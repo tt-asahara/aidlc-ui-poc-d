@@ -47,7 +47,7 @@ describe("D source/spec grounding", () => {
       config: { sourceGrounding: { enabled: true, roots: ["src"] } },
       worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "orders route exists", evidencePaths: ["src/orders.ts"], detail: "literal route matches" }], uncertainty: ["runtime middleware was not executed"] }),
     });
-    expect(result).toMatchObject({ action: "grounding-findings", verdict: "READY", workerCalls: 1, artifactsWritten: 0, reviewsRun: 0, approvalRecorded: false });
+    expect(result).toMatchObject({ action: "grounding-findings", verdict: "NOT-READY", workerCalls: 1, artifactsWritten: 0, reviewsRun: 0, approvalRecorded: false });
     if (result.action === "grounding-findings") expect(result.findings[0]?.evidencePaths[0]).toBe(realpathSync(join(projectDir, "src", "orders.ts")));
   });
 

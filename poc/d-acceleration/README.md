@@ -15,8 +15,10 @@ See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
 local service contract.
 
-The Claude package also exposes a default-off `/loop` surface for exactly one
-GitHub Issue per invocation. Its fixed-argv GitHub adapter, durable claim, and
+The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
+exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
+routing. Claude Code's standard `/loop` is not overwritten; it may schedule the
+dedicated command. The fixed-argv GitHub adapter, durable claim, and
 assumption ledger live in `issue-autopilot-runtime.ts`; policy and lifecycle
 stops live in `issue-autopilot.ts`. It delegates every workflow transition,
 review, sensor, and approval to ordinary `/aidlc`. See `configuration.md` for

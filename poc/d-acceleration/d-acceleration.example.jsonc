@@ -1,18 +1,27 @@
 {
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
-  // Clef委譲 / 対象: 明示したlow-risk Unit。ON時もloopbackだけ。既定値: OFF。
-  "clef": { "enabled": false, "url": "http://127.0.0.1:18742", "lowRiskUnits": [] },
-  // 承認境界のGit保存 / ON時: 既存の秘密検査を含むpersistence保護を使用。既定値: OFF。
-  "gitPersistence": { "enabled": false, "push": false, "remote": "origin" },
+  "clef": {
+    // 対象: D対応の設計wave内で明示したlow-risk Unitのrouting時。役割: loopback Clefへtier判断を委譲する。ON時: urlへ問い合わせ、失敗・低信頼ならOpusへ安全にfallback。OFF時: Clefを呼ばない。既定値: OFF。利用場面: ローカルClefを別途起動済みの場合だけ。
+    "enabled": false,
+    "url": "http://127.0.0.1:18742",
+    "lowRiskUnits": [],
+  },
+  "gitPersistence": {
+    // 対象: 公式reportが承認境界を正常通過した直後。役割: 承認済みmanifestだけをcheckpoint commitする。ON時: 必須secret scan後にcommit、OFF時: Gitを変更しない。既定値: OFF。利用場面: PRODUCT側で明示的な承認履歴を残す場合。機能7の秘密検査自体にはOFFスイッチを設けない。
+    "enabled": false,
+    // 対象: 上記checkpoint commit成功後。役割: 固定refspecをremoteへ送る。ON時: enabledもONのときだけpush、OFF時: local commitまで。既定値: OFF。利用場面: 利用者がPRODUCTのpushを明示許可した場合だけ。
+    "push": false,
+    "remote": "origin",
+  },
   "features": {
-    // 機能21 / 対象: requirements-analysis〜code/test。ON時: 公式traceabilityとCのSCREEN/STATE/ACが既存要件IDを引用するか照合し、再採番しない。既定値: OFF。
+    // 機能21 / 対象: ui-ux-designのrefined handoffとfunctional-design完了後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。利用場面: C UI契約を使う案件。
     "requirementIdValidation": false,
-    // 機能22 / 対象: functional-design。ON時: Sources・仮定・範囲・traceabilityを正本へ集約して重複メタ文書を抑制。既定値: OFF。
+    // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
-    // 機能27 / 対象: 調査根拠を使うstage。ON時: source出典と取得事実を記録し、承認は生成・推定しない。既定値: OFF。
+    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。利用場面: brownfield設計。roots空では停止する。
     "sourceGrounding": false,
-    // 機能28 / 対象: specを入力にする設計・実装stage。ON時: 根拠箇所との対応を記録し、承認は生成・推定しない。既定値: OFF。
+    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。利用場面: 外部仕様準拠が必要な案件。roots空では停止する。
     "specGrounding": false,
   },
   "featureInputs": {
@@ -26,19 +35,29 @@
   },
   // 自動進行 / 対象: 現在セッションの公式engine正規遷移のみ。既定値: OFF。
   "auto": {
+    // 対象: /aidlc-issue-autopilot または /aidlcのIssue入口。役割: 公式遷移だけをboundedに自動継続する親スイッチ。ON時: issueAutopilot.enabledもONの場合だけ1 Issueを処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: 明示allowlist付き自動処理。定期実行にはClaude標準 /loop から別コマンド起動が必要。
     "enabled": false,
     // ON時の停止stage。省略時は利用者が明示した範囲を超えない。
     "through": "code-generation",
-    // セッションをまたぐ無人継続を禁止。既定値: true。
+    // 対象: Intent作成直後。役割: 無人継続を現在呼出し内に限定する。ON時: Intent作成後に停止、OFF時: maxSteps/deadline/through内で公式hostが継続可能。既定値: ON。利用場面: 通常はON、安全に限定した明示autoだけOFF。
     "sessionOnly": true,
     // 不明点: halt=停止、assume=仮定台帳へ記録、research=調査後も不明なら停止。既定値: halt。
     "ambiguityPolicy": "halt",
+    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
     "assumptionLedger": true,
     // claim失敗等のbounded retry回数（0〜10）。既定値: 2。
     "maxRetries": 2,
+    // 自動進行の最大公式directive数。no-progress検出とは別のhard stop。既定値: 64。
+    "maxSteps": 64,
+    // 自動進行1回の最大経過ms。lease更新中でも超過時は停止。既定値: 900000（15分）。
+    "deadlineMs": 900000,
     // Issue自動処理を許可するlabel。空配列は許可対象なし。
     "labelAllowlist": [],
   },
-  // 機能17 / 対象: /loopからのIssue autopilot。Issue本文は未信頼入力。既定値: OFF、1回1件。
-  "issueAutopilot": { "enabled": false, "oneIssuePerRun": true },
+  "issueAutopilot": {
+    // 機能17 / 対象: /aidlc-issue-autopilot、/aidlc --from-issue、およびClaude標準 /loopからの同コマンド起動。役割: GitHub Issue intakeを許可する子スイッチ。ON時: auto.enabledもONかつlabel完全一致時だけ処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: Issue駆動運用。
+    "enabled": false,
+    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue、OFFは安全契約違反のため現在も1件に強制。既定値: ON。利用場面: 常時ONを維持する。
+    "oneIssuePerRun": true,
+  },
 }

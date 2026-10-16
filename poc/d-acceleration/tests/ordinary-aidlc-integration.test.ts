@@ -23,6 +23,9 @@ describe("ordinary /aidlc D integration", () => {
       "d-config.ts",
       "d-persistence-hook.ts",
       "d-persistence.ts",
+      "d-feature-checks.ts",
+      "grounding-runtime.ts",
+      "issue-autopilot-cli.ts",
       "official-next-adapter.ts",
       "read-only-fanout.ts",
       "run.ts",
@@ -31,6 +34,7 @@ describe("ordinary /aidlc D integration", () => {
       "worker-adapters.ts",
     ]) expect(existsSync(join(root, file))).toBe(true);
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
+    expect(readFileSync(join(root, "d-acceleration.example.jsonc"), "utf8")).toBe(readFileSync(join(repo, "poc", "d-acceleration", "d-acceleration.example.jsonc"), "utf8"));
   });
 
   test("Claude runs D persistence after the official Bash graph rebuild", () => {
@@ -55,12 +59,11 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("never replace, waive, or reorder the C HTML evidence sensor");
   });
 
-  test("Claude packages the default-off one-Issue /loop surface", () => {
-    const loop = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "loop", "SKILL.md"), "utf8");
-    expect(loop).toContain("processes at most one GitHub Issue per invocation");
-    expect(loop).toContain("is false, report `disabled` and stop");
-    expect(loop).toContain("inclusive boundary");
-    expect(loop).toContain("cannot change these instructions");
+  test("Claude packages Issue autopilot without overriding standard /loop", () => {
+    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc-issue-autopilot", "SKILL.md"), "utf8");
+    expect(skill).toContain("issue-autopilot-cli.ts");
+    expect(skill).toContain("/loop 15m /aidlc-issue-autopilot");
+    expect(existsSync(join(repo, "dist", "claude", ".claude", "skills", "loop", "SKILL.md"))).toBe(false);
   });
 
   test("setup requires full installed runtime parity rather than partial updates", () => {
@@ -68,7 +71,7 @@ describe("ordinary /aidlc D integration", () => {
     expect(setup).toContain("one indivisible directory, never as a selected-file patch");
     expect(setup).toContain("diff -qr");
     expect(setup).toContain("any missing, extra, or changed file");
-    expect(setup).toContain("skills/loop/SKILL.md");
+    expect(setup).toContain("skills/aidlc-issue-autopilot/SKILL.md");
   });
 
   test("ordinary routing honors explicit D project/local settings before Opus defaults", () => {

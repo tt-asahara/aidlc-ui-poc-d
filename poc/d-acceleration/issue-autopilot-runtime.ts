@@ -7,6 +7,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -107,6 +108,17 @@ function tryCreate(path: string, contents: string): boolean {
   return true;
 }
 
+function acquireRecoverableLock(path: string, owner: string, now: () => number, staleMs: number): boolean {
+  if (tryCreate(path, `${JSON.stringify({ owner, createdAt: now() })}\n`)) return true;
+  try {
+    if (now() - statSync(path).mtimeMs <= staleMs) return false;
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+  }
+  return tryCreate(path, `${JSON.stringify({ owner, createdAt: now() })}\n`);
+}
+
 export function createFileClaimStore(options: {
   directory: string;
   leaseMs: number;
@@ -128,7 +140,7 @@ export function createFileClaimStore(options: {
 
       // Serialize stale reclamation. Fresh contenders never remove a live claim.
       const recovery = `${path}.recovery`;
-      if (!tryCreate(recovery, `${owner}\n`)) return "busy";
+      if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return "busy";
       try {
         const current = readJson<ClaimRecord>(path);
         if (!current || current.issueNumber !== issueNumber || current.expiresAt > now()) return "busy";
@@ -142,13 +154,26 @@ export function createFileClaimStore(options: {
         try { unlinkSync(recovery); } catch { /* another failure remains recoverable */ }
       }
     },
+    async renew(issueNumber, owner) {
+      const path = pathFor(issueNumber), recovery = `${path}.recovery`;
+      if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return "lost";
+      try {
+        const current = readJson<ClaimRecord>(path);
+        if (!current || current.issueNumber !== issueNumber || current.owner !== owner) return "lost";
+        const renewed = { ...current, expiresAt: now() + options.leaseMs };
+        const temporary = `${path}.renew-${process.pid}-${now()}`;
+        writeFileSync(temporary, `${JSON.stringify(renewed)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        renameSync(temporary, path);
+        return "renewed";
+      } finally { try { unlinkSync(recovery); } catch {} }
+    },
     async release(issueNumber, owner) {
       const path = pathFor(issueNumber);
       const current = readJson<ClaimRecord>(path);
       if (!current || current.issueNumber !== issueNumber || current.owner !== owner) return;
       // Recovery lock prevents release/reclaim from deleting a successor claim.
       const recovery = `${path}.recovery`;
-      if (!tryCreate(recovery, `${owner}\n`)) return;
+      if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return;
       try {
         const verified = readJson<ClaimRecord>(path);
         if (verified?.issueNumber === issueNumber && verified.owner === owner && verified.acquiredAt === current.acquiredAt) {
@@ -177,12 +202,14 @@ function gitDirectory(projectDir: string): { path: string; git: boolean } {
 export function issueAutopilotRuntimePaths(projectDir: string, sessionDirectory?: string): {
   claims: string;
   assumptions: string;
+  stop: string;
 } {
   const storage = gitDirectory(resolve(projectDir));
   const root = sessionDirectory
     ? resolve(sessionDirectory)
     : join(storage.path, ...(storage.git ? ["aidlc", "issue-autopilot"] : ["issue-autopilot"]));
-  return { claims: join(root, "claims"), assumptions: join(root, "assumptions.jsonl") };
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return { claims: join(root, "claims"), assumptions: join(root, "assumptions.jsonl"), stop: join(root, "stop") };
 }
 
 export function createFileAssumptionLedger(path: string, options: { clock?: () => number } = {}): AssumptionLedger {
@@ -192,7 +219,7 @@ export function createFileAssumptionLedger(path: string, options: { clock?: () =
     async append(entry) {
       const timestamp = now();
       const lock = `${path}.lock`;
-      if (!tryCreate(lock, "locked\n")) throw new Error("assumption ledger is busy");
+      if (!acquireRecoverableLock(lock, `ledger-${process.pid}`, () => timestamp, 60_000)) throw new Error("assumption ledger is busy");
       const temporary = `${path}.tmp-${process.pid}-${timestamp}`;
       try {
         const prior = existsSync(path) ? readFileSync(path, "utf8") : "";

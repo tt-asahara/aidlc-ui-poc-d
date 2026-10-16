@@ -69,6 +69,8 @@ describe("D issue intake/autopilot", () => {
     expect(result.reason).toBe("label-not-allowed");
     expect(claimed).toBeFalse();
     expect(calls.create).toHaveLength(0);
+    const caseMismatch = fixture();
+    expect((await runIssueAutopilot({ config: enabled({ labelAllowlist: ["AIDLC-AUTO"] }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: caseMismatch.deps })).reason).toBe("label-not-allowed");
   });
 
   test("halts on ambiguity by default and records explicit assume policy", async () => {
@@ -89,8 +91,11 @@ describe("D issue intake/autopilot", () => {
     let attempts = 0;
     const failing = fixture({ engine: { async createIntent() { attempts += 1; throw new Error("transient"); }, async next() { return { kind: "complete" }; }, async execute(value) { return value; } } });
     const result = await runIssueAutopilot({ config: enabled({ maxRetries: 2 }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: failing.deps });
-    expect(result).toMatchObject({ reason: "failure", attempts: 3 });
-    expect(attempts).toBe(3);
+    expect(result).toMatchObject({ reason: "failure", attempts: 1 });
+    expect(attempts).toBe(1);
+
+    const reconciled = fixture({ engine: { async createIntent() { throw new Error("response lost"); }, async reconcileIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } } });
+    expect((await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).reason).toBe("human-gate");
   });
 
   test("session auto stops at gates, dangerous operations, and inclusive through boundary", async () => {
@@ -126,5 +131,13 @@ describe("D issue intake/autopilot", () => {
       labelAllowlist: [],
       maxAttempts: 3,
     });
+  });
+
+  test("rejects unknown through stages and stops repeated/no-progress directives", async () => {
+    const { deps } = fixture();
+    await expect(runIssueAutopilot({ config: enabled({ through: "not-a-stage" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps })).rejects.toThrow("not an official stage");
+    const repeated = fixture({ engine: { async createIntent() { return { kind: "run-stage", stage: "requirements-analysis" }; }, async next() { return { kind: "run-stage", stage: "requirements-analysis" }; }, async execute(value) { return value; } } });
+    const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: repeated.deps });
+    expect(result.detail).toBe("no-progress");
   });
 });

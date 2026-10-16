@@ -66,7 +66,7 @@ Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude
 
 Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted.
 
-Also verify that `PRODUCT/.claude/skills/loop/SKILL.md` exists and is byte-identical to the packaged Claude distribution. `/loop` is the default-off, one-Issue-per-invocation entry point; setup must not enable it or create project configuration on the person's behalf.
+Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Setup must not enable autopilot or create project configuration on the person's behalf.
 
 ```bash
 (cd "$PRODUCT" && bun "$PRODUCT/.claude/tools/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)

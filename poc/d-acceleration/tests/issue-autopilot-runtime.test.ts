@@ -33,6 +33,8 @@ describe("issue autopilot production adapters", () => {
     const second = createFileClaimStore({ directory, leaseMs: 100, clock: () => time });
     expect((await Promise.all([first.acquire(9, "alpha"), second.acquire(9, "beta")])).sort()).toEqual(["acquired", "busy"]);
     expect((await Promise.all([first.acquire(9, "alpha"), second.acquire(9, "beta")])).every((value) => value === "busy")).toBeTrue();
+    expect(await first.renew!(9, "alpha")).toBe("renewed");
+    expect(await second.renew!(9, "beta")).toBe("lost");
     await second.release(9, "beta");
     expect(await second.acquire(9, "beta")).toBe("busy");
     time = 1_101;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseDJsonc, resolveDAutomation, resolveDClef, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
@@ -22,14 +22,14 @@ describe("D JSONC configuration", () => {
     expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false });
     expect(resolveDFeatureInputs(root)).toEqual({ requirementIdBridges: [], functionalDesignBudgets: { artifactBytes: 60000, unitBytes: 160000, metadataBytes: 30000 }, sourceRoots: [], specRoots: [] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
-    expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, labelAllowlist: [] });
+    expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, maxSteps: 64, deadlineMs: 900000, labelAllowlist: [] });
   });
   test("merges by field and preserves explicit local false", () => {
     const root = project();
     write(root, "d-acceleration.json", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, "clef": { "enabled": true, "lowRiskUnits": ["web"] }, }`);
     write(root, "d-acceleration.local.json", `{ "features": { "sourceGrounding": false, "specGrounding": true }, "auto": { "enabled": false, "ambiguityPolicy": "halt", "maxRetries": 1 }, "issueAutopilot": { "enabled": false }, "clef": { "enabled": false }, }`);
     expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true });
-    expect(resolveDAutomation(root)).toEqual({ enabled: false, through: "code-generation", sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 1, labelAllowlist: ["aidlc"] });
+    expect(resolveDAutomation(root)).toEqual({ enabled: false, through: "code-generation", sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 1, maxSteps: 64, deadlineMs: 900000, labelAllowlist: ["aidlc"] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDClef(root).enabled).toBe(false);
   });
@@ -41,6 +41,21 @@ describe("D JSONC configuration", () => {
   });
   test("rejects mistyped safety policy", () => {
     const root = project(); write(root, "d-acceleration.json", '{ "auto": { "ambiguityPolicy": "guess" } }'); expect(() => resolveDAutomation(root)).toThrow("ambiguityPolicy");
+    write(root, "d-acceleration.json", '{ "auto": { "through": "made-up-stage" } }'); expect(() => resolveDAutomation(root)).toThrow("through");
     write(root, "d-acceleration.json", '{ "features": { "sourceGrounding": "yes" } }'); expect(() => resolveDFeatureFlags(root)).toThrow("sourceGrounding");
+  });
+  test("documents every boolean switch in Japanese with timing and ON/OFF/default behavior", () => {
+    const lines = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8").split("\n");
+    const switches = lines.flatMap((line, index) => /"([^"]+)"\s*:\s*(true|false)/.test(line) ? [{ index }] : []);
+    expect(switches.length).toBe(12);
+    for (const entry of switches) {
+      const comment = lines.slice(Math.max(0, entry.index - 2), entry.index).join(" ");
+      expect(comment).toMatch(/[ぁ-んァ-ヶ一-龠]/);
+      expect(comment).toContain("対象:");
+      expect(comment).toContain("ON時:");
+      expect(comment).toMatch(/OFF時:|OFFは/);
+      expect(comment).toContain("既定値:");
+      expect(comment).toContain("利用場面:");
+    }
   });
 });

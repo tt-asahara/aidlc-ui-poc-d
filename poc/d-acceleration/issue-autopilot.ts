@@ -21,6 +21,8 @@ export type IssueAutopilotConfig = {
   sessionAuto: boolean;
   /** Feature 15: bounded transient retries; zero means one attempt only. */
   maxRetries: number;
+  maxSteps: number;
+  deadlineMs: number;
 };
 
 export const DEFAULT_ISSUE_AUTOPILOT_CONFIG: Readonly<IssueAutopilotConfig> = {
@@ -29,6 +31,8 @@ export const DEFAULT_ISSUE_AUTOPILOT_CONFIG: Readonly<IssueAutopilotConfig> = {
   uncertaintyPolicy: "halt",
   sessionAuto: false,
   maxRetries: 2,
+  maxSteps: 64,
+  deadlineMs: 15 * 60_000,
 };
 
 export type Issue = {
@@ -51,6 +55,7 @@ export interface ClaimStore {
   acquire(issueNumber: number, owner: string): Promise<"acquired" | "busy">;
   /** Must release only when the persisted claim is still owned by owner. */
   release(issueNumber: number, owner: string): Promise<void>;
+  renew?(issueNumber: number, owner: string): Promise<"renewed" | "lost">;
 }
 
 export type InputAssessment = {
@@ -92,6 +97,7 @@ export interface EngineAdapter {
   createIntent(args: readonly ["--new-intent", "--scope", string, "--label", string, string]): Promise<OfficialDirective>;
   next(): Promise<OfficialDirective>;
   execute(directive: Readonly<OfficialDirective>): Promise<OfficialDirective>;
+  reconcileIntent?(issueNumber: number): Promise<OfficialDirective | null>;
 }
 
 export type IntakeSelection =
@@ -145,11 +151,22 @@ function validateConfig(config: IssueAutopilotConfig): void {
   if (!Number.isSafeInteger(config.maxRetries) || config.maxRetries < 0 || config.maxRetries > 10) {
     throw new Error("issue autopilot maxRetries must be an integer from 0 through 10");
   }
+  if (!Number.isSafeInteger(config.maxSteps) || config.maxSteps < 1 || config.maxSteps > 1000) throw new Error("issue autopilot maxSteps must be an integer from 1 through 1000");
+  if (!Number.isSafeInteger(config.deadlineMs) || config.deadlineMs < 1000 || config.deadlineMs > 86_400_000) throw new Error("issue autopilot deadlineMs must be an integer from 1000 through 86400000");
   if (!config.labelAllowlist.every((label) => typeof label === "string" && label.trim())) {
     throw new Error("issue autopilot labelAllowlist must contain non-empty strings");
   }
-  if (config.through !== undefined && !config.through.trim()) throw new Error("issue autopilot through must be a non-empty stage slug");
+  if (config.through !== undefined && !OFFICIAL_STAGES.has(config.through)) throw new Error(`issue autopilot through is not an official stage: ${config.through}`);
 }
+
+export const OFFICIAL_STAGES = new Set([
+  "workspace-detection", "reverse-engineering", "requirements-analysis", "user-stories", "workflow-planning",
+  "application-design", "units-generation", "domain-design", "logical-design", "technical-design", "ui-ux-design",
+  "architecture-design", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation",
+  "build", "unit-testing", "integration-testing", "system-testing", "acceptance-testing", "security-testing",
+  "performance-testing", "deployment-planning", "release-planning", "deployment", "monitoring", "operations",
+  "feedback-collection", "retrospective", "optimization", "maintenance",
+]);
 
 export function issueAutopilotStatus(config: IssueAutopilotConfig = DEFAULT_ISSUE_AUTOPILOT_CONFIG): IssueAutopilotStatus {
   validateConfig(config);
@@ -166,8 +183,8 @@ export function issueAutopilotStatus(config: IssueAutopilotConfig = DEFAULT_ISSU
 
 function allowed(issue: Issue, allowlist: readonly string[]): boolean {
   if (allowlist.length === 0) return false;
-  const labels = new Set(issue.labels.map((label) => label.toLowerCase()));
-  return allowlist.every((label) => labels.has(label.toLowerCase()));
+  const labels = new Set(issue.labels);
+  return allowlist.every((label) => labels.has(label));
 }
 
 function slug(title: string, number: number): string {
@@ -257,16 +274,31 @@ export async function runIssueAutopilot(input: {
       assessment.description,
       "</untrusted-issue-body>",
     ].join("\n");
-    const created = await withRetries(config.maxRetries, () =>
-      input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]),
-    );
+    // Intent creation is non-idempotent. Attempt it once, then reconcile from
+    // official state when the response is uncertain; never blindly retry it.
+    let created: { value?: OfficialDirective; attempts: number; error?: unknown };
+    try {
+      created = { value: await input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]), attempts: 1 };
+    } catch (error) {
+      const reconciled = await input.deps.engine.reconcileIntent?.(issue.number);
+      created = reconciled ? { value: reconciled, attempts: 1 } : { attempts: 1, error };
+    }
     if (!created.value) {
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };
     }
     if (!config.sessionAuto) return { status: "stopped", reason: "intent-created", issueNumber: issue.number, attempts: created.attempts };
 
     let directive = created.value;
+    const started = Date.now();
+    let steps = 0;
+    let previous = "";
     for (;;) {
+      if (++steps > config.maxSteps) return { status: "stopped", reason: "failure", issueNumber: issue.number, detail: "max-steps-exceeded" };
+      if (Date.now() - started >= config.deadlineMs) return { status: "stopped", reason: "failure", issueNumber: issue.number, detail: "deadline-exceeded" };
+      if (input.deps.claims.renew && await input.deps.claims.renew(issue.number, input.owner) !== "renewed") return { status: "stopped", reason: "claim-busy", issueNumber: issue.number, detail: "claim-lost" };
+      const fingerprint = JSON.stringify([directive.kind, directive.stage, directive.gate, directive.completed]);
+      if (fingerprint === previous) return { status: "stopped", reason: "failure", issueNumber: issue.number, stage: directive.stage, detail: "no-progress" };
+      previous = fingerprint;
       if (directive.dangerous) return { status: "stopped", reason: "dangerous-operation", issueNumber: issue.number, stage: directive.stage };
       if (directive.gate || directive.kind === "ask") return { status: "stopped", reason: "human-gate", issueNumber: issue.number, stage: directive.stage };
       if (directive.completed || directive.kind === "complete") return { status: "completed", reason: "complete", issueNumber: issue.number, stage: directive.stage };
@@ -274,7 +306,9 @@ export async function runIssueAutopilot(input: {
         // Ordering belongs to the official engine; the controller stops only
         // after executing the named inclusive boundary, never guesses stage order.
       }
-      const executed = await withRetries(config.maxRetries, () => input.deps.engine.execute(directive));
+      // Stage execution can mutate artifacts and official state. It is never
+      // blindly retried; the next invocation reconciles from official state.
+      const executed = await withRetries(0, () => input.deps.engine.execute(directive));
       if (!executed.value) return { status: "stopped", reason: "failure", issueNumber: issue.number, stage: directive.stage, attempts: executed.attempts, detail: String(executed.error) };
       if (config.through && directive.stage === config.through) {
         return { status: "stopped", reason: "boundary-reached", issueNumber: issue.number, stage: directive.stage, attempts: executed.attempts };

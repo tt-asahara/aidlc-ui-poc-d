@@ -124,7 +124,7 @@ export async function runGrounding(input: {
     workerCalls: 1,
     artifactsWritten: 0,
     reviewsRun: 0,
-    verdict: result.findings.some((finding) => finding.severity === "error") ? "NOT-READY" : "READY",
+    verdict: result.uncertainty.length > 0 || result.findings.some((finding) => finding.severity === "error" || finding.code === "grounding-unavailable") ? "NOT-READY" : "READY",
     findings: result.findings,
     uncertainty: result.uncertainty,
     approvalRecorded: false,

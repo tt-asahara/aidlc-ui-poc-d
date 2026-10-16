@@ -14,6 +14,11 @@ const optional = resolveDConfig(projectDir);
 const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
+const stageCheckInput = value("--stage-check-input");
+if (stageCheckInput) {
+  const check = spawnSync(process.execPath, [join(import.meta.dir, "d-feature-checks.ts"), "--project-dir", projectDir, "--input", stageCheckInput], { cwd: projectDir, encoding: "utf8" });
+  process.stdout.write(check.stdout); process.stderr.write(check.stderr); process.exit(check.status ?? 1);
+}
 const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
 if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
 const directive = JSON.parse(next.stdout);
