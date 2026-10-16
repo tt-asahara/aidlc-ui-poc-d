@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { composePluginFixture } from "../../../tests/harness/plugin-kit.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -67,9 +68,17 @@ ${stageRow(" ", "build-and-test")}
 
 function createWaveProject(): string {
   const project = createTestProject();
+  return seedWaveProject(project);
+}
+
+function seedWaveProject(project: string): string {
   projects.push(project);
   seedAidlcMemory(project);
-  writeFileSync(seededStateFile(project), functionalDesignState());
+  const stateFile = seededStateFile(project);
+  const recordDir = dirname(stateFile);
+  mkdirSync(recordDir, { recursive: true });
+  writeFileSync(stateFile, functionalDesignState());
+  writeFileSync(join(dirname(recordDir), "active-intent"), `${basename(recordDir)}\n`);
   seedBoltDag(
     project,
     [
@@ -182,6 +191,56 @@ describe("official next adapter integration", () => {
       // directly to the product adapter. No hand-authored directive surrogate
       // participates in this assertion.
       expect(() => adaptOfficialNext({ directive: result.directive })).toThrow("missing composed Arm C UI consumes");
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test(
+    "composes C, resolves its refined contract, runs fake D workers, and returns to the official gate",
+    () => {
+      const fixture = composePluginFixture({
+        plugin: "ui-poc",
+        harness: "claude",
+        pluginBuilt: join(import.meta.dir, "..", "..", "ui-poc", "dist", "claude"),
+      });
+      const project = seedWaveProject(fixture.projectDir);
+      expect(fixture.dropLogs).toBe("");
+      const orchestrate = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
+      const engineDir = join(project, ".claude", "tools");
+      const first = runOrchestrateNext(orchestrate, project, [], {
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(first.status, `${first.stdout}\n${first.stderr}`).toBe(0);
+      const missing = first.directive?.wave?.entries?.[0]?.consumes_absent?.find(
+        (entry: { path: string }) => entry.path.endsWith("/ui-poc-refined-contract.md"),
+      );
+      expect(missing?.path, JSON.stringify(first.directive, null, 2)).toBeString();
+      const contractPath = join(project, missing.path);
+      mkdirSync(join(contractPath, ".."), { recursive: true });
+      writeFileSync(contractPath, "# Refined UI contract fixture\n");
+
+      const composed = runOrchestrateNext(orchestrate, project, [], {
+        env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+      });
+      expect(composed.status, `${composed.stdout}\n${composed.stderr}`).toBe(0);
+      expect(composed.directive.wave.entries[0].consumes).toContain(missing.path);
+      expect(adaptOfficialNext(composed.directive).tasks[0]?.inputSet).toContain(missing.path);
+
+      const run = spawnSync(
+        process.execPath,
+        [CONDUCTOR, "--project-dir", project, "--engine-dir", engineDir, "--worker", "fake", "--disposable-test-mode"],
+        {
+          cwd: project,
+          env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
+          encoding: "utf8",
+          timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+        },
+      );
+      expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
+      const result = JSON.parse(run.stdout);
+      expect(result.status).toBe("official-host-action-required");
+      expect(result.directive).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
+      expect(result.workerRuns[0].result.records).toHaveLength(2);
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
