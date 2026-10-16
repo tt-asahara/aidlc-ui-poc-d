@@ -20,6 +20,10 @@ work through the existing engine directives.
 - Model IDs are never invented. A plan may select only an ID supplied in the
   runtime model catalog. Without a catalog it emits an abstract tier and leaves
   the session model unchanged.
+- The executable harness currently supports issued per-Unit design waves only.
+  Code Generation swarm execution is intentionally unsupported until the
+  official worktree preparation, referee merge, source landing, and settlement
+  receipts can be consumed and verified rather than asserted by input.
 - A failed fast/balanced attempt escalates to the next tier; a judgment failure
   stops for human review. The planner does not execute models itself.
 
@@ -31,6 +35,10 @@ bun poc/d-acceleration/aidlc-acceleration-plan.ts \
   --output /tmp/d-plan.json
 
 bun test poc/d-acceleration/tests
+
+bun poc/d-acceleration/scheduler.ts \
+  --input poc/d-acceleration/fixtures/synthetic-plan.json \
+  --approve approval --output /tmp/d-scheduler.json
 ```
 
 Set `clef.enabled` in the input only when the existing local service is already
