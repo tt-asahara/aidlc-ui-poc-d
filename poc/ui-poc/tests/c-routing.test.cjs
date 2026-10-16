@@ -59,7 +59,7 @@ test('ordinary UI routing is distinct, reproducible, and preserves explicit choi
   assert.match(scope,/Explicit user scope and execution choices always win/);
   const delivery=fs.readFileSync(path.join(root,'core/aidlc-common/stages/inception/delivery-planning.md'),'utf8');
   assert.match(delivery,/ready Units with\s+disjoint write sets/);
-  assert.match(delivery,/never record the proposal as approved/);
+  assert.match(delivery,/wait for the person's answer at the official gate/);
   const readme=fs.readFileSync(path.join(root,'poc/ui-poc/README.md'),'utf8');
   assert.match(readme,/\/aidlc\nBuild a household budget web app/);
   assert.doesNotMatch(readme,/\/aidlc --scope ui-poc-comparison/);
