@@ -78,6 +78,17 @@ all 33 official stages. Only official design waves are executable here;
 pipeline, mob, ensemble, and swarm directives are handed back intact to the
 official host.
 
+For an enabled inline analysis stage, the official host can invoke
+`read-only-fanout.ts --input <plan.json> --project-dir <project> --framework-dir
+<installed-core>`. The input includes the current unmodified directive,
+runtime-confirmed model ID, and independent evidence-path tasks. Use
+`--dry-run` to inspect the projected official agents and enforced Claude CLI
+permissions without making a model call. Worker responses are returned
+separately for lead integration; workers never write official artifacts.
+Start from `fixtures/read-only-fanout.json`, replace its directive with the
+latest official `orchestrate next` result and its model placeholder with an ID
+confirmed by that runtime. Never reuse the example directive as authority.
+
 ## Evidence, not claims
 
 `benchmark.ts` compares the same synthetic task durations under serial order and

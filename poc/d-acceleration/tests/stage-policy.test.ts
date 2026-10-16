@@ -25,7 +25,8 @@ describe("all-stage acceleration policy", () => {
     expect(policy.stages.find((entry) => entry.stage === "code-generation")).toMatchObject({ status: "official-delegation", parallelism: "official-swarm", clef: "never" });
   });
   test("keeps speculative fanout disabled and Clef away from high-risk work", () => {
-    expect(policy.stages.filter((entry) => entry.parallelism === "read-only-fanout").every((entry) => entry.status === "candidate-not-enabled")).toBeTrue();
+    expect(policy.stages.filter((entry) => entry.status === "implemented-read-only-fanout").map((entry) => entry.stage).sort()).toEqual(["feasibility", "market-research", "performance-validation"]);
+    expect(policy.stages.filter((entry) => entry.parallelism === "read-only-fanout" && entry.status !== "implemented-read-only-fanout").every((entry) => entry.status === "candidate-not-enabled")).toBeTrue();
     expect(policy.stages.filter((entry) => entry.tier === "judgment").every((entry) => entry.clef === "never")).toBeTrue();
   });
 });

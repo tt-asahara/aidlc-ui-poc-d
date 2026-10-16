@@ -1,0 +1,27 @@
+{
+  "directive": {
+    "kind": "run-stage",
+    "stage": "market-research",
+    "mode": "inline",
+    "gate": false,
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": []
+  },
+  "model": "replace-with-runtime-confirmed-model-id",
+  "effort": "medium",
+  "maxParallel": 2,
+  "tasks": [
+    {
+      "id": "existing-constraints",
+      "agent": "aidlc-architect-agent",
+      "objective": "Extract existing architectural constraints and cite their source paths.",
+      "evidencePaths": ["README.md", "core"]
+    },
+    {
+      "id": "quality-evidence",
+      "agent": "aidlc-quality-agent",
+      "objective": "Identify existing test and quality evidence and cite its source paths.",
+      "evidencePaths": ["tests"]
+    }
+  ]
+}
