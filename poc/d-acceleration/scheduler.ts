@@ -7,6 +7,25 @@ import { claudeWorkerLaunch, fakeWorkerLaunch, runWorker, type WorkerKind } from
 const escalate = (tier: Tier): Tier | null => tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : null;
 type Options = { failOnce?: string[]; workerKind?: WorkerKind; ledgerPath?: string; projectDir: string; requestedClaudeModels?: Partial<Record<Tier, string>>; requestedClaudeEffort?: string; claudeExecutable?: string; disposableTestMode?: boolean; timeoutMs?: number };
 
+function readProjectContext(projectDir: string, path: unknown): { path: string; text: string } | null {
+  if (typeof path !== "string" || !path.trim()) return null;
+  const root = realpathSync(projectDir); const absolute = resolve(root, path); const rel = relative(root, absolute);
+  if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(absolute)) throw new Error(`builder context is missing or escapes product: ${path}`);
+  return { path, text: readFileSync(absolute, "utf8") };
+}
+
+export function buildClaudeBuilderPrompt(input: Input, task: Input["tasks"][number], projectDir: string): string {
+  if (!task.builderBrief) {
+    return JSON.stringify({ directive: input.sourceDirective ?? input.directives, target: { stage: task.stage, unit: task.unit, dependencies: task.dependsOn, inputs: task.inputSet ?? [], outputs: task.writeSet, writeBoundary: projectDir } });
+  }
+  const brief = (task.builderBrief ?? {}) as any;
+  const stage = readProjectContext(projectDir, brief.stage_file);
+  if (!stage) throw new Error("official builder brief is missing stage_file");
+  const inline = (Array.isArray(brief.inline_context_paths) ? brief.inline_context_paths : []).map((path: string) => readProjectContext(projectDir, path));
+  const unitMemory = readProjectContext(projectDir, brief.unit_memory_path);
+  return JSON.stringify({ directive: input.sourceDirective, officialBuilderBrief: { ceremony: brief.ceremony, protocol_modules: brief.protocol_modules, stage_file: stage, inline_context: inline, context_warnings: brief.context_warnings, steering: brief.steering, unit_memory: unitMemory, entry: brief.entry }, target: { stage: task.stage, unit: task.unit, dependencies: task.dependsOn, inputs: task.inputSet ?? [], outputs: task.writeSet, writeBoundary: projectDir }, uiBaseline: "C", instruction: "Execute the composed stage instructions and inline context verbatim for this Unit. Honor consumes/produces, blocking sensors, approval receipts, ceremony and protocol modules. Withhold missing required outputs and return questions to the lead. Worker exit zero is candidate evidence only; the official host is the sole gate/state writer." });
+}
+
 export async function execute(input: Input, options: Options) {
   if (options.workerKind && !["fake", "claude"].includes(options.workerKind)) throw new Error(`unsupported worker: ${options.workerKind}`);
   const planned = await plan(input); const failOnce = new Set(options.failOnce ?? []); const records: any[] = []; const started = performance.now();
@@ -28,7 +47,7 @@ export async function execute(input: Input, options: Options) {
         const model = options.workerKind === "claude" ? options.requestedClaudeModels?.[tier] : input.modelCatalog?.[tier];
         if (options.workerKind === "claude" && !model) return { ok: false, failure: "missing-requested-model" };
         const launch = options.workerKind === "claude"
-          ? claudeWorkerLaunch({ model: model!, effort: options.requestedClaudeEffort ?? (tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high"), prompt: JSON.stringify({ directive: input.sourceDirective, target: { stage: task.stage, unit: task.unit, dependencies: task.dependsOn, inputs: task.inputSet ?? [], outputs: task.writeSet, writeBoundary: options.projectDir }, uiBaseline: "C", instruction: "Honor the composed official stage instructions, consumes/produces, blocking sensors, approval receipts, and downstream handoff. Worker exit zero is candidate evidence only; the official host is the sole gate/state writer." }), executable: options.claudeExecutable })
+          ? claudeWorkerLaunch({ model: model!, effort: options.requestedClaudeEffort ?? (tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high"), prompt: buildClaudeBuilderPrompt(input, task, options.projectDir), executable: options.claudeExecutable })
           : fakeWorkerLaunch({ script: `${import.meta.dir}/fake-worker.ts`, task: id, stage: task.stage, unit: task.unit, tier, model, durationMs: task.estimatedMs, retryOrdinal, fail: failOnce.has(id) && retryOrdinal === 0, produces: options.disposableTestMode ? task.writeSet : [] });
         const result = await runWorker(launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 30_000, maxStdoutBytes: 1_048_576, maxStderrBytes: 262_144 }); records.push({ task: id, tier, retryOrdinal, ...result });
         // Worker completion is only candidate evidence. The official engine

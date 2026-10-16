@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 export type Tier = "fast" | "balanced" | "judgment";
 export type TaskType = "templated" | "implementation" | "review" | "design" | "security" | "compliance" | "approval" | "ambiguous";
 export type Execution = "serial" | "official-wave" | "official-swarm";
-export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
+export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; builderBrief?: unknown; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
 export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
 type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };

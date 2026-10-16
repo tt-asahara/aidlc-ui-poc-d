@@ -62,18 +62,18 @@ Report paths, build/dry-run, authorized writes, collisions, exact payload/licens
 
 ## Keep and parameterize D acceleration
 
-Do not copy `poc/d-acceleration` into `PRODUCT`. Keep the complete D checkout at `SRC`; its tools import pinned source contracts from `SRC/core` and integration fixtures from `SRC/tests`. Invoke them from the PRODUCT working directory using absolute paths. Verify imports without a model call:
+Do not copy `poc/d-acceleration` into `PRODUCT`. Keep the complete D checkout at `SRC`, but always execute against PRODUCT's composed `.claude` runtime. Never pass bare `SRC/core` as the engine/framework. The single supported entrypoint is:
 
 ```bash
-(cd "$PRODUCT" && bun -e 'await import(process.argv[1])' "$SRC/poc/d-acceleration/read-only-fanout.ts")
-(cd "$PRODUCT" && bun -e 'await import(process.argv[1])' "$SRC/poc/d-acceleration/conductor.ts")
-claude --help
+(cd "$PRODUCT" && bun "$SRC/poc/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)
 ```
+
+Preflight must report `uiBaseline: C-composed`, the four supported design waves, three supported read-only stages, the exact PRODUCT runtime path, and no missing compose files. Treat any other result as setup failure. For a supported official design wave, rerun the same entrypoint with `--worker claude` and explicit requested models. For feasibility, market-research, or performance-validation, add `--fanout-input <absolute-path>`; use `--dry-run` first. Every other stage returns unchanged to the official host.
 
 Acceleration is opt-in. With it disabled, the installed C plugin, pinned payload, HTML evidence contracts, blocking sensor, approvals, and downstream handoffs remain fully active. With it enabled, obtain a fresh official `orchestrate next`; accept only policy-supported read-only fanout or official design waves; preserve `gate`, state, stage, memory/record paths, contribution contracts, and sensor dispatch; keep overlapping writes, reviewers, approvals, and unsupported topologies serial.
 
 Confirm at execution time: PRODUCT/framework paths, user-supplied model request catalog, timeout/concurrency, evidence/log locations, and any existing loopback Clef URL. Never install, start, authenticate, or reconfigure Clef or a model provider. Clef is optional and low-risk only; timeout, malformed output, low confidence, or transport failure falls back conservatively. Requested, launched, and runtime-reported model identities remain separate.
 
-Run `read-only-fanout.ts --dry-run` or `conductor.ts` only against a fresh engine directive and from `PRODUCT`. Workers stay read-only and return separate findings; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff.
+Run only `run.ts`; it resolves PRODUCT's composed engine/framework and obtains a fresh official directive. Workers stay read-only and return separate findings; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff. Save preflight, stdout, stderr, enabled-feature summary, and returned official handoff as the D execution record; import checks alone are not setup completion.
 
 Report the retained C source pins and licenses, UI compose status, D source commit, acceleration mode, directive validation, fallback disposition, requested/runtime model IDs, evidence paths, and exact official next handoff. Fixtures, fake workers, dry runs, and benchmark estimates are synthetic evidence and are not live-model or speed claims.

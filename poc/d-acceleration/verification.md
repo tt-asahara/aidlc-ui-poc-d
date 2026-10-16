@@ -92,10 +92,9 @@ stop.
    checks pass. Inspect the launch without a model call first:
 
    ```bash
-   bun poc/d-acceleration/read-only-fanout.ts \
-     --input /tmp/aidlc-d-fanout.json \
+   bun poc/d-acceleration/run.ts \
      --project-dir '<disposable-project-absolute-path>' \
-     --framework-dir "$PWD/core" \
+     --fanout-input /tmp/aidlc-d-fanout.json \
      --dry-run | tee /tmp/aidlc-d-evidence/fanout-dry-run.json
    ```
 
@@ -105,9 +104,8 @@ stop.
 6. For an official design Unit wave, the host may invoke:
 
    ```bash
-   bun poc/d-acceleration/conductor.ts \
+   bun poc/d-acceleration/run.ts \
      --project-dir '<disposable-project-absolute-path>' \
-     --engine-dir "$PWD/core/tools" \
      --worker claude \
      --claude-fast "$D_FAST_MODEL" \
      --claude-balanced "$D_BALANCED_MODEL" \

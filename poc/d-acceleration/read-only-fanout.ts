@@ -98,10 +98,10 @@ export async function runReadOnlyFanout(input: FanoutInput, options: FanoutOptio
 
 if (import.meta.main) {
   const args = process.argv.slice(2); const value = (flag: string) => { const index = args.indexOf(flag); return index < 0 ? undefined : args[index + 1]; };
-  const inputPath = value("--input"); const projectDir = value("--project-dir"); const frameworkDir = value("--framework-dir");
+  const inputPath = value("--input"); const projectDir = value("--project-dir"); const frameworkDir = value("--framework-dir"); const engineDir = value("--engine-dir");
   if (!inputPath || !projectDir || !frameworkDir) throw new Error("--input, --project-dir, and --framework-dir are required");
   const input = JSON.parse(readFileSync(inputPath, "utf8"));
-  const result = args.includes("--dry-run") ? planReadOnlyFanout(input, { projectDir, frameworkDir }) : await runReadOnlyFanout(input, { projectDir, frameworkDir });
+  const result = args.includes("--dry-run") ? planReadOnlyFanout(input, { projectDir, frameworkDir, engineDir }) : await runReadOnlyFanout(input, { projectDir, frameworkDir, engineDir });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.action === "official-host-action-required") process.exitCode = 2;
 }

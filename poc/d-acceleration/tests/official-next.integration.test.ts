@@ -205,6 +205,9 @@ describe("official next adapter integration", () => {
       });
       const project = seedWaveProject(fixture.projectDir);
       expect(fixture.dropLogs).toBe("");
+      const preflight = spawnSync(process.execPath, [join(import.meta.dir, "..", "run.ts"), "--project-dir", project, "--preflight"], { cwd: project, encoding: "utf8" });
+      expect(preflight.status, `${preflight.stdout}\n${preflight.stderr}`).toBe(0);
+      expect(JSON.parse(preflight.stdout)).toMatchObject({ uiBaseline: "C-composed", acceleration: "D-opt-in", missing: [] });
       const orchestrate = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
       const engineDir = join(project, ".claude", "tools");
       const first = runOrchestrateNext(orchestrate, project, [], {
