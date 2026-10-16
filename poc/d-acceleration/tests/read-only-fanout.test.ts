@@ -12,7 +12,7 @@ const tasks = [
   { id: "constraints", agent: "aidlc-architect-agent", objective: "Extract technical constraints", evidencePaths: ["README.md", "core"] },
   { id: "quality", agent: "aidlc-quality-agent", objective: "Find existing quality evidence", evidencePaths: ["tests"] },
 ];
-const catalog = { balanced: "runtime-confirmed-balanced", judgment: "runtime-confirmed-judgment" };
+const catalog = { balanced: "caller-balanced-request", judgment: "caller-judgment-request" };
 const fullHelp = "--print --output-format --no-session-persistence --restricted --strict-mcp-config --mcp-config --disable-slash-commands --permission-mode --permission-prompts --tools --allowed-tools --disallowed-tools --agents --agent --model --effort";
 
 describe("read-only within-stage fanout", () => {
@@ -21,7 +21,7 @@ describe("read-only within-stage fanout", () => {
     const result = planReadOnlyFanout({ directive, tasks, modelCatalog: catalog }, options);
     expect(result.action).toBe("unverified-read-only-fanout-plan");
     expect(result.verifiedAgainstFreshNext).toBeFalse();
-    expect(result.routing).toEqual({ tier: "balanced", effort: "medium", requestedModel: "runtime-confirmed-balanced", source: "stage-policy" });
+    expect(result.routing).toEqual({ tier: "balanced", effort: "medium", requestedModel: "caller-balanced-request", source: "stage-policy" });
     expect(result.launches).toHaveLength(2);
     const launch = result.launches[0]!.launch;
     expect(launch.args).toContain("--agent"); expect(launch.args).toContain("aidlc-architect-agent");

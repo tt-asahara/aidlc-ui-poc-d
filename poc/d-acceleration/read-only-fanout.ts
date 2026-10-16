@@ -48,7 +48,7 @@ export function planReadOnlyFanout(input: FanoutInput, options: FanoutOptions) {
   if (!Array.isArray(input.tasks) || input.tasks.length < 2) throw new Error("read-only fanout requires at least two independent tasks");
   const tier = stage.tier as PolicyTier; const effort = stage.effort as PolicyEffort;
   const model = input.modelCatalog?.[tier];
-  if (!model?.trim()) throw new Error(`a runtime-confirmed ${tier} model ID is required`);
+  if (!model?.trim()) throw new Error(`a caller-supplied ${tier} model request is required`);
   const maxParallel = input.maxParallel ?? 3;
   if (!Number.isFinite(maxParallel) || !Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > MAX_PARALLEL) throw new Error(`maxParallel must be an integer from 1 through ${MAX_PARALLEL}`);
   const ids = new Set<string>();

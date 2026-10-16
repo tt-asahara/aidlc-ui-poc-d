@@ -37,8 +37,8 @@ describe("worker adapters", () => {
   });
 
   test("Claude argv is explicit and missing executable fails without login retry", async () => {
-    const launch = claudeWorkerLaunch({ model: "runtime-confirmed-model", effort: "medium", prompt: "synthetic fixture", executable: "/definitely/missing/claude" });
-    expect(launch.args).toEqual(["--print", "--output-format", "json", "--permission-prompts", "none", "--model", "runtime-confirmed-model", "--effort", "medium", "synthetic fixture"]);
+    const launch = claudeWorkerLaunch({ model: "caller-model-request", effort: "medium", prompt: "synthetic fixture", executable: "/definitely/missing/claude" });
+    expect(launch.args).toEqual(["--print", "--output-format", "json", "--permission-prompts", "none", "--model", "caller-model-request", "--effort", "medium", "synthetic fixture"]);
     const result = await runWorker(launch, limits);
     expect(result.failure).toBe("unavailable");
     expect(result.argv.filter((value) => /login/i.test(value))).toEqual([]);

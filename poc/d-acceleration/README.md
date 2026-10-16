@@ -81,7 +81,7 @@ official host.
 For an enabled inline analysis stage, the official host can invoke
 `read-only-fanout.ts --input <plan.json> --project-dir <project> --framework-dir
 <installed-core>`. The input includes the current unmodified directive,
-runtime-confirmed tier-to-model catalog, and independent evidence-path tasks. The
+caller-supplied tier-to-model request catalog, and independent evidence-path tasks. The
 stage policy selects both tier and effort; the chosen tier, effort, and requested
 model are retained in the result. Use
 `--dry-run` to inspect the projected official agents and enforced Claude CLI
@@ -92,8 +92,10 @@ phase, mode, gate, memory/record path, and stage file must still match before
 any worker starts. Worker responses are returned
 separately for lead integration; workers never write official artifacts.
 Start from `fixtures/read-only-fanout.json`, replace its directive with the
-latest official `orchestrate next` result and its model placeholder with an ID
-confirmed by that runtime. Never reuse the example directive as authority.
+latest official `orchestrate next` result and its model placeholder with the
+model request configured on the user's authenticated terminal. This is only a
+request: availability and runtime-reported identity are determined from each
+execution result. Never reuse the example directive as authority.
 
 Evidence paths are realpath-checked against the project, including symlinks.
 They scope the assignment, not the Claude file tools: `Read`, `Grep`, and

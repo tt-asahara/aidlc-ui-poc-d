@@ -17,7 +17,7 @@
     "stage_file": "core/aidlc-common/stages/ideation/market-research.md"
   },
   "modelCatalog": {
-    "balanced": "replace-with-runtime-confirmed-balanced-model-id"
+    "balanced": "replace-with-caller-supplied-balanced-model-request"
   },
   "maxParallel": 2,
   "tasks": [

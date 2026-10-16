@@ -31,7 +31,7 @@ describe("D acceleration harness", () => {
     expect(Math.max(...designs.map((record) => record.startedAt))).toBeLessThan(Math.min(...designs.map((record) => record.endedAt)));
     expect(completed.records.at(-1)?.task).toBe("review");
   });
-  test("passes verified model argv and escalates failed child", async () => {
+  test("passes caller model requests and escalates failed child", async () => {
     const result = await execute(withoutApproval(), { projectDir, failOnce: ["code-a"] });
     const attempts = result.records.filter((record) => record.task === "code-a");
     expect(attempts.map((record) => record.requestedModel)).toEqual(["fixture-balanced", "fixture-judgment"]);
