@@ -5,6 +5,10 @@ approval, review, audit, or Testing Contract boundaries. It is deliberately
 outside `core/`: an install must opt in and call the planner before dispatching
 work through the existing engine directives.
 
+See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
+surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
+local service contract.
+
 ## Safety contract
 
 - Deterministic rules win. Clef is consulted only for ambiguous, low-risk task
