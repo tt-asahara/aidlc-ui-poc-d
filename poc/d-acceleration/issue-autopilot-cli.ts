@@ -206,12 +206,17 @@ async function recoverPartialRepair(issueNumber: number, key: string): Promise<{
   // release cannot remove a successor claim.
   await createFileClaimStore({ directory: paths.claims, leaseMs: 60_000 }).release(issueNumber, journal.owner);
   if (journal.phase === "binding-repaired") { const archive = journal.archive; rmSync(lock, { recursive: true, force: true }); return archive ? { completedArchive: archive } : {}; }
-  if ((journal.phase === "moved" || journal.phase === "audited") && journal.source && journal.archive) {
+  if ((journal.phase === "prepared" || journal.phase === "moved" || journal.phase === "audited") && journal.source && journal.archive) {
     const spaces = realpathSync(join(projectDir, "aidlc", "spaces"));
     const source = resolve(journal.source), archive = resolve(journal.archive), quarantine = realpathSync(resolve(paths.bindings, "quarantine"));
-    if (!source.startsWith(`${spaces}/`) || !existsSync(archive) || lstatSync(archive).isSymbolicLink() || !lstatSync(archive).isDirectory()
-      || !realpathSync(archive).startsWith(`${quarantine}/`) || existsSync(source)) return { busy: true };
-    renameSync(archive, source);
+    const sourceExists = existsSync(source), archiveExists = existsSync(archive);
+    if (journal.phase === "prepared" && sourceExists && !archiveExists) {
+      // The process died before rename; only the lock needs recovery.
+    } else {
+      if (!source.startsWith(`${spaces}/`) || !archiveExists || lstatSync(archive).isSymbolicLink() || !lstatSync(archive).isDirectory()
+        || !realpathSync(archive).startsWith(`${quarantine}/`) || sourceExists) return { busy: true };
+      renameSync(archive, source);
+    }
   }
   rmSync(lock, { recursive: true, force: true }); return {};
 }
@@ -247,6 +252,7 @@ if (command === "repair") {
       quarantined = join(quarantineParent, `${key}-${Date.now()}-${basename(source)}`);
       journal = { ...journal, phase: "prepared", source: actual, archive: quarantined }; writeJournal(repairLock, journal);
       renameSync(source, quarantined);
+      if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-rename") process.kill(process.pid, "SIGKILL");
       journal = { ...journal, phase: "moved" }; writeJournal(repairLock, journal);
       if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-move") process.kill(process.pid, "SIGKILL");
       const auditPath = join(quarantined, "partial-repair-audit.json");

@@ -135,7 +135,7 @@ describe("packaged Issue autopilot command routing", () => {
   });
 
   test("partial repair recovers dead locks and every crash phase without data loss", () => {
-    for (const phase of ["after-lock", "after-move", "after-audit", "after-binding"]) {
+    for (const phase of ["after-lock", "after-rename", "after-move", "after-audit", "after-binding"]) {
       const root = mkdtempSync(join(tmpdir(), `d-auto-crash-${phase}-`)); mkdirSync(join(root, ".claude"), { recursive: true });
       writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
       const repository = "github.com/owner/repo", binding = { provider: "github", repository, issueNumber: 9, intakeKey: intakeBindingKey({ provider: "github", repository }, 9) };
