@@ -2,13 +2,23 @@
   "directive": {
     "kind": "run-stage",
     "stage": "market-research",
+    "phase": "ideation",
     "mode": "inline",
     "gate": false,
     "lead_agent": "aidlc-product-agent",
-    "support_agents": []
+    "support_agents": [],
+    "inline_context_paths": ["core/agents/aidlc-product-agent.md"],
+    "memory_path": "aidlc/spaces/default/intents/replace-me/ideation/market-research/memory.md",
+    "consumes": [],
+    "produces": ["aidlc/spaces/default/intents/replace-me/ideation/market-research/research.md"],
+    "rules_in_context": [],
+    "sensors_applicable": [],
+    "ceremony": { "sensors": "on", "learnings": "on", "summary_confirmation": "on", "plan_approval": "on", "collaborators": "off" },
+    "stage_file": "core/aidlc-common/stages/ideation/market-research.md"
   },
-  "model": "replace-with-runtime-confirmed-model-id",
-  "effort": "medium",
+  "modelCatalog": {
+    "balanced": "replace-with-runtime-confirmed-balanced-model-id"
+  },
   "maxParallel": 2,
   "tasks": [
     {
