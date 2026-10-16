@@ -15,21 +15,27 @@ export const groundingSpawnRunner: GroundingCommandRunner = (executable, argv, c
 export function createClaudeGroundingWorker(options: { cwd: string; executable?: string; runner?: GroundingCommandRunner }): GroundingWorker {
   const runner = options.runner ?? groundingSpawnRunner;
   return async (task: GroundingTask): Promise<GroundingWorkerResult> => {
-    const files: string[] = [];
+    const evidenceFiles: string[] = [];
     for (const evidenceRoot of task.evidenceRoots) {
       const pending = [evidenceRoot];
       while (pending.length) {
         const path = pending.pop()!; const stat = lstatSync(path);
         if (stat.isSymbolicLink()) throw new Error(`grounding evidence contains a symlink: ${path}`);
         if (stat.isDirectory()) { for (const name of readdirSync(path)) pending.push(`${path}/${name}`); continue; }
-        if (stat.isFile()) files.push(path);
-        if (files.length > 200) throw new Error("grounding evidence exceeds 200 files");
+        if (stat.isFile()) evidenceFiles.push(path);
+        if (evidenceFiles.length > 200) throw new Error("grounding evidence exceeds 200 files");
       }
     }
-    let bytes = 0;
-    const snapshot = files.sort().map((path) => { const content = readFileSync(path, "utf8"); bytes += Buffer.byteLength(content); if (bytes > 1_000_000) throw new Error("grounding evidence exceeds 1000000 bytes"); return `--- ${relative(options.cwd, path)} ---\n${content}`; }).join("\n");
+    const artifactFiles = [...new Set(task.artifactPaths)].sort();
+    const all = [...artifactFiles, ...evidenceFiles.sort()];
+    let declaredBytes = 0;
+    for (const path of all) { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`grounding input is not a regular file: ${path}`); declaredBytes += stat.size; if (declaredBytes > 1_000_000) throw new Error("grounding inputs exceed 1000000 bytes before read"); }
+    let actualBytes = 0;
+    const render = (paths: string[], label: string) => paths.map((path) => { const content = readFileSync(path, "utf8"); actualBytes += Buffer.byteLength(content); if (actualBytes > 1_000_000) throw new Error("grounding inputs exceed 1000000 bytes while reading"); return `--- ${label}: ${relative(options.cwd, path)} ---\n${content}`; }).join("\n");
+    const artifactSnapshot = render(artifactFiles, "STAGE ARTIFACT");
+    const evidenceSnapshot = render(evidenceFiles.sort(), "EVIDENCE");
     const schema = '{"findings":[{"code":"confirmed|refuted|grounding-unavailable","severity":"info|warn|error","claim":"...","evidencePaths":["..."],"detail":"..."}],"uncertainty":["..."]}';
-    const result = await runner(options.executable ?? "claude", ["-p", `${task.prompt}\nBounded evidence snapshot:\n${snapshot}\nReturn JSON only matching ${schema}`, "--allowedTools", "", "--permission-mode", "dontAsk"], options.cwd);
+    const result = await runner(options.executable ?? "claude", ["-p", `${task.prompt}\nBounded stage artifact snapshot:\n${artifactSnapshot}\nBounded evidence snapshot:\n${evidenceSnapshot}\nReturn JSON only matching ${schema}`, "--allowedTools", "", "--permission-mode", "dontAsk"], options.cwd);
     if (result.status !== 0) throw new Error(`grounding worker failed (${result.status}): ${result.stderr.trim()}`);
     try { return JSON.parse(result.stdout) as GroundingWorkerResult; } catch { throw new Error("grounding worker returned non-JSON output"); }
   };

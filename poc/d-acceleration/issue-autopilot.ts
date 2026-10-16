@@ -282,14 +282,20 @@ export async function runIssueAutopilot(input: {
       assessment.description,
       "</untrusted-issue-body>",
     ].join("\n");
-    // Intent creation is non-idempotent. Attempt it once, then reconcile from
-    // official state when the response is uncertain; never blindly retry it.
+    // Intent creation is non-idempotent. Reconcile from durable official state
+    // before every create, so a later poll of the same Issue resumes the bound
+    // intent instead of creating a duplicate.
     let created: { value?: OfficialDirective; attempts: number; error?: unknown };
-    try {
-      created = { value: await input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]), attempts: 1 };
-    } catch (error) {
-      const reconciled = await input.deps.engine.reconcileIntent?.(issue.number);
-      created = reconciled ? { value: reconciled, attempts: 1 } : { attempts: 1, error };
+    const existing = await input.deps.engine.reconcileIntent?.(issue.number);
+    if (existing) {
+      created = { value: existing, attempts: 0 };
+    } else {
+      try {
+        created = { value: await input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]), attempts: 1 };
+      } catch (error) {
+        const reconciled = await input.deps.engine.reconcileIntent?.(issue.number);
+        created = reconciled ? { value: reconciled, attempts: 1 } : { attempts: 1, error };
+      }
     }
     if (!created.value) {
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };

@@ -38,7 +38,9 @@ export function checkpointHostSession(state: HostSessionState, directive: Readon
   const fingerprint = directiveProgressFingerprint(directive);
   if (fingerprint === state.lastFingerprint) return { action: "stop", reason: "no-progress", state };
   const next = { ...state, steps: state.steps + 1, lastFingerprint: fingerprint, lastStage: directive.stage ?? state.lastStage };
-  if (directive.gate || directive.kind === "ask") return { action: "stop", reason: "human-gate", state: next };
+  // run-stage gate:true means execute the stage and then enter its approval
+  // protocol. Only an actual ask is already waiting on the human.
+  if (directive.kind === "ask") return { action: "stop", reason: "human-gate", state: next };
   if (directive.dangerous) return { action: "stop", reason: "dangerous-operation", state: next };
   return { action: "continue", state: next };
 }

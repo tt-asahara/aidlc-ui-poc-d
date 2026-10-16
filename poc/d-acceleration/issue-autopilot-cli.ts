@@ -58,7 +58,9 @@ class OfficialEngine implements EngineAdapter {
 const auto = resolveDAutomation(projectDir), autopilot = resolveDIssueAutopilot(projectDir);
 const policy = JSON.parse(readFileSync(join(import.meta.dir, "stage-policy.json"), "utf8")) as { stages: Array<{ stage: string }> };
 const activeStages = (value("--active-stages")?.split(",").filter(Boolean) ?? policy.stages.map((entry) => entry.stage));
-const through = resolveThroughBoundary(auto.through, activeStages);
+// Phase resolution needs the actual active scope graph. Defer it to host init
+// unless the host supplied that list on this invocation.
+const through = value("--active-stages") ? resolveThroughBoundary(auto.through, activeStages) : auto.through;
 const config = { enabled: auto.enabled && autopilot.enabled, labelAllowlist: auto.labelAllowlist, uncertaintyPolicy: auto.assumptionLedger ? auto.ambiguityPolicy : "halt" as const, through: through ?? undefined, sessionAuto: !auto.sessionOnly, maxRetries: auto.maxRetries, maxSteps: auto.maxSteps, deadlineMs: auto.deadlineMs };
 if (command === "status") { process.stdout.write(`${JSON.stringify(issueAutopilotStatus(config), null, 2)}\n`); process.exit(0); }
 if (!config.enabled && command !== "stop") { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }

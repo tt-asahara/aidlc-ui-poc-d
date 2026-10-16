@@ -12,6 +12,8 @@ describe("host-driven autopilot session", () => {
     expect(directiveProgressFingerprint(a)).not.toBe(directiveProgressFingerprint(b));
     const initial = { startedAt: 100, deadlineMs: 1000, maxSteps: 3, steps: 0, through: null };
     const first = checkpointHostSession(initial, a, 200); expect(first.action).toBe("continue");
+    expect(checkpointHostSession(initial, { ...a, gate: true }, 200).action).toBe("continue");
+    expect(checkpointHostSession(initial, { kind: "ask", stage: "functional-design", gate: true }, 200).reason).toBe("human-gate");
     expect(checkpointHostSession(first.state, a, 300).reason).toBe("no-progress");
     expect(checkpointHostSession(first.state, b, 300).action).toBe("continue");
     const boundary = checkpointHostSession({ ...first.state, through: "functional-design", lastStage: "functional-design" }, { kind: "run-stage", stage: "code-generation" }, 300);
