@@ -114,4 +114,25 @@ describe("durable claimed host session", () => {
     expect(existsSync(join(root, ".aidlc-engine", "session.json.heartbeat.json"))).toBeFalse();
     expect(existsSync(join(root, ".aidlc-engine", "session.json.lifecycle.lock"))).toBeFalse();
   });
+
+  test("human-gate keeps renewing its claim and a stolen owner cannot resume", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-host-human-wait-")); mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+    const paths = issueAutopilotRuntimePaths(root), owner = createFileClaimStore({ directory: paths.claims, leaseMs: 150 });
+    expect(await owner.acquire(42, "owner-a")).toBe("acquired");
+    const init = ["init", "--active-stages", "functional-design", "--through", "functional-design", "--deadline-ms", "5000", "--issue-number", "42", "--owner", "owner-a", "--claim-lease-ms", "150"];
+    expect(run(root, init).status).toBe(0);
+    writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "ask", stage: "functional-design", gate: true }));
+    expect(JSON.parse(run(root, ["checkpoint", "--directive-file", "directive.json"]).stdout)).toMatchObject({ reason: "human-gate", state: { awaitingHuman: true, waitingToken: expect.any(String) } });
+    await Bun.sleep(650);
+    expect(await createFileClaimStore({ directory: paths.claims, leaseMs: 150 }).acquire(42, "owner-b")).toBe("busy");
+    expect(JSON.parse(run(root, init).stdout)).toMatchObject({ action: "continue", resumed: true, state: { awaitingHuman: false } });
+
+    const stolen = mkdtempSync(join(tmpdir(), "d-host-human-stolen-")); mkdirSync(join(stolen, ".aidlc-engine"), { recursive: true });
+    const stolenPaths = issueAutopilotRuntimePaths(stolen), stolenStore = createFileClaimStore({ directory: stolenPaths.claims, leaseMs: 5000 });
+    expect(await stolenStore.acquire(42, "owner-b")).toBe("acquired");
+    writeFileSync(join(stolen, ".aidlc-engine", "session.json"), JSON.stringify({ startedAt: Date.now(), deadlineMs: 5000, maxSteps: 4, steps: 1, through: "functional-design", claim: { issueNumber: 42, owner: "owner-a", leaseMs: 5000 }, awaitingHuman: true }));
+    const oldOwner = run(stolen, ["init", "--active-stages", "functional-design", "--through", "functional-design", "--deadline-ms", "5000", "--issue-number", "42", "--owner", "owner-a", "--claim-lease-ms", "5000"]);
+    expect(JSON.parse(oldOwner.stdout)).toMatchObject({ action: "stop", reason: "claim-lost" });
+    expect(JSON.parse(readFileSync(join(stolenPaths.claims, "issue-42.json"), "utf8")).owner).toBe("owner-b");
+  });
 });

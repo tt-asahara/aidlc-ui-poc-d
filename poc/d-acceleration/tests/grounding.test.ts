@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { planGrounding, runGrounding, type GroundingTask } from "../grounding.ts";
@@ -79,5 +79,14 @@ describe("D source/spec grounding", () => {
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [], uncertainty: [], approval: "approved" }) })).rejects.toThrow("must not create or claim approval");
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity: "error", claim: "x", evidencePaths: ["../"], detail: "x" }], uncertainty: [] }) })).rejects.toThrow("escapes project");
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity: "error", claim: "x", evidencePaths: ["src/orders.ts"], detail: "x" }], uncertainty: [] }) })).rejects.toThrow("outside configured roots");
+  });
+
+  test("rejects directories and symlinks as confirmed/refuted evidence", async () => {
+    const projectDir = fixture();
+    symlinkSync(join(projectDir, "spec", "api.md"), join(projectDir, "spec", "api-link.md"));
+    const base = { lane: "spec" as const, stage: "domain-design" as const, projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } } };
+    for (const evidencePath of ["spec", "spec/api-link.md"]) {
+      await expect(runGrounding({ ...base, worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "orders endpoint exists", evidencePaths: [evidencePath], detail: "claimed evidence" }], uncertainty: [] }) })).rejects.toThrow("not a regular non-symlinked file");
+    }
   });
 });

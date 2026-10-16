@@ -96,8 +96,8 @@ function readClaim(path: string): ClaimRecord | null {
   const value = readJson<unknown>(path);
   if (!value || typeof value !== "object") return null;
   const claim = value as Partial<ClaimRecord>;
-  return Number.isSafeInteger(claim.issueNumber) && claim.issueNumber! > 0
-    && typeof claim.owner === "string" && !!claim.owner.trim()
+  return typeof claim.issueNumber === "number" && Number.isSafeInteger(claim.issueNumber) && claim.issueNumber > 0
+    && typeof claim.owner === "string" && claim.owner.trim().length > 0
     && typeof claim.acquiredAt === "number" && Number.isFinite(claim.acquiredAt)
     && typeof claim.expiresAt === "number" && Number.isFinite(claim.expiresAt)
     ? claim as ClaimRecord : null;
@@ -244,6 +244,20 @@ export function createFileIntakeBindingStore(directory: string, options: { clock
         return "reserved";
       } finally { try { unlinkSync(recovery); } catch {} }
     },
+    async repair(binding, owner, reason) {
+      const path = pathFor(binding), recovery = `${path}.recovery`;
+      if (!acquireRecoverableLock(recovery, owner, now, recoveryLeaseMs)) return "missing";
+      try {
+        const current = readJson<Record<string, unknown>>(path);
+        if (!current) return "missing";
+        if (current.state === "bound") return "bound";
+        if (current.intakeKey !== binding.intakeKey || current.provider !== binding.provider || current.repository !== binding.repository || current.issueNumber !== binding.issueNumber) throw new Error("cannot repair mismatched intake binding");
+        const archive = `${path}.repaired-${now()}`;
+        writeFileSync(archive, `${JSON.stringify({ ...current, repairedAt: now(), repairedBy: owner, repairReason: reason })}\n`, { mode: 0o600, flag: "wx" });
+        unlinkSync(path);
+        return "repaired";
+      } finally { try { unlinkSync(recovery); } catch {} }
+    },
     async finalize(binding, owner) {
       const path = pathFor(binding), current = readJson<Record<string, unknown>>(path);
       if (!current || current.provider !== binding.provider || current.repository !== binding.repository
@@ -257,7 +271,7 @@ export function createFileIntakeBindingStore(directory: string, options: { clock
     },
     async recordAttempt(binding, owner, attempt) {
       const path = pathFor(binding), current = readJson<Record<string, unknown>>(path);
-      if (!current || current.state !== "pending" || current.owner !== owner || current.intakeKey !== binding.intakeKey) throw new Error("cannot record attempt for unowned intake binding");
+      if (current?.state !== "pending" || current.owner !== owner || current.intakeKey !== binding.intakeKey) throw new Error("cannot record attempt for unowned intake binding");
       const temporary = `${path}.attempt-${process.pid}`;
       writeFileSync(temporary, `${JSON.stringify({ ...current, ...attempt, updatedAt: now() })}\n`, { mode: 0o600, flag: "wx" });
       renameSync(temporary, path);

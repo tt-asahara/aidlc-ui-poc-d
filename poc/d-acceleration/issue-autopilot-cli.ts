@@ -25,15 +25,20 @@ const hostSessionPath = resolve(projectDir, hostSessionFile);
 if (relative(resolve(projectDir), hostSessionPath).startsWith("..")) throw new Error("session file escapes project");
 const activeHostSession = (): HostSessionState | null => {
   if (!existsSync(hostSessionPath)) return null;
-  try {
-    // status performs lifecycle recovery under the host-session lock before we
-    // decide whether a durable action is resumable or terminal.
-    const recovered = spawnSync(process.execPath, [join(import.meta.dir, "host-session-cli.ts"), "status", "--project-dir", projectDir, "--session-file", hostSessionFile], { cwd: projectDir, encoding: "utf8" });
-    if (recovered.status !== 0) return null;
-    const state = (JSON.parse(recovered.stdout) as { state?: HostSessionState | null }).state ?? null;
-    return state?.endedAt ? null : state;
+  // This is deliberately an executable recovery boundary, not a JSON read.
+  // status owns the lifecycle lock and atomically terminalizes stale workers,
+  // releases their owner claim, and removes heartbeat debris before intake.
+  const recovered = spawnSync(process.execPath, [join(import.meta.dir, "host-session-cli.ts"), "status", "--project-dir", projectDir, "--session-file", hostSessionFile], { cwd: projectDir, encoding: "utf8" });
+  if (recovered.status !== 0) throw new Error((recovered.stderr || recovered.stdout || "host session recovery failed").trim());
+  const state = (JSON.parse(recovered.stdout) as { state?: HostSessionState | null }).state ?? null;
+  return state?.endedAt ? null : state;
+};
+const requireActiveHostSession = (): HostSessionState | null => {
+  try { return activeHostSession(); }
+  catch (error) {
+    process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "session-recovery-failed", detail: String(error) }, null, 2)}\n`);
+    process.exit(0);
   }
-  catch { return null; }
 };
 
 function runJson(executable: string, args: string[]): Json {
@@ -58,7 +63,8 @@ function issueIntentState(issueNumber: number): "none" | "partial" | "active" {
   let partial = false;
   let seen = 0;
   while (pending.length && seen++ < 4096) {
-    const dir = pending.pop()!;
+    const dir = pending.pop();
+    if (!dir) break;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) pending.push(path);
@@ -100,10 +106,8 @@ function issueIntentState(issueNumber: number): "none" | "partial" | "active" {
 }
 
 class OfficialEngine implements EngineAdapter {
-  private issueNumber = 0;
   async createIntent(args: readonly ["--new-intent", "--scope", string, "--label", string, string]): Promise<OfficialDirective> {
     const description = args[5];
-    const match = /GitHub issue #(\d+)/.exec(description); this.issueNumber = Number(match?.[1] ?? 0);
     runJson(utility, ["intent-create", "--scope", args[2], "--label", args[4], "--arguments", description]);
     return runJson(orchestrate, ["next"]) as OfficialDirective;
   }
@@ -121,16 +125,23 @@ const activeStages = (value("--active-stages")?.split(",").filter(Boolean) ?? po
 // unless the host supplied that list on this invocation.
 const through = value("--active-stages") ? resolveThroughBoundary(auto.through, activeStages) : auto.through;
 const config = { enabled: auto.enabled && autopilot.enabled, labelAllowlist: auto.labelAllowlist, uncertaintyPolicy: auto.assumptionLedger ? auto.ambiguityPolicy : "halt" as const, through: through ?? undefined, sessionAuto: !auto.sessionOnly, maxRetries: auto.maxRetries, maxSteps: auto.maxSteps, deadlineMs: auto.deadlineMs };
-if (command === "status") { process.stdout.write(`${JSON.stringify({ ...issueAutopilotStatus(config), activeSession: activeHostSession() }, null, 2)}\n`); process.exit(0); }
-if (!config.enabled && command !== "stop") { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
+if (command === "status") { process.stdout.write(`${JSON.stringify({ ...issueAutopilotStatus(config), activeSession: requireActiveHostSession() }, null, 2)}\n`); process.exit(0); }
+if (!config.enabled && command !== "stop" && command !== "repair") { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
 const paths = issueAutopilotRuntimePaths(projectDir);
-if (command === "stop") { writeFileSync(paths.stop, "stop\n", { mode: 0o600 }); process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "operator-stop", stopFile: paths.stop })}\n`); process.exit(0); }
-if (existsSync(paths.stop)) { unlinkSync(paths.stop); process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "operator-stop" })}\n`); process.exit(0); }
+if (command === "stop") {
+  writeFileSync(paths.stop, "stop\n", { mode: 0o600 });
+  // Recovery consumes the stop while holding the lifecycle lock, persists the
+  // terminal session, and releases only its bound owner claim.
+  requireActiveHostSession();
+  if (existsSync(paths.stop)) unlinkSync(paths.stop);
+  process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "operator-stop", stopFile: paths.stop })}\n`); process.exit(0);
+}
 
 // A new slash invocation has a new pid, but an active durable session already
 // owns the Issue claim. Resume it before intake instead of contending under a
 // freshly-generated owner and reporting claim-busy.
-const existingSession = activeHostSession();
+const existingSession = requireActiveHostSession();
+if (existsSync(paths.stop)) { unlinkSync(paths.stop); process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "operator-stop" })}\n`); process.exit(0); }
 if (existingSession?.claim) {
   const actionActive = Boolean(existingSession.hostAction) || existsSync(`${hostSessionPath}.heartbeat.json`);
   const resumed = {
@@ -144,19 +155,30 @@ if (existingSession?.claim) {
 
 const origin = configuredRepository ? null : spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: projectDir, encoding: "utf8" });
 repository = canonicalGitHubRepository(configuredRepository ?? (origin?.status === 0 ? origin.stdout.trim() : ""));
+const bindings = createFileIntakeBindingStore(paths.bindings);
+
+if (command === "repair") {
+  const repairIssue = Number(value("--issue-number"));
+  if (!Number.isSafeInteger(repairIssue) || repairIssue <= 0) throw new Error("repair requires --issue-number");
+  if (issueIntentState(repairIssue) !== "none") {
+    process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "repair-refused", issueNumber: repairIssue, detail: "official active or partial intent state still exists" })}\n`); process.exit(0);
+  }
+  if (!bindings.repair) throw new Error("intake binding repair is unavailable");
+  const repaired = await bindings.repair({ provider: "github", repository, issueNumber: repairIssue, intakeKey: intakeKey(repairIssue) }, value("--owner") ?? `repair-${process.pid}`, value("--reason") ?? "operator-confirmed official absence");
+  process.stdout.write(`${JSON.stringify({ status: "stopped", reason: `binding-${repaired}`, issueNumber: repairIssue })}\n`); process.exit(0);
+}
 
 const issueNumber = /^\d+$/.test(command) ? Number(command) : undefined;
 const requiredLabel = issueNumber || command === "list" ? undefined : command;
 const effective = requiredLabel ? { ...config, labelAllowlist: [...config.labelAllowlist, requiredLabel] } : config;
 const issues = createGhIssueSource({ cwd: projectDir, repository, executable: value("--gh-executable") });
 if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
-const bindings = createFileIntakeBindingStore(paths.bindings);
 if (issueNumber && issueIntentState(issueNumber) === "partial") {
   await bindings.reserve({ provider: "github", repository, issueNumber, intakeKey: intakeKey(issueNumber) }, "migration-partial");
 }
 const result = await runIssueAutopilot({
   config: effective,
-  selection: issueNumber ? { issueNumber } : { candidatesFromList: async (choices) => choices.filter((item) => item.labels.includes(requiredLabel!) && issueIntentState(item.number) === "none").map((item) => item.number) },
+  selection: issueNumber ? { issueNumber } : { candidatesFromList: async (choices) => choices.filter((item) => effective.labelAllowlist.every((label) => item.labels.includes(label)) && issueIntentState(item.number) === "none").map((item) => item.number) },
   owner: value("--owner") ?? `pid-${process.pid}`,
   scope: value("--scope") ?? "feature",
   binding: { provider: "github", repository },

@@ -126,6 +126,7 @@ export function intakeBindingKey(binding: IntakeBindingIdentity, issueNumber: nu
 export interface IntakeBindingStore {
   reserve(binding: IntakeBinding, owner: string): Promise<"reserved" | "recoverable" | "pending" | "bound">;
   recover?(binding: IntakeBinding, owner: string): Promise<"reserved" | "pending">;
+  repair?(binding: IntakeBinding, owner: string, reason: string): Promise<"repaired" | "missing" | "bound">;
   finalize(binding: IntakeBinding, owner: string): Promise<void>;
   recordAttempt?(binding: IntakeBinding, owner: string, attempt: { attempts: number; outcome: "transient-exhausted" | "ambiguous" | "fatal"; detail: string }): Promise<void>;
 }
@@ -284,7 +285,8 @@ export async function runIssueAutopilot(input: {
       }
       return skipped.length ? { ...result, skippedCandidates: skipped } : result;
     }
-    return skipped.length ? { status: "stopped", reason: skipped.at(-1)!.reason, issueNumber: skipped.at(-1)!.issueNumber, detail: "all eligible candidates were busy or require reconciliation", skippedCandidates: skipped } : { status: "stopped", reason: "selection-cancelled" };
+    const lastSkipped = skipped.at(-1);
+    return lastSkipped ? { status: "stopped", reason: lastSkipped.reason, issueNumber: lastSkipped.issueNumber, detail: "all eligible candidates were busy or require reconciliation", skippedCandidates: skipped } : { status: "stopped", reason: "selection-cancelled" };
   }
 
   const issue = await resolveIssue(input.selection, input.deps.issues);

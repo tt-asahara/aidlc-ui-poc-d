@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 
 export type GroundingLane = "source" | "spec";
@@ -45,6 +45,16 @@ function boundedExistingPath(projectDir: string, candidate: string): string {
   return canonical;
 }
 
+function boundedEvidenceFile(projectDir: string, candidate: string): string {
+  const root = realpathSync(projectDir);
+  const requested = isAbsolute(candidate) ? candidate : resolve(root, candidate);
+  if (!existsSync(requested)) throw new Error(`grounding path does not exist: ${candidate}`);
+  const bounded = boundedExistingPath(projectDir, candidate);
+  const stat = lstatSync(requested);
+  if (stat.isSymbolicLink() || !stat.isFile() || resolve(requested) !== bounded) throw new Error(`grounding evidence path is not a regular non-symlinked file: ${candidate}`);
+  return bounded;
+}
+
 function feature(config: GroundingConfig, lane: GroundingLane): GroundingFeatureConfig {
   return lane === "source" ? config.sourceGrounding ?? {} : config.specGrounding ?? {};
 }
@@ -63,7 +73,7 @@ function validateResult(value: GroundingWorkerResult, projectDir: string, eviden
     if (!ALLOWED_CODES.has(finding.code) || !ALLOWED_SEVERITIES.has(finding.severity) || !finding.claim?.trim() || !finding.detail?.trim() || !Array.isArray(finding.evidencePaths)) {
       throw new Error("grounding worker returned an invalid finding");
     }
-    const evidencePaths = finding.evidencePaths.map((path) => boundedExistingPath(projectDir, path));
+    const evidencePaths = finding.evidencePaths.map((path) => boundedEvidenceFile(projectDir, path));
     if (evidencePaths.some((path) => !insideAnyRoot(path, evidenceRoots))) throw new Error("grounding evidence path is outside configured roots");
     if ((finding.code === "confirmed" || finding.code === "refuted") && evidencePaths.length === 0) {
       throw new Error(`grounding ${finding.code} finding requires at least one evidence path`);

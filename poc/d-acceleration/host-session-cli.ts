@@ -77,34 +77,62 @@ const terminalize = async (state: HostSessionState, reason: string): Promise<Hos
   save(ended);
   if (state.claim) await storeFor(state)?.release(state.claim.issueNumber, state.claim.owner);
   remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed);
+  remove(issueAutopilotRuntimePaths(projectDir).stop);
   return ended;
+};
+const claimIsOwned = (state: HostSessionState) => {
+  if (!state.claim) return true;
+  try {
+    const claim = JSON.parse(readFileSync(`${issueAutopilotRuntimePaths(projectDir).claims}/issue-${state.claim.issueNumber}.json`, "utf8")) as { owner?: string; expiresAt?: number };
+    return claim.owner === state.claim.owner && typeof claim.expiresAt === "number" && claim.expiresAt > Date.now();
+  } catch { return false; }
 };
 const recoverLifecycle = async (): Promise<{ state: HostSessionState | null; recoveredReason?: string; busy?: boolean }> => {
   if (!existsSync(path)) return { state: null };
   const recovered = await withLifecycleLock(async () => {
     let state = readState();
     if (state.endedAt) { remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed); return { state }; }
+    if (existsSync(issueAutopilotRuntimePaths(projectDir).stop)) {
+      state = await terminalize(state, "operator-stop"); return { state, recoveredReason: "operator-stop" };
+    }
     const record = readHeartbeat();
     const failure = existsSync(heartbeatFailed) ? JSON.parse(readFileSync(heartbeatFailed, "utf8")) as { token?: string; reason?: string } : null;
-    if (!state.hostAction && !record) return { state };
-    if (!state.hostAction && record?.status === "stopping") { remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed); return { state }; }
+    const expectedToken = state.hostAction?.token ?? state.waitingToken;
+    if (!expectedToken && !record) {
+      if (!claimIsOwned(state)) { state = await terminalize(state, "claim-lost"); return { state, recoveredReason: "claim-lost" }; }
+      return { state };
+    }
+    if (!expectedToken && record?.status === "stopping") { remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed); return { state }; }
     let reason: string | null = null;
-    if (!state.hostAction || !record || state.hostAction.token !== record.token) reason = "host-action-orphaned";
+    if (!expectedToken || !record || expectedToken !== record.token) reason = "host-action-orphaned";
     else if (failure?.token === record.token) reason = failure.reason ?? "heartbeat-failed";
     else if (existsSync(issueAutopilotRuntimePaths(projectDir).stop)) reason = "operator-stop";
     else if (Date.now() - state.startedAt >= state.deadlineMs) reason = "deadline-exceeded";
     else if (record.status === "failed") reason = "heartbeat-failed";
     else if (!pidAlive(record.pid) || record.expiresAt <= Date.now()) reason = "heartbeat-stale";
-    if (!reason && state.claim) {
-      try {
-        const claim = JSON.parse(readFileSync(`${issueAutopilotRuntimePaths(projectDir).claims}/issue-${state.claim.issueNumber}.json`, "utf8")) as { owner?: string; expiresAt?: number };
-        if (claim.owner !== state.claim.owner || typeof claim.expiresAt !== "number" || claim.expiresAt <= Date.now()) reason = "claim-lost";
-      } catch { reason = "claim-lost"; }
-    }
+    if (!reason && !claimIsOwned(state)) reason = "claim-lost";
     if (reason) { state = await terminalize(state, reason); return { state, recoveredReason: reason }; }
     return { state };
   });
   return recovered ?? { state: readState(), busy: true };
+};
+const resumeWaitingHuman = async (state: HostSessionState): Promise<HostSessionState> => {
+  if (!state.awaitingHuman || !state.waitingToken) return state;
+  const resumed = await withLifecycleLock(async () => {
+    const current = readState(), record = readHeartbeat();
+    if (!record || record.token !== current.waitingToken) return terminalize(current, "host-action-orphaned");
+    writeHeartbeat({ ...record, status: "stopping" });
+    writeFileSync(heartbeatStop, "stop\n", { mode: 0o600 });
+    const joinDeadline = Date.now() + heartbeatInterval(current) * 2 + 500;
+    while (pidAlive(record.pid) && Date.now() < joinDeadline) await Bun.sleep(20);
+    const failure = existsSync(heartbeatFailed) ? JSON.parse(readFileSync(heartbeatFailed, "utf8")) as { reason: string } : null;
+    if (failure?.reason || pidAlive(record.pid)) return terminalize(current, failure?.reason ?? "heartbeat-worker-stuck");
+    if (await renewResilient(current) !== "renewed") return terminalize(current, "claim-lost");
+    const next = { ...current, awaitingHuman: false, waitingToken: undefined };
+    save(next); remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed);
+    return next;
+  });
+  return resumed ?? state;
 };
 
 if (mode === "init") {
@@ -113,7 +141,8 @@ if (mode === "init") {
   const claim: HostSessionClaim | undefined = issueNumber > 0 && owner ? { issueNumber, owner, leaseMs } : undefined;
   if ((issueNumber > 0) !== Boolean(owner)) throw new Error("init requires both --issue-number and --owner for a claimed session");
   if (existsSync(path)) {
-    const existing = (await recoverLifecycle()).state ?? readState();
+    let existing = (await recoverLifecycle()).state ?? readState();
+    if (!existing.endedAt && existing.awaitingHuman) existing = await resumeWaitingHuman(existing);
     const sameClaim = JSON.stringify(existing.claim ?? null) === JSON.stringify(claim ?? null);
     if (!existing.endedAt) {
       if (existing.through !== through || !sameClaim) throw new Error("active host session does not match requested boundary/claim");
@@ -122,6 +151,7 @@ if (mode === "init") {
     }
   }
   const state = { startedAt: Date.now(), deadlineMs: Number(value("--deadline-ms") ?? 900000), maxSteps: Number(value("--max-steps") ?? 64), steps: 0, through, ...(claim ? { claim } : {}) };
+  if (claim && !claimIsOwned(state)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "claim-lost", state })}\n`); process.exit(0); }
   save(state); process.stdout.write(`${JSON.stringify({ action: "continue", state })}\n`); process.exit(0);
 }
 
@@ -236,7 +266,22 @@ try {
     const result = checkpointHostSession(state, directive);
     let finalState: HostSessionState;
     if (result.action === "stop" && result.reason !== "human-gate") finalState = await finish(result.state, result.reason ?? "terminal-stop");
-    else { finalState = { ...result.state, awaitingHuman: result.reason === "human-gate" }; save(finalState); }
+    else if (result.reason === "human-gate" && result.state.claim) {
+      const leaseMs = result.state.claim.leaseMs;
+      const guarded = await withLifecycleLock(async () => {
+        const token = randomUUID(), startedAt = Date.now();
+        const waiting = { ...result.state, awaitingHuman: true, waitingToken: token };
+        save(waiting);
+        writeHeartbeat({ token, pid: null, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + leaseMs, status: "starting" });
+        try {
+          const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
+          if (!child.pid) throw new Error("waiting heartbeat worker did not start");
+          writeHeartbeat({ token, pid: child.pid, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + leaseMs, status: "running" });
+          child.unref(); return waiting;
+        } catch { return terminalize(waiting, "heartbeat-start-failed"); }
+      });
+      finalState = guarded ?? await finish(result.state, "lifecycle-busy");
+    } else { finalState = { ...result.state, awaitingHuman: result.reason === "human-gate" }; save(finalState); }
     process.stdout.write(`${JSON.stringify({ ...result, state: finalState })}\n`);
   }
 } finally {
