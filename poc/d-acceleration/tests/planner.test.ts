@@ -4,6 +4,7 @@ import { execute } from "../scheduler.ts";
 import { adaptOfficialNext } from "../official-next-adapter.ts";
 import { claudeLaunch } from "../claude-worker-adapter.ts";
 import fixture from "../fixtures/synthetic-plan.json";
+const projectDir = process.cwd();
 const withoutApproval = () => { const input = structuredClone(fixture) as Input; input.tasks = input.tasks.filter((task) => task.id !== "approval"); input.tasks.find((task) => task.id === "code-a")!.dependsOn = ["fd-a", "fd-b", "fd-c"]; return input; };
 
 describe("D acceleration harness", () => {
@@ -22,16 +23,16 @@ describe("D acceleration harness", () => {
     expect(launch.args).toContain("runtime-model"); expect(launch.args.at(-1)).toBe("synthetic prompt");
   });
   test("stops at approval and runs real children with overlap", async () => {
-    const stopped = await execute(fixture as Input);
+    const stopped = await execute(fixture as Input, { projectDir });
     expect(stopped.status).toBe("awaiting-official-approval");
     expect(stopped.records.map((record) => record.task).sort()).toEqual(["fd-a", "fd-b", "fd-c", "requirements"]);
-    const completed = await execute(withoutApproval());
+    const completed = await execute(withoutApproval(), { projectDir });
     const designs = completed.records.filter((record) => record.stage === "functional-design");
     expect(Math.max(...designs.map((record) => record.startedAt))).toBeLessThan(Math.min(...designs.map((record) => record.endedAt)));
     expect(completed.records.at(-1)?.task).toBe("review");
   });
   test("passes verified model argv and escalates failed child", async () => {
-    const result = await execute(withoutApproval(), { failOnce: ["code-a"] });
+    const result = await execute(withoutApproval(), { projectDir, failOnce: ["code-a"] });
     const attempts = result.records.filter((record) => record.task === "code-a");
     expect(attempts.map((record) => record.requestedModel)).toEqual(["fixture-balanced", "fixture-judgment"]);
     expect(attempts.map((record) => record.retryOrdinal)).toEqual([0, 1]);

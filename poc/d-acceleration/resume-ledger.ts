@@ -6,6 +6,7 @@ export const RESUME_LEDGER_VERSION = 1 as const;
 
 export interface UnitCompletion {
   completedAt: string;
+  contractFingerprint?: string;
   result?: unknown;
 }
 
@@ -74,8 +75,17 @@ export function loadResumeLedger(path: string, directive: unknown): ResumeLedger
 
 /** Returns issued units that have not already been durably recorded as successful. */
 export function unitsToResume(path: string, directive: unknown, issuedUnits: readonly string[]): string[] {
-  const ledger = loadResumeLedger(path, directive);
-  return issuedUnits.filter((unit) => !Object.hasOwn(ledger.succeeded, unit));
+  if (!existsSync(path)) return [...issuedUnits];
+  const ledger = validateLedger(JSON.parse(readFileSync(path, "utf8")));
+  return issuedUnits.filter((unit) => {
+    const completion = ledger.succeeded[unit];
+    return !completion || completion.contractFingerprint !== fingerprintUnitContract(directive, unit);
+  });
+}
+
+export function fingerprintUnitContract(directive: any, unit: string): string {
+  const entry = directive?.wave?.entries?.find((candidate: any) => candidate?.unit === unit) ?? { unit };
+  return fingerprintDirective({ stage: directive?.stage, unit, unit_kind: entry.unit_kind, consumes: entry.consumes, produces: entry.produces, required_produces: entry.required_produces, unit_memory_path: entry.unit_memory_path });
 }
 
 /** Writes beside the destination then atomically renames, so readers see old or new JSON, never a partial file. */
@@ -118,7 +128,7 @@ export function recordUnitSuccess(
   if (Object.hasOwn(ledger.succeeded, unit)) return ledger;
   const updated: ResumeLedger = {
     ...ledger,
-    succeeded: { ...ledger.succeeded, [unit]: result === undefined ? { completedAt } : { completedAt, result } },
+    succeeded: { ...ledger.succeeded, [unit]: result === undefined ? { completedAt, contractFingerprint: fingerprintUnitContract(directive, unit) } : { completedAt, contractFingerprint: fingerprintUnitContract(directive, unit), result } },
   };
   writeResumeLedgerAtomic(path, updated);
   return updated;

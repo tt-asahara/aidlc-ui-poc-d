@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { claudeWorkerLaunch, fakeWorkerLaunch, runWorker } from "../worker-adapters.ts";
 
-const limits = { timeoutMs: 1_000, maxStdoutBytes: 4_096, maxStderrBytes: 4_096 };
+const limits = { projectDir: process.cwd(), timeoutMs: 1_000, maxStdoutBytes: 4_096, maxStderrBytes: 4_096 };
 
 describe("worker adapters", () => {
   test("fake launch uses an argv array and captures both output streams", async () => {

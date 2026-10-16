@@ -8,7 +8,7 @@ replacement execution runtime.
 | Initialization stages | Official delegation | AI-DLC engine remains serial and owns state creation and audit |
 | Ideation stages | Official delegation | Approval and human judgment stay in the official conductor |
 | Inception stages | Official delegation | Stage transitions and approvals are not scheduled here |
-| Functional Design per-Unit wave | Locally exercised | Same-stage, engine-issued entries only; bounded fake child processes overlap |
+| Functional Design per-Unit wave | Engine-integrated fixture | Real next → adapter → fake artifacts → official unit complete → partial resume → gate |
 | NFR Requirements per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
 | NFR Design per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
 | Infrastructure Design per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
@@ -16,7 +16,7 @@ replacement execution runtime.
 | Build and Test / reviewers | Official delegation | Kept serial; official reviewer scope and receipts remain authoritative |
 | Operation stages | Official delegation | No custom parallel dispatch |
 | Ensemble spokes / mob contribution | Not implemented | Existing official ensemble implementation should be used |
-| Model selection | Adapter only | Claude argv exists, but no host model-list discovery; fake argv evidence only |
+| Model selection | Adapter only | Explicit unverified Claude request is launchable; returned model or unavailable/auth error is recorded; no live authenticated proof |
 | Clef routing | Local adapter verified | Optional low-risk ambiguous classification; deterministic and safety decisions excluded |
 
 ## Missing integration evidence

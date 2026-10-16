@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
 export type WorkerKind = "fake" | "claude";
 export type WorkerFailure =
   | "spawn-error"
@@ -35,6 +38,7 @@ export type WorkerResult = {
 };
 
 export type WorkerLimits = {
+  projectDir: string;
   timeoutMs: number;
   maxStdoutBytes: number;
   maxStderrBytes: number;
@@ -52,13 +56,14 @@ export type FakeWorkerRequest = {
   retryOrdinal: number;
   fail?: boolean;
   executable?: string;
+  produces?: string[];
 };
 
 export function fakeWorkerLaunch(request: FakeWorkerRequest): WorkerLaunch {
   return {
     kind: "fake",
     executable: request.executable ?? process.execPath,
-    args: [request.script, "--task", request.task, "--stage", request.stage, "--unit", request.unit ?? "", "--tier", request.tier, "--model", request.model ?? "", "--duration-ms", String(request.durationMs), "--retry-ordinal", String(request.retryOrdinal), "--fail", String(request.fail ?? false)],
+    args: [request.script, "--task", request.task, "--stage", request.stage, "--unit", request.unit ?? "", "--tier", request.tier, "--model", request.model ?? "", "--duration-ms", String(request.durationMs), "--retry-ordinal", String(request.retryOrdinal), "--fail", String(request.fail ?? false), "--produce-json", JSON.stringify(request.produces ?? [])],
     requestedModel: request.model || null,
     requestedEffort: null,
   };
@@ -115,15 +120,17 @@ function classifyClaude(stderr: string): WorkerFailure {
 
 /** Runs one worker attempt and always resolves, so callers can safely use Promise.allSettled. */
 export async function runWorker(launch: WorkerLaunch, limits: WorkerLimits): Promise<WorkerResult> {
+  if (!isAbsolute(limits.projectDir) || !existsSync(limits.projectDir)) throw new Error("projectDir must be an existing absolute path");
   if (!Number.isFinite(limits.timeoutMs) || limits.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
   if (!Number.isInteger(limits.maxStdoutBytes) || limits.maxStdoutBytes < 0 || !Number.isInteger(limits.maxStderrBytes) || limits.maxStderrBytes < 0) throw new Error("output limits must be non-negative integers");
   const startedAt = Date.now(); let child: ReturnType<typeof Bun.spawn>;
-  try { child = Bun.spawn([launch.executable, ...launch.args], { stdout: "pipe", stderr: "pipe" }); }
+  try { child = Bun.spawn([launch.executable, ...launch.args], { cwd: limits.projectDir, stdout: "pipe", stderr: "pipe" }); }
   catch (error) {
     return { ok: false, kind: launch.kind, argv: [launch.executable, ...launch.args], exitCode: null, signalCode: null, failure: launch.kind === "claude" ? "unavailable" : "spawn-error", stdout: "", stderr: String(error), stdoutTruncated: false, stderrTruncated: false, requestedModel: launch.requestedModel, requestedEffort: launch.requestedEffort, runtimeReportedModel: null, startedAt, endedAt: Date.now() };
   }
   let termination: WorkerFailure | null = null;
-  const terminate = (reason: WorkerFailure) => { if (!termination) { termination = reason; try { child.kill("SIGTERM"); } catch {} } };
+  let hardKill: ReturnType<typeof setTimeout> | undefined;
+  const terminate = (reason: WorkerFailure) => { if (!termination) { termination = reason; try { child.kill("SIGTERM"); } catch {} hardKill = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 200); } };
   const timer = setTimeout(() => terminate("timeout"), limits.timeoutMs);
   const abort = () => terminate("cancelled");
   if (limits.signal?.aborted) abort(); else limits.signal?.addEventListener("abort", abort, { once: true });
@@ -132,7 +139,7 @@ export async function runWorker(launch: WorkerLaunch, limits: WorkerLimits): Pro
     readBounded(child.stderr as ReadableStream<Uint8Array>, limits.maxStderrBytes, () => terminate("output-limit")),
     child.exited,
   ]);
-  clearTimeout(timer); limits.signal?.removeEventListener("abort", abort);
+  clearTimeout(timer); if (hardKill) clearTimeout(hardKill); limits.signal?.removeEventListener("abort", abort);
   const failure = termination ?? (exitCode === 0 ? null : launch.kind === "claude" ? classifyClaude(stderrResult.text) : "process-error");
   return { ok: failure === null, kind: launch.kind, argv: [launch.executable, ...launch.args], exitCode, signalCode: child.signalCode, failure, stdout: stdoutResult.text, stderr: stderrResult.text, stdoutTruncated: stdoutResult.truncated, stderrTruncated: stderrResult.truncated, requestedModel: launch.requestedModel, requestedEffort: launch.requestedEffort, runtimeReportedModel: reportedModel(launch.kind, stdoutResult.text), startedAt, endedAt: Date.now() };
 }

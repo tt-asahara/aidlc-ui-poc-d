@@ -24,6 +24,7 @@ function validate(input: Input): void {
     if (!LEVELS.has(task.risk) || !LEVELS.has(task.difficulty)) throw new Error(`invalid risk or difficulty: ${task.id}`);
     if (!Array.isArray(task.dependsOn) || !Array.isArray(task.writeSet) || !Number.isFinite(task.estimatedMs) || task.estimatedMs < 0) throw new Error(`invalid task fields: ${task.id}`);
     if (task.execution === "official-swarm" && !task.isolatedWorktree) throw new Error(`official-swarm requires isolatedWorktree: ${task.id}`);
+    if (task.execution === "official-swarm") throw new Error(`official-swarm execution is unsupported: ${task.id}`);
     if (task.execution === "official-wave" && !OFFICIAL_WAVE_STAGES.has(task.stage)) throw new Error(`official-wave is not available for stage: ${task.stage}`);
   }
   for (const task of input.tasks) for (const dependency of task.dependsOn) if (!ids.has(dependency)) throw new Error(`unknown dependency ${dependency} for ${task.id}`);

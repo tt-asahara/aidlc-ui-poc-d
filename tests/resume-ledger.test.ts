@@ -37,7 +37,7 @@ describe("D acceleration resume ledger", () => {
 
     expect(existsSync(path)).toBeTrue();
     expect(unitsToResume(path, directive, ["alpha", "beta"])).toEqual(["beta"]);
-    expect(loadResumeLedger(path, directive).succeeded.alpha).toEqual({
+    expect(loadResumeLedger(path, directive).succeeded.alpha).toMatchObject({
       completedAt: "2026-10-16T00:00:00.000Z",
       result: { receipt: "accepted" },
     });
@@ -50,7 +50,7 @@ describe("D acceleration resume ledger", () => {
     const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 2 } };
     recordUnitSuccess(path, directive, "alpha", { attempt: 1 }, "2026-10-16T00:00:00.000Z");
     recordUnitSuccess(path, directive, "alpha", { attempt: 2 }, "2026-10-16T01:00:00.000Z");
-    expect(loadResumeLedger(path, directive).succeeded.alpha).toEqual({
+    expect(loadResumeLedger(path, directive).succeeded.alpha).toMatchObject({
       completedAt: "2026-10-16T00:00:00.000Z",
       result: { attempt: 1 },
     });
