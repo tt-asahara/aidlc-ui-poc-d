@@ -1,0 +1,14 @@
+{
+  "maxParallel": 3,
+  "clef": { "enabled": false, "timeoutMs": 500, "confidenceThreshold": 0.8 },
+  "tasks": [
+    { "id": "requirements", "dependsOn": [], "estimatedMs": 1200, "taskType": "design", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["requirements.md"] },
+    { "id": "functional-design", "dependsOn": ["requirements"], "estimatedMs": 1500, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["functional-design.md"] },
+    { "id": "nfr-design", "dependsOn": ["requirements"], "estimatedMs": 1000, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["nfr-design.md"] },
+    { "id": "infrastructure-design", "dependsOn": ["requirements"], "estimatedMs": 1300, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["infrastructure-design.md"] },
+    { "id": "plan-approval", "dependsOn": ["functional-design", "nfr-design", "infrastructure-design"], "estimatedMs": 800, "taskType": "approval", "difficulty": "low", "risk": "high", "execution": "serial", "writeSet": ["approval-record"] },
+    { "id": "unit-a", "dependsOn": ["plan-approval"], "estimatedMs": 2400, "taskType": "implementation", "difficulty": "medium", "risk": "medium", "execution": "official-swarm", "isolatedWorktree": true, "writeSet": ["worktree:a"] },
+    { "id": "unit-b", "dependsOn": ["plan-approval"], "estimatedMs": 2200, "taskType": "implementation", "difficulty": "medium", "risk": "medium", "execution": "official-swarm", "isolatedWorktree": true, "writeSet": ["worktree:b"] },
+    { "id": "review", "dependsOn": ["unit-a", "unit-b"], "estimatedMs": 900, "taskType": "review", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["review-receipt"] }
+  ]
+}
