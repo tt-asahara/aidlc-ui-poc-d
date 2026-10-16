@@ -6,7 +6,7 @@ export type TaskType = "templated" | "implementation" | "review" | "design" | "s
 export type Execution = "serial" | "official-wave" | "official-swarm";
 export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
-export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; modelCatalogVerified?: boolean; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
+export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
 type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };
 
 const TASK_TYPES = new Set(["templated", "implementation", "review", "design", "security", "compliance", "approval", "ambiguous"]);
@@ -63,16 +63,16 @@ async function clefRoute(task: Task, config: NonNullable<Input["clef"]>): Promis
 async function route(task: Task, input: Input): Promise<Route> {
   const started = performance.now();
   const ruled = deterministicRoute(task);
-  if (ruled) return { ...ruled, model: input.modelCatalogVerified ? input.modelCatalog?.[ruled.tier] : undefined, routingMs: performance.now() - started };
+  if (ruled) return { ...ruled, routingMs: performance.now() - started };
   if (task.risk === "low" && input.clef?.enabled) {
     try {
       const selected = await clefRoute(task, input.clef);
-      return { tier: selected.tier, model: input.modelCatalogVerified ? input.modelCatalog?.[selected.tier] : undefined, reason: "local Clef classified an ambiguous low-risk task", source: "clef", escalation: selected.tier === "fast" ? "balanced" : selected.tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started };
+      return { tier: selected.tier, reason: "local Clef classified an ambiguous low-risk task", source: "clef", escalation: selected.tier === "fast" ? "balanced" : selected.tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started };
     } catch {
       // Fail closed; transport and model details intentionally do not affect policy.
     }
   }
-  return { tier: "judgment", model: input.modelCatalogVerified ? input.modelCatalog?.judgment : undefined, reason: "ambiguous classification used the conservative fallback", source: "fallback", escalation: "human-review", routingMs: performance.now() - started };
+  return { tier: "judgment", reason: "ambiguous classification used the conservative fallback", source: "fallback", escalation: "human-review", routingMs: performance.now() - started };
 }
 
 function normalizedPath(value: string): string { return value.replaceAll("\\", "/").split("/").reduce<string[]>((parts, part) => part === ".." ? parts.slice(0, -1) : part && part !== "." ? [...parts, part] : parts, []).join("/"); }

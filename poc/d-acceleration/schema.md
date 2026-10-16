@@ -13,9 +13,9 @@ official stage and Unit:
 - `writeSet`: paths or artifact IDs that the task can mutate
 - `isolatedWorktree`: required for `official-swarm`
 
-`modelCatalog` maps the abstract `fast`, `balanced`, and `judgment` tiers to
-IDs but is consumed only with `modelCatalogVerified: true` after runtime
-discovery. Missing or unverified entries mean inherit the session model. The
+`modelCatalog` is used only by the synthetic fake worker. Claude execution
+requires a separate `runtimeCatalog` carrying a retained runtime response;
+without it the scheduler stops with `unverified-model-catalog`. The
 planner never validates availability by making a paid model call.
 
 Output contains per-task `route`, ordered `waves`, routing metrics, and enforced

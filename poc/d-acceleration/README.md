@@ -42,12 +42,19 @@ bun test poc/d-acceleration/tests
 
 bun poc/d-acceleration/scheduler.ts \
   --input poc/d-acceleration/fixtures/synthetic-plan.json \
-  --approve approval --output /tmp/d-scheduler.json
+  --ledger /tmp/d-resume.json --output /tmp/d-scheduler.json
 ```
 
 Set `clef.enabled` in the input only when the existing local service is already
 running. The planner never starts or stops it. See `schema.md` for the input and
 output contract.
+
+The scheduler never accepts a local approval override: an approval task returns
+`awaiting-official-approval`. It can select `--worker fake` or `--worker
+claude`; Claude requires runtime catalog evidence and stops without retrying
+login when authentication or availability is missing. Successful entries are
+atomically recorded in the optional ledger and skipped only when the complete
+issued-directive fingerprint still matches.
 
 ## Evidence, not claims
 

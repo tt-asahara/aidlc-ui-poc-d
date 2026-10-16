@@ -16,7 +16,7 @@ replacement execution runtime.
 | Build and Test / reviewers | Official delegation | Kept serial; official reviewer scope and receipts remain authoritative |
 | Operation stages | Official delegation | No custom parallel dispatch |
 | Ensemble spokes / mob contribution | Not implemented | Existing official ensemble implementation should be used |
-| Model selection | Planning only | No Claude launcher adapter; no host model-list binding; fake argv evidence only |
+| Model selection | Adapter only | Claude argv exists, but no host model-list discovery; fake argv evidence only |
 | Clef routing | Local adapter verified | Optional low-risk ambiguous classification; deterministic and safety decisions excluded |
 
 ## Missing integration evidence
@@ -24,7 +24,7 @@ replacement execution runtime.
 There is currently no test that pipes the raw JSON produced by an actual
 `aidlc next` invocation directly into this scheduler. The fixture models the
 reviewed directive shape but is not engine-issued evidence. There is also no
-Claude process adapter. `modelCatalogVerified` is caller-supplied and therefore
-does not prove availability; production use must replace it with a catalog
-record derived from the selected host's own model-list response and retain
+authenticated Claude execution. Caller `modelCatalog` is never accepted for
+Claude; production use needs a catalog record derived from the selected host's
+own model-list response and must retain
 requested, launched, and runtime-reported identities separately.
