@@ -9,10 +9,10 @@ AI-DLC owns stage order, stage conditions, questions, pending-question state, ar
 Run the projected tool before applying a treatment:
 
 ```text
-node <harness>/tools/ui-poc-c-routing.cjs plan --stage <slug> [--facts <stage-facts.json>]
+node <harness>/tools/ui-poc-c-routing.cjs plan --stage <slug> --scope <engine-scope> [--facts <stage-facts.json>]
 ```
 
-Missing facts for a conditional rule are a hard stop. A true fact yields `use`; false yields `do-not-use`. The plan names exact entrypoints, inputs, outputs, adapter constraints, and the routing-config hash. The stage writes `ui-poc-skill-evidence.json` in its engine-resolved record directory and verifies it before completion:
+The routing config's `runtimeProfiles` map is the single source of enabled scopes. The engine-derived scope, recorded execution context, and selected runtime profile must agree exactly. `ui-poc-comparison` carries comparison treatment `C`; ordinary `ui-poc-application` uses the same bounded runtime methods without claiming comparison-treatment metadata. Missing facts for a conditional rule are a hard stop. A true fact yields `use`; false yields `do-not-use`. The plan names the runtime profile, optional comparison treatment, exact entrypoints, inputs, outputs, adapter constraints, and routing-config hash. The stage writes `ui-poc-skill-evidence.json` in its engine-resolved record directory and verifies it before completion:
 
 ```text
 node <harness>/tools/ui-poc-c-routing.cjs verify --stage <slug> --facts <record>/ui-poc-routing-facts.json --context <record>/ui-poc-routing-context.json --output-path <record>/<stage-output> --log <record>/ui-poc-skill-evidence.json

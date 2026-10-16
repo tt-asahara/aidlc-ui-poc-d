@@ -21,6 +21,8 @@ describe("ordinary /aidlc D integration", () => {
       "aidlc-acceleration-plan.ts",
       "conductor.ts",
       "d-config.ts",
+      "d-persistence-hook.ts",
+      "d-persistence.ts",
       "official-next-adapter.ts",
       "read-only-fanout.ts",
       "run.ts",
@@ -29,6 +31,17 @@ describe("ordinary /aidlc D integration", () => {
       "worker-adapters.ts",
     ]) expect(existsSync(join(root, file))).toBe(true);
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
+  });
+
+  test("Claude runs D persistence after the official Bash graph rebuild", () => {
+    const settings = JSON.parse(readFileSync(join(repo, "dist", "claude", ".claude", "settings.json"), "utf8"));
+    const bash = settings.hooks.PostToolUse.find((group: { matcher: string }) => group.matcher === "Bash");
+    expect(bash).toBeDefined();
+    const commands = bash.hooks.map((hook: { command: string }) => hook.command);
+    const rebuild = commands.findIndex((command: string) => command.includes("engine hook rebuild-stage-graph"));
+    const persistence = commands.findIndex((command: string) => command.includes("tools/d-acceleration/d-persistence-hook.ts"));
+    expect(rebuild).toBeGreaterThanOrEqual(0);
+    expect(persistence).toBe(rebuild + 1);
   });
 
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {

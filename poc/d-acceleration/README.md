@@ -15,6 +15,40 @@ See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
 local service contract.
 
+## Approved-transition Git persistence
+
+The Claude projection includes a host-only PostToolUse coordinator that runs
+after a successful official `orchestrate report`. It remains disabled by
+default. Opt in through `.claude/d-acceleration.json`, with an optional
+`.claude/d-acceleration.local.json` override:
+
+```json
+{
+  "gitPersistence": {
+    "enabled": true,
+    "push": false,
+    "remote": "origin",
+    "branch": "main"
+  }
+}
+```
+
+Local values override project values; omitted values resolve to `enabled:
+false`, `push: false`, and remote `origin`. Approval is not Git authorization:
+teams must explicitly enable commit and push independently. The coordinator
+accepts only completed, skipped, or workflow-completed report crossings; uses
+an exact artifact manifest; refuses worktrees, an occupied index, in-progress
+Git operations, protected paths, and high-confidence secrets; and leaves
+unrelated worktree changes untouched. Normal Git hooks still run. A hook that
+adds an external path causes the checkpoint commit to be rolled back without
+changing worktree bytes.
+
+Push uses a journaled immutable commit OID, remote, branch, and refspec. A push
+failure never rolls back official stage state and a later invocation retries
+the same pending refspec rather than creating another commit. Parallel workers
+do not run this coordinator; official swarm publish, land, and merge contracts
+remain authoritative.
+
 ## Safety contract
 
 - Deterministic rules win. Clef is consulted only for ambiguous, low-risk task

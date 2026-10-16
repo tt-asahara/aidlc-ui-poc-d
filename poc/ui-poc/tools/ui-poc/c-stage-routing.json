@@ -1,6 +1,17 @@
 {
   "schema": 1,
-  "arm": "C",
+  "runtimeProfiles": {
+    "ui-poc-comparison": {
+      "id": "comparison-c",
+      "scope": "ui-poc-comparison",
+      "comparisonTreatment": "C"
+    },
+    "ui-poc-application": {
+      "id": "application-c",
+      "scope": "ui-poc-application",
+      "comparisonTreatment": null
+    }
+  },
   "sourceCommit": "49dd158d1076134a641b33efb035946536778336",
   "designCommit": "209444a9d552c18bcaa74e26bf66a25fc568a767",
   "designContextPolicy": "creator-confirmed snapshot from the common comparison brief; loaded instructions, then .impeccable.md, then AI-DLC questions through bounded teach-impeccable; never infer from code and never write AGENTS.md",

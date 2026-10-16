@@ -29,7 +29,7 @@ function main(argv) {
     try { facts = JSON.parse(require('node:fs').readFileSync(factsPath, 'utf8')); }
     catch (e) {
       // Stages with no routing rules need neither facts nor a skill log.
-      const empty = require('./ui-poc-c-routing.cjs').plan(stage, {});
+      const empty = require('./ui-poc-c-routing.cjs').plan(stage, {}, require('./ui-poc-c-routing.cjs').deriveEngineContext(outputPath, stage).scope);
       if (!empty.pass || empty.invocations.length) findings.push(`Unreadable routing facts: ${e.message}`);
     }
     const routing = verify(stage, resolve(root, 'ui-poc-skill-evidence.json'), facts, {contextPath:resolve(root, 'ui-poc-routing-context.json'),factsPath,outputPath});

@@ -871,6 +871,8 @@ function buildTree(
       "aidlc-acceleration-plan.ts",
       "conductor.ts",
       "d-config.ts",
+      "d-persistence-hook.ts",
+      "d-persistence.ts",
       "fake-worker.ts",
       "official-next-adapter.ts",
       "read-only-fanout.ts",

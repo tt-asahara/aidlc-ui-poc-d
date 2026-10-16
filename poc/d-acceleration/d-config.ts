@@ -4,10 +4,11 @@ import { join } from "node:path";
 export type DModelTier = "fast" | "balanced" | "judgment";
 export type DModelCatalog = Record<DModelTier, string>;
 export type DClefConfig = { enabled: boolean; url: string; lowRiskUnits: string[] };
+export type DGitPersistenceConfig = { enabled: boolean; push: boolean; remote: string; branch?: string };
 export const DEFAULT_D_MODEL = "opus";
 export const DEFAULT_CLEF_URL = "http://127.0.0.1:18742";
 
-type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig> };
+type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig> };
 function readConfig(path: string): DFileConfig {
   if (!existsSync(path)) return { models: {} };
   const value = JSON.parse(readFileSync(path, "utf8"));
@@ -28,7 +29,26 @@ function readConfig(path: string): DFileConfig {
     }
     if (clef.lowRiskUnits !== undefined && (!Array.isArray(clef.lowRiskUnits) || !clef.lowRiskUnits.every((unit: unknown) => typeof unit === "string" && unit.trim()))) throw new Error(`invalid D Clef lowRiskUnits in ${path}`);
   }
-  return { models: result, clef };
+  const gitPersistence = value?.gitPersistence;
+  if (gitPersistence !== undefined) {
+    if (!gitPersistence || typeof gitPersistence !== "object") throw new Error(`invalid D Git persistence config in ${path}`);
+    for (const key of Object.keys(gitPersistence)) if (!["enabled", "push", "remote", "branch"].includes(key)) throw new Error(`unknown D Git persistence key ${key} in ${path}`);
+    for (const key of ["enabled", "push"] as const) if (gitPersistence[key] !== undefined && typeof gitPersistence[key] !== "boolean") throw new Error(`invalid D Git persistence ${key} in ${path}`);
+    for (const key of ["remote", "branch"] as const) if (gitPersistence[key] !== undefined && (typeof gitPersistence[key] !== "string" || !gitPersistence[key].trim())) throw new Error(`invalid D Git persistence ${key} in ${path}`);
+  }
+  return { models: result, clef, gitPersistence };
+}
+
+/** Approval never implies Git authority: persistence is off until explicitly enabled. */
+export function resolveDGitPersistence(projectDir: string): DGitPersistenceConfig {
+  const project = readConfig(join(projectDir, ".claude", "d-acceleration.json")).gitPersistence ?? {};
+  const local = readConfig(join(projectDir, ".claude", "d-acceleration.local.json")).gitPersistence ?? {};
+  return {
+    enabled: local.enabled ?? project.enabled ?? false,
+    push: local.push ?? project.push ?? false,
+    remote: (local.remote ?? project.remote ?? "origin").trim(),
+    branch: local.branch?.trim() ?? project.branch?.trim(),
+  };
 }
 
 /** D routing is deliberately separate from official per-agent model policy. */

@@ -17,8 +17,15 @@ function boundedFile(projectRoot, rel) {
   if (!file.startsWith(root + path.sep) || !fs.statSync(file).isFile()) throw Error(`Artifact reference escapes project or is not a file: ${rel}`);
   return fs.readFileSync(file);
 }
-function validContext(value, stage) {
-  return value && value.stage === stage && value.scope === 'ui-poc-comparison' && typeof value.recordId === 'string' && value.recordId.trim() && Number.isInteger(value.attempt) && value.attempt > 0 && /^[a-f0-9]{64}$/.test(value.engineStateSha256 || '') && (value.unit === null || typeof value.unit === 'string');
+function runtimeProfile(cfg, scope) {
+  const profiles = cfg?.runtimeProfiles;
+  const profile = profiles && typeof profiles === 'object' ? profiles[scope] : null;
+  if (!profile || profile.scope !== scope || typeof profile.id !== 'string' || !profile.id.trim()) throw Error(`Engine scope is not enabled by the routing config: ${scope ?? 'missing'}`);
+  if (profile.comparisonTreatment !== null && profile.comparisonTreatment !== 'C') throw Error(`Invalid comparison treatment for routing profile: ${scope}`);
+  return profile;
+}
+function validContext(value, stage, scope) {
+  return value && value.stage === stage && value.scope === scope && typeof value.recordId === 'string' && value.recordId.trim() && Number.isInteger(value.attempt) && value.attempt > 0 && /^[a-f0-9]{64}$/.test(value.engineStateSha256 || '') && (value.unit === null || typeof value.unit === 'string');
 }
 
 function artifactJson(projectRoot, ref, label) {
@@ -40,7 +47,7 @@ function stateField(content, name) {
   return content.match(new RegExp(`^\\*\\*${escaped}\\*\\*:\\s*(.+?)\\s*$`, 'm'))?.[1] ?? null;
 }
 
-function deriveEngineContext(outputPath, stage) {
+function deriveEngineContext(outputPath, stage, cfg = load()) {
   let output;
   try { output = fs.realpathSync(outputPath); } catch (e) { throw Error(`Cannot resolve stage output: ${e.message}`); }
   const projectRoot = fs.realpathSync(process.cwd());
@@ -58,7 +65,7 @@ function deriveEngineContext(outputPath, stage) {
   if (rel[0] === 'construction' && stageIndex !== 2) throw Error('Construction output path has no unambiguous Unit');
   const stateBytes = fs.readFileSync(path.join(recordRoot, 'aidlc-state.md'));
   const scope = stateField(stateBytes.toString('utf8'), 'Scope');
-  if (scope !== 'ui-poc-comparison') throw Error(`Engine scope is not ui-poc-comparison: ${scope ?? 'missing'}`);
+  runtimeProfile(cfg, scope);
   return {stage,scope,recordId:path.basename(recordRoot),unit,engineStateSha256:hash(stateBytes)};
 }
 
@@ -72,8 +79,10 @@ function lockedEntrypoint(skillName, entrypoint) {
   return record;
 }
 
-function plan(stage, facts = {}) {
+function plan(stage, facts = {}, scope) {
   const cfg = load();
+  let profile;
+  try { profile = runtimeProfile(cfg, scope); } catch (e) { return fail(e.message); }
   if (cfg.designCommit !== '209444a9d552c18bcaa74e26bf66a25fc568a767' || cfg.accessibilityCorrections?.largeTextNormalCssPx !== 24 || cfg.accessibilityCorrections?.largeTextBoldCssPx !== 18.6667) return fail('Invalid C design pin or WCAG correction policy');
   if (!Object.hasOwn(cfg.stages, stage)) return fail(`Unknown stage: ${stage}`);
   const invocations = [];
@@ -88,16 +97,18 @@ function plan(stage, facts = {}) {
     if (!skill || skill.lifecyclePolicy === 'disabled') return fail(`Disabled or unknown lifecycle skill: ${rule.skill}`);
     invocations.push({...rule, decision:result, repository:skill.repository, commit:skill.commit, applicationKind:skill.applicationKind || 'skill', entrypoints:skill.entrypoints});
   }
-  return {pass:true, schema:1, arm:'C', stage, configSha256:hash(fs.readFileSync(configPath)), invocations};
+  return {pass:true, schema:1, runtimeProfile:profile.id, comparisonTreatment:profile.comparisonTreatment, stage, configSha256:hash(fs.readFileSync(configPath)), invocations};
 }
 
 function verify(stage, logPath, facts = {}, options = {}) {
-  const expected = plan(stage, facts);
+  let engine;
+  try { engine = deriveEngineContext(options.outputPath, stage); } catch (e) { return fail(e.message); }
+  const expected = plan(stage, facts, engine.scope);
   if (!expected.pass) return expected;
   if (!expected.invocations.length && (!logPath || !fs.existsSync(logPath))) return {pass:true, findings_count:0, findings:[]};
   let log;
   try { log = JSON.parse(fs.readFileSync(logPath, 'utf8')); } catch (e) { return fail(`Unreadable evidence log: ${e.message}`); }
-  if (log.schema !== 1 || log.arm !== 'C' || log.stage !== stage || log.configSha256 !== expected.configSha256) return fail('Evidence log identity does not match the routing plan');
+  if (log.schema !== 1 || log.runtimeProfile !== expected.runtimeProfile || log.comparisonTreatment !== expected.comparisonTreatment || log.stage !== stage || log.configSha256 !== expected.configSha256) return fail('Evidence log identity does not match the routing plan');
   if (!Array.isArray(log.events)) return fail('Evidence log events must be an array');
   if (expected.invocations.length) {
     if (!options.contextPath || !options.factsPath || !options.outputPath) return fail('Routing context, facts path, and output path are required');
@@ -105,9 +116,7 @@ function verify(stage, logPath, facts = {}, options = {}) {
     if ([options.contextPath, options.factsPath, options.outputPath].some(p => path.dirname(path.resolve(p)) !== evidenceRoot)) return fail('Routing context, facts, log, and stage output must share the stage evidence directory');
     let context;
     try { context = JSON.parse(fs.readFileSync(options.contextPath, 'utf8')); } catch (e) { return fail(`Unreadable routing context: ${e.message}`); }
-    if (!validContext(context, stage)) return fail('Invalid routing execution context');
-    let engine;
-    try { engine = deriveEngineContext(options.outputPath, stage); } catch (e) { return fail(e.message); }
+    if (!validContext(context, stage, engine.scope)) return fail('Invalid routing execution context');
     if (['stage','scope','recordId','unit','engineStateSha256'].some(key => context[key] !== engine[key])) return fail('Routing context does not match the current engine record, Unit, and state snapshot');
     if (log.contextSha256 !== hash(fs.readFileSync(options.contextPath)) || log.factsSha256 !== hash(fs.readFileSync(options.factsPath)) || JSON.stringify(log.context) !== JSON.stringify(context)) return fail('Evidence log is not bound to the current context and facts');
   }
@@ -181,6 +190,7 @@ function parse(argv) {
   const out = {facts:{}};
   for (let i=0;i<argv.length;i++) {
     if (argv[i] === '--stage') out.stage = argv[++i];
+    else if (argv[i] === '--scope') out.scope = argv[++i];
     else if (argv[i] === '--facts') { out.factsPath = argv[++i]; out.facts = JSON.parse(fs.readFileSync(out.factsPath, 'utf8')); }
     else if (argv[i] === '--log') out.log = argv[++i];
     else if (argv[i] === '--context') out.context = argv[++i];
@@ -192,10 +202,10 @@ function parse(argv) {
 function main(argv) {
   try {
     const command = argv.shift(), args = parse(argv);
-    const result = command === 'plan' ? plan(args.stage, args.facts) : command === 'verify' ? verify(args.stage, args.log, args.facts, {contextPath:args.context,factsPath:args.factsPath,outputPath:args.outputPath}) : fail('Expected plan or verify');
+    const result = command === 'plan' ? plan(args.stage, args.facts, args.scope) : command === 'verify' ? verify(args.stage, args.log, args.facts, {contextPath:args.context,factsPath:args.factsPath,outputPath:args.outputPath}) : fail('Expected plan or verify');
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.pass ? 0 : 1;
   } catch (e) { console.log(JSON.stringify(fail(e.message), null, 2)); process.exitCode = 1; }
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {plan, verify, load, lockedEntrypoint, deriveEngineContext};
+module.exports = {plan, verify, load, lockedEntrypoint, deriveEngineContext, runtimeProfile};
