@@ -11,6 +11,7 @@ function functionalDirective(consumes: string[]) {
     kind: "run-stage",
     stage: "functional-design",
     gate: false,
+    rules_in_context: [],
     wave: {
       batch_index: 0,
       entries: [{ unit: "web", build_required: true, produces: ["functional-spec.md"], required_produces: ["functional-spec.md"], consumes, consumes_absent: [] }],
@@ -68,6 +69,22 @@ describe("D retains the composed Arm C UI baseline", () => {
     directive.rules_held = "sha256:fixture";
     directive.rules_held_note = "The active host chat already holds this exact rule bundle.";
     expect(() => adaptOfficialNext(directive)).toThrow("holds rules only in the host chat");
+  });
+
+  test("rules delivered only through prior load-steering fail closed for detached workers", () => {
+    const directive = functionalDirective(["evidence/ui-poc-refined-contract.md"]) as any;
+    directive.rules_in_context = ["aidlc/spaces/default/memory/org.md"];
+    expect(() => adaptOfficialNext(directive)).toThrow("rules arrived through prior load-steering");
+  });
+
+  test("inline rules must match the official path manifest exactly and in order", () => {
+    const directive = functionalDirective(["evidence/ui-poc-refined-contract.md"]) as any;
+    directive.rules_in_context = ["aidlc/spaces/default/memory/org.md", "aidlc/spaces/default/memory/project.md"];
+    directive.rules_content = [
+      { path: "aidlc/spaces/default/memory/project.md", text: "project" },
+      { path: "aidlc/spaces/default/memory/org.md", text: "org" },
+    ];
+    expect(() => adaptOfficialNext(directive)).toThrow("does not exactly match rules_in_context order");
   });
 
   test("missing C compose evidence fails closed before worker dispatch", () => {

@@ -144,7 +144,7 @@ describe("official next adapter integration", () => {
 
   test("product conductor stops when an unchanged build wave is reissued despite existing outputs", () => {
     const project = createWaveProject(); const engine = join(project, "stub-engine"); mkdirSync(engine);
-    const repeated = { kind: "run-stage", stage: "functional-design", gate: false, wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: ["already.md"], required_produces: ["already.md"], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
+    const repeated = { kind: "run-stage", stage: "functional-design", gate: false, rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: ["already.md"], required_produces: ["already.md"], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
     writeFileSync(join(engine, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify(repeated)}\n`)});\n`);
     writeFileSync(join(engine, "aidlc-state.ts"), "process.exit(99);\n");
     writeFileSync(join(project, "already.md"), "pre-existing fixture output\n");
