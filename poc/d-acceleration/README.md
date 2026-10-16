@@ -60,6 +60,12 @@ authentication or availability is missing. Worker exit zero is candidate
 evidence only: the official single writer must accept `unit complete` before
 recording engine acceptance in the ledger.
 
+Claude model requests are configured separately with `--claude-fast`,
+`--claude-balanced`, and `--claude-judgment`. They are requests, not availability
+claims; the result records the requested and runtime-reported identities.
+Synthetic artifact writing requires the explicit `--disposable-test-mode` and
+must only be used with a throwaway fixture project.
+
 ## Evidence, not claims
 
 `benchmark.ts` compares the same synthetic task durations under serial order and

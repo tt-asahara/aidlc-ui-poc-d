@@ -40,6 +40,11 @@ describe("D acceleration harness", () => {
   test("does not treat caller model IDs as runtime verified", async () => {
     expect((await plan(fixture as Input)).routes.review?.model).toBeUndefined();
   });
+  test("maps selected tier to an explicit Claude request without login retry", async () => {
+    const input: Input = { tasks: [{ id: "impl", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "implementation", difficulty: "medium", risk: "medium", execution: "serial", writeSet: [] }] };
+    const result = await execute(input, { projectDir, workerKind: "claude", requestedClaudeModels: { balanced: "requested-balanced" }, claudeExecutable: "/definitely/missing/claude" });
+    expect(result.status).toBe("failed"); expect(result.records[0]?.requestedModel).toBe("requested-balanced"); expect(result.records[0]?.failure).toBe("unavailable");
+  });
   test("falls back when Clef is unavailable", async () => {
     const input: Input = { clef: { enabled: true, url: "http://127.0.0.1:1", timeoutMs: 25 }, tasks: [{ id: "x", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] }] };
     const result = await plan(input); expect(result.routes.x?.source).toBe("fallback");

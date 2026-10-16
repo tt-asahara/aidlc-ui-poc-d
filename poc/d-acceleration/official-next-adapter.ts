@@ -12,7 +12,6 @@ export function adaptOfficialNext(value: any): Input {
     if (typeof entry.unit !== "string" || !Array.isArray(entry.produces)) throw new Error("invalid official wave entry");
     return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], estimatedMs: 1, taskType: "design", difficulty: "medium", risk: "medium", execution: "official-wave", writeSet: entry.required_produces };
   });
-  if (!tasks.length) throw new Error("official wave contains no build_required entries");
   return { tasks, directives: [{ kind: "wave", stage: directive.stage, entries: tasks.map((task) => task.id) }], sourceDirective: structuredClone(directive) };
 }
 if (import.meta.main) {

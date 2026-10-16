@@ -17,6 +17,7 @@ import { execute } from "../scheduler.ts";
 
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const CONDUCTOR = join(import.meta.dir, "..", "conductor.ts");
 const SEPARATOR = "\u2014";
 const projects: string[] = [];
 
@@ -125,6 +126,18 @@ afterEach(() => {
 });
 
 describe("official next adapter integration", () => {
+  test("product conductor CLI settles a disposable wave through the official gate", () => {
+    const project = createWaveProject();
+    const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    const run = spawnSync(process.execPath, [CONDUCTOR, "--project-dir", project, "--engine-dir", join(AIDLC_SRC, "tools"), "--worker", "fake", "--disposable-test-mode"], { cwd: project, env, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS });
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
+    const result = JSON.parse(run.stdout);
+    expect(result.status).toBe("official-host-action-required");
+    expect(result.directive).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
+    expect(result.directive.wave).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test(
     "runs a real emitted wave, records official completion, and resumes only unfinished units",
     async () => {
@@ -169,6 +182,7 @@ describe("official next adapter integration", () => {
       const scheduled = await execute(adapted, {
         workerKind: "fake",
         projectDir: project,
+        disposableTestMode: true,
       });
       expect(scheduled.status, JSON.stringify(scheduled, null, 2)).toBe(
         "completed",
