@@ -78,13 +78,26 @@ describe("issue autopilot production adapters", () => {
   });
 
   test("intake binding reservation is atomic and exact", async () => {
-    const store = createFileIntakeBindingStore(join(temp(), "bindings"));
+    const directory = join(temp(), "bindings"); let time = 10;
+    const store = createFileIntakeBindingStore(directory, { clock: () => time++ });
     const binding = { provider: "github", repository: "owner/repo", issueNumber: 9, intakeKey: "key-9" };
     expect(await store.reserve(binding, "alpha")).toBe("reserved");
+    await store.recordAttempt!(binding, "alpha", { attempts: 3, outcome: "transient-exhausted", detail: "temporary" });
+    expect(JSON.parse(readFileSync(join(directory, "key-9.json"), "utf8"))).toMatchObject({ createdAt: 10, updatedAt: 11, attempts: 3, outcome: "transient-exhausted", detail: "temporary" });
     expect(await store.reserve(binding, "beta")).toBe("pending");
     await store.finalize(binding, "beta");
     expect(await store.reserve(binding, "beta")).toBe("bound");
     await expect(store.reserve({ ...binding, repository: "other/repo" }, "beta")).rejects.toThrow("collision");
+  });
+
+  test("ambiguous pending bindings never auto-recover", async () => {
+    const directory = join(temp(), "bindings"); let time = 10;
+    const store = createFileIntakeBindingStore(directory, { clock: () => time, recoveryLeaseMs: 5 });
+    const binding = { provider: "github", repository: "github.com/owner/repo", issueNumber: 8, intakeKey: "key-8" };
+    expect(await store.reserve(binding, "alpha")).toBe("reserved");
+    await store.recordAttempt!(binding, "alpha", { attempts: 1, outcome: "ambiguous", detail: "response lost" });
+    time = 10_000;
+    expect(await store.reserve(binding, "beta")).toBe("pending");
   });
 
   test("defaults runtime state beneath git metadata", () => {

@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createFileIntakeBindingStore } from "../issue-autopilot-runtime.ts";
 import {
   DEFAULT_ISSUE_AUTOPILOT_CONFIG,
+  canonicalGitHubRepository,
   issueAutopilotStatus,
   runIssueAutopilot,
   type EngineAdapter,
@@ -34,6 +39,10 @@ function fixture(overrides: Partial<IssueAutopilotDependencies> = {}) {
 const enabled = (overrides: Partial<IssueAutopilotConfig> = {}): IssueAutopilotConfig => ({ ...DEFAULT_ISSUE_AUTOPILOT_CONFIG, enabled: true, labelAllowlist: ["aidlc-auto"], ...overrides });
 
 describe("D issue intake/autopilot", () => {
+  test("canonicalizes equivalent GitHub repository forms", () => {
+    const expected = "github.com/owner/repo";
+    expect(["Owner/Repo", "https://github.com/Owner/Repo.git", "git@github.com:Owner/Repo.git", "github.com/Owner/Repo"].map(canonicalGitHubRepository)).toEqual([expected, expected, expected, expected]);
+  });
   test("is default-off and performs no adapter work", async () => {
     const { calls, deps } = fixture();
     expect(await runIssueAutopilot({ selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps })).toEqual({ status: "stopped", reason: "disabled" });
@@ -105,6 +114,15 @@ describe("D issue intake/autopilot", () => {
     expect(retried).toMatchObject({ reason: "failure", attempts: 3 });
     expect(events).toEqual(["reconcile", "create", "reconcile", "backoff", "create", "reconcile", "backoff", "create", "reconcile"]);
 
+    const audit: unknown[] = [];
+    const exhausted = fixture({
+      bindings: { async reserve() { return "reserved"; }, async finalize() {}, async recordAttempt(_binding, _owner, attempt) { audit.push(attempt); } },
+      engine: { async createIntent() { throw new Error("temporary"); }, async reconcileIntent() { return null; }, classifyCreateError() { return "transient"; }, async next() { return { kind: "ask" }; }, async execute(value) { return value; } },
+      sleep: async () => {},
+    });
+    await runIssueAutopilot({ config: enabled({ maxRetries: 1 }), binding: { provider: "github", repository: "github.com/owner/repo" }, selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: exhausted.deps });
+    expect(audit).toEqual([{ attempts: 2, outcome: "transient-exhausted", detail: "Error: temporary" }]);
+
     let ambiguousAttempts = 0, ambiguousReconciles = 0;
     const ambiguous = fixture({ engine: {
       async createIntent() { ambiguousAttempts += 1; throw new Error("connection closed after send"); },
@@ -139,6 +157,40 @@ describe("D issue intake/autopilot", () => {
     });
     const result = await runIssueAutopilot({ config: enabled(), selection: { async candidatesFromList(choices) { return choices.map((entry) => entry.number); } }, owner: "worker", scope: "feature", deps });
     expect(result.issueNumber).toBe(43); expect(acquired).toEqual([41, 42, 43]); expect(created).toEqual([43]);
+  });
+
+  test("list polling audits reconcile-required candidates and continues", async () => {
+    const created: number[] = [];
+    const { deps } = fixture({
+      issues: { async list() { return [41, 42].map((number) => ({ number, title: `Issue ${number}`, labels: ["aidlc-auto"] })); }, async get(number) { return { number, title: `Issue ${number}`, body: "body", labels: ["aidlc-auto"], state: "open" }; } },
+      bindings: { async reserve(binding) { return binding.issueNumber === 41 ? "pending" : "reserved"; }, async finalize() {} },
+      engine: { async reconcileIntent() { return null; }, async createIntent(args) { created.push(Number(/#(\d+)/.exec(args[5])![1])); return { kind: "ask" }; }, async next() { return { kind: "ask" }; }, async execute(value) { return value; } },
+    });
+    const result = await runIssueAutopilot({ config: enabled(), binding: { provider: "github", repository: "github.com/owner/repo" }, selection: { async candidatesFromList(choices) { return choices.map((entry) => entry.number); } }, owner: "worker", scope: "feature", deps });
+    expect(result).toMatchObject({ issueNumber: 42, skippedCandidates: [{ issueNumber: 41, reason: "reconcile-required" }] });
+    expect(created).toEqual([42]);
+  });
+
+  test("a later invocation safely recovers only an expired transient exhaustion", async () => {
+    let time = 1_000, invocation = 0, absenceConfirmed = false;
+    const bindings = createFileIntakeBindingStore(join(mkdtempSync(join(tmpdir(), "binding-recovery-")), "bindings"), { clock: () => time, recoveryLeaseMs: 100 });
+    const { deps } = fixture({
+      bindings,
+      engine: {
+        async reconcileIntent() { return null; },
+        async confirmIntentAbsent() { return absenceConfirmed; },
+        async createIntent() { invocation += 1; if (invocation === 1) throw new Error("temporary"); return { kind: "ask" }; },
+        classifyCreateError() { return "transient"; }, async next() { return { kind: "ask" }; }, async execute(value) { return value; },
+      }, sleep: async () => {},
+    });
+    const input = { config: enabled({ maxRetries: 0 }), binding: { provider: "github", repository: "github.com/owner/repo" }, selection: { issueNumber: 42 } as const, scope: "feature", deps };
+    expect(await runIssueAutopilot({ ...input, owner: "first" })).toMatchObject({ reason: "failure", attempts: 1 });
+    expect(await runIssueAutopilot({ ...input, owner: "too-soon" })).toMatchObject({ reason: "reconcile-required", attempts: 0 });
+    time += 101;
+    expect(await runIssueAutopilot({ ...input, owner: "not-confirmed" })).toMatchObject({ reason: "reconcile-required", attempts: 0 });
+    absenceConfirmed = true;
+    expect(await runIssueAutopilot({ ...input, owner: "recovery" })).toMatchObject({ reason: "intent-created", attempts: 1 });
+    expect(invocation).toBe(2);
   });
 
   test("issue text cannot enable auto, change settings, or stand in for approval", async () => {

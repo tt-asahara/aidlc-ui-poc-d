@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -59,6 +59,14 @@ describe("durable claimed host session", () => {
     await Bun.sleep(650);
     expect(await createFileClaimStore({ directory: paths.claims, leaseMs: 150 }).acquire(42, "other-owner")).toBe("busy");
     expect(JSON.parse(run(root, ["action-finish", "--action-token", action.token]).stdout)).toMatchObject({ action: "continue" });
+    const racing = JSON.parse(run(root, ["action-start"]).stdout) as { token: string };
+    const recoveryLock = join(paths.claims, "issue-42.json.recovery");
+    writeFileSync(recoveryLock, "busy\n");
+    const finishing = Bun.spawn([process.execPath, cli, "action-finish", "--action-token", racing.token, "--project-dir", root, "--session-file", ".aidlc-engine/session.json"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    await Bun.sleep(80); unlinkSync(recoveryLock);
+    const racingOutput = await new Response(finishing.stdout).text();
+    expect(await finishing.exited).toBe(0);
+    expect(JSON.parse(racingOutput)).toMatchObject({ action: "continue" });
     const stoppedAction = JSON.parse(run(root, ["action-start"]).stdout) as { token: string };
     writeFileSync(paths.stop, "stop\n");
     await Bun.sleep(200);
@@ -73,5 +81,37 @@ describe("durable claimed host session", () => {
     writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "run-stage", stage: "functional-design" }));
     expect(run(root, ["checkpoint", "--directive-file", "directive.json"]).status).not.toBe(0);
     expect(existsSync(join(root, ".aidlc-engine", "session.json.lock"))).toBeFalse();
+  });
+
+  test("status atomically recovers worker crashes and action crash windows", async () => {
+    for (const fixture of [
+      { name: "state-only", hostAction: { token: "lost", startedAt: Date.now() }, heartbeat: null, failure: null, reason: "host-action-orphaned" },
+      { name: "dead-worker", hostAction: { token: "dead", startedAt: Date.now() }, heartbeat: { token: "dead", pid: 2147483647, startedAt: Date.now(), lastRenewedAt: Date.now(), expiresAt: Date.now() + 5000, status: "running" }, failure: null, reason: "heartbeat-stale" },
+      { name: "record-only", hostAction: undefined, heartbeat: { token: "orphan", pid: 2147483647, startedAt: Date.now(), lastRenewedAt: Date.now(), expiresAt: Date.now() + 5000, status: "starting" }, failure: null, reason: "host-action-orphaned" },
+      { name: "failed-deadline", hostAction: { token: "failed", startedAt: Date.now() }, heartbeat: { token: "failed", pid: 2147483647, startedAt: Date.now(), lastRenewedAt: Date.now(), expiresAt: Date.now(), status: "failed" }, failure: { token: "failed", reason: "deadline-exceeded" }, reason: "deadline-exceeded" },
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), `d-host-recover-${fixture.name}-`));
+      mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+      const paths = issueAutopilotRuntimePaths(root), store = createFileClaimStore({ directory: paths.claims, leaseMs: 5000 });
+      expect(await store.acquire(42, "owner")).toBe("acquired");
+      writeFileSync(join(root, ".aidlc-engine", "session.json"), JSON.stringify({ startedAt: Date.now(), deadlineMs: 5000, maxSteps: 4, steps: 1, through: null, claim: { issueNumber: 42, owner: "owner", leaseMs: 5000 }, ...(fixture.hostAction ? { hostAction: fixture.hostAction } : {}) }));
+      if (fixture.heartbeat) writeFileSync(join(root, ".aidlc-engine", "session.json.heartbeat.json"), JSON.stringify(fixture.heartbeat));
+      if (fixture.failure) writeFileSync(join(root, ".aidlc-engine", "session.json.heartbeat-failed"), JSON.stringify(fixture.failure));
+      const status = JSON.parse(run(root, ["status"]).stdout);
+      expect(status).toMatchObject({ active: false, recoveredReason: fixture.reason, state: { terminalReason: fixture.reason } });
+      expect(existsSync(join(paths.claims, "issue-42.json"))).toBeFalse();
+      expect(existsSync(join(root, ".aidlc-engine", "session.json.heartbeat.json"))).toBeFalse();
+    }
+  });
+
+  test("a stopping record left after state save is cleaned without ending the session", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-host-finish-window-"));
+    mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(root, ".aidlc-engine", "session.json"), JSON.stringify({ startedAt: Date.now(), deadlineMs: 5000, maxSteps: 4, steps: 1, through: null }));
+    writeFileSync(join(root, ".aidlc-engine", "session.json.heartbeat.json"), JSON.stringify({ token: "done", pid: 2147483647, startedAt: Date.now(), lastRenewedAt: Date.now(), expiresAt: Date.now() + 5000, status: "stopping" }));
+    writeFileSync(join(root, ".aidlc-engine", "session.json.lifecycle.lock"), JSON.stringify({ pid: 2147483647, createdAt: Date.now() }));
+    expect(JSON.parse(run(root, ["status"]).stdout)).toMatchObject({ active: true, recoveredReason: null });
+    expect(existsSync(join(root, ".aidlc-engine", "session.json.heartbeat.json"))).toBeFalse();
+    expect(existsSync(join(root, ".aidlc-engine", "session.json.lifecycle.lock"))).toBeFalse();
   });
 });

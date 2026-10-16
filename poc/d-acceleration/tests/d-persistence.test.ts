@@ -248,6 +248,27 @@ describe("D approval persistence", () => {
     expect(Number(run(root, ["git", "rev-list", "--count", "HEAD"]))).toBeLessThanOrEqual(2);
   });
 
+  test("restores the scanned commit when post-commit amends the branch with a secret", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+    const hook = join(root, ".git", "hooks", "post-commit");
+    writeFileSync(hook, "#!/bin/sh\nmarker=\"$(git rev-parse --git-dir)/post-amended\"\nif test ! -f \"$marker\"; then\n  touch \"$marker\"\n  printf '%s\\n' 'AKIAABCDEFGHIJKLMNOP' > aidlc/result.md\n  git add aidlc/result.md\n  git commit --amend --no-verify -m 'hook rewrite' >/dev/null\nfi\nexit 1\n"); chmodSync(hook, 0o755);
+    expect(() => persistCrossing(root, commit, crossing())).toThrow(/original scanned commit restored/);
+    expect(run(root, ["git", "show", "HEAD:aidlc/result.md"])).toBe("approved");
+    expect(spawnSync("git", ["grep", "-F", "AKIAABCDEFGHIJKLMNOP", "refs/heads/main", "--"], { cwd: root }).status).toBe(1);
+    expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
+    expect(readFileSync(join(root, "aidlc/result.md"), "utf8")).toBe("AKIAABCDEFGHIJKLMNOP\n");
+  });
+
+  test("allows a safe post-commit hook without changing the scanned checkpoint", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+    const hook = join(root, ".git", "hooks", "post-commit");
+    writeFileSync(hook, "#!/bin/sh\nprintf '%s\\n' ran > post-hook-ran.txt\n"); chmodSync(hook, 0o755);
+    const result = persistCrossing(root, commit, crossing());
+    expect(result.status).toBe("committed");
+    expect(readFileSync(join(root, "post-hook-ran.txt"), "utf8")).toBe("ran\n");
+    expect(run(root, ["git", "show", "HEAD:aidlc/result.md"])).toBe("approved");
+  });
+
   test("records a fixed pending refspec and resumes the same push", () => {
     const root = repo(); const remote = mkdtempSync(join(tmpdir(), "d-remote-")); roots.push(remote); run(remote, ["git", "init", "--bare"]); run(root, ["git", "remote", "add", "origin", remote]);
     mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");

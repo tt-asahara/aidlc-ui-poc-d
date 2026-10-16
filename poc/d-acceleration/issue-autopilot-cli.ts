@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveDAutomation, resolveDIssueAutopilot } from "./d-config.ts";
-import { runIssueAutopilot, issueAutopilotStatus, intakeBindingKey, type EngineAdapter, type OfficialDirective } from "./issue-autopilot.ts";
+import { runIssueAutopilot, issueAutopilotStatus, intakeBindingKey, canonicalGitHubRepository, type EngineAdapter, type OfficialDirective } from "./issue-autopilot.ts";
 import { createFileAssumptionLedger, createFileClaimStore, createFileIntakeBindingStore, createGhIssueSource, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
 import { resolveThroughBoundary, type HostSessionState } from "./host-session.ts";
 
@@ -25,7 +25,14 @@ const hostSessionPath = resolve(projectDir, hostSessionFile);
 if (relative(resolve(projectDir), hostSessionPath).startsWith("..")) throw new Error("session file escapes project");
 const activeHostSession = (): HostSessionState | null => {
   if (!existsSync(hostSessionPath)) return null;
-  try { const state = JSON.parse(readFileSync(hostSessionPath, "utf8")) as HostSessionState; return state.endedAt ? null : state; }
+  try {
+    // status performs lifecycle recovery under the host-session lock before we
+    // decide whether a durable action is resumable or terminal.
+    const recovered = spawnSync(process.execPath, [join(import.meta.dir, "host-session-cli.ts"), "status", "--project-dir", projectDir, "--session-file", hostSessionFile], { cwd: projectDir, encoding: "utf8" });
+    if (recovered.status !== 0) return null;
+    const state = (JSON.parse(recovered.stdout) as { state?: HostSessionState | null }).state ?? null;
+    return state?.endedAt ? null : state;
+  }
   catch { return null; }
 };
 
@@ -40,7 +47,8 @@ function runJson(executable: string, args: string[]): Json {
   try { return JSON.parse(result.stdout) as Json; } catch { return { kind: "print", message: result.stdout.trim() }; }
 }
 
-const repository = value("--repo") ?? `local:${projectDir}`;
+const configuredRepository = value("--repo");
+let repository = "";
 const intakeKey = (issueNumber: number) => intakeBindingKey({ provider: "github", repository }, issueNumber);
 
 function issueIntentState(issueNumber: number): "none" | "partial" | "active" {
@@ -77,7 +85,7 @@ function issueIntentState(issueNumber: number): "none" | "partial" | "active" {
               const match = /^Implement GitHub issue #(\d+):/m.exec(candidate);
               // Legacy descriptions had no repository identity. They are safe
               // to migrate only for this product's implicit current repo.
-              if (!value("--repo") && match && Number(match[1]) === issueNumber) {
+              if (!configuredRepository && match && Number(match[1]) === issueNumber) {
                 if (routable) return "active";
                 partial = true;
               }
@@ -103,6 +111,7 @@ class OfficialEngine implements EngineAdapter {
   async execute(directive: Readonly<OfficialDirective>) { return { ...directive, kind: "official-host-action-required" }; }
   classifyCreateError(error: unknown) { return error instanceof OfficialCommandError ? error.retryClass : "ambiguous" as const; }
   async reconcileIntent(issueNumber: number) { return issueIntentState(issueNumber) === "active" ? this.next() : null; }
+  async confirmIntentAbsent(issueNumber: number) { return issueIntentState(issueNumber) === "none"; }
 }
 
 const auto = resolveDAutomation(projectDir), autopilot = resolveDIssueAutopilot(projectDir);
@@ -133,10 +142,13 @@ if (existingSession?.claim) {
   process.stdout.write(`${JSON.stringify(resumed, null, 2)}\n`); process.exit(0);
 }
 
+const origin = configuredRepository ? null : spawnSync("git", ["config", "--get", "remote.origin.url"], { cwd: projectDir, encoding: "utf8" });
+repository = canonicalGitHubRepository(configuredRepository ?? (origin?.status === 0 ? origin.stdout.trim() : ""));
+
 const issueNumber = /^\d+$/.test(command) ? Number(command) : undefined;
 const requiredLabel = issueNumber || command === "list" ? undefined : command;
 const effective = requiredLabel ? { ...config, labelAllowlist: [...config.labelAllowlist, requiredLabel] } : config;
-const issues = createGhIssueSource({ cwd: projectDir, repository: value("--repo"), executable: value("--gh-executable") });
+const issues = createGhIssueSource({ cwd: projectDir, repository, executable: value("--gh-executable") });
 if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
 const bindings = createFileIntakeBindingStore(paths.bindings);
 if (issueNumber && issueIntentState(issueNumber) === "partial") {

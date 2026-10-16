@@ -56,6 +56,9 @@ describe("installed D feature-check entry", () => {
     writeFileSync(join(root, "directive.json"), JSON.stringify(ask));
     result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, ask)], { cwd: root, encoding: "utf8" });
     expect(result.status).not.toBe(0); expect(result.stderr).toContain("active run-stage directive");
+    const unresolved = { ...saved, gate: "unresolved" }; writeFileSync(join(root, "directive.json"), JSON.stringify(unresolved));
+    result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, unresolved)], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("resolved boolean run-stage gate");
   });
   test("public CLI cannot bypass the verified host boundary", () => {
     const root = project({});
@@ -72,6 +75,9 @@ describe("installed D feature-check entry", () => {
     writeFileSync(join(root, "directive.json"), JSON.stringify({ ...directive, stage: "code-generation" }));
     result = spawnSync(process.execPath, [publicCli, "--project-dir", root, "--stage-check-input", "input.json", "--directive-file", "directive.json"], { cwd: root, encoding: "utf8" });
     expect(result.status).not.toBe(0); expect(result.stderr).toContain("stage mismatch");
+    const unresolved = { ...directive, gate: "unresolved" }; writeFileSync(join(root, "directive.json"), JSON.stringify(unresolved)); writeFileSync(join(tools, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify({ directive: unresolved })}\n`)});\n`);
+    result = spawnSync(process.execPath, [publicCli, "--project-dir", root, "--stage-check-input", "input.json", "--directive-file", "directive.json"], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("resolved boolean run-stage gate");
   });
   test("rejects input and output paths outside the product", () => {
     const root = project({ features: { requirementIdValidation: true } });

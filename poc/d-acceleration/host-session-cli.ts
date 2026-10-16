@@ -27,6 +27,85 @@ const renew = async (state: HostSessionState) => {
   const store = storeFor(state);
   return state.claim && store?.renew ? store.renew(state.claim.issueNumber, state.claim.owner) : "renewed" as const;
 };
+const renewResilient = async (state: HostSessionState) => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (await renew(state) === "renewed") return "renewed" as const;
+    if (!state.claim) return "lost" as const;
+    try {
+      const claim = JSON.parse(readFileSync(`${issueAutopilotRuntimePaths(projectDir).claims}/issue-${state.claim.issueNumber}.json`, "utf8")) as { owner?: string; expiresAt?: number };
+      if (claim.owner !== state.claim.owner || typeof claim.expiresAt !== "number" || claim.expiresAt <= Date.now()) return "lost" as const;
+    } catch { return "lost" as const; }
+    await Bun.sleep(20);
+  }
+  return "lost" as const;
+};
+type HeartbeatRecord = { token: string; pid: number | null; startedAt: number; lastRenewedAt: number; expiresAt: number; status: "starting" | "running" | "stopping" | "failed" };
+const lifecycleLock = `${path}.lifecycle.lock`;
+const writeHeartbeat = (record: HeartbeatRecord) => {
+  const temporary = `${heartbeat}.tmp-${process.pid}`;
+  writeFileSync(temporary, `${JSON.stringify(record)}\n`, { mode: 0o600, flag: "wx" });
+  renameSync(temporary, heartbeat);
+};
+const readHeartbeat = (): HeartbeatRecord | null => {
+  try { return JSON.parse(readFileSync(heartbeat, "utf8")) as HeartbeatRecord; } catch { return null; }
+};
+const pidAlive = (pid: number | null) => {
+  if (!pid || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+};
+const withLifecycleLock = async <T>(operation: () => Promise<T>): Promise<T | null> => {
+  const acquire = () => {
+    const fd = openSync(lifecycleLock, "wx", 0o600);
+    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`, "utf8");
+    return fd;
+  };
+  let fd: number;
+  try { fd = acquire(); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    let owner: { pid?: number } | null = null;
+    try { owner = JSON.parse(readFileSync(lifecycleLock, "utf8")) as { pid?: number }; } catch {}
+    if ((owner?.pid && pidAlive(owner.pid)) || (!owner?.pid && Date.now() - statSync(lifecycleLock).mtimeMs < 5000)) return null;
+    try { unlinkSync(lifecycleLock); } catch { return null; }
+    try { fd = acquire(); } catch { return null; }
+  }
+  try { return await operation(); }
+  finally { closeSync(fd); remove(lifecycleLock); }
+};
+const terminalize = async (state: HostSessionState, reason: string): Promise<HostSessionState> => {
+  const ended = { ...state, hostAction: undefined, endedAt: Date.now(), terminalReason: reason };
+  save(ended);
+  if (state.claim) await storeFor(state)?.release(state.claim.issueNumber, state.claim.owner);
+  remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed);
+  return ended;
+};
+const recoverLifecycle = async (): Promise<{ state: HostSessionState | null; recoveredReason?: string; busy?: boolean }> => {
+  if (!existsSync(path)) return { state: null };
+  const recovered = await withLifecycleLock(async () => {
+    let state = readState();
+    if (state.endedAt) { remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed); return { state }; }
+    const record = readHeartbeat();
+    const failure = existsSync(heartbeatFailed) ? JSON.parse(readFileSync(heartbeatFailed, "utf8")) as { token?: string; reason?: string } : null;
+    if (!state.hostAction && !record) return { state };
+    if (!state.hostAction && record?.status === "stopping") { remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed); return { state }; }
+    let reason: string | null = null;
+    if (!state.hostAction || !record || state.hostAction.token !== record.token) reason = "host-action-orphaned";
+    else if (failure?.token === record.token) reason = failure.reason ?? "heartbeat-failed";
+    else if (existsSync(issueAutopilotRuntimePaths(projectDir).stop)) reason = "operator-stop";
+    else if (Date.now() - state.startedAt >= state.deadlineMs) reason = "deadline-exceeded";
+    else if (record.status === "failed") reason = "heartbeat-failed";
+    else if (!pidAlive(record.pid) || record.expiresAt <= Date.now()) reason = "heartbeat-stale";
+    if (!reason && state.claim) {
+      try {
+        const claim = JSON.parse(readFileSync(`${issueAutopilotRuntimePaths(projectDir).claims}/issue-${state.claim.issueNumber}.json`, "utf8")) as { owner?: string; expiresAt?: number };
+        if (claim.owner !== state.claim.owner || typeof claim.expiresAt !== "number" || claim.expiresAt <= Date.now()) reason = "claim-lost";
+      } catch { reason = "claim-lost"; }
+    }
+    if (reason) { state = await terminalize(state, reason); return { state, recoveredReason: reason }; }
+    return { state };
+  });
+  return recovered ?? { state: readState(), busy: true };
+};
 
 if (mode === "init") {
   const active = (value("--active-stages") ?? "").split(",").filter(Boolean), through = resolveThroughBoundary(value("--through"), active);
@@ -34,7 +113,7 @@ if (mode === "init") {
   const claim: HostSessionClaim | undefined = issueNumber > 0 && owner ? { issueNumber, owner, leaseMs } : undefined;
   if ((issueNumber > 0) !== Boolean(owner)) throw new Error("init requires both --issue-number and --owner for a claimed session");
   if (existsSync(path)) {
-    const existing = readState();
+    const existing = (await recoverLifecycle()).state ?? readState();
     const sameClaim = JSON.stringify(existing.claim ?? null) === JSON.stringify(claim ?? null);
     if (!existing.endedAt) {
       if (existing.through !== through || !sameClaim) throw new Error("active host session does not match requested boundary/claim");
@@ -47,8 +126,8 @@ if (mode === "init") {
 }
 
 if (mode === "status") {
-  const state = existsSync(path) ? readState() : null;
-  process.stdout.write(`${JSON.stringify({ active: Boolean(state && !state.endedAt), actionActive: existsSync(heartbeat), heartbeatFailed: existsSync(heartbeatFailed), state })}\n`);
+  const recovery = await recoverLifecycle(), state = recovery.state;
+  process.stdout.write(`${JSON.stringify({ active: Boolean(state && !state.endedAt), actionActive: Boolean(state?.hostAction), heartbeatFailed: existsSync(heartbeatFailed), recoveredReason: recovery.recoveredReason ?? null, lifecycleBusy: recovery.busy ?? false, state })}\n`);
   process.exit(0);
 }
 
@@ -56,13 +135,19 @@ if (mode === "heartbeat-worker") {
   const token = value("--action-token");
   if (!token) throw new Error("heartbeat-worker requires --action-token");
   while (existsSync(heartbeat)) {
-    const record = JSON.parse(readFileSync(heartbeat, "utf8")) as { token: string };
+    const record = readHeartbeat();
+    if (!record) break;
     if (record.token !== token || existsSync(heartbeatStop)) break;
     const state = readState();
     const reason = existsSync(issueAutopilotRuntimePaths(projectDir).stop) ? "operator-stop"
       : Date.now() - state.startedAt >= state.deadlineMs ? "deadline-exceeded"
-      : await renew(state) !== "renewed" ? "claim-lost" : null;
-    if (reason) { writeFileSync(heartbeatFailed, `${JSON.stringify({ token, reason, at: Date.now() })}\n`, { mode: 0o600 }); break; }
+      : await renewResilient(state) !== "renewed" ? "claim-lost" : null;
+    if (reason) {
+      writeHeartbeat({ ...record, pid: process.pid, status: "failed", lastRenewedAt: Date.now(), expiresAt: Date.now() });
+      writeFileSync(heartbeatFailed, `${JSON.stringify({ token, reason, at: Date.now() })}\n`, { mode: 0o600 }); break;
+    }
+    const renewedAt = Date.now();
+    writeHeartbeat({ ...record, pid: process.pid, status: "running", lastRenewedAt: renewedAt, expiresAt: renewedAt + (state.claim?.leaseMs ?? 30_000) });
     await Bun.sleep(heartbeatInterval(state));
   }
   process.exit(0);
@@ -71,32 +156,51 @@ if (mode === "heartbeat-worker") {
 if (!existsSync(path)) throw new Error("host session does not exist");
 const state = readState();
 if (mode === "action-start") {
-  if (state.endedAt) throw new Error("host session already ended");
-  if (existsSync(heartbeat)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "host-action-busy", state })}\n`); process.exit(0); }
-  if (await renew(state) !== "renewed") { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "claim-lost", state })}\n`); process.exit(0); }
-  remove(heartbeatStop); remove(heartbeatFailed);
-  const token = randomUUID();
-  writeFileSync(heartbeat, `${JSON.stringify({ token, startedAt: Date.now() })}\n`, { mode: 0o600, flag: "wx" });
-  save({ ...state, hostAction: { token, startedAt: Date.now() }, awaitingHuman: false });
-  const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
-  child.unref();
-  process.stdout.write(`${JSON.stringify({ action: "continue", token, heartbeatEveryMs: heartbeatInterval(state) })}\n`); process.exit(0);
+  const started = await withLifecycleLock(async () => {
+    const current = readState();
+    if (current.endedAt) return { action: "stop", reason: "session-ended", state: current };
+    if (current.hostAction || existsSync(heartbeat)) return { action: "stop", reason: "host-action-busy", state: current };
+    if (await renew(current) !== "renewed") return { action: "stop", reason: "claim-lost", state: await terminalize(current, "claim-lost") };
+    remove(heartbeatStop); remove(heartbeatFailed);
+    const token = randomUUID(), startedAt = Date.now();
+    save({ ...current, hostAction: { token, startedAt }, awaitingHuman: false });
+    writeHeartbeat({ token, pid: null, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + (current.claim?.leaseMs ?? 30_000), status: "starting" });
+    try {
+      const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
+      if (!child.pid) throw new Error("heartbeat worker did not start");
+      writeHeartbeat({ token, pid: child.pid, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + (current.claim?.leaseMs ?? 30_000), status: "running" });
+      child.unref();
+      return { action: "continue", token, heartbeatEveryMs: heartbeatInterval(current) };
+    } catch {
+      return { action: "stop", reason: "heartbeat-start-failed", state: await terminalize(current, "heartbeat-start-failed") };
+    }
+  });
+  process.stdout.write(`${JSON.stringify(started ?? { action: "stop", reason: "lifecycle-busy", state })}\n`); process.exit(0);
 }
 
 if (mode === "action-finish") {
   const token = value("--action-token");
-  const record = existsSync(heartbeat) ? JSON.parse(readFileSync(heartbeat, "utf8")) as { token: string } : null;
-  if (!token || !record || record.token !== token) throw new Error("action-finish token does not own the active heartbeat");
-  writeFileSync(heartbeatStop, "stop\n", { mode: 0o600 });
-  await Bun.sleep(Math.min(100, Math.max(20, Math.floor((state.claim?.leaseMs ?? 300) / 3))));
-  remove(heartbeat); remove(heartbeatStop);
-  const failure = existsSync(heartbeatFailed) ? JSON.parse(readFileSync(heartbeatFailed, "utf8")) as { reason: string } : null;
-  remove(heartbeatFailed);
-  const reason = failure?.reason ?? (await renew(state) !== "renewed" ? "claim-lost" : null);
-  const finishedState: HostSessionState = { ...readState(), hostAction: undefined, ...(reason ? { endedAt: Date.now(), terminalReason: reason } : {}) };
-  save(finishedState);
-  if (reason && state.claim) await storeFor(state)?.release(state.claim.issueNumber, state.claim.owner);
-  process.stdout.write(`${JSON.stringify(reason ? { action: "stop", reason, state: finishedState } : { action: "continue", state: finishedState })}\n`); process.exit(0);
+  const finished = await withLifecycleLock(async () => {
+    const current = readState(), record = readHeartbeat();
+    if (!token || !record || record.token !== token || current.hostAction?.token !== token) throw new Error("action-finish token does not own the active heartbeat");
+    writeHeartbeat({ ...record, status: "stopping" });
+    writeFileSync(heartbeatStop, "stop\n", { mode: 0o600 });
+    const joinDeadline = Date.now() + heartbeatInterval(current) * 2 + 500;
+    while (pidAlive(record.pid) && Date.now() < joinDeadline) await Bun.sleep(20);
+    const failure = existsSync(heartbeatFailed) ? JSON.parse(readFileSync(heartbeatFailed, "utf8")) as { reason: string } : null;
+    let reason = failure?.reason ?? (pidAlive(record.pid) ? "heartbeat-worker-stuck" : null);
+    if (!reason) {
+      if (await renewResilient(current) !== "renewed") reason = "claim-lost";
+    }
+    if (reason) return { action: "stop", reason, state: await terminalize(current, reason) };
+    // Persist the completed transition before deleting the stopping record. If
+    // cleanup crashes, recovery recognizes status=stopping as harmless debris.
+    const finishedState: HostSessionState = { ...current, hostAction: undefined };
+    save(finishedState);
+    remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed);
+    return { action: "continue", state: finishedState };
+  });
+  process.stdout.write(`${JSON.stringify(finished ?? { action: "stop", reason: "lifecycle-busy", state })}\n`); process.exit(0);
 }
 
 if (mode !== "checkpoint") throw new Error("mode must be init, status, checkpoint, action-start, or action-finish");

@@ -206,18 +206,43 @@ export function createFileClaimStore(options: {
   };
 }
 
-export function createFileIntakeBindingStore(directory: string): IntakeBindingStore {
+export function createFileIntakeBindingStore(directory: string, options: { clock?: () => number; recoveryLeaseMs?: number } = {}): IntakeBindingStore {
+  const now = options.clock ?? Date.now;
+  const recoveryLeaseMs = options.recoveryLeaseMs ?? 60_000;
+  if (!Number.isSafeInteger(recoveryLeaseMs) || recoveryLeaseMs <= 0) throw new Error("binding recoveryLeaseMs must be a positive integer");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const pathFor = (binding: IntakeBinding) => join(directory, `${binding.intakeKey}.json`);
   return {
     async reserve(binding, owner) {
       const path = pathFor(binding);
-      if (tryCreate(path, `${JSON.stringify({ ...binding, state: "pending", owner })}\n`)) return "reserved";
+      const createdAt = now();
+      if (tryCreate(path, `${JSON.stringify({ ...binding, state: "pending", owner, createdAt, updatedAt: createdAt, attempts: 0 })}\n`)) return "reserved";
       const current = readJson<Record<string, unknown>>(path);
       const exact = current?.provider === binding.provider && current.repository === binding.repository
         && current.issueNumber === binding.issueNumber && current.intakeKey === binding.intakeKey;
       if (!exact) throw new Error("intake binding key collision or corrupt binding");
-      return current?.state === "bound" ? "bound" : "pending";
+      if (current?.state === "bound") return "bound";
+      // Only an explicitly classified transient exhaustion can be recovered
+      // automatically. Ambiguous/fatal/partial outcomes require manual repair.
+      if (current?.state === "pending" && current.outcome === "transient-exhausted"
+        && typeof current.updatedAt === "number" && now() - current.updatedAt > recoveryLeaseMs) {
+        return "recoverable";
+      }
+      return "pending";
+    },
+    async recover(binding, owner) {
+      const path = pathFor(binding);
+      const recovery = `${path}.recovery`;
+      if (!acquireRecoverableLock(recovery, owner, now, recoveryLeaseMs)) return "pending";
+      try {
+        const verified = readJson<Record<string, unknown>>(path);
+        if (verified?.state !== "pending" || verified.outcome !== "transient-exhausted" || verified.intakeKey !== binding.intakeKey
+          || typeof verified.updatedAt !== "number" || now() - verified.updatedAt <= recoveryLeaseMs) return "pending";
+        const temporary = `${path}.recover-${process.pid}-${now()}`;
+        writeFileSync(temporary, `${JSON.stringify({ ...verified, owner, updatedAt: now(), attempts: 0, outcome: "retry-reserved", recoveredAt: now(), recoveryCount: Number(verified.recoveryCount ?? 0) + 1 })}\n`, { mode: 0o600, flag: "wx" });
+        renameSync(temporary, path);
+        return "reserved";
+      } finally { try { unlinkSync(recovery); } catch {} }
     },
     async finalize(binding, owner) {
       const path = pathFor(binding), current = readJson<Record<string, unknown>>(path);
@@ -228,6 +253,13 @@ export function createFileIntakeBindingStore(directory: string): IntakeBindingSt
       // active intent after the reserving process crashed before finalization.
       const temporary = `${path}.bound-${process.pid}`;
       writeFileSync(temporary, `${JSON.stringify({ ...binding, state: "bound", owner })}\n`, { mode: 0o600, flag: "wx" });
+      renameSync(temporary, path);
+    },
+    async recordAttempt(binding, owner, attempt) {
+      const path = pathFor(binding), current = readJson<Record<string, unknown>>(path);
+      if (!current || current.state !== "pending" || current.owner !== owner || current.intakeKey !== binding.intakeKey) throw new Error("cannot record attempt for unowned intake binding");
+      const temporary = `${path}.attempt-${process.pid}`;
+      writeFileSync(temporary, `${JSON.stringify({ ...current, ...attempt, updatedAt: now() })}\n`, { mode: 0o600, flag: "wx" });
       renameSync(temporary, path);
     },
   };

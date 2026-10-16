@@ -99,17 +99,35 @@ export interface EngineAdapter {
   next(): Promise<OfficialDirective>;
   execute(directive: Readonly<OfficialDirective>): Promise<OfficialDirective>;
   reconcileIntent?(issueNumber: number): Promise<OfficialDirective | null>;
+  confirmIntentAbsent?(issueNumber: number): Promise<boolean>;
   classifyCreateError?(error: unknown): "transient" | "ambiguous" | "fatal";
 }
 
 export type IntakeBinding = { provider: string; repository: string; issueNumber: number; intakeKey: string };
 export type IntakeBindingIdentity = Pick<IntakeBinding, "provider" | "repository">;
+export function canonicalGitHubRepository(input: string): string {
+  const raw = input.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  const scp = /^(?:git@)?([^:/.]+(?:\.[^:/.]+)+):(.+)$/.exec(raw);
+  let host = "github.com", path = raw;
+  if (scp) [host, path] = [scp[1], scp[2]];
+  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    const url = new URL(raw); host = url.hostname; path = url.pathname.replace(/^\//, "");
+  } else {
+    const parts = raw.split("/");
+    if (parts.length === 3 && parts[0].includes(".")) [host, path] = [parts[0], parts.slice(1).join("/")];
+  }
+  const parts = path.split("/").filter(Boolean);
+  if (!/^[a-z0-9.-]+$/i.test(host) || parts.length !== 2 || !parts.every((part) => /^[a-z0-9_.-]+$/i.test(part))) throw new Error("GitHub repository must identify [HOST/]OWNER/REPO");
+  return `${host.toLowerCase()}/${parts[0].toLowerCase()}/${parts[1].toLowerCase()}`;
+}
 export function intakeBindingKey(binding: IntakeBindingIdentity, issueNumber: number): string {
   return createHash("sha256").update(`${binding.provider}\0${binding.repository}\0${issueNumber}`).digest("hex");
 }
 export interface IntakeBindingStore {
-  reserve(binding: IntakeBinding, owner: string): Promise<"reserved" | "pending" | "bound">;
+  reserve(binding: IntakeBinding, owner: string): Promise<"reserved" | "recoverable" | "pending" | "bound">;
+  recover?(binding: IntakeBinding, owner: string): Promise<"reserved" | "pending">;
   finalize(binding: IntakeBinding, owner: string): Promise<void>;
+  recordAttempt?(binding: IntakeBinding, owner: string, attempt: { attempts: number; outcome: "transient-exhausted" | "ambiguous" | "fatal"; detail: string }): Promise<void>;
 }
 
 export type IntakeSelection =
@@ -124,6 +142,7 @@ export type AutopilotStopReason =
   | "label-not-allowed"
   | "selection-cancelled"
   | "claim-busy"
+  | "reconcile-required"
   | "uncertainty"
   | "intent-created"
   | "boundary-reached"
@@ -140,6 +159,7 @@ export type AutopilotResult = {
   attempts?: number;
   detail?: string;
   directive?: OfficialDirective;
+  skippedCandidates?: Array<{ issueNumber: number; reason: "claim-busy" | "reconcile-required"; detail?: string }>;
   hostControl?: { through: string | null; maxSteps: number; deadlineMs: number; claim: { issueNumber: number; owner: string; leaseMs: number } };
 };
 
@@ -255,14 +275,16 @@ export async function runIssueAutopilot(input: {
     const choices = (await input.deps.issues.list()).filter((entry) => Number.isSafeInteger(entry.number) && entry.number > 0);
     const candidates = await input.selection.candidatesFromList(choices);
     if (!candidates.length) return { status: "stopped", reason: "selection-cancelled" };
-    let busy: AutopilotResult | undefined;
+    const skipped: NonNullable<AutopilotResult["skippedCandidates"]> = [];
     for (const candidate of candidates) {
       if (!choices.some((entry) => entry.number === candidate)) throw new Error("candidate issue is not in the offered list");
       const result = await runIssueAutopilot({ ...input, selection: { issueNumber: candidate } });
-      if (result.reason === "claim-busy") { busy = result; continue; }
-      return result;
+      if (result.reason === "claim-busy" || result.reason === "reconcile-required") {
+        skipped.push({ issueNumber: candidate, reason: result.reason, ...(result.detail ? { detail: result.detail } : {}) }); continue;
+      }
+      return skipped.length ? { ...result, skippedCandidates: skipped } : result;
     }
-    return busy ?? { status: "stopped", reason: "selection-cancelled" };
+    return skipped.length ? { status: "stopped", reason: skipped.at(-1)!.reason, issueNumber: skipped.at(-1)!.issueNumber, detail: "all eligible candidates were busy or require reconciliation", skippedCandidates: skipped } : { status: "stopped", reason: "selection-cancelled" };
   }
 
   const issue = await resolveIssue(input.selection, input.deps.issues);
@@ -305,7 +327,7 @@ export async function runIssueAutopilot(input: {
     // before every create, so a later poll of the same Issue resumes the bound
     // intent instead of creating a duplicate.
     const binding = input.binding ? { ...input.binding, issueNumber: issue.number, intakeKey: intakeBindingKey(input.binding, issue.number) } : undefined;
-    const reservation = binding && input.deps.bindings ? await input.deps.bindings.reserve(binding, input.owner) : "reserved";
+    let reservation = binding && input.deps.bindings ? await input.deps.bindings.reserve(binding, input.owner) : "reserved";
     let created: { value?: OfficialDirective; attempts: number; error?: unknown } = { attempts: 0 };
     const reconcile = () => input.deps.engine.reconcileIntent?.(issue.number) ?? Promise.resolve(null);
     const existing = await reconcile();
@@ -313,10 +335,16 @@ export async function runIssueAutopilot(input: {
       created = { value: existing, attempts: 0 };
       if (binding && input.deps.bindings) await input.deps.bindings.finalize(binding, input.owner);
     }
-    else if (reservation !== "reserved") {
-      return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: 0, detail: `intake binding is ${reservation}; durable reconciliation required` };
+    else if (reservation === "recoverable") {
+      // Recovery ownership is transferred only after the official adapter has
+      // strongly confirmed that no exact active intent exists.
+      const absent = await input.deps.engine.confirmIntentAbsent?.(issue.number) ?? false;
+      reservation = absent && binding && input.deps.bindings?.recover ? await input.deps.bindings.recover(binding, input.owner) : "pending";
     }
-    else {
+    if (!existing && reservation !== "reserved") {
+      return { status: "stopped", reason: "reconcile-required", issueNumber: issue.number, attempts: 0, detail: `intake binding is ${reservation}; durable reconciliation required` };
+    }
+    else if (!existing) {
       // Creation is non-idempotent. A failed invocation is never retried until
       // durable official state has been reconciled for this exact Issue.
       while (created.attempts <= config.maxRetries && !created.value) {
@@ -336,6 +364,10 @@ export async function runIssueAutopilot(input: {
       }
     }
     if (!created.value) {
+      if (binding && input.deps.bindings?.recordAttempt) {
+        const classification = input.deps.engine.classifyCreateError?.(created.error) ?? "ambiguous";
+        await input.deps.bindings.recordAttempt(binding, input.owner, { attempts: created.attempts, outcome: classification === "transient" ? "transient-exhausted" : classification, detail: String(created.error) });
+      }
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };
     }
     if (binding && input.deps.bindings) await input.deps.bindings.finalize(binding, input.owner);

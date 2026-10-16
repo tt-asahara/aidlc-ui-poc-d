@@ -16,6 +16,7 @@ if (!validation.valid) throw new Error(`host boundary requires a valid official 
 // means the official stage ritual includes its approval boundary; it is not an
 // `ask` directive and must still receive the optional checks before review/report.
 if (directive.kind !== "run-stage") throw new Error("host boundary requires an active run-stage directive whose body just executed");
+if (typeof directive.gate !== "boolean") throw new Error("host boundary requires a resolved boolean run-stage gate");
 if (directive.stage !== manifest.stage) throw new Error(`host boundary stage mismatch: ${directive.stage} != ${manifest.stage}`);
 if ((directive.unit ?? null) !== (manifest.unit ?? null)) throw new Error(`host boundary unit mismatch: ${directive.unit ?? "<stage>"} != ${manifest.unit ?? "<stage>"}`);
 const fresh = spawnSync(process.execPath, [resolve(engineDir, "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });

@@ -63,6 +63,7 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("If it returns `official-host-action-required`, continue below with the returned directive.");
     expect(skill).toContain("never mark a Unit complete from worker exit alone");
     expect(skill).toContain("Optional D checks (default off)");
+    expect(skill).toContain('it rejects `gate: "unresolved"`, asks, and invented or stale directives');
     expect(skill).toContain("never replace, waive, or reorder the C HTML evidence sensor");
   });
 

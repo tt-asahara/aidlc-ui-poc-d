@@ -337,9 +337,13 @@ function validatedCommitMessage(messagePath: string, receipt: string, approval: 
   }
   return text;
 }
-function runHook(projectDir: string, indexPath: string, name: string, args: string[] = []): void {
+function hookFailure(projectDir: string, indexPath: string, name: string, args: string[] = []): string | null {
   const result = gitWithEnv(projectDir, ["hook", "run", "--ignore-missing", name, "--", ...args], { GIT_INDEX_FILE: indexPath });
-  if (result.status !== 0) throw new Error((result.stderr || result.stdout || `${name} hook failed`).trim());
+  return result.status === 0 ? null : (result.stderr || result.stdout || `${name} hook failed`).trim();
+}
+function runHook(projectDir: string, indexPath: string, name: string, args: string[] = []): void {
+  const failure = hookFailure(projectDir, indexPath, name, args);
+  if (failure) throw new Error(failure);
 }
 function acquireLock(path: string): number | null {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -431,7 +435,22 @@ export function persistCrossing(projectDir: string, config: DGitPersistenceConfi
       }
       const refresh = git(projectDir, ["reset", "--mixed", oid, "--", ...cached]);
       if (refresh.status !== 0) throw new Error((refresh.stderr || refresh.stdout || "cannot refresh persistence paths in the primary index").trim());
-      runHook(projectDir, isolatedIndex, "post-commit");
+      const postHookError = hookFailure(projectDir, isolatedIndex, "post-commit");
+      const afterHookRead = git(projectDir, ["rev-parse", "--verify", `refs/heads/${branch}`]);
+      const afterHookRef = afterHookRead.status === 0 ? afterHookRead.stdout.trim() : "";
+      if (afterHookRef !== oid) {
+        // post-commit is allowed to inspect or update unrelated worktree bytes,
+        // but it must not replace the already scanned checkpoint. Restore only
+        // when the ref still has the exact value produced by that hook; a
+        // concurrent third-party movement is never overwritten.
+        const restored = git(projectDir, ["update-ref", `refs/heads/${branch}`, oid, afterHookRef]);
+        if (restored.status !== 0) throw new Error("post-commit changed the checkpoint ref and CAS restoration failed");
+        throw new Error("post-commit changed the checkpoint ref; original scanned commit restored and push suppressed");
+      }
+      if (out(projectDir, ["symbolic-ref", "--short", "HEAD"]) !== branch || out(projectDir, ["rev-parse", "HEAD"]) !== oid) {
+        throw new Error("checked-out branch changed during post-commit; push suppressed");
+      }
+      if (postHookError) throw new Error(postHookError);
       if (staged(projectDir).length) throw new Error("checkpoint postcondition failed; push suppressed");
       ledger[crossing.receipt] = { commitOid: oid }; atomicJson(paths.ledger, ledger);
       if (!config.push) return { status: "committed", commitOid: oid };
