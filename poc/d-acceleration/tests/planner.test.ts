@@ -59,6 +59,19 @@ describe("D acceleration harness", () => {
       const result = await plan(low); expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced"); expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
     } finally { globalThis.fetch = originalFetch; }
   });
+  test("native design actually aborts a slow Clef call and falls back to balanced", async () => {
+    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    });
+    try {
+      const input = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742", timeoutMs: 5 } });
+      const result = await plan(input);
+      expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced");
+      expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
+    } finally { globalThis.fetch = originalFetch; }
+  });
   test("Clef judgment reaches the tier-specific worker model argument", async () => {
     const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "judgment", confidence: 0.95 } } });
     try {

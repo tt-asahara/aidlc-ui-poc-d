@@ -1,30 +1,49 @@
-# AI-DLC acceleration coverage
+# AI-DLC all-stage acceleration policy
 
-This table prevents the proof of concept from being mistaken for a complete
-replacement execution runtime.
+The executable policy is [`stage-policy.json`](stage-policy.json). Its test compares the matrix with every stage file in pinned v2.11.0. Cross-stage concurrency is always false; official directives, approvals, reviews, and the shared-state writer remain authoritative.
 
-| Area | Status | Owner / boundary |
-|---|---|---|
-| Initialization stages | Official delegation | AI-DLC engine remains serial and owns state creation and audit |
-| Ideation stages | Official delegation | Approval and human judgment stay in the official conductor |
-| Inception stages | Official delegation | Stage transitions and approvals are not scheduled here |
-| Functional Design per-Unit wave | Engine-integrated fixture | Real next → adapter → fake artifacts → official unit complete → partial resume → gate |
-| NFR Requirements per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
-| NFR Design per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
-| Infrastructure Design per-Unit wave | Planner-supported | Official wave stage, but no raw `aidlc next` integration fixture yet |
-| Code Generation swarm | Not executable here | Official worktree preparation, referee merge, landing, receipts, and settlement are required |
-| Build and Test / reviewers | Official delegation | Kept serial; official reviewer scope and receipts remain authoritative |
-| Operation stages | Official delegation | No custom parallel dispatch |
-| Ensemble spokes / mob contribution | Not implemented | Existing official ensemble implementation should be used |
-| Model selection | Adapter only | Explicit unverified Claude request is launchable; returned model or unavailable/auth error is recorded; no live authenticated proof |
-| Clef routing | Local adapter verified | Optional low-risk ambiguous classification; deterministic and safety decisions excluded |
+`implemented` means D executes an official Unit wave. `official-delegation` means D returns the complete directive to the existing host. `candidate-not-enabled` is an opportunity, not a measured or enabled feature.
 
-## Missing integration evidence
+| Phase | Stage | Status | Parallelism | Tier / effort | Clef |
+|---|---|---|---|---|---|
+| initialization | workspace-detection | official-delegation | deterministic-only | fast / low | never |
+| initialization | workspace-scaffold | official-delegation | serial-host | fast / low | never |
+| initialization | state-init | official-delegation | serial-host | fast / low | never |
+| ideation | intent-capture | official-delegation | serial-host | balanced / medium | never |
+| ideation | feasibility | candidate-not-enabled | read-only-fanout | judgment / high | never |
+| ideation | market-research | candidate-not-enabled | read-only-fanout | balanced / medium | never |
+| ideation | team-formation | official-delegation | serial-host | balanced / medium | never |
+| ideation | rough-mockups | candidate-not-enabled | read-only-fanout | balanced / medium | never |
+| ideation | scope-definition | official-delegation | serial-host | judgment / high | never |
+| ideation | approval-handoff | official-delegation | serial-host | judgment / high | never |
+| inception | reverse-engineering | official-delegation | official-pipeline | judgment / high | never |
+| inception | requirements-analysis | official-delegation | serial-host | judgment / high | never |
+| inception | user-stories | official-delegation | official-mob | judgment / high | never |
+| inception | domain-design | official-delegation | serial-host | judgment / high | never |
+| inception | refined-mockups | candidate-not-enabled | read-only-fanout | balanced / medium | never |
+| inception | units-generation | official-delegation | serial-host | judgment / high | never |
+| inception | contract-design | official-delegation | serial-host | judgment / high | never |
+| inception | practices-discovery | official-delegation | official-ensemble | balanced / medium | never |
+| inception | delivery-planning | official-delegation | serial-host | balanced / medium | never |
+| construction | functional-design | implemented | official-wave | balanced / medium | explicit low-risk escalation only |
+| construction | nfr-requirements | implemented | official-wave | balanced / medium | explicit low-risk escalation only |
+| construction | nfr-design | implemented | official-wave | balanced / medium | explicit low-risk escalation only |
+| construction | infrastructure-design | implemented | official-wave | balanced / medium | explicit low-risk escalation only |
+| construction | code-generation | official-delegation | official-swarm | judgment / high | never |
+| construction | build-and-test | official-delegation | serial-host | judgment / high | never |
+| construction | ci-pipeline | official-delegation | serial-host | judgment / high | never |
+| operation | environment-provisioning | official-delegation | serial-host | judgment / high | never |
+| operation | deployment-pipeline | official-delegation | serial-host | judgment / high | never |
+| operation | deployment-execution | official-delegation | serial-host | judgment / high | never |
+| operation | observability-setup | official-delegation | serial-host | balanced / medium | never |
+| operation | performance-validation | candidate-not-enabled | read-only-fanout | judgment / high | never |
+| operation | feedback-optimization | official-delegation | serial-host | judgment / high | never |
+| operation | incident-response | official-delegation | serial-host | judgment / high | never |
 
-There is currently no test that pipes the raw JSON produced by an actual
-`aidlc next` invocation directly into this scheduler. The fixture models the
-reviewed directive shape but is not engine-issued evidence. There is also no
-authenticated Claude execution. Caller `modelCatalog` is never accepted for
-Claude; production use needs a catalog record derived from the selected host's
-own model-list response and must retain
-requested, launched, and runtime-reported identities separately.
+## Safe handoff boundary
+
+The conductor executes only the four official `run-stage.wave` directives. A mob, ensemble, ordered pipeline, swarm, gate, review, question, or unknown directive returns `official-host-action-required` with the unmodified directive and completed worker records. D does not reimplement code-generation worktree preparation, referee merge, landing, or receipts.
+
+## Evidence boundary
+
+The functional-design fixture proves raw official `next` → adapter → bounded workers → official Unit completion → partial resume → gate. The other three design stages share the adapter contract but lack equivalent native fixtures. Fake workers and synthetic fixtures prove local orchestration only; they are not real-model speed, quality, or cost evidence. Authenticated benchmarking must record identical inputs and quality checks, routing time, worker time, retries, requested/launched/runtime-reported model IDs, and usage.

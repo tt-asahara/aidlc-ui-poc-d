@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -133,6 +133,22 @@ describe("official next adapter integration", () => {
     const result = JSON.parse(run.stdout); expect(result.status).toBe("worker-action-required"); expect(result.reason).toBe("no-progress-missing-required-outputs"); expect(result.history).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("product conductor stops when an unchanged build wave is reissued despite existing outputs", () => {
+    const project = createWaveProject(); const engine = join(project, "stub-engine"); mkdirSync(engine);
+    const repeated = { kind: "run-stage", stage: "functional-design", gate: false, wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: ["already.md"], required_produces: ["already.md"], consumes: [], consumes_absent: [] }] } };
+    writeFileSync(join(engine, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify(repeated)}\n`)});\n`);
+    writeFileSync(join(engine, "aidlc-state.ts"), "process.exit(99);\n");
+    writeFileSync(join(project, "already.md"), "pre-existing fixture output\n");
+    const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }; delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    const run = spawnSync(process.execPath, [CONDUCTOR, "--project-dir", project, "--engine-dir", engine, "--worker", "fake"], { cwd: project, env, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS });
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(2);
+    const result = JSON.parse(run.stdout);
+    expect(result.reason).toBe("no-progress-repeated-official-build-wave");
+    expect(result.history).toHaveLength(2);
+    expect(result.workerRuns).toHaveLength(1);
+    expect(result.workerRuns[0].result.records).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("product conductor CLI settles a disposable wave through the official gate", () => {
     const project = createWaveProject();
     const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
@@ -143,6 +159,8 @@ describe("official next adapter integration", () => {
     expect(result.status).toBe("official-host-action-required");
     expect(result.directive).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
     expect(result.directive.wave).toBeUndefined();
+    expect(result.workerRuns).toHaveLength(1);
+    expect(result.workerRuns[0].result.records.map((record: { task: string }) => record.task).sort()).toEqual(["functional-design:alpha", "functional-design:beta"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test(

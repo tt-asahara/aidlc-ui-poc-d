@@ -73,6 +73,11 @@ Clef can escalate uncertain work to `judgment` but cannot downgrade design to
 `fast`. This PoC therefore does not claim universal fast-tier coverage across
 all AI-DLC stages.
 
+`stage-policy.json` is the machine-readable, test-enforced classification of
+all 33 official stages. Only official design waves are executable here;
+pipeline, mob, ensemble, and swarm directives are handed back intact to the
+official host.
+
 ## Evidence, not claims
 
 `benchmark.ts` compares the same synthetic task durations under serial order and
