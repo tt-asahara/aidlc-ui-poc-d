@@ -64,6 +64,8 @@ Report paths, build/dry-run, authorized writes, collisions, exact payload/licens
 
 Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude distribution projects the bounded runtime into `.claude/tools/d-acceleration`; verify that ordinary `/aidlc` uses that installed copy and never reaches back into `SRC`. The setup-only preflight is:
 
+Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted.
+
 ```bash
 (cd "$PRODUCT" && bun "$PRODUCT/.claude/tools/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)
 ```

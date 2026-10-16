@@ -40,6 +40,13 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("never mark a Unit complete from worker exit alone");
   });
 
+  test("setup requires full installed runtime parity rather than partial updates", () => {
+    const setup = readFileSync(join(repo, ".claude", "skills", "aidlc-setup", "SKILL.md"), "utf8");
+    expect(setup).toContain("one indivisible directory, never as a selected-file patch");
+    expect(setup).toContain("diff -qr");
+    expect(setup).toContain("any missing, extra, or changed file");
+  });
+
   test("ordinary routing honors explicit D project/local settings before Opus defaults", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-d-models-"));
     mkdirSync(join(project, ".claude"), { recursive: true });

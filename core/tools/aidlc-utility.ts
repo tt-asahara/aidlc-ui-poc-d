@@ -11808,6 +11808,14 @@ const HIGH_SPECIFICITY_KEYWORDS = new Set<string>([
   "poc",
   "proof of concept",
   "cve",
+  "web app",
+  "webapp",
+  "dashboard",
+  "website",
+  "frontend",
+  "user interface",
+  "mobile app",
+  "webアプリ",
 ]);
 
 // A request to fix something: "Fix the export ...", "please fix it",
@@ -11853,7 +11861,7 @@ function isFixRequest(text: string, index: number, length: number): boolean {
   return FIX_REQUEST_ASKER.test(text.slice(start, index + length + (end < 0 ? after.length : end)));
 }
 
-function isNegatedScopeKeyword(text: string, index: number): boolean {
+function isNegatedScopeKeyword(text: string, index: number, length = 0): boolean {
   // Keep this local to the occurrence: "refactor without changing behavior"
   // is affirmative, and a new clause can request a different scope. This is
   // a conservative lexical guard, not a general natural-language parser.
@@ -11862,7 +11870,14 @@ function isNegatedScopeKeyword(text: string, index: number): boolean {
     .split(/[.!?;:\n]|\b(?:but|however|instead)\b/)
     .pop() ?? "";
   const normalized = prefix.replace(/\bnot\s+(?:only|just|merely)\b/g, "");
-  return /\b(?:no|not|never|without|avoid(?:ing)?|skip(?:ping)?|exclud(?:e|ing)|[a-z]+n['’]t)\b(?:[\s"'“”‘’()-]+\w+){0,4}[\s"'“”‘’()-]*$/.test(normalized);
+  if (/\b(?:no|not|never|without|avoid(?:ing)?|skip(?:ping)?|exclud(?:e|ing)|[a-z]+n['’]t)\b(?:[\s"'“”‘’()-]+\w+){0,4}[\s"'“”‘’()-]*$/.test(normalized)) return true;
+  return /^(?:ではない|ではなく|じゃない|不要|なし|を避け)/.test(text.slice(index + length).trimStart());
+}
+
+function scopeKeywordRegex(normalized: string): RegExp {
+  const tokens = normalized.split(" ").map(escapeRegex);
+  if (/[^\x00-\x7f]/.test(normalized)) return new RegExp(tokens.join("\\s+"), "giu");
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${tokens.join("\\s+")}(?![\\p{L}\\p{N}_])`, "giu");
 }
 
 export function inferScopeFromText(input: string): InferResult {
@@ -11883,15 +11898,14 @@ export function inferScopeFromText(input: string): InferResult {
     let firstMatch: { scope: string; keyword: string } | undefined;
     for (const kw of keywords) {
       const normalized = kw.toLowerCase().trim().replace(/\s+/g, " ");
-      const tokens = normalized.split(" ").map(escapeRegex);
-      const re = new RegExp(`\\b${tokens.join("\\s+")}\\b`, "gi");
+      const re = scopeKeywordRegex(normalized);
       for (const match of text.matchAll(re)) {
+        if (isNegatedScopeKeyword(text, match.index, match[0].length)) continue;
         firstMatch ??= { scope, keyword: kw };
         if (
           wordCount > 5 &&
           specificMatch === undefined &&
-          HIGH_SPECIFICITY_KEYWORDS.has(normalized) &&
-          !isNegatedScopeKeyword(text, match.index)
+          HIGH_SPECIFICITY_KEYWORDS.has(normalized)
         ) {
           specificMatch = { scope, keyword: kw };
         }
@@ -11899,8 +11913,7 @@ export function inferScopeFromText(input: string): InferResult {
           wordCount > 5 &&
           fixMatch === undefined &&
           FIX_REQUEST_KEYWORDS.has(normalized) &&
-          isFixRequest(text, match.index, match[0].length) &&
-          !isNegatedScopeKeyword(text, match.index)
+          isFixRequest(text, match.index, match[0].length)
         ) {
           fixMatch = { scope, keyword: kw };
         }
