@@ -126,6 +126,8 @@ export type AutopilotResult = {
   stage?: string;
   attempts?: number;
   detail?: string;
+  directive?: OfficialDirective;
+  hostControl?: { through: string | null; maxSteps: number; deadlineMs: number };
 };
 
 /** Serializable status for `/loop` output; it grants no execution authority. */
@@ -137,6 +139,8 @@ export type IssueAutopilotStatus = {
   uncertaintyPolicy: UncertaintyPolicy;
   labelAllowlist: string[];
   maxAttempts: number;
+  maxSteps: number;
+  deadlineMs: number;
 };
 
 export type IssueAutopilotDependencies = {
@@ -156,17 +160,19 @@ function validateConfig(config: IssueAutopilotConfig): void {
   if (!config.labelAllowlist.every((label) => typeof label === "string" && label.trim())) {
     throw new Error("issue autopilot labelAllowlist must contain non-empty strings");
   }
-  if (config.through !== undefined && !OFFICIAL_STAGES.has(config.through)) throw new Error(`issue autopilot through is not an official stage: ${config.through}`);
+  if (config.through !== undefined && !OFFICIAL_STAGES.has(config.through) && !OFFICIAL_PHASES.has(config.through)) throw new Error(`issue autopilot through is not an official stage or phase: ${config.through}`);
 }
 
 export const OFFICIAL_STAGES = new Set([
-  "workspace-detection", "reverse-engineering", "requirements-analysis", "user-stories", "workflow-planning",
-  "application-design", "units-generation", "domain-design", "logical-design", "technical-design", "ui-ux-design",
-  "architecture-design", "functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation",
-  "build", "unit-testing", "integration-testing", "system-testing", "acceptance-testing", "security-testing",
-  "performance-testing", "deployment-planning", "release-planning", "deployment", "monitoring", "operations",
-  "feedback-collection", "retrospective", "optimization", "maintenance",
+  "workspace-detection", "workspace-scaffold", "state-init", "intent-capture", "feasibility", "market-research",
+  "team-formation", "rough-mockups", "scope-definition", "approval-handoff", "reverse-engineering",
+  "requirements-analysis", "user-stories", "domain-design", "refined-mockups", "units-generation", "contract-design",
+  "practices-discovery", "delivery-planning", "functional-design", "nfr-requirements", "nfr-design",
+  "infrastructure-design", "code-generation", "build-and-test", "ci-pipeline", "environment-provisioning",
+  "deployment-pipeline", "deployment-execution", "observability-setup", "performance-validation",
+  "feedback-optimization", "incident-response",
 ]);
+export const OFFICIAL_PHASES = new Set(["initialization", "ideation", "inception", "construction", "operation"]);
 
 export function issueAutopilotStatus(config: IssueAutopilotConfig = DEFAULT_ISSUE_AUTOPILOT_CONFIG): IssueAutopilotStatus {
   validateConfig(config);
@@ -178,6 +184,8 @@ export function issueAutopilotStatus(config: IssueAutopilotConfig = DEFAULT_ISSU
     uncertaintyPolicy: config.uncertaintyPolicy,
     labelAllowlist: [...config.labelAllowlist],
     maxAttempts: config.maxRetries + 1,
+    maxSteps: config.maxSteps,
+    deadlineMs: config.deadlineMs,
   };
 }
 
@@ -286,37 +294,8 @@ export async function runIssueAutopilot(input: {
     if (!created.value) {
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };
     }
-    if (!config.sessionAuto) return { status: "stopped", reason: "intent-created", issueNumber: issue.number, attempts: created.attempts };
-
-    let directive = created.value;
-    const started = Date.now();
-    let steps = 0;
-    let previous = "";
-    for (;;) {
-      if (++steps > config.maxSteps) return { status: "stopped", reason: "failure", issueNumber: issue.number, detail: "max-steps-exceeded" };
-      if (Date.now() - started >= config.deadlineMs) return { status: "stopped", reason: "failure", issueNumber: issue.number, detail: "deadline-exceeded" };
-      if (input.deps.claims.renew && await input.deps.claims.renew(issue.number, input.owner) !== "renewed") return { status: "stopped", reason: "claim-busy", issueNumber: issue.number, detail: "claim-lost" };
-      const fingerprint = JSON.stringify([directive.kind, directive.stage, directive.gate, directive.completed]);
-      if (fingerprint === previous) return { status: "stopped", reason: "failure", issueNumber: issue.number, stage: directive.stage, detail: "no-progress" };
-      previous = fingerprint;
-      if (directive.dangerous) return { status: "stopped", reason: "dangerous-operation", issueNumber: issue.number, stage: directive.stage };
-      if (directive.gate || directive.kind === "ask") return { status: "stopped", reason: "human-gate", issueNumber: issue.number, stage: directive.stage };
-      if (directive.completed || directive.kind === "complete") return { status: "completed", reason: "complete", issueNumber: issue.number, stage: directive.stage };
-      if (config.through && directive.stage && directive.stage !== config.through) {
-        // Ordering belongs to the official engine; the controller stops only
-        // after executing the named inclusive boundary, never guesses stage order.
-      }
-      // Stage execution can mutate artifacts and official state. It is never
-      // blindly retried; the next invocation reconciles from official state.
-      const executed = await withRetries(0, () => input.deps.engine.execute(directive));
-      if (!executed.value) return { status: "stopped", reason: "failure", issueNumber: issue.number, stage: directive.stage, attempts: executed.attempts, detail: String(executed.error) };
-      if (config.through && directive.stage === config.through) {
-        return { status: "stopped", reason: "boundary-reached", issueNumber: issue.number, stage: directive.stage, attempts: executed.attempts };
-      }
-      const next = await withRetries(config.maxRetries, () => input.deps.engine.next());
-      if (!next.value) return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: next.attempts, detail: String(next.error) };
-      directive = next.value;
-    }
+    const result = { status: "stopped" as const, reason: "intent-created" as const, issueNumber: issue.number, attempts: created.attempts, directive: created.value };
+    return config.sessionAuto ? { ...result, hostControl: { through: config.through ?? null, maxSteps: config.maxSteps, deadlineMs: config.deadlineMs } } : result;
   } finally {
     await input.deps.claims.release(issue.number, input.owner);
   }

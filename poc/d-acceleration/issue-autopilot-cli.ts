@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { resolveDAutomation, resolveDIssueAutopilot } from "./d-config.ts";
 import { runIssueAutopilot, issueAutopilotStatus, type EngineAdapter, type OfficialDirective } from "./issue-autopilot.ts";
 import { createFileAssumptionLedger, createFileClaimStore, createGhIssueSource, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
+import { resolveThroughBoundary } from "./host-session.ts";
 
 type Json = Record<string, unknown>;
 const argv = process.argv.slice(2);
@@ -55,7 +56,10 @@ class OfficialEngine implements EngineAdapter {
 }
 
 const auto = resolveDAutomation(projectDir), autopilot = resolveDIssueAutopilot(projectDir);
-const config = { enabled: auto.enabled && autopilot.enabled, labelAllowlist: auto.labelAllowlist, uncertaintyPolicy: auto.assumptionLedger ? auto.ambiguityPolicy : "halt" as const, through: auto.through, sessionAuto: false, maxRetries: auto.maxRetries, maxSteps: auto.maxSteps, deadlineMs: auto.deadlineMs };
+const policy = JSON.parse(readFileSync(join(import.meta.dir, "stage-policy.json"), "utf8")) as { stages: Array<{ stage: string }> };
+const activeStages = (value("--active-stages")?.split(",").filter(Boolean) ?? policy.stages.map((entry) => entry.stage));
+const through = resolveThroughBoundary(auto.through, activeStages);
+const config = { enabled: auto.enabled && autopilot.enabled, labelAllowlist: auto.labelAllowlist, uncertaintyPolicy: auto.assumptionLedger ? auto.ambiguityPolicy : "halt" as const, through: through ?? undefined, sessionAuto: !auto.sessionOnly, maxRetries: auto.maxRetries, maxSteps: auto.maxSteps, deadlineMs: auto.deadlineMs };
 if (command === "status") { process.stdout.write(`${JSON.stringify(issueAutopilotStatus(config), null, 2)}\n`); process.exit(0); }
 if (!config.enabled && command !== "stop") { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
 const paths = issueAutopilotRuntimePaths(projectDir);

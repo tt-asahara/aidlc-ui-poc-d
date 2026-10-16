@@ -37,7 +37,7 @@
   "auto": {
     // 対象: /aidlc-issue-autopilot または /aidlcのIssue入口。役割: 公式遷移だけをboundedに自動継続する親スイッチ。ON時: issueAutopilot.enabledもONの場合だけ1 Issueを処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: 明示allowlist付き自動処理。定期実行にはClaude標準 /loop から別コマンド起動が必要。
     "enabled": false,
-    // ON時の停止stage。省略時は利用者が明示した範囲を超えない。
+    // ON時のinclusive停止stageまたはphase。phase名は現在scopeで有効な最後のstageへ解決し、その正規review/sensor/approval完了後に停止する。省略時は利用者が明示した範囲を超えない。
     "through": "code-generation",
     // 対象: Intent作成直後。役割: 無人継続を現在呼出し内に限定する。ON時: Intent作成後に停止、OFF時: maxSteps/deadline/through内で公式hostが継続可能。既定値: ON。利用場面: 通常はON、安全に限定した明示autoだけOFF。
     "sessionOnly": true,

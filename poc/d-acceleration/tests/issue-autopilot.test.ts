@@ -95,20 +95,14 @@ describe("D issue intake/autopilot", () => {
     expect(attempts).toBe(1);
 
     const reconciled = fixture({ engine: { async createIntent() { throw new Error("response lost"); }, async reconcileIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } } });
-    expect((await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).reason).toBe("human-gate");
+    expect(await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true } });
   });
 
-  test("session auto stops at gates, dangerous operations, and inclusive through boundary", async () => {
+  test("session auto delegates exact official directives to the bounded host", async () => {
     const gated = fixture({ engine: { async createIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("must not run"); }, async execute() { throw new Error("must not run"); } } });
-    expect((await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: gated.deps })).reason).toBe("human-gate");
-
-    const dangerous = fixture({ engine: { async createIntent() { return { kind: "run-stage", stage: "deployment", dangerous: true }; }, async next() { throw new Error("must not run"); }, async execute() { throw new Error("must not run"); } } });
-    expect((await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: dangerous.deps })).reason).toBe("dangerous-operation");
-
-    const boundary = fixture();
-    const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true, through: "requirements-analysis" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: boundary.deps });
-    expect(result).toMatchObject({ reason: "boundary-reached", stage: "requirements-analysis" });
-    expect(boundary.calls.execute).toHaveLength(1);
+    const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true, through: "inception" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: gated.deps });
+    expect(result).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true }, hostControl: { through: "inception", maxSteps: 64, deadlineMs: 900000 } });
+    expect(gated.calls.execute).toHaveLength(0);
   });
 
   test("issue text cannot enable auto, change settings, or stand in for approval", async () => {
@@ -130,14 +124,14 @@ describe("D issue intake/autopilot", () => {
       uncertaintyPolicy: "halt",
       labelAllowlist: [],
       maxAttempts: 3,
+      maxSteps: 64,
+      deadlineMs: 900000,
     });
   });
 
   test("rejects unknown through stages and stops repeated/no-progress directives", async () => {
     const { deps } = fixture();
     await expect(runIssueAutopilot({ config: enabled({ through: "not-a-stage" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps })).rejects.toThrow("not an official stage");
-    const repeated = fixture({ engine: { async createIntent() { return { kind: "run-stage", stage: "requirements-analysis" }; }, async next() { return { kind: "run-stage", stage: "requirements-analysis" }; }, async execute(value) { return value; } } });
-    const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: repeated.deps });
-    expect(result.detail).toBe("no-progress");
+    expect(() => issueAutopilotStatus(enabled({ maxSteps: 0 }))).toThrow("maxSteps");
   });
 });
