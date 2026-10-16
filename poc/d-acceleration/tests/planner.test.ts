@@ -49,6 +49,25 @@ describe("D acceleration harness", () => {
     const input: Input = { clef: { enabled: true, url: "http://127.0.0.1:1", timeoutMs: 25 }, tasks: [{ id: "x", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] }] };
     const result = await plan(input); expect(result.routes.x?.source).toBe("fallback");
   });
+  test("native design keeps balanced baseline when Clef is disabled, times out, or is low confidence", async () => {
+    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } };
+    const disabled = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"] });
+    expect((await plan(disabled)).routes["functional-design:alpha"]?.tier).toBe("balanced");
+    const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "fast", confidence: 0.2 } } });
+    try {
+      const low = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742", confidenceThreshold: 0.8 } });
+      const result = await plan(low); expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced"); expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
+    } finally { globalThis.fetch = originalFetch; }
+  });
+  test("Clef judgment reaches the tier-specific worker model argument", async () => {
+    const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "judgment", confidence: 0.95 } } });
+    try {
+      const input = adaptOfficialNext({ kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } }, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742" } });
+      input.modelCatalog = { judgment: "fixture-judgment" };
+      const result = await execute(input, { projectDir, workerKind: "fake" });
+      expect(result.records[0]?.tier).toBe("judgment"); expect(result.records[0]?.requestedModel).toBe("fixture-judgment");
+    } finally { globalThis.fetch = originalFetch; }
+  });
   test("rejects false directives, invalid levels, and unsafe swarm", async () => {
     const bad = structuredClone(fixture) as Input; bad.directives![0]!.stage = "nfr-design";
     await expect(plan(bad)).rejects.toThrow("active-stage");

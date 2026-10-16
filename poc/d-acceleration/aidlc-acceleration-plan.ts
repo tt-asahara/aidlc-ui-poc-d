@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 export type Tier = "fast" | "balanced" | "judgment";
 export type TaskType = "templated" | "implementation" | "review" | "design" | "security" | "compliance" | "approval" | "ambiguous";
 export type Execution = "serial" | "official-wave" | "official-swarm";
-export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean };
+export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
 export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
 type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };
@@ -52,7 +52,7 @@ async function clefRoute(task: Task, config: NonNullable<Input["clef"]>): Promis
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") throw new Error("Clef URL must be local http://127.0.0.1");
   const started = performance.now();
-  const response = await fetch(`${url.replace(/\/$/, "")}/v1/systemone`, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(config.timeoutMs ?? 1500), body: JSON.stringify({ model: "clef", state: task, questions: { tier: { type: "choice", instructions: "Classify only the reasoning effort for this low-risk ambiguous task.", criteria: { fast: "deterministic or templated", balanced: "moderate reasoning", judgment: "complex or uncertain" } } } }) });
+  const response = await fetch(`${url.replace(/\/$/, "")}/v1/systemone`, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(config.timeoutMs ?? 1500), body: JSON.stringify({ model: "clef", state: task.assessmentState ?? { stage: task.stage, unit: task.unit, outputs: task.writeSet }, questions: { tier: { type: "choice", instructions: "Classify only the reasoning effort for this explicitly low-risk task.", criteria: { fast: "deterministic or templated", balanced: "moderate reasoning", judgment: "complex or uncertain" } } } }) });
   if (!response.ok) throw new Error(`Clef HTTP ${response.status}`);
   const body = await response.json() as any;
   const answer = body?.answers?.tier;
@@ -68,12 +68,14 @@ async function route(task: Task, input: Input): Promise<Route> {
   if (task.risk === "low" && input.clef?.enabled) {
     try {
       const selected = await clefRoute(task, input.clef);
-      return { tier: selected.tier, reason: "local Clef classified an ambiguous low-risk task", source: "clef", escalation: selected.tier === "fast" ? "balanced" : selected.tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started };
+      const order: Tier[] = ["fast", "balanced", "judgment"]; const tier = order.indexOf(selected.tier) < order.indexOf(task.minimumTier ?? "fast") ? task.minimumTier! : selected.tier;
+      return { tier, reason: "local Clef classified an explicitly low-risk task, subject to its minimum tier", source: "clef", escalation: tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started };
     } catch {
       // Fail closed; transport and model details intentionally do not affect policy.
     }
   }
-  return { tier: "judgment", reason: "ambiguous classification used the conservative fallback", source: "fallback", escalation: "human-review", routingMs: performance.now() - started };
+  const fallback = task.fallbackTier ?? "judgment";
+  return { tier: fallback, reason: "ambiguous classification used the task's conservative fallback", source: "fallback", escalation: fallback === "fast" ? "balanced" : fallback === "balanced" ? "judgment" : "human-review", routingMs: performance.now() - started };
 }
 
 function normalizedPath(value: string): string { return value.replaceAll("\\", "/").split("/").reduce<string[]>((parts, part) => part === ".." ? parts.slice(0, -1) : part && part !== "." ? [...parts, part] : parts, []).join("/"); }

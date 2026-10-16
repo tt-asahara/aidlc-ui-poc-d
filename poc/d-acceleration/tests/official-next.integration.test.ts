@@ -126,6 +126,13 @@ afterEach(() => {
 });
 
 describe("official next adapter integration", () => {
+  test("product conductor stops after one non-progressing worker wave", () => {
+    const project = createWaveProject(); const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }; delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    const run = spawnSync(process.execPath, [CONDUCTOR, "--project-dir", project, "--engine-dir", join(AIDLC_SRC, "tools"), "--worker", "fake"], { cwd: project, env, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS });
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(2);
+    const result = JSON.parse(run.stdout); expect(result.status).toBe("worker-action-required"); expect(result.reason).toBe("no-progress-missing-required-outputs"); expect(result.history).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("product conductor CLI settles a disposable wave through the official gate", () => {
     const project = createWaveProject();
     const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };

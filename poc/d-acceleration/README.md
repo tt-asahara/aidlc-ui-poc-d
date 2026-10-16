@@ -66,6 +66,13 @@ claims; the result records the requested and runtime-reported identities.
 Synthetic artifact writing requires the explicit `--disposable-test-mode` and
 must only be used with a throwaway fixture project.
 
+The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
+comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
+Clef. Design waves retain `balanced` as their minimum and failure fallback, so
+Clef can escalate uncertain work to `judgment` but cannot downgrade design to
+`fast`. This PoC therefore does not claim universal fast-tier coverage across
+all AI-DLC stages.
+
 ## Evidence, not claims
 
 `benchmark.ts` compares the same synthetic task durations under serial order and
