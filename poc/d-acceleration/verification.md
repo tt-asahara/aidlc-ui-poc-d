@@ -2,7 +2,10 @@
 
 ## Local functional verification
 
-1. Run `bun test poc/d-acceleration/tests`.
+1. Run `bun test poc/d-acceleration/tests`. The suite uses fixture Issues,
+   injected command runners, fake workers, and disposable repositories. It does
+   not run a live `/loop`, contact GitHub, invoke a model, or mutate a real
+   product repository.
 2. Run `bun poc/d-acceleration/benchmark.ts` and retain its JSON. Treat the
    reduction as a synthetic critical-path estimate only.
 3. If Clef is already running, set `clef.enabled=true` on a synthetic,
