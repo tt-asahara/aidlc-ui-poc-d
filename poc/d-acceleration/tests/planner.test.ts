@@ -1,24 +1,37 @@
 import { describe, expect, test } from "bun:test";
 import { plan, type Input } from "../aidlc-acceleration-plan.ts";
 import { execute } from "../scheduler.ts";
+import { adaptOfficialNext } from "../official-next-adapter.ts";
+import { claudeLaunch } from "../claude-worker-adapter.ts";
 import fixture from "../fixtures/synthetic-plan.json";
+const withoutApproval = () => { const input = structuredClone(fixture) as Input; input.tasks = input.tasks.filter((task) => task.id !== "approval"); input.tasks.find((task) => task.id === "code-a")!.dependsOn = ["fd-a", "fd-b", "fd-c"]; return input; };
 
 describe("D acceleration harness", () => {
   test("parallelizes only entries in the same issued directive", async () => {
     const result = await plan(fixture as Input);
     expect(result.waves).toEqual([["requirements"], ["fd-a", "fd-b", "fd-c"], ["approval"], ["code-a"], ["code-b"], ["review"]]);
   });
+  test("adapts the official run-stage.wave shape and build_required entries", () => {
+    const input = adaptOfficialNext({ directive: { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "api", build_required: true, produces: ["api/spec.md"] }, { unit: "done", build_required: false, produces: ["done/spec.md"] }] } } });
+    expect(input.tasks.map((task) => task.id)).toEqual(["functional-design:api"]);
+    expect(input.directives?.[0]?.entries).toEqual(["functional-design:api"]);
+    expect((input.sourceDirective as any).lead_agent).toBeUndefined();
+  });
+  test("constructs Claude argv without shell interpolation", () => {
+    const launch = claudeLaunch("runtime-model", "medium", "synthetic prompt");
+    expect(launch.args).toContain("runtime-model"); expect(launch.args.at(-1)).toBe("synthetic prompt");
+  });
   test("stops at approval and runs real children with overlap", async () => {
     const stopped = await execute(fixture as Input);
     expect(stopped.status).toBe("awaiting-approval");
     expect(stopped.records.map((record) => record.task).sort()).toEqual(["fd-a", "fd-b", "fd-c", "requirements"]);
-    const completed = await execute(fixture as Input, { approvals: ["approval"] });
+    const completed = await execute(withoutApproval());
     const designs = completed.records.filter((record) => record.stage === "functional-design");
     expect(Math.max(...designs.map((record) => record.startedAt))).toBeLessThan(Math.min(...designs.map((record) => record.endedAt)));
     expect(completed.records.at(-1)?.task).toBe("review");
   });
   test("passes verified model argv and escalates failed child", async () => {
-    const result = await execute(fixture as Input, { approvals: ["approval"], failOnce: ["code-a"] });
+    const result = await execute(withoutApproval(), { failOnce: ["code-a"] });
     const attempts = result.records.filter((record) => record.task === "code-a");
     expect(attempts.map((record) => record.launchedModel)).toEqual(["fixture-balanced", "fixture-judgment"]);
     expect(attempts.map((record) => record.retryOrdinal)).toEqual([0, 1]);
@@ -36,7 +49,7 @@ describe("D acceleration harness", () => {
     await expect(plan(bad)).rejects.toThrow("active-stage");
     const level = structuredClone(fixture) as any; level.tasks[0].risk = "unknown";
     await expect(plan(level)).rejects.toThrow("risk or difficulty");
-    const swarm = structuredClone(fixture) as Input; swarm.tasks.find((task) => task.id === "code-a")!.execution = "official-swarm"; swarm.tasks.find((task) => task.id === "code-a")!.isolatedWorktree = false;
+    const swarm = structuredClone(fixture) as Input; swarm.directives!.push({ kind: "swarm", stage: "code-generation", entries: ["code-a"] }); swarm.tasks.find((task) => task.id === "code-a")!.execution = "official-swarm";
     await expect(plan(swarm)).rejects.toThrow("isolatedWorktree");
   });
   test("serializes normalized parent-child conflicts and caps concurrency", async () => {

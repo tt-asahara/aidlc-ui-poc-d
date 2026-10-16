@@ -6,7 +6,7 @@ export type TaskType = "templated" | "implementation" | "review" | "design" | "s
 export type Execution = "serial" | "official-wave" | "official-swarm";
 export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
-export type Input = { tasks: Task[]; directives?: Directive[]; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; modelCatalogVerified?: boolean; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
+export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; modelCatalogVerified?: boolean; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
 type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };
 
 const TASK_TYPES = new Set(["templated", "implementation", "review", "design", "security", "compliance", "approval", "ambiguous"]);
@@ -28,10 +28,11 @@ function validate(input: Input): void {
   }
   for (const task of input.tasks) for (const dependency of task.dependsOn) if (!ids.has(dependency)) throw new Error(`unknown dependency ${dependency} for ${task.id}`);
   for (const directive of input.directives ?? []) for (const id of directive.entries) {
+    if (directive.kind !== "wave" && directive.kind !== "swarm") throw new Error(`unsupported directive kind: ${String(directive.kind)}`);
+    if (directive.kind === "swarm") throw new Error("swarm execution is unsupported by this harness");
     const task = input.tasks.find((candidate) => candidate.id === id);
     if (!task || task.stage !== directive.stage || ["approval", "review", "security", "compliance"].includes(task.taskType)) throw new Error(`directive entry does not match an eligible active-stage task: ${id}`);
     if (directive.kind === "wave" && (task.execution !== "official-wave" || !OFFICIAL_WAVE_STAGES.has(directive.stage))) throw new Error(`invalid wave directive entry: ${id}`);
-    if (directive.kind === "swarm" && (directive.stage !== "code-generation" || task.execution !== "official-swarm" || !task.isolatedWorktree)) throw new Error(`invalid swarm directive entry: ${id}`);
   }
   if (input.maxParallel !== undefined && (!Number.isInteger(input.maxParallel) || input.maxParallel < 1)) throw new Error("maxParallel must be a positive integer");
   for (const [tier, model] of Object.entries(input.modelCatalog ?? {})) if (!(["fast", "balanced", "judgment"].includes(tier)) || typeof model !== "string" || !model.trim()) throw new Error(`invalid model catalog entry: ${tier}`);
