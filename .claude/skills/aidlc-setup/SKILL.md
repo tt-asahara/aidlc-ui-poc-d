@@ -31,7 +31,7 @@ bun test poc/ui-poc/tests poc/d-acceleration/tests tests/resume-ledger.test.ts
 bun "$SRC/dist/claude/.claude/tools/aidlc.ts" config --from "$SRC/dist/claude" --harness claude --project-dir "$PRODUCT" --mcp none --dry-run
 ```
 
-Use exactly `SRC/dist/claude` as runtime source and `SRC/poc/ui-poc/dist/claude` as marketplace. Confirm projection of `tools/ui-poc-c-routing.cjs`, `tools/ui-poc/c-stage-routing.json`, treatment/source-lock/runtime contract, and sensor adapter. Never use `dist` or `.claude` for `--from`, edit generated output, or use `--force`.
+Use exactly `SRC/dist/claude` as runtime source and `SRC/poc/ui-poc/dist/claude` as the project-local compose payload. Confirm projection of `tools/ui-poc-c-routing.cjs`, `tools/ui-poc/c-stage-routing.json`, treatment/source-lock/runtime contract, and sensor adapter. Never use `dist` or `.claude` for `--from`, edit generated output, or use `--force`.
 
 Present target, writes, and collisions. Stop on dirty target, differing path, or impact to settings/hooks/skills/plugins. A passing preview is not apply authority. Apply only after approval by rerunning the same command without `--dry-run`.
 
@@ -39,16 +39,33 @@ Present target, writes, and collisions. Stop on dirty target, differing path, or
 
 Compare complete product-relative directories: `.agents/skills/{prototype,grilling,domain-modeling,to-spec}`, `frontend-design` with all seven reference files, `teach-impeccable`, `.agents/skills/LICENSES/mattpocock-skills`, and `.agents/skills/LICENSES/impeccable` with `LICENSE` and `NOTICE.md`. Add absent directories only in the approved write set; leave byte-identical ones; stop on differences. Never merge or overwrite. Verify paths, bytes, commits, dependency, licenses, and exclusions against the installation manifest, treatment C, and source lock.
 
-## Install and verify
+## Compose and verify inside the project
 
-Provide a handoff with resolved paths and commands, then open a new Claude session rooted at `PRODUCT`; shell `cd` is insufficient. Verify host root and `git rev-parse --show-toplevel`, then run:
+Do not add, remove, or repoint a Claude marketplace. After the reviewed runtime
+copy is applied, run the emitted official compose hook directly against the
+project and exact built payload:
 
-```text
-/plugin marketplace add <SRC>/poc/ui-poc/dist/claude
-/plugin install aidlc-ui-poc@aidlc-plugins
+```bash
+AIDLC_PROJECT_DIR="$PRODUCT" \
+AIDLC_PLUGIN_ROOT="$SRC/poc/ui-poc/dist/claude" \
+AIDLC_HARNESS_DIR=.claude \
+AIDLC_HARNESS_NAME=claude \
+bun "$SRC/poc/ui-poc/dist/claude/hooks/compose.ts"
 ```
 
-Preserve existing plugins. Start another PRODUCT-rooted session, inspect `/plugin` **Installed** (or `claude plugin list`), and `/aidlc --doctor`. Confirm `ui-poc-comparison`, no unexpected compose drops, treatment C, routing verifier/config, runtime companion, sensor, all references/dependency/licenses. Do not use `/plugin list`.
+This must remain project-local: it copies the sensor/tools/scopes with
+no-clobber checks, merges sentinel-marked contributions into official stage
+sources, writes compose provenance sidecars, and recompiles the official stage
+graph. It must not edit generated files by hand or weaken a gate. Run it twice
+and require identical stage-graph and sidecar hashes on the second pass. Then
+run `/aidlc --doctor` and D preflight. Confirm `ui-poc-comparison`, no compose
+drops, treatment C, routing verifier/config, runtime companion, sensor, all
+references/dependency/licenses, and the refined-to-code-to-test
+produce/consume/sensor edges. A host-plugin inventory warning may remain because
+this supported compatibility path deliberately has no Claude marketplace
+installation; report it explicitly and judge readiness from compose provenance,
+graph validation, sensor discovery, zero drops, and preflight rather than
+silently pruning the composed payload.
 
 ## Preserve C adapters
 
@@ -66,7 +83,7 @@ Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude
 
 Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted.
 
-Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Setup must not enable autopilot or create project configuration on the person's behalf.
+Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Setup must not enable autopilot or create project configuration unless the person explicitly requested those exact settings for this product.
 
 ```bash
 (cd "$PRODUCT" && bun "$PRODUCT/.claude/tools/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)

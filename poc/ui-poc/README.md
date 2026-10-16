@@ -54,3 +54,11 @@ A: frontend-design. B: Matt custom extension plus frontend-design. C: Matt custo
 ## Installation boundary
 
 Enable this plugin only in the isolated A/B/C comparison repositories. Contributions modify their target stages whenever the plugin is enabled: adds.scopes adds scope membership, but it does not condition the other additions on that scope. Disable/remove the plugin before unrelated stock-scope workflows. Runtime guidance and treatment configs live under the projected tools/ui-poc/ subtree; root docs/treatments are source/research copies. Official build/compose validation is still required.
+
+For D project setup, the built Claude projection is composed directly into the
+project's installed AI-DLC harness with its emitted `hooks/compose.ts`, explicit
+`AIDLC_PROJECT_DIR`, and explicit `AIDLC_PLUGIN_ROOT`. Do not add or repoint a
+machine-wide Claude marketplace. The same official composer performs
+no-clobber payload copies, sentinel contribution merges, provenance sidecars,
+and graph compilation; run it twice and require idempotent graph/sidecar hashes,
+zero compose drops, and `uiBaseline: C-composed` preflight before use.

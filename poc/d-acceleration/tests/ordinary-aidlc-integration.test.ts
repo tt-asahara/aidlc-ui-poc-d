@@ -82,6 +82,18 @@ describe("ordinary /aidlc D integration", () => {
     expect(setup).toContain("skills/aidlc-issue-autopilot/SKILL.md");
   });
 
+  test("setup composes the C payload inside the project without a shared marketplace", () => {
+    const setup = readFileSync(join(repo, ".claude", "skills", "aidlc-setup", "SKILL.md"), "utf8");
+    expect(setup).toContain('AIDLC_PROJECT_DIR="$PRODUCT"');
+    expect(setup).toContain('AIDLC_PLUGIN_ROOT="$SRC/poc/ui-poc/dist/claude"');
+    expect(setup).toContain('bun "$SRC/poc/ui-poc/dist/claude/hooks/compose.ts"');
+    expect(setup).toContain("Run it twice");
+    expect(setup).toContain("identical stage-graph and sidecar hashes");
+    expect(setup).toContain("Do not add, remove, or repoint a Claude marketplace");
+    expect(setup).not.toContain("/plugin marketplace add");
+    expect(setup).not.toContain("/plugin install aidlc-ui-poc");
+  });
+
   test("ordinary routing honors explicit D project/local settings before Opus defaults", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-d-models-"));
     mkdirSync(join(project, ".claude"), { recursive: true });
