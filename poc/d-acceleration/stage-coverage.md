@@ -2,7 +2,7 @@
 
 The executable policy is [`stage-policy.json`](stage-policy.json). Its test compares the matrix with every stage file in pinned v2.11.0. Cross-stage concurrency is always false; official directives, approvals, reviews, and the shared-state writer remain authoritative.
 
-`implemented` means D executes an official Unit wave. `implemented-read-only-fanout` means isolated evidence tasks run inside one active stage and return text to its lead. `official-delegation` returns the complete directive to the existing host. `candidate-not-enabled` is an opportunity, not a measured or enabled feature.
+`implemented` means D executes an official Unit wave. `implemented-read-only-fanout` means isolated evidence tasks run inside one active stage and return text to its lead. `official-delegation` returns the complete directive to the existing host. `candidate-not-enabled` describes acceleration only: it never disables the Arm C plugin contribution or official stage. The C UI baseline remains mandatory with acceleration off, and missing composed consumes fail closed to the official host.
 
 | Phase | Stage | Status | Parallelism | Tier / effort | Clef |
 |---|---|---|---|---|---|

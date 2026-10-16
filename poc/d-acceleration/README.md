@@ -1,5 +1,11 @@
 # D acceleration proof of concept
 
+Arm D is the complete pinned Arm C UI baseline plus this opt-in acceleration
+layer. The C plugin, Matt bounded adapters, historical Impeccable context and
+WCAG correction, HTML evidence contracts, blocking sensor, native approvals,
+and downstream handoffs remain active when acceleration is disabled and must
+not be bypassed when it is enabled. See `../ui-poc/` for that baseline.
+
 This proof of concept accelerates routing decisions without weakening AI-DLC's
 approval, review, audit, or Testing Contract boundaries. It is deliberately
 outside `core/`: an install must opt in and call the planner before dispatching

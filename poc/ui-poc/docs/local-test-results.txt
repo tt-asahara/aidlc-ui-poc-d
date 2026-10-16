@@ -1,0 +1,45 @@
+✔ synthetic valid evidence passes local checker only (4.08509ms)
+✔ rejects missing HTML (0.883156ms)
+✔ rejects tampered HTML (0.657415ms)
+✔ rejects missing contract (0.51562ms)
+✔ rejects parent path escape (0.830477ms)
+✔ rejects absolute path (1.443143ms)
+✔ rejects symlink escape (0.949006ms)
+✔ rejects tampered upstream contract (1.047825ms)
+✔ rejects unapproved status (1.38787ms)
+✔ rejects missing approval (0.761161ms)
+✔ rejects missing mapping (0.39654ms)
+✔ rejects missing required coverage (0.427757ms)
+✔ rejects duplicate mapping (0.498174ms)
+✔ rejects malformed JSON (0.72686ms)
+✔ rejects wrong stage (0.565816ms)
+✔ rejects invalid arm (0.507928ms)
+✔ rejects unconfigured trust input (0.908134ms)
+✔ checks sibling contract when dispatcher fires on another deliverable (1.088356ms)
+✔ producer draft does not require an extra human approval gate (0.666479ms)
+✔ verifies declared CSS and rejects tampering (3.70141ms)
+✔ rejects wrong upstream approval hash (2.997515ms)
+✔ rejects wrong approval arm (0.7402ms)
+✔ rejects changed approved mapping inventory (1.01093ms)
+✔ rejects ledger inside evidence directory (1.547066ms)
+✔ build/test validates full refined to implementation hash chain (1.819143ms)
+✔ rejects approved implementation missing assets (2.066657ms)
+✔ rejects approved implementation missing mappings (0.671145ms)
+✔ rejects approved implementation missing upstream (1.428591ms)
+✔ rejects approved parent missing headings (1.023348ms)
+✔ requires both implementation and refined approval receipts (1.296417ms)
+✔ rejects upstream reference back to current contract (1.524832ms)
+✔ rejects recursion over fixed stage-chain depth (0.48968ms)
+✔ rejects previously visited contract identity (0.516792ms)
+✔ actual TS adapter emits script verdict JSON on missing input (90.900397ms)
+✔ regression: approved metadata-only implementation envelope is rejected (2.266078ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 232.429434
+PASS: 23 contribution targets and supported anchors checked against pinned source; 30 source blob identities checked. NOT upstream composer/harness validation.
+PASS: projected runtime documentation and treatment configs match source copies.

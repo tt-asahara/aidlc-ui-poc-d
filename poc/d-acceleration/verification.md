@@ -45,14 +45,14 @@ stop.
 1. Work from the pushed branch and a disposable AI-DLC project/intent:
 
    ```bash
-   cd /Users/cb-329/Documents/Codex/2026-10-16/task-3/aidlc-ui-poc-d
-   git switch feature/ui-poc-d-acceleration
+   cd <D checkout containing the merged Arm C UI baseline>
+   git status --short --branch
    git status --short --branch
    git rev-parse HEAD
    mkdir -p /tmp/aidlc-d-evidence
    ```
 
-   Do not run the PoC against A/B/C or a production intent.
+   Use a disposable D PRODUCT with the Arm C UI plugin composed and its exact pinned payload installed. Do not use A, B, a standalone C checkout, a production intent, or an existing approval ledger.
 
 2. Reuse the existing local Clef installation. Check it without reading
    environment values: `curl --fail http://127.0.0.1:18742/health`. If it is

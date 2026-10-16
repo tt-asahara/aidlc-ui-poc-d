@@ -129,13 +129,13 @@ describe("official next adapter integration", () => {
   test("product conductor stops after one non-progressing worker wave", () => {
     const project = createWaveProject(); const env = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }; delete env.AWS_AIDLC_DEFAULT_SCOPE;
     const run = spawnSync(process.execPath, [CONDUCTOR, "--project-dir", project, "--engine-dir", join(AIDLC_SRC, "tools"), "--worker", "fake"], { cwd: project, env, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS });
-    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(2);
-    const result = JSON.parse(run.stdout); expect(result.status).toBe("worker-action-required"); expect(result.reason).toBe("no-progress-missing-required-outputs"); expect(result.history).toHaveLength(1);
+    expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
+    const result = JSON.parse(run.stdout); expect(result.status).toBe("official-host-action-required"); expect(result.reason).toBe("c-ui-baseline-not-composed"); expect(result.history).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("product conductor stops when an unchanged build wave is reissued despite existing outputs", () => {
     const project = createWaveProject(); const engine = join(project, "stub-engine"); mkdirSync(engine);
-    const repeated = { kind: "run-stage", stage: "functional-design", gate: false, wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: ["already.md"], required_produces: ["already.md"], consumes: [], consumes_absent: [] }] } };
+    const repeated = { kind: "run-stage", stage: "functional-design", gate: false, wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: ["already.md"], required_produces: ["already.md"], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
     writeFileSync(join(engine, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify(repeated)}\n`)});\n`);
     writeFileSync(join(engine, "aidlc-state.ts"), "process.exit(99);\n");
     writeFileSync(join(project, "already.md"), "pre-existing fixture output\n");
@@ -157,15 +157,13 @@ describe("official next adapter integration", () => {
     expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
     const result = JSON.parse(run.stdout);
     expect(result.status).toBe("official-host-action-required");
-    expect(result.directive).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
-    expect(result.directive.wave).toBeUndefined();
-    expect(result.workerRuns).toHaveLength(1);
-    expect(result.workerRuns[0].result.records.map((record: { task: string }) => record.task).sort()).toEqual(["functional-design:alpha", "functional-design:beta"]);
+    expect(result.reason).toBe("c-ui-baseline-not-composed");
+    expect(result.workerRuns).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test(
-    "runs a real emitted wave, records official completion, and resumes only unfinished units",
-    async () => {
+    "refuses a real official wave when the C plugin was not composed",
+    () => {
       const project = createWaveProject();
       const result = next(project);
       expect(result.directive).toMatchObject({
@@ -183,90 +181,7 @@ describe("official next adapter integration", () => {
       // Pass the parsed JSON returned by the real `aidlc-orchestrate next`
       // directly to the product adapter. No hand-authored directive surrogate
       // participates in this assertion.
-      const adapted = adaptOfficialNext({ directive: result.directive });
-      expect(adapted.tasks.map((task) => task.id)).toEqual([
-        "functional-design:alpha",
-        "functional-design:beta",
-      ]);
-      expect(adapted.directives).toEqual([
-        {
-          kind: "wave",
-          stage: "functional-design",
-          entries: [
-            "functional-design:alpha",
-            "functional-design:beta",
-          ],
-        },
-      ]);
-      // The adapter must retain every parent field (agents, mode, gate,
-      // ceremony, protocol modules, memory and reviewer settings), not merely
-      // the wave projection it schedules.
-      expect(adapted.sourceDirective).toEqual(result.directive);
-      expect(adapted.sourceDirective).not.toBe(result.directive);
-
-      const scheduled = await execute(adapted, {
-        workerKind: "fake",
-        projectDir: project,
-        disposableTestMode: true,
-      });
-      expect(scheduled.status, JSON.stringify(scheduled, null, 2)).toBe(
-        "completed",
-      );
-      expect(scheduled.records.map((record) => record.task).sort()).toEqual([
-        "functional-design:alpha",
-        "functional-design:beta",
-      ]);
-      const originalEntries = (
-        result.directive as {
-          wave: {
-            entries: Array<{
-              unit: string;
-              required_produces: string[];
-            }>;
-          };
-        }
-      ).wave.entries;
-      for (const entry of originalEntries) {
-        for (const relativePath of entry.required_produces) {
-          expect(existsSync(join(project, relativePath))).toBeTrue();
-        }
-      }
-
-      // State mutation remains single-writer and uses the official command.
-      // Completing only alpha must not erase or replay its unfinished sibling.
-      completeWaveUnit(project, "alpha");
-      const resumed = next(project);
-      expect(resumed.directive).toMatchObject({
-        kind: "run-stage",
-        stage: "functional-design",
-        gate: false,
-        wave: {
-          batch_index: 0,
-          entries: [
-            {
-              unit: "beta",
-              build_required: false,
-              completion_required: true,
-              review_state: "not-required",
-            },
-          ],
-        },
-      });
-      expect(
-        (resumed.directive as { wave: { entries: Array<{ unit: string }> } })
-          .wave.entries.map((entry) => entry.unit),
-      ).toEqual(["beta"]);
-
-      completeWaveUnit(project, "beta");
-      const settled = next(project);
-      expect(settled.directive).toMatchObject({
-        kind: "run-stage",
-        stage: "functional-design",
-        gate: true,
-      });
-      expect(
-        (settled.directive as { wave?: unknown }).wave,
-      ).toBeUndefined();
+      expect(() => adaptOfficialNext({ directive: result.directive })).toThrow("missing composed Arm C UI consumes");
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );

@@ -1,0 +1,18 @@
+{
+  "arm": "A",
+  "plugin": "ui-poc@0.1.0",
+  "scope": "ui-poc-comparison",
+  "upstream": {
+    "version": "2.11.0",
+    "commit": "6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a"
+  },
+  "status": "source-pinned-stage-invocation-not-run",
+  "skills": {
+    "content": [
+      "anthropics/skills:skills/frontend-design/"
+    ],
+    "layout": ".agents/skills/frontend-design/{SKILL.md,LICENSE.txt}"
+  },
+  "source_lock": "source-lock.json",
+  "actual_stage_read_evidence": null
+}

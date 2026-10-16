@@ -1,21 +1,23 @@
 ---
 name: aidlc-setup
-description: Set up this repository's AI-DLC Claude runtime and bounded D acceleration PoC in another product while preserving official host authority and existing files. Do not use for the A/B/C UI plugin.
+description: Set up the pinned Arm C UI baseline plus the bounded D acceleration PoC while preserving official host authority and existing work.
 argument-hint: "[D checkout path] [product repository path]"
 user-invocable: true
 ---
 
-# Set up AI-DLC D acceleration
+# Set up AI-DLC D on the Arm C UI baseline
 
-Invoke from the D checkout containing this skill. D is an opt-in acceleration PoC around the official host, not a UI treatment/plugin. Never build, copy, install, or reference `poc/ui-poc`, frontend-design, Impeccable, or the comparison scope.
+Invoke from the D checkout containing this skill. D retains the complete pinned Arm C UI treatment and adds opt-in acceleration around the official host. Invocation permits inspection and dry-run only; applying reviewed product changes requires separate explicit authorization.
 
 ## Establish boundaries
 
-1. Resolve absolute `SRC` and `PRODUCT`. Confirm exact target, project scope, disposable/non-production use, trust/permissions, and preview-versus-apply authority.
-2. Inspect both repos with `git -C <path> status --short --branch`. Preserve every tracked, untracked, ignored, and uncommitted product file. Never overwrite `CLAUDE.md`, `AGENTS.md`, `.claude`, settings, hooks, skills, or plugins. Never change authentication, global/shared settings, or model defaults.
-3. Read [`../../../poc/d-acceleration/README.md`](../../../poc/d-acceleration/README.md), [`verification.md`](../../../poc/d-acceleration/verification.md), [`stage-coverage.md`](../../../poc/d-acceleration/stage-coverage.md), [`stage-policy.json`](../../../poc/d-acceleration/stage-policy.json), [`schema.md`](../../../poc/d-acceleration/schema.md), and [`clef-local-contract.md`](../../../poc/d-acceleration/clef-local-contract.md).
+1. Resolve absolute `SRC` and `PRODUCT`. Confirm an isolated D target, project-local scope, trust/permissions, and preview-versus-apply authority. Never change authentication, global/shared settings, or model configuration.
+2. Inspect both repos with `git -C <path> status --short --branch`. Preserve all existing tracked, untracked, ignored, and uncommitted files. Never replace product `CLAUDE.md`, `AGENTS.md`, `.claude`, skills, hooks, settings, or plugins.
+3. Read [`../../../poc/ui-poc/README.md`](../../../poc/ui-poc/README.md), [`../../../poc/ui-poc/docs/verification.md`](../../../poc/ui-poc/docs/verification.md), [`../../../poc/ui-poc/docs/contract.md`](../../../poc/ui-poc/docs/contract.md), [`../../../poc/ui-poc/docs/c-stage-skill-matrix.md`](../../../poc/ui-poc/docs/c-stage-skill-matrix.md), [`../../../poc/ui-poc/treatments/c.json`](../../../poc/ui-poc/treatments/c.json), its [`source-lock.json`](../../../poc/ui-poc/treatments/source-lock.json), [`../../../poc/skill-installation.json`](../../../poc/skill-installation.json), and the D acceleration [`README.md`](../../../poc/d-acceleration/README.md), [`verification.md`](../../../poc/d-acceleration/verification.md), [`stage-policy.json`](../../../poc/d-acceleration/stage-policy.json), and [`clef-local-contract.md`](../../../poc/d-acceleration/clef-local-contract.md).
 
-The official host retains questions, approvals, reviews, transitions, shared state/artifacts, mob/ensemble/pipeline modes, and code-generation swarm settlement.
+Keep A/B/C conditions comparable. Do not substitute Anthropic frontend-design, latest Impeccable, engine/hooks/subagents, or an unavailable historical custom extension.
+
+The complete C UI baseline is mandatory even when acceleration is disabled. The official host remains the single writer for questions, approvals, reviews, transitions, state, artifacts, and swarm settlement. D acceleration may schedule only the bounded seams in its policy and must return all UI contribution consumes/produces, sensor results, gates, and handoffs to that host unchanged.
 
 ## Build and preview
 
@@ -24,17 +26,43 @@ From `SRC`, stop on failure:
 ```bash
 bun install --frozen-lockfile
 bun scripts/package.ts claude
-bun test poc/d-acceleration/tests tests/resume-ledger.test.ts
+bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/ui-poc claude --json
+bun test poc/ui-poc/tests poc/d-acceleration/tests tests/resume-ledger.test.ts
 bun "$SRC/dist/claude/.claude/tools/aidlc.ts" config --from "$SRC/dist/claude" --harness claude --project-dir "$PRODUCT" --mcp none --dry-run
 ```
 
-`--from` must be `SRC/dist/claude`, never `dist` or `.claude`. Present target, writes, and collisions. A passing dry run is not apply authority. Stop on dirty targets/differences; never use `--force`. Apply only after approval using the identical config command without `--dry-run`.
+Use exactly `SRC/dist/claude` as runtime source and `SRC/poc/ui-poc/dist/claude` as marketplace. Confirm projection of `tools/ui-poc-c-routing.cjs`, `tools/ui-poc/c-stage-routing.json`, treatment/source-lock/runtime contract, and sensor adapter. Never use `dist` or `.claude` for `--from`, edit generated output, or use `--force`.
 
-## Keep the D harness in its source checkout
+Present target, writes, and collisions. Stop on dirty target, differing path, or impact to settings/hooks/skills/plugins. A passing preview is not apply authority. Apply only after approval by rerunning the same command without `--dry-run`.
 
-Do not copy `poc/d-acceleration` into `PRODUCT`. Its tools intentionally import pinned source contracts from `SRC/core`, and its integration tests use `SRC/tests/harness`; copying only the PoC tree creates a broken runtime, while copying `core` or `tests` would add an unauthorized source tree to the product. Keep the complete D checkout at `SRC` and invoke its tools by absolute path while the process working directory is `PRODUCT`.
+## Place the exact C payload
 
-Before handoff, verify source-relative resolution without writing to the product:
+Compare complete product-relative directories: `.agents/skills/{prototype,grilling,domain-modeling,to-spec}`, `frontend-design` with all seven reference files, `teach-impeccable`, `.agents/skills/LICENSES/mattpocock-skills`, and `.agents/skills/LICENSES/impeccable` with `LICENSE` and `NOTICE.md`. Add absent directories only in the approved write set; leave byte-identical ones; stop on differences. Never merge or overwrite. Verify paths, bytes, commits, dependency, licenses, and exclusions against the installation manifest, treatment C, and source lock.
+
+## Install and verify
+
+Provide a handoff with resolved paths and commands, then open a new Claude session rooted at `PRODUCT`; shell `cd` is insufficient. Verify host root and `git rev-parse --show-toplevel`, then run:
+
+```text
+/plugin marketplace add <SRC>/poc/ui-poc/dist/claude
+/plugin install aidlc-ui-poc@aidlc-plugins
+```
+
+Preserve existing plugins. Start another PRODUCT-rooted session, inspect `/plugin` **Installed** (or `claude plugin list`), and `/aidlc --doctor`. Confirm `ui-poc-comparison`, no unexpected compose drops, treatment C, routing verifier/config, runtime companion, sensor, all references/dependency/licenses. Do not use `/plugin list`.
+
+## Preserve C adapters
+
+Before design use, confirm Design Context in order: creator-confirmed loaded instructions; root `.impeccable.md`; then fixed `teach-impeccable` only as a bounded organizer in AI-DLC's existing question flow. Audience, use cases, and brand tone require creator confirmation. Do not infer from code, edit `AGENTS.md`, add an interview, or add approval. Bind the same confirmed A/B/C brief and record C-only follow-up as an evaluation difference.
+
+Keep pinned reference bytes unchanged. For every design application, read and hash-verify all seven references and produce the routing contract's hashed WCAG correction report: large text is 24 CSS px normal or approximately 18.6667 CSS px bold (WCAG 18pt/14pt bold), overriding only the pinned file's incorrect 18px/14px statement through the adapter.
+
+Record experiment Arm D and UI treatment Arm C as separate identities, read installed contracts/entrypoints, invoke `/aidlc --scope ui-poc-comparison`, preserve brownfield/greenfield classification, and stop after rough-mockups review absent separate authorization. Never fabricate approval-ledger entries.
+
+Report paths, build/dry-run, authorized writes, collisions, exact payload/licenses, compose/plugin/doctor, Design Context and WCAG readiness, and stop point. Separate static/synthetic checks from live execution, model use, and approval.
+
+## Keep and parameterize D acceleration
+
+Do not copy `poc/d-acceleration` into `PRODUCT`. Keep the complete D checkout at `SRC`; its tools import pinned source contracts from `SRC/core` and integration fixtures from `SRC/tests`. Invoke them from the PRODUCT working directory using absolute paths. Verify imports without a model call:
 
 ```bash
 (cd "$PRODUCT" && bun -e 'await import(process.argv[1])' "$SRC/poc/d-acceleration/read-only-fanout.ts")
@@ -42,30 +70,10 @@ Before handoff, verify source-relative resolution without writing to the product
 claude --help
 ```
 
-The first two checks prove the source checkout supplies the PoC, `core/tools/aidlc-directive.ts`, and sibling modules even when launched from `PRODUCT`. The Claude help output must expose every capability required by `read-only-fanout.ts`; the real runner repeats that capability check immediately before workers. Do not treat any of these checks as a model call. Fixtures, fake workers, dry runs, and benchmark estimates remain synthetic evidence.
+Acceleration is opt-in. With it disabled, the installed C plugin, pinned payload, HTML evidence contracts, blocking sensor, approvals, and downstream handoffs remain fully active. With it enabled, obtain a fresh official `orchestrate next`; accept only policy-supported read-only fanout or official design waves; preserve `gate`, state, stage, memory/record paths, contribution contracts, and sensor dispatch; keep overlapping writes, reviewers, approvals, and unsupported topologies serial.
 
-## Parameterize the handoff
+Confirm at execution time: PRODUCT/framework paths, user-supplied model request catalog, timeout/concurrency, evidence/log locations, and any existing loopback Clef URL. Never install, start, authenticate, or reconfigure Clef or a model provider. Clef is optional and low-risk only; timeout, malformed output, low confidence, or transport failure falls back conservatively. Requested, launched, and runtime-reported model identities remain separate.
 
-Ask for or confirm at execution time: product/framework absolute paths; existing loopback Clef URL (contract default `http://127.0.0.1:18742`) and explicitly reviewed low-risk Units; user-selected fast/balanced/judgment model request values available in their authorized terminal; approved evidence/log directory; timeout/concurrency; and read-only fanout versus official design wave.
+Run `read-only-fanout.ts --dry-run` or `conductor.ts` only against a fresh engine directive and from `PRODUCT`. Workers stay read-only and return separate findings; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff.
 
-Do not start, stop, install, authenticate, or reconfigure Clef during setup. Health-check only a confirmed loopback URL without reading environment values. Do not log in, buy model access, or claim requested models were used; retain requested, launched, and runtime-reported IDs separately.
-
-For read-only fanout, require the current unmodified official `orchestrate next`, a policy-supported inline `gate:false` stage, independent PRODUCT-relative evidence paths, and caller model catalog. Create the input in an approved temporary or product evidence location, then preview from the product working directory:
-
-```bash
-(cd "$PRODUCT" && bun "$SRC/poc/d-acceleration/read-only-fanout.ts" \
-  --input '<absolute-input-path>' \
-  --project-dir "$PRODUCT" \
-  --framework-dir "$SRC/core" \
-  --dry-run)
-```
-
-Do not use the example directive as authority. A real run removes `--dry-run`, validates a fresh official `next` through `SRC/core/tools`, and keeps workers read-only with separate findings returned to the lead.
-
-For design waves, use `SRC/poc/d-acceleration/conductor.ts` only for an engine-issued official wave in the four implemented design stages. Launch it from `PRODUCT`, pass `--project-dir "$PRODUCT"`, `--engine-dir "$SRC/core/tools"`, user-selected model values, loopback `--clef-url`, explicit `--clef-low-risk-units` when applicable, timeout, and separate stdout/stderr log destinations. Return approvals, reviews, gates, unsupported topologies, completed worker records, and the next official handoff unchanged to the host. Never use fake-artifact mode as real evidence.
-
-## Continue in the correct project
-
-Give a handoff with resolved paths, approved changes, parameterized dry-run, log locations, and official-host next step. Shell `cd` does not switch Claude projects. Open a new Claude session rooted at `PRODUCT`; verify host root and `git rev-parse --show-toplevel`. Inspect `/plugin` **Installed** or `claude plugin list` only to confirm existing plugins remain—D installs none—then `/aidlc --doctor`. Obtain a fresh official `orchestrate next` before PoC execution and return every boundary to the official host.
-
-Report paths, build/tests/dry-run, authorized runtime writes/collisions, the retained SRC PoC commit/hash, source-relative import and Claude capability checks, Clef URL/health disposition, requested versus runtime model IDs, PRODUCT process working directory, stdout/stderr/evidence locations, directive validation, and exact official next handoff. Separate static, synthetic, dry-run, and authenticated evidence; never claim unrecorded transition, approval, review, model use, quality, speed, or cost.
+Report the retained C source pins and licenses, UI compose status, D source commit, acceleration mode, directive validation, fallback disposition, requested/runtime model IDs, evidence paths, and exact official next handoff. Fixtures, fake workers, dry runs, and benchmark estimates are synthetic evidence and are not live-model or speed claims.

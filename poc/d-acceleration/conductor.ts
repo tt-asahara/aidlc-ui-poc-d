@@ -23,7 +23,13 @@ export async function conduct(options: ConductOptions) {
       const buildWaveKey = JSON.stringify({ stage: directive.stage, batch_index: directive.wave.batch_index, entries: build.map((entry) => ({ unit: entry.unit, required_produces: entry.required_produces })).sort((a, b) => a.unit.localeCompare(b.unit)) });
       if (dispatchedBuildWaves.has(buildWaveKey)) return { status: "worker-action-required", reason: "no-progress-repeated-official-build-wave", directive, history, workerRuns };
       dispatchedBuildWaves.add(buildWaveKey);
-      const adapted = adaptOfficialNext(directive, { clefLowRiskUnits: options.clefLowRiskUnits, clef: options.clefUrl ? { enabled: true, url: options.clefUrl } : undefined }); const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels: options.requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs });
+      let adapted;
+      try {
+        adapted = adaptOfficialNext(directive, { clefLowRiskUnits: options.clefLowRiskUnits, clef: options.clefUrl ? { enabled: true, url: options.clefUrl } : undefined });
+      } catch (error) {
+        return { status: "official-host-action-required", reason: "c-ui-baseline-not-composed", error: error instanceof Error ? error.message : String(error), directive, history, workerRuns };
+      }
+      const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels: options.requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs });
       workerRuns.push({ stage: directive.stage, batchIndex: directive.wave.batch_index, result });
       if (result.status !== "completed") return { status: "worker-action-required", directive, result, history, workerRuns };
       const missing = adapted.tasks.flatMap((task) => task.writeSet).filter((path) => !existsSync(isAbsolute(path) ? path : join(options.projectDir, path)));

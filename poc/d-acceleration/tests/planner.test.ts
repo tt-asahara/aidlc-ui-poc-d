@@ -13,7 +13,7 @@ describe("D acceleration harness", () => {
     expect(result.waves).toEqual([["requirements"], ["fd-a", "fd-b", "fd-c"], ["approval"], ["code-a"], ["code-b"], ["review"]]);
   });
   test("adapts the official run-stage.wave shape and build_required entries", () => {
-    const input = adaptOfficialNext({ directive: { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "api", build_required: true, produces: ["api/spec.md"] }, { unit: "done", build_required: false, produces: ["done/spec.md"] }] } } });
+    const input = adaptOfficialNext({ directive: { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "api", build_required: true, produces: ["api/spec.md"], required_produces: ["api/spec.md"], consumes: ["ui-poc-refined-contract"] }, { unit: "done", build_required: false, produces: ["done/spec.md"], required_produces: [], consumes: [] }] } } });
     expect(input.tasks.map((task) => task.id)).toEqual(["functional-design:api"]);
     expect(input.directives?.[0]?.entries).toEqual(["functional-design:api"]);
     expect((input.sourceDirective as any).lead_agent).toBeUndefined();
@@ -50,7 +50,7 @@ describe("D acceleration harness", () => {
     const result = await plan(input); expect(result.routes.x?.source).toBe("fallback");
   });
   test("native design keeps balanced baseline when Clef is disabled, times out, or is low confidence", async () => {
-    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } };
+    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
     const disabled = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"] });
     expect((await plan(disabled)).routes["functional-design:alpha"]?.tier).toBe("balanced");
     const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "fast", confidence: 0.2 } } });
@@ -60,7 +60,7 @@ describe("D acceleration harness", () => {
     } finally { globalThis.fetch = originalFetch; }
   });
   test("native design actually aborts a slow Clef call and falls back to balanced", async () => {
-    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } };
+    const directive = { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
@@ -75,7 +75,7 @@ describe("D acceleration harness", () => {
   test("Clef judgment reaches the tier-specific worker model argument", async () => {
     const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "judgment", confidence: 0.95 } } });
     try {
-      const input = adaptOfficialNext({ kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: [], consumes_absent: [] }] } }, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742" } });
+      const input = adaptOfficialNext({ kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } }, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742" } });
       input.modelCatalog = { judgment: "fixture-judgment" };
       const result = await execute(input, { projectDir, workerKind: "fake" });
       expect(result.records[0]?.tier).toBe("judgment"); expect(result.records[0]?.requestedModel).toBe("fixture-judgment");

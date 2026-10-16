@@ -3,15 +3,22 @@ import { readFileSync } from "node:fs";
 import type { Input, Task } from "./aidlc-acceleration-plan.ts";
 
 const WAVE_STAGES = new Set(["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"]);
+const REQUIRED_C_UI_CONSUMES: Record<string, string[]> = {
+  "functional-design": ["ui-poc-refined-contract"],
+};
 export function adaptOfficialNext(value: any, options: { clefLowRiskUnits?: string[]; clef?: Input["clef"] } = {}): Input {
   const directive = value?.directive ?? value;
   if (directive?.kind !== "run-stage") throw new Error(`expected official run-stage directive, got ${String(directive?.kind)}`);
   if (!directive.wave || !WAVE_STAGES.has(directive.stage)) throw new Error("run-stage has no supported official design wave");
   if (!Array.isArray(directive.wave.entries) || !Number.isInteger(directive.wave.batch_index)) throw new Error("invalid official wave shape");
+  const requiredUiConsumes = REQUIRED_C_UI_CONSUMES[directive.stage] ?? [];
   const tasks: Task[] = directive.wave.entries.filter((entry: any) => entry.build_required === true).map((entry: any) => {
     if (typeof entry.unit !== "string" || !Array.isArray(entry.produces)) throw new Error("invalid official wave entry");
+    const consumes = Array.isArray(entry.consumes) ? entry.consumes : [];
+    const missingUiConsumes = requiredUiConsumes.filter((artifact) => !consumes.includes(artifact));
+    if (missingUiConsumes.length) throw new Error(`official ${directive.stage} wave is missing composed Arm C UI consumes: ${missingUiConsumes.join(", ")}`);
     const clefEligible = options.clefLowRiskUnits?.includes(entry.unit) === true;
-    return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], estimatedMs: 1, taskType: clefEligible ? "ambiguous" : "design", difficulty: clefEligible ? "low" : "medium", risk: clefEligible ? "low" : "medium", execution: "official-wave", writeSet: entry.required_produces, ...(clefEligible ? { minimumTier: "balanced" as const, fallbackTier: "balanced" as const, assessmentState: { stage: directive.stage, unit: entry.unit, unit_kind: entry.unit_kind, consumes: entry.consumes, consumes_absent: entry.consumes_absent, required_produces: entry.required_produces } } : {}) };
+    return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], inputSet: consumes, estimatedMs: 1, taskType: clefEligible ? "ambiguous" : "design", difficulty: clefEligible ? "low" : "medium", risk: clefEligible ? "low" : "medium", execution: "official-wave", writeSet: entry.required_produces, ...(clefEligible ? { minimumTier: "balanced" as const, fallbackTier: "balanced" as const, assessmentState: { stage: directive.stage, unit: entry.unit, unit_kind: entry.unit_kind, consumes, consumes_absent: entry.consumes_absent, required_produces: entry.required_produces } } : {}) };
   });
   return { tasks, directives: [{ kind: "wave", stage: directive.stage, entries: tasks.map((task) => task.id) }], sourceDirective: structuredClone(directive), clef: options.clef };
 }

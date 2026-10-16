@@ -1,0 +1,26 @@
+{
+  "arm": "B",
+  "plugin": "ui-poc@0.1.0",
+  "scope": "ui-poc-comparison",
+  "upstream": {
+    "version": "2.11.0",
+    "commit": "6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a"
+  },
+  "status": "source-pinned-stage-invocation-not-run",
+  "skills": {
+    "content": [
+      "A",
+      "mattpocock/skills:skills/engineering/prototype/",
+      "mattpocock/skills:skills/productivity/grilling/",
+      "mattpocock/skills:skills/engineering/domain-modeling/",
+      "mattpocock/skills:skills/engineering/to-spec/"
+    ],
+    "support": [
+      "grill-with-docs wrapper",
+      "setup-matt-pocock-skills configuration references"
+    ],
+    "layout": "Copy each selected leaf skill directory under .agents/skills/, preserving UI.md, LOGIC.md, GLOSSARY-FORMAT.md, ADR-FORMAT.md, and agents/openai.yaml."
+  },
+  "source_lock": "source-lock.json",
+  "actual_stage_read_evidence": null
+}

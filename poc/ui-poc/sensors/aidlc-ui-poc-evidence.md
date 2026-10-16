@@ -1,0 +1,23 @@
+---
+id: ui-poc-evidence
+kind: deterministic
+command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-ui-poc-evidence.ts
+default_severity: blocking
+fire_on: gate
+description: Verify UI contracts plus Arm C routing, Design Context, pinned payloads, and WCAG correction evidence
+category: ui-evidence
+input_schema:
+  output_path: string
+  stage_slug: string
+output_schema:
+  pass: boolean
+  findings_count: integer
+  findings: string[]
+timeout_seconds: 30
+---
+
+# UI evidence gate
+
+No matches filter: declared stage deliverables trigger contract checks; every C stage with routing rules also verifies facts, engine-bound context, source-lock bytes, selected/disabled skill events, hashed inputs/outputs, creator-confirmed Design Context, and the WCAG correction report. Requirements Analysis and Domain Design attach the same blocking sensor through the additive seam. Skipped engine stages emit no deliverable and create no sensor obligation. Rough/refined checks add no approval; AI-DLC remains the only lifecycle and approval owner.
+
+The pinned dispatcher resolves a .ts basename, runs it with its own runtime, and consumes JSON `pass` plus `findings_count`. It does not execute an arbitrary shell prefix. Never replace this adapter with a guessed command API.

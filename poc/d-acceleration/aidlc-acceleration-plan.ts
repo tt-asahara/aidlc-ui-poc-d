@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 export type Tier = "fast" | "balanced" | "judgment";
 export type TaskType = "templated" | "implementation" | "review" | "design" | "security" | "compliance" | "approval" | "ambiguous";
 export type Execution = "serial" | "official-wave" | "official-swarm";
-export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
+export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
 export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
 type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };
@@ -22,7 +22,7 @@ function validate(input: Input): void {
     ids.add(task.id);
     if (!TASK_TYPES.has(task.taskType) || !EXECUTIONS.has(task.execution)) throw new Error(`invalid task contract: ${task.id}`);
     if (!LEVELS.has(task.risk) || !LEVELS.has(task.difficulty)) throw new Error(`invalid risk or difficulty: ${task.id}`);
-    if (!Array.isArray(task.dependsOn) || !Array.isArray(task.writeSet) || !Number.isFinite(task.estimatedMs) || task.estimatedMs < 0) throw new Error(`invalid task fields: ${task.id}`);
+    if (!Array.isArray(task.dependsOn) || (task.inputSet !== undefined && !Array.isArray(task.inputSet)) || !Array.isArray(task.writeSet) || !Number.isFinite(task.estimatedMs) || task.estimatedMs < 0) throw new Error(`invalid task fields: ${task.id}`);
     if (task.execution === "official-swarm" && !task.isolatedWorktree) throw new Error(`official-swarm requires isolatedWorktree: ${task.id}`);
     if (task.execution === "official-swarm") throw new Error(`official-swarm execution is unsupported: ${task.id}`);
     if (task.execution === "official-wave" && !OFFICIAL_WAVE_STAGES.has(task.stage)) throw new Error(`official-wave is not available for stage: ${task.stage}`);

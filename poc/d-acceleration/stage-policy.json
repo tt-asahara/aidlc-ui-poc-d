@@ -1,5 +1,11 @@
 {
   "schemaVersion": 1,
+  "uiBaseline": {
+    "arm": "C",
+    "requiredWhenAccelerationDisabled": true,
+    "officialStageContributionsRemainEnabled": true,
+    "missingComposedConsumes": "fail-closed-to-official-host"
+  },
   "invariants": {
     "crossStageParallelism": false,
     "officialDirectiveIsAuthority": true,
