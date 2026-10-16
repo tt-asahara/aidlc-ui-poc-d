@@ -48,5 +48,5 @@ if (import.meta.main) {
   const projectDir = value("--project-dir"); const engineDir = value("--engine-dir"); const worker = value("--worker") as WorkerKind | undefined;
   if (!projectDir || !engineDir || !worker || !["fake", "claude"].includes(worker)) throw new Error("--project-dir, --engine-dir, and --worker fake|claude are required");
   const result = await conduct({ projectDir, engineDir, workerKind: worker, requestedClaudeModels: { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") }, requestedClaudeEffort: value("--claude-effort"), disposableTestMode: args.includes("--disposable-test-mode"), clefUrl: value("--clef-url"), clefLowRiskUnits: value("--clef-low-risk-units")?.split(",").filter(Boolean), timeoutMs: value("--timeout-ms") ? Number(value("--timeout-ms")) : undefined });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (result.status === "worker-action-required") process.exitCode = 2; else if (result.status === "limit-reached") process.exitCode = 4;
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (result.status === "worker-action-required" || result.reason === "c-ui-baseline-not-composed") process.exitCode = 2; else if (result.status === "limit-reached") process.exitCode = 4;
 }

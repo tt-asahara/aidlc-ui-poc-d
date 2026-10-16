@@ -6,6 +6,11 @@ const WAVE_STAGES = new Set(["functional-design", "nfr-requirements", "nfr-desig
 const REQUIRED_C_UI_CONSUMES: Record<string, string[]> = {
   "functional-design": ["ui-poc-refined-contract"],
 };
+function consumedArtifact(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const leaf = value.replaceAll("\\", "/").split("/").at(-1) ?? "";
+  return leaf.endsWith(".md") ? leaf.slice(0, -3) : leaf;
+}
 export function adaptOfficialNext(value: any, options: { clefLowRiskUnits?: string[]; clef?: Input["clef"] } = {}): Input {
   const directive = value?.directive ?? value;
   if (directive?.kind !== "run-stage") throw new Error(`expected official run-stage directive, got ${String(directive?.kind)}`);
@@ -15,7 +20,8 @@ export function adaptOfficialNext(value: any, options: { clefLowRiskUnits?: stri
   const tasks: Task[] = directive.wave.entries.filter((entry: any) => entry.build_required === true).map((entry: any) => {
     if (typeof entry.unit !== "string" || !Array.isArray(entry.produces)) throw new Error("invalid official wave entry");
     const consumes = Array.isArray(entry.consumes) ? entry.consumes : [];
-    const missingUiConsumes = requiredUiConsumes.filter((artifact) => !consumes.includes(artifact));
+    const consumedArtifacts = new Set(consumes.map(consumedArtifact).filter(Boolean));
+    const missingUiConsumes = requiredUiConsumes.filter((artifact) => !consumedArtifacts.has(artifact));
     if (missingUiConsumes.length) throw new Error(`official ${directive.stage} wave is missing composed Arm C UI consumes: ${missingUiConsumes.join(", ")}`);
     const clefEligible = options.clefLowRiskUnits?.includes(entry.unit) === true;
     return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], inputSet: consumes, estimatedMs: 1, taskType: clefEligible ? "ambiguous" : "design", difficulty: clefEligible ? "low" : "medium", risk: clefEligible ? "low" : "medium", execution: "official-wave", writeSet: entry.required_produces, ...(clefEligible ? { minimumTier: "balanced" as const, fallbackTier: "balanced" as const, assessmentState: { stage: directive.stage, unit: entry.unit, unit_kind: entry.unit_kind, consumes, consumes_absent: entry.consumes_absent, required_produces: entry.required_produces } } : {}) };

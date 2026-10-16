@@ -26,9 +26,10 @@ describe("D retains the composed Arm C UI baseline", () => {
   });
 
   test("functional-design acceleration retains the C refined HTML contract input", () => {
-    const adapted = adaptOfficialNext(functionalDirective(["ui-poc-refined-contract"]));
-    expect(adapted.tasks[0]?.inputSet).toContain("ui-poc-refined-contract");
-    expect(adapted.sourceDirective).toEqual(functionalDirective(["ui-poc-refined-contract"]));
+    const resolvedContract = "aidlc/spaces/default/intents/example/inception/refined-mockups/ui-poc-refined-contract.md";
+    const adapted = adaptOfficialNext(functionalDirective([resolvedContract]));
+    expect(adapted.tasks[0]?.inputSet).toContain(resolvedContract);
+    expect(adapted.sourceDirective).toEqual(functionalDirective([resolvedContract]));
   });
 
   test("missing C compose evidence fails closed before worker dispatch", () => {

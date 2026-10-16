@@ -1,7 +1,6 @@
 {
   "schema": 1,
   "arm": "C",
-  "consumer_arm": "D",
   "source_lock": "ui-poc/treatments/source-lock.json",
   "installed": [
     {

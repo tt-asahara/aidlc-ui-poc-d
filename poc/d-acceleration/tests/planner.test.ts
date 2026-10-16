@@ -13,7 +13,7 @@ describe("D acceleration harness", () => {
     expect(result.waves).toEqual([["requirements"], ["fd-a", "fd-b", "fd-c"], ["approval"], ["code-a"], ["code-b"], ["review"]]);
   });
   test("adapts the official run-stage.wave shape and build_required entries", () => {
-    const input = adaptOfficialNext({ directive: { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "api", build_required: true, produces: ["api/spec.md"], required_produces: ["api/spec.md"], consumes: ["ui-poc-refined-contract"] }, { unit: "done", build_required: false, produces: ["done/spec.md"], required_produces: [], consumes: [] }] } } });
+    const input = adaptOfficialNext({ directive: { kind: "run-stage", stage: "functional-design", wave: { batch_index: 0, entries: [{ unit: "api", build_required: true, produces: ["api/spec.md"], required_produces: ["api/spec.md"], consumes: ["evidence/ui-poc-refined-contract.md"] }, { unit: "done", build_required: false, produces: ["done/spec.md"], required_produces: [], consumes: [] }] } } });
     expect(input.tasks.map((task) => task.id)).toEqual(["functional-design:api"]);
     expect(input.directives?.[0]?.entries).toEqual(["functional-design:api"]);
     expect((input.sourceDirective as any).lead_agent).toBeUndefined();
