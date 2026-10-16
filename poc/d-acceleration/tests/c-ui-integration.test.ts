@@ -41,7 +41,11 @@ describe("D retains the composed Arm C UI baseline", () => {
     directive.stage_file = "poc/ui-poc/contributions/construction/functional-design.md";
     directive.inline_context_paths = ["poc/ui-poc/docs/contract.md"];
     directive.context_warnings = ["fixture-warning"];
-    directive.steering = { instruction: "preserve-C-context" };
+    directive.rules_in_context = ["aidlc/spaces/default/memory/org.md", "aidlc/spaces/default/memory/project.md"];
+    directive.rules_content = [
+      { path: "aidlc/spaces/default/memory/org.md", text: "Org rule: write every human-facing artifact in Japanese." },
+      { path: "aidlc/spaces/default/memory/project.md", text: "Project rule: preserve the approved refined UI contract." },
+    ];
     directive.wave.entries[0].unit_memory_path = "poc/ui-poc/docs/c-stage-skill-matrix.md";
     const input = adaptOfficialNext(directive); const task = input.tasks[0]!;
     const prompt = JSON.parse(buildClaudeBuilderPrompt(input, task, repo));
@@ -50,9 +54,20 @@ describe("D retains the composed Arm C UI baseline", () => {
     expect(prompt.officialBuilderBrief.stage_file.text).toContain("Refined UI evidence as functional design input");
     expect(prompt.officialBuilderBrief.inline_context[0].text).toContain("UI evidence contract");
     expect(prompt.officialBuilderBrief.context_warnings).toEqual(["fixture-warning"]);
-    expect(prompt.officialBuilderBrief.steering).toEqual(directive.steering);
+    expect(prompt.officialBuilderBrief.rules_in_context).toEqual(directive.rules_in_context);
+    expect(prompt.officialBuilderBrief.rules_content).toEqual(directive.rules_content);
+    expect(prompt.officialBuilderBrief.rules_content[0].text).toContain("human-facing artifact in Japanese");
+    expect(prompt.officialBuilderBrief.rules_content[1].text).toContain("approved refined UI contract");
     expect(prompt.officialBuilderBrief.unit_memory.text).toContain("Arm C stage-to-skill contract");
     expect(prompt.officialBuilderBrief.entry.unit_memory_path).toBe(directive.wave.entries[0].unit_memory_path);
+  });
+
+  test("rules held only in the official host chat fail closed", () => {
+    const directive = functionalDirective(["evidence/ui-poc-refined-contract.md"]) as any;
+    directive.rules_in_context = ["aidlc/spaces/default/memory/org.md"];
+    directive.rules_held = "sha256:fixture";
+    directive.rules_held_note = "The active host chat already holds this exact rule bundle.";
+    expect(() => adaptOfficialNext(directive)).toThrow("holds rules only in the host chat");
   });
 
   test("missing C compose evidence fails closed before worker dispatch", () => {
