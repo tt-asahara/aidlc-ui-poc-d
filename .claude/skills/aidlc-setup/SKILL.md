@@ -1,13 +1,13 @@
 ---
 name: aidlc-setup
-description: Set up the pinned Arm C UI baseline plus the bounded D acceleration PoC while preserving official host authority and existing work.
+description: Set up the pinned Arm C UI baseline plus automatically integrated, bounded D acceleration while preserving official host authority and existing work.
 argument-hint: "[D checkout path] [product repository path]"
 user-invocable: true
 ---
 
 # Set up AI-DLC D on the Arm C UI baseline
 
-Invoke from the D checkout containing this skill. D retains the complete pinned Arm C UI treatment and adds opt-in acceleration around the official host. Invocation permits inspection and dry-run only; applying reviewed product changes requires separate explicit authorization.
+Invoke from the D checkout containing this skill. D retains the complete pinned Arm C UI treatment and installs bounded acceleration into the ordinary `/aidlc` wave path. Invocation permits inspection and dry-run only; applying reviewed product changes requires separate explicit authorization.
 
 ## Establish boundaries
 
@@ -60,20 +60,20 @@ Record experiment Arm D and UI treatment Arm C as separate identities, read inst
 
 Report paths, build/dry-run, authorized writes, collisions, exact payload/licenses, compose/plugin/doctor, Design Context and WCAG readiness, and stop point. Separate static/synthetic checks from live execution, model use, and approval.
 
-## Keep and parameterize D acceleration
+## Verify automatic D acceleration
 
-Do not copy `poc/d-acceleration` into `PRODUCT`. Keep the complete D checkout at `SRC`, but always execute against PRODUCT's composed `.claude` runtime. Never pass bare `SRC/core` as the engine/framework. The single supported entrypoint is:
+Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude distribution projects the bounded runtime into `.claude/tools/d-acceleration`; verify that ordinary `/aidlc` uses that installed copy and never reaches back into `SRC`. The setup-only preflight is:
 
 ```bash
-(cd "$PRODUCT" && bun "$SRC/poc/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)
+(cd "$PRODUCT" && bun "$PRODUCT/.claude/tools/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)
 ```
 
-Preflight must report `uiBaseline: C-composed`, the four supported design waves, three supported read-only stages, the exact PRODUCT runtime path, and no missing compose files. Treat any other result as setup failure. For a supported official design wave, rerun the same entrypoint with `--worker claude` and explicit requested models. For feasibility, market-research, or performance-validation, add `--fanout-input <absolute-path>`; use `--dry-run` first. Every other stage returns unchanged to the official host.
+Preflight must report `uiBaseline: C-composed`, `acceleration: D-automatic-for-supported-waves`, the four supported design waves, three supported read-only stages, the exact PRODUCT runtime path, and no missing compose files. Treat any other result as setup failure. Do not manually start the runner for ordinary design work: `/aidlc` invokes it for supported official waves. Every unsupported stage and every gate returns unchanged to the official host.
 
-Acceleration is opt-in. With it disabled, the installed C plugin, pinned payload, HTML evidence contracts, blocking sensor, approvals, and downstream handoffs remain fully active. With it enabled, obtain a fresh official `orchestrate next`; accept only policy-supported read-only fanout or official design waves; preserve `gate`, state, stage, memory/record paths, contribution contracts, and sensor dispatch; keep overlapping writes, reviewers, approvals, and unsupported topologies serial.
+Acceleration is automatic only for a supported official wave and fails closed to the official host. The installed C plugin, pinned payload, HTML evidence contracts, blocking sensor, approvals, and downstream handoffs remain fully active. The runner obtains a fresh official `orchestrate next`; accepts only policy-supported read-only fanout or official design waves; preserves `gate`, state, stage, memory/record paths, contribution contracts, and sensor dispatch; and keeps overlapping writes, reviewers, approvals, and unsupported topologies serial.
 
-Confirm at execution time: PRODUCT/framework paths, user-supplied model request catalog, timeout/concurrency, evidence/log locations, and any existing loopback Clef URL. Never install, start, authenticate, or reconfigure Clef or a model provider. Clef is optional and low-risk only; timeout, malformed output, low confidence, or transport failure falls back conservatively. Requested, launched, and runtime-reported model identities remain separate.
+Confirm at execution time: PRODUCT/framework paths, timeout/concurrency, evidence/log locations, and any existing loopback Clef URL. Never install, start, authenticate, or reconfigure Clef or a model provider. The confirmed Claude CLI `opus` alias is the default request for all three tiers; explicit tier overrides remain possible, and requested, launched, and runtime-reported model identities remain separate. Clef is optional and low-risk only; each route records attempted/available/used/outcome, and timeout, malformed output, low confidence, or transport failure falls back conservatively.
 
-Run only `run.ts`; it resolves PRODUCT's composed engine/framework and obtains a fresh official directive. Workers stay read-only and return separate findings; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff. Save preflight, stdout, stderr, enabled-feature summary, and returned official handoff as the D execution record; import checks alone are not setup completion.
+The ordinary `/aidlc` skill runs only the installed `run.ts`; it resolves PRODUCT's composed engine/framework and obtains a fresh official directive. Workers write only their issued disjoint output sets; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff. Save preflight, stdout, stderr, enabled-feature summary, and returned official handoff as the D execution record; import checks alone are not setup completion.
 
 Report the retained C source pins and licenses, UI compose status, D source commit, acceleration mode, directive validation, fallback disposition, requested/runtime model IDs, evidence paths, and exact official next handoff. Fixtures, fake workers, dry runs, and benchmark estimates are synthetic evidence and are not live-model or speed claims.
