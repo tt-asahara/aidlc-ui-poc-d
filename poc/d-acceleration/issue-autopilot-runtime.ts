@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { AssumptionLedger, ClaimStore, Issue, IssueSource, IssueSummary } from "./issue-autopilot.ts";
+import type { AssumptionLedger, ClaimStore, IntakeBinding, IntakeBindingStore, Issue, IssueSource, IssueSummary } from "./issue-autopilot.ts";
 
 export type CommandResult = { status: number; stdout: string; stderr: string };
 export type CommandRunner = (executable: string, argv: readonly string[], options: { cwd: string }) => Promise<CommandResult>;
@@ -206,6 +206,33 @@ export function createFileClaimStore(options: {
   };
 }
 
+export function createFileIntakeBindingStore(directory: string): IntakeBindingStore {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const pathFor = (binding: IntakeBinding) => join(directory, `${binding.intakeKey}.json`);
+  return {
+    async reserve(binding, owner) {
+      const path = pathFor(binding);
+      if (tryCreate(path, `${JSON.stringify({ ...binding, state: "pending", owner })}\n`)) return "reserved";
+      const current = readJson<Record<string, unknown>>(path);
+      const exact = current?.provider === binding.provider && current.repository === binding.repository
+        && current.issueNumber === binding.issueNumber && current.intakeKey === binding.intakeKey;
+      if (!exact) throw new Error("intake binding key collision or corrupt binding");
+      return current?.state === "bound" ? "bound" : "pending";
+    },
+    async finalize(binding, owner) {
+      const path = pathFor(binding), current = readJson<Record<string, unknown>>(path);
+      if (!current || current.provider !== binding.provider || current.repository !== binding.repository
+        || current.issueNumber !== binding.issueNumber || current.intakeKey !== binding.intakeKey) throw new Error("cannot finalize mismatched intake binding");
+      if (current.state === "bound") return;
+      // The caller may be a recovery worker that verified the exact official
+      // active intent after the reserving process crashed before finalization.
+      const temporary = `${path}.bound-${process.pid}`;
+      writeFileSync(temporary, `${JSON.stringify({ ...binding, state: "bound", owner })}\n`, { mode: 0o600, flag: "wx" });
+      renameSync(temporary, path);
+    },
+  };
+}
+
 function gitDirectory(projectDir: string): { path: string; git: boolean } {
   const dotGit = join(projectDir, ".git");
   if (!existsSync(dotGit)) return { path: join(projectDir, ".aidlc"), git: false };
@@ -221,6 +248,7 @@ function gitDirectory(projectDir: string): { path: string; git: boolean } {
 
 export function issueAutopilotRuntimePaths(projectDir: string, sessionDirectory?: string): {
   claims: string;
+  bindings: string;
   assumptions: string;
   stop: string;
 } {
@@ -229,7 +257,7 @@ export function issueAutopilotRuntimePaths(projectDir: string, sessionDirectory?
     ? resolve(sessionDirectory)
     : join(storage.path, ...(storage.git ? ["aidlc", "issue-autopilot"] : ["issue-autopilot"]));
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  return { claims: join(root, "claims"), assumptions: join(root, "assumptions.jsonl"), stop: join(root, "stop") };
+  return { claims: join(root, "claims"), bindings: join(root, "bindings"), assumptions: join(root, "assumptions.jsonl"), stop: join(root, "stop") };
 }
 
 export function createFileAssumptionLedger(path: string, options: { clock?: () => number } = {}): AssumptionLedger {

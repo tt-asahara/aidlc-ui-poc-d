@@ -168,6 +168,7 @@ describe("D approval persistence", () => {
     expect(detectHighConfidenceSecret(Buffer.from(`AIza${"a".repeat(35)}`))).toBe("google-api-key");
     expect(detectHighConfidenceSecret(Buffer.from(`sk_live_${"a".repeat(24)}`))).toBe("stripe-live-key");
     expect(detectHighConfidenceSecret(Buffer.from("ordinary approved artifact"))).toBeNull();
+    expect(detectHighConfidenceSecret(Buffer.concat([Buffer.alloc(9000), Buffer.from("AKIAABCDEFGHIJKLMNOP")]))).toBe("aws-access-key");
   });
 
   test("recursively rejects protected files and symlinks inside artifact directories", () => {
@@ -199,7 +200,7 @@ describe("D approval persistence", () => {
     const beforeObjects = run(root, ["git", "count-objects", "-v"]);
     const hook = join(root, ".git", "hooks", "pre-commit");
     writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' 'AKIAABCDEFGHIJKLMNOP' > aidlc/result.md\ngit add aidlc/result.md\n`); chmodSync(hook, 0o755);
-    expect(() => persistCrossing(root, commit, crossing())).toThrow(/hook-updated persistence index/);
+    expect(() => persistCrossing(root, commit, crossing())).toThrow(/hook-produced persistence tree/);
     expect(run(root, ["git", "rev-list", "--count", "HEAD"])).toBe("1");
     expect(run(root, ["git", "show", "HEAD:README.md"])).toBe("base");
     expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
@@ -215,6 +216,36 @@ describe("D approval persistence", () => {
     expect(persistCrossing(root, commit, crossing()).status).toBe("committed");
     expect(run(root, ["git", "show", "HEAD:aidlc/result.md"])).toBe("approved by hook");
     expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
+  });
+
+  test("rejects secrets and required-trailer removal introduced by commit message hooks", () => {
+    for (const body of [
+      "printf '%s\\n' 'AKIAABCDEFGHIJKLMNOP' >> \"$1\"",
+      "grep -v '^AI-DLC-Receipt:' \"$1\" > \"$1.next\" && mv \"$1.next\" \"$1\"",
+    ]) {
+      const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+      const hook = join(root, ".git", "hooks", "commit-msg"); writeFileSync(hook, `#!/bin/sh\n${body}\n`); chmodSync(hook, 0o755);
+      expect(() => persistCrossing(root, commit, crossing())).toThrow();
+      expect(run(root, ["git", "rev-list", "--count", "HEAD"])).toBe("1");
+    }
+  });
+
+  test("fails closed when a hook replaces the manifest with output larger than the old spawn buffer", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+    const hook = join(root, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\ndd if=/dev/zero bs=1200000 count=1 2>/dev/null | tr '\\000' a > aidlc/result.md\nprintf '\\n%s\\n' 'AKIAABCDEFGHIJKLMNOP' >> aidlc/result.md\ngit add aidlc/result.md\n"); chmodSync(hook, 0o755);
+    expect(() => persistCrossing(root, commit, crossing())).toThrow(/hook-produced persistence tree/);
+    expect(run(root, ["git", "rev-list", "--count", "HEAD"])).toBe("1");
+  });
+
+  test("an asynchronous hook index rewrite cannot alter the immutable scanned tree", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), `${"safe\n".repeat(200_000)}`);
+    const hook = join(root, ".git", "hooks", "commit-msg");
+    writeFileSync(hook, "#!/bin/sh\n( sleep 0.01; printf '%s\\n' 'AKIAABCDEFGHIJKLMNOP' > aidlc/result.md; git add aidlc/result.md ) >/dev/null 2>&1 &\n"); chmodSync(hook, 0o755);
+    try { persistCrossing(root, commit, crossing()); } catch { /* mutation before write-tree is rejected */ }
+    const committed = spawnSync("git", ["grep", "-F", "AKIAABCDEFGHIJKLMNOP", "HEAD", "--"], { cwd: root, encoding: "utf8" });
+    expect(committed.status).toBe(1);
+    expect(Number(run(root, ["git", "rev-list", "--count", "HEAD"]))).toBeLessThanOrEqual(2);
   });
 
   test("records a fixed pending refspec and resumes the same push", () => {

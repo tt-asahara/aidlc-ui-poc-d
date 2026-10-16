@@ -12,7 +12,10 @@ const directive = JSON.parse(readFileSync(bounded(directiveFile), "utf8"));
 const manifest = JSON.parse(readFileSync(bounded(manifestFile), "utf8"));
 const validation = validateDirective(directive);
 if (!validation.valid) throw new Error(`host boundary requires a valid official directive: ${validation.errors.join("; ")}`);
-if (directive.kind !== "run-stage" || directive.gate !== false) throw new Error("host boundary requires the active non-gate run-stage directive whose body just executed");
+// Both gate:false and gate:true are executable run-stage directives. gate:true
+// means the official stage ritual includes its approval boundary; it is not an
+// `ask` directive and must still receive the optional checks before review/report.
+if (directive.kind !== "run-stage") throw new Error("host boundary requires an active run-stage directive whose body just executed");
 if (directive.stage !== manifest.stage) throw new Error(`host boundary stage mismatch: ${directive.stage} != ${manifest.stage}`);
 if ((directive.unit ?? null) !== (manifest.unit ?? null)) throw new Error(`host boundary unit mismatch: ${directive.unit ?? "<stage>"} != ${manifest.unit ?? "<stage>"}`);
 const fresh = spawnSync(process.execPath, [resolve(engineDir, "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });

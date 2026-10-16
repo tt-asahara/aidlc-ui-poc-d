@@ -42,4 +42,36 @@ describe("durable claimed host session", () => {
     expect(JSON.parse(blocked.stdout)).toMatchObject({ action: "stop", reason: "session-busy" });
     expect(JSON.parse(readFileSync(join(root, ".aidlc-engine", "session.json"), "utf8")).steps).toBe(0);
   });
+
+  test("renews the owner claim during a long host action and finishes by token", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-host-heartbeat-"));
+    mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+    const paths = issueAutopilotRuntimePaths(root);
+    const owner = createFileClaimStore({ directory: paths.claims, leaseMs: 150 });
+    expect(await owner.acquire(42, "session-owner")).toBe("acquired");
+    const init = ["init", "--active-stages", "functional-design", "--through", "functional-design", "--deadline-ms", "5000", "--issue-number", "42", "--owner", "session-owner", "--claim-lease-ms", "150"];
+    expect(run(root, init).status).toBe(0);
+    const action = JSON.parse(run(root, ["action-start"]).stdout) as { action: string; token: string; heartbeatEveryMs: number };
+    expect(action).toMatchObject({ action: "continue", heartbeatEveryMs: 50 });
+    expect(JSON.parse(run(root, init).stdout)).toMatchObject({ action: "stop", reason: "host-action-busy" });
+    writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "run-stage", stage: "functional-design" }));
+    expect(JSON.parse(run(root, ["checkpoint", "--directive-file", "directive.json"]).stdout)).toMatchObject({ action: "stop", reason: "host-action-busy" });
+    await Bun.sleep(650);
+    expect(await createFileClaimStore({ directory: paths.claims, leaseMs: 150 }).acquire(42, "other-owner")).toBe("busy");
+    expect(JSON.parse(run(root, ["action-finish", "--action-token", action.token]).stdout)).toMatchObject({ action: "continue" });
+    const stoppedAction = JSON.parse(run(root, ["action-start"]).stdout) as { token: string };
+    writeFileSync(paths.stop, "stop\n");
+    await Bun.sleep(200);
+    expect(JSON.parse(run(root, ["action-finish", "--action-token", stoppedAction.token]).stdout)).toMatchObject({ action: "stop", reason: "operator-stop", state: { terminalReason: "operator-stop" } });
+    expect(existsSync(join(paths.claims, "issue-42.json"))).toBeFalse();
+  });
+
+  test("cleans the checkpoint lock when an exception escapes", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-host-lock-cleanup-"));
+    mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(root, ".aidlc-engine", "session.json"), JSON.stringify({ startedAt: Date.now(), deadlineMs: 5000, maxSteps: 2, steps: 0, through: null, claim: { issueNumber: 42, owner: "owner", leaseMs: 0 } }));
+    writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "run-stage", stage: "functional-design" }));
+    expect(run(root, ["checkpoint", "--directive-file", "directive.json"]).status).not.toBe(0);
+    expect(existsSync(join(root, ".aidlc-engine", "session.json.lock"))).toBeFalse();
+  });
 });

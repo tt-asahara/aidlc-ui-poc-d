@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   createFileAssumptionLedger,
   createFileClaimStore,
+  createFileIntakeBindingStore,
   createGhIssueSource,
   issueAutopilotRuntimePaths,
   type CommandRunner,
@@ -74,6 +75,16 @@ describe("issue autopilot production adapters", () => {
       { recordedAt: 20, issueNumber: 1, policy: "assume", assumptions: ["JPY"], researchedFacts: [] },
       { recordedAt: 21, issueNumber: 2, policy: "research", assumptions: [], researchedFacts: ["API v2"] },
     ]);
+  });
+
+  test("intake binding reservation is atomic and exact", async () => {
+    const store = createFileIntakeBindingStore(join(temp(), "bindings"));
+    const binding = { provider: "github", repository: "owner/repo", issueNumber: 9, intakeKey: "key-9" };
+    expect(await store.reserve(binding, "alpha")).toBe("reserved");
+    expect(await store.reserve(binding, "beta")).toBe("pending");
+    await store.finalize(binding, "beta");
+    expect(await store.reserve(binding, "beta")).toBe("bound");
+    await expect(store.reserve({ ...binding, repository: "other/repo" }, "beta")).rejects.toThrow("collision");
   });
 
   test("defaults runtime state beneath git metadata", () => {

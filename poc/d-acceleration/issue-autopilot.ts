@@ -5,6 +5,7 @@
  * inject those adapters, which keeps tests offline and makes the trust boundary
  * explicit. Official workflow state is changed only through EngineAdapter.
  */
+import { createHash } from "node:crypto";
 
 export type UncertaintyPolicy = "halt" | "assume" | "research";
 
@@ -98,11 +99,23 @@ export interface EngineAdapter {
   next(): Promise<OfficialDirective>;
   execute(directive: Readonly<OfficialDirective>): Promise<OfficialDirective>;
   reconcileIntent?(issueNumber: number): Promise<OfficialDirective | null>;
+  classifyCreateError?(error: unknown): "transient" | "ambiguous" | "fatal";
+}
+
+export type IntakeBinding = { provider: string; repository: string; issueNumber: number; intakeKey: string };
+export type IntakeBindingIdentity = Pick<IntakeBinding, "provider" | "repository">;
+export function intakeBindingKey(binding: IntakeBindingIdentity, issueNumber: number): string {
+  return createHash("sha256").update(`${binding.provider}\0${binding.repository}\0${issueNumber}`).digest("hex");
+}
+export interface IntakeBindingStore {
+  reserve(binding: IntakeBinding, owner: string): Promise<"reserved" | "pending" | "bound">;
+  finalize(binding: IntakeBinding, owner: string): Promise<void>;
 }
 
 export type IntakeSelection =
   | { issueNumber: number }
-  | { selectFromList: (issues: readonly IssueSummary[]) => Promise<number | null> };
+  | { selectFromList: (issues: readonly IssueSummary[]) => Promise<number | null> }
+  | { candidatesFromList: (issues: readonly IssueSummary[]) => Promise<readonly number[]> };
 
 export type AutopilotStopReason =
   | "disabled"
@@ -149,6 +162,8 @@ export type IssueAutopilotDependencies = {
   assessor: InputAssessor;
   assumptions: AssumptionLedger;
   engine: EngineAdapter;
+  bindings?: IntakeBindingStore;
+  sleep?: (milliseconds: number) => Promise<void>;
 };
 
 function validateConfig(config: IssueAutopilotConfig): void {
@@ -213,6 +228,7 @@ async function resolveIssue(selection: IntakeSelection, source: IssueSource): Pr
     if (!Number.isSafeInteger(selection.issueNumber) || selection.issueNumber <= 0) throw new Error("issue number must be a positive integer");
     return source.get(selection.issueNumber);
   }
+  if ("candidatesFromList" in selection) throw new Error("candidate lists must be resolved before single-Issue intake");
   const choices = (await source.list()).filter((issue) => Number.isSafeInteger(issue.number) && issue.number > 0);
   const selected = await selection.selectFromList(choices);
   if (selected === null) return "cancelled";
@@ -226,6 +242,7 @@ export async function runIssueAutopilot(input: {
   selection: IntakeSelection;
   owner: string;
   scope: string;
+  binding?: IntakeBindingIdentity;
   deps: IssueAutopilotDependencies;
 }): Promise<AutopilotResult> {
   const config = input.config ?? DEFAULT_ISSUE_AUTOPILOT_CONFIG;
@@ -233,6 +250,20 @@ export async function runIssueAutopilot(input: {
   if (!config.enabled) return { status: "stopped", reason: "disabled" };
   if (!input.owner.trim()) throw new Error("issue autopilot owner is required");
   if (!input.scope.trim()) throw new Error("issue autopilot scope is required");
+
+  if ("candidatesFromList" in input.selection) {
+    const choices = (await input.deps.issues.list()).filter((entry) => Number.isSafeInteger(entry.number) && entry.number > 0);
+    const candidates = await input.selection.candidatesFromList(choices);
+    if (!candidates.length) return { status: "stopped", reason: "selection-cancelled" };
+    let busy: AutopilotResult | undefined;
+    for (const candidate of candidates) {
+      if (!choices.some((entry) => entry.number === candidate)) throw new Error("candidate issue is not in the offered list");
+      const result = await runIssueAutopilot({ ...input, selection: { issueNumber: candidate } });
+      if (result.reason === "claim-busy") { busy = result; continue; }
+      return result;
+    }
+    return busy ?? { status: "stopped", reason: "selection-cancelled" };
+  }
 
   const issue = await resolveIssue(input.selection, input.deps.issues);
   if (issue === "cancelled") return { status: "stopped", reason: "selection-cancelled" };
@@ -265,6 +296,7 @@ export async function runIssueAutopilot(input: {
     // description and passed as one argv element; it is never interpreted here.
     const description = [
       `Implement GitHub issue #${issue.number}: ${issue.title}`,
+      ...(input.binding ? [`AIDLC-INTAKE: ${JSON.stringify({ ...input.binding, issueNumber: issue.number, intakeKey: intakeBindingKey(input.binding, issue.number) })}`] : []),
       "<untrusted-issue-body>",
       assessment.description,
       "</untrusted-issue-body>",
@@ -272,10 +304,18 @@ export async function runIssueAutopilot(input: {
     // Intent creation is non-idempotent. Reconcile from durable official state
     // before every create, so a later poll of the same Issue resumes the bound
     // intent instead of creating a duplicate.
+    const binding = input.binding ? { ...input.binding, issueNumber: issue.number, intakeKey: intakeBindingKey(input.binding, issue.number) } : undefined;
+    const reservation = binding && input.deps.bindings ? await input.deps.bindings.reserve(binding, input.owner) : "reserved";
     let created: { value?: OfficialDirective; attempts: number; error?: unknown } = { attempts: 0 };
     const reconcile = () => input.deps.engine.reconcileIntent?.(issue.number) ?? Promise.resolve(null);
     const existing = await reconcile();
-    if (existing) created = { value: existing, attempts: 0 };
+    if (existing) {
+      created = { value: existing, attempts: 0 };
+      if (binding && input.deps.bindings) await input.deps.bindings.finalize(binding, input.owner);
+    }
+    else if (reservation !== "reserved") {
+      return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: 0, detail: `intake binding is ${reservation}; durable reconciliation required` };
+    }
     else {
       // Creation is non-idempotent. A failed invocation is never retried until
       // durable official state has been reconciled for this exact Issue.
@@ -290,12 +330,15 @@ export async function runIssueAutopilot(input: {
           if (!input.deps.engine.reconcileIntent) break;
           const reconciled = await reconcile();
           if (reconciled) created.value = reconciled;
+          else if ((input.deps.engine.classifyCreateError?.(error) ?? "ambiguous") !== "transient") break;
+          else if (created.attempts <= config.maxRetries) await (input.deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(Math.min(1000, 50 * 2 ** (created.attempts - 1)));
         }
       }
     }
     if (!created.value) {
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };
     }
+    if (binding && input.deps.bindings) await input.deps.bindings.finalize(binding, input.owner);
     const result = { status: "stopped" as const, reason: "intent-created" as const, issueNumber: issue.number, attempts: created.attempts, directive: created.value };
     if (config.sessionAuto) {
       retainClaim = true;

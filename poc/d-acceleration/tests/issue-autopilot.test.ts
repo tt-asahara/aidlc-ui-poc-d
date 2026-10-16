@@ -98,11 +98,22 @@ describe("D issue intake/autopilot", () => {
     const retrying = fixture({ engine: {
       async createIntent() { events.push("create"); throw new Error("transient"); },
       async reconcileIntent() { events.push("reconcile"); return null; },
+      classifyCreateError() { return "transient"; },
       async next() { throw new Error("unused"); }, async execute(value) { return value; },
-    } });
+    }, sleep: async () => { events.push("backoff"); } });
     const retried = await runIssueAutopilot({ config: enabled({ maxRetries: 2 }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: retrying.deps });
     expect(retried).toMatchObject({ reason: "failure", attempts: 3 });
-    expect(events).toEqual(["reconcile", "create", "reconcile", "create", "reconcile", "create", "reconcile"]);
+    expect(events).toEqual(["reconcile", "create", "reconcile", "backoff", "create", "reconcile", "backoff", "create", "reconcile"]);
+
+    let ambiguousAttempts = 0, ambiguousReconciles = 0;
+    const ambiguous = fixture({ engine: {
+      async createIntent() { ambiguousAttempts += 1; throw new Error("connection closed after send"); },
+      async reconcileIntent() { ambiguousReconciles += 1; return null; },
+      classifyCreateError() { return "ambiguous"; },
+      async next() { throw new Error("unused"); }, async execute(value) { return value; },
+    } });
+    expect(await runIssueAutopilot({ config: enabled({ maxRetries: 2 }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: ambiguous.deps })).toMatchObject({ reason: "failure", attempts: 1 });
+    expect([ambiguousAttempts, ambiguousReconciles]).toEqual([1, 2]);
 
     const reconciled = fixture({ engine: { async createIntent() { throw new Error("response lost"); }, async reconcileIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } } });
     expect(await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true } });
@@ -114,6 +125,20 @@ describe("D issue intake/autopilot", () => {
     expect(result).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true }, hostControl: { through: "inception", maxSteps: 64, deadlineMs: 900000, claim: { issueNumber: 42, owner: "worker", leaseMs: 900000 } } });
     expect(gated.calls.releases).toEqual([]);
     expect(gated.calls.execute).toHaveLength(0);
+  });
+
+  test("list polling skips busy candidates but processes at most one", async () => {
+    const acquired: number[] = [], created: number[] = [];
+    const { deps } = fixture({
+      issues: {
+        async list() { return [41, 42, 43].map((number) => ({ number, title: `Issue ${number}`, labels: ["aidlc-auto"] })); },
+        async get(number) { return { number, title: `Issue ${number}`, body: "body", labels: ["aidlc-auto"], state: "open" }; },
+      },
+      claims: { async acquire(number) { acquired.push(number); return number < 43 ? "busy" : "acquired"; }, async release() {} },
+      engine: { async createIntent(args) { created.push(Number(/#(\d+)/.exec(args[5])![1])); return { kind: "ask" }; }, async next() { return { kind: "ask" }; }, async execute(value) { return value; } },
+    });
+    const result = await runIssueAutopilot({ config: enabled(), selection: { async candidatesFromList(choices) { return choices.map((entry) => entry.number); } }, owner: "worker", scope: "feature", deps });
+    expect(result.issueNumber).toBe(43); expect(acquired).toEqual([41, 42, 43]); expect(created).toEqual([43]);
   });
 
   test("issue text cannot enable auto, change settings, or stand in for approval", async () => {

@@ -66,6 +66,14 @@ describe("D source/spec grounding", () => {
     expect(result).toMatchObject({ action: "grounding-findings", verdict: "READY" });
   });
 
+  test("an evidenced refutation is NOT-READY regardless of advisory severity", async () => {
+    const projectDir = fixture();
+    for (const severity of ["info", "warn"] as const) {
+      const result = await runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity, claim: "artifact claims POST", evidencePaths: ["spec/api.md"], detail: "the specification only defines GET" }], uncertainty: [] }) });
+      expect(result).toMatchObject({ action: "grounding-findings", verdict: "NOT-READY" });
+    }
+  });
+
   test("rejects fabricated approval and evidence outside configured project", async () => {
     const projectDir = fixture();
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [], uncertainty: [], approval: "approved" }) })).rejects.toThrow("must not create or claim approval");

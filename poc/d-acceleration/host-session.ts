@@ -38,7 +38,7 @@ export function directiveProgressFingerprint(directive: Readonly<OfficialDirecti
 }
 
 export type HostSessionClaim = { issueNumber: number; owner: string; leaseMs: number };
-export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; endedAt?: number; terminalReason?: string };
+export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; endedAt?: number; terminalReason?: string };
 export function checkpointHostSession(state: HostSessionState, directive: Readonly<OfficialDirective>, now = Date.now()): { action: "continue" | "stop"; reason?: string; state: HostSessionState } {
   if (state.through && state.lastStage === state.through && directive.stage !== state.through) return { action: "stop", reason: "boundary-reached", state };
   if (now - state.startedAt >= state.deadlineMs) return { action: "stop", reason: "deadline-exceeded", state };

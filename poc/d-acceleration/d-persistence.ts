@@ -15,6 +15,9 @@ function git(projectDir: string, args: string[], input?: string) {
 function gitWithEnv(projectDir: string, args: string[], env: Record<string, string>, input?: string) {
   return spawnSync("git", args, { cwd: projectDir, input, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env } });
 }
+function gitBuffer(projectDir: string, args: string[], maxBuffer: number) {
+  return spawnSync("git", args, { cwd: projectDir, encoding: null, maxBuffer, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+}
 function out(projectDir: string, args: string[]): string {
   const r = git(projectDir, args); if (r.status !== 0) throw new Error((r.stderr || r.stdout || `git ${args[0]} failed`).trim()); return r.stdout.trim();
 }
@@ -33,12 +36,15 @@ const HIGH_CONFIDENCE_SECRETS: ReadonlyArray<{ kind: string; pattern: RegExp }> 
 
 /** Persistence always scans the exact approved manifest; this is not optional. */
 export function detectHighConfidenceSecret(bytes: Buffer): string | null {
-  // NUL-heavy/binary files are not decoded as credential-bearing text. Path
-  // policy and the 2 MiB inspection cap still apply to them.
+  // Known credential families are ASCII, so check them before classifying a
+  // NUL-heavy payload as binary. Prefixing a token with binary bytes must not
+  // turn the mandatory scan into a bypass.
+  const text = bytes.toString("latin1");
+  const match = HIGH_CONFIDENCE_SECRETS.find(({ pattern }) => pattern.test(text))?.kind;
+  if (match) return match;
   const sample = bytes.subarray(0, Math.min(bytes.length, 8192));
   if (sample.length && sample.filter((byte) => byte === 0).length / sample.length > 0.05) return null;
-  const text = bytes.toString("utf8");
-  return HIGH_CONFIDENCE_SECRETS.find(({ pattern }) => pattern.test(text))?.kind ?? null;
+  return null;
 }
 
 function normalizeManifest(projectDir: string, paths: string[]): string[] {
@@ -303,15 +309,33 @@ function stagedWithIndex(projectDir: string, indexPath: string): string[] {
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "cannot inspect isolated persistence index").trim());
   return result.stdout.split("\0").filter(Boolean).sort();
 }
-function scanIndexManifest(projectDir: string, indexPath: string, paths: string[]): void {
+function scanTreeManifest(projectDir: string, tree: string, paths: string[]): void {
   for (const path of paths) {
-    const blob = gitWithEnv(projectDir, ["show", `:${path}`], { GIT_INDEX_FILE: indexPath });
-    if (blob.status !== 0) continue;
-    const bytes = Buffer.from(blob.stdout, "utf8");
-    if (bytes.length > 2_000_000) throw new Error(`persistence manifest file is too large to inspect after hooks: ${path}`);
+    const entry = gitBuffer(projectDir, ["ls-tree", "-z", tree, "--", path], 64_000);
+    if (entry.status !== 0 || entry.error) throw new Error(`cannot inspect hook-produced tree entry: ${path}`);
+    if (!entry.stdout.length) continue; // an exact-path deletion has no blob
+    const size = git(projectDir, ["cat-file", "-s", `${tree}:${path}`]);
+    if (size.status !== 0 || !/^\d+\n?$/.test(size.stdout)) throw new Error(`cannot inspect hook-produced tree blob: ${path}`);
+    if (Number(size.stdout.trim()) > 2_000_000) throw new Error(`persistence manifest file is too large to inspect after hooks: ${path}`);
+    const blob = gitBuffer(projectDir, ["cat-file", "blob", `${tree}:${path}`], 2_100_000);
+    if (blob.status !== 0 || blob.error) throw new Error(`cannot read hook-produced tree blob for secret inspection: ${path}`);
+    const bytes = blob.stdout;
     const secret = detectHighConfidenceSecret(bytes);
-    if (secret) throw new Error(`high-confidence ${secret} detected in hook-updated persistence index: ${path}`);
+    if (secret) throw new Error(`high-confidence ${secret} detected in hook-produced persistence tree: ${path}`);
   }
+}
+function validatedCommitMessage(messagePath: string, receipt: string, approval: "pass" | "override"): string {
+  const bytes = readFileSync(messagePath);
+  if (bytes.length > 2_000_000) throw new Error("hook-updated persistence commit message is too large to inspect");
+  const secret = detectHighConfidenceSecret(bytes);
+  if (secret) throw new Error(`high-confidence ${secret} detected in hook-updated persistence commit message`);
+  const text = bytes.toString("utf8");
+  const receiptTrailer = `AI-DLC-Receipt: ${receipt}`;
+  const approvalTrailer = `AI-DLC-Approval: ${approval}`;
+  if (text.split("\n").filter((line) => line === receiptTrailer).length !== 1 || text.split("\n").filter((line) => line === approvalTrailer).length !== 1) {
+    throw new Error("hook removed or changed a required AI-DLC persistence trailer");
+  }
+  return text;
 }
 function runHook(projectDir: string, indexPath: string, name: string, args: string[] = []): void {
   const result = gitWithEnv(projectDir, ["hook", "run", "--ignore-missing", name, "--", ...args], { GIT_INDEX_FILE: indexPath });
@@ -389,14 +413,22 @@ export function persistCrossing(projectDir: string, config: DGitPersistenceConfi
       runHook(projectDir, isolatedIndex, "commit-msg", [messagePath]);
       const hookPaths = stagedWithIndex(projectDir, isolatedIndex);
       if (hookPaths.join("\0") !== cached.join("\0")) throw new Error("hook changed the exact persistence path set; commit suppressed");
-      scanIndexManifest(projectDir, isolatedIndex, cached);
       const tree = gitWithEnv(projectDir, ["write-tree"], indexEnv);
       if (tree.status !== 0) throw new Error((tree.stderr || tree.stdout).trim());
-      const committed = gitWithEnv(projectDir, ["commit-tree", tree.stdout.trim(), "-p", head, "-F", messagePath], indexEnv);
+      const treeOid = tree.stdout.trim();
+      scanTreeManifest(projectDir, treeOid, cached);
+      const finalMessage = validatedCommitMessage(messagePath, crossing.receipt, crossing.approvalOutcome ?? "pass");
+      const committed = gitWithEnv(projectDir, ["commit-tree", treeOid, "-p", head, "-F", "-"], indexEnv, finalMessage);
       if (committed.status !== 0) throw new Error((committed.stderr || committed.stdout || "git commit-tree failed").trim());
       const oid = committed.stdout.trim();
+      if (out(projectDir, ["symbolic-ref", "--short", "HEAD"]) !== branch || out(projectDir, ["rev-parse", `refs/heads/${branch}`]) !== head) {
+        throw new Error("checked-out branch or checkpoint parent changed before ref update");
+      }
       const updated = git(projectDir, ["update-ref", `refs/heads/${branch}`, oid, head]);
       if (updated.status !== 0) throw new Error("checkpoint parent changed unexpectedly; commit was not attached to the branch");
+      if (out(projectDir, ["symbolic-ref", "--short", "HEAD"]) !== branch || out(projectDir, ["rev-parse", "HEAD"]) !== oid) {
+        throw new Error("checked-out branch changed during checkpoint; primary index was not refreshed");
+      }
       const refresh = git(projectDir, ["reset", "--mixed", oid, "--", ...cached]);
       if (refresh.status !== 0) throw new Error((refresh.stderr || refresh.stdout || "cannot refresh persistence paths in the primary index").trim());
       runHook(projectDir, isolatedIndex, "post-commit");

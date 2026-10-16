@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 
 const cli = join(import.meta.dir, "..", "d-feature-checks.ts");
 const boundary = join(import.meta.dir, "..", "host-stage-boundary.ts");
+const publicCli = join(import.meta.dir, "..", "run.ts");
 function project(config: unknown) { const root = mkdtempSync(join(tmpdir(), "d-feature-entry-")); mkdirSync(join(root, ".claude")); writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify(config)); return root; }
 function run(root: string) { return spawnSync(process.execPath, [cli, "--project-dir", root, "--input", "input.json"], { cwd: root, encoding: "utf8" }); }
 function officialDirective(stage = "functional-design", unit?: string) {
@@ -40,7 +41,7 @@ describe("installed D feature-check entry", () => {
     writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "refined-mockups", traceabilityPath: "trace.json", uiContractPath: "ui.json" }));
     const result = run(root); expect(result.status).toBe(2); expect(JSON.parse(result.stdout).notReady).toContain("requirementIdValidation");
   });
-  test("requires a valid, fresh, exact official non-gate directive including Unit state", () => {
+  test("requires a valid, fresh, exact official run-stage directive including Unit state", () => {
     const root = project({}); writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", unit: "alpha" }));
     writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "run-stage", stage: "functional-design" }));
     let result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, officialDirective("functional-design", "alpha"))], { cwd: root, encoding: "utf8" });
@@ -50,7 +51,27 @@ describe("installed D feature-check entry", () => {
     expect(result.status).not.toBe(0); expect(result.stderr).toContain("stale or does not match");
     const gated = { ...saved, gate: true }; writeFileSync(join(root, "directive.json"), JSON.stringify(gated));
     result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, gated)], { cwd: root, encoding: "utf8" });
-    expect(result.status).not.toBe(0); expect(result.stderr).toContain("active non-gate");
+    expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ status: "disabled-or-not-applicable" });
+    const ask = { kind: "ask", ask_type: "scope-confirm", response_route: "next", question: "Continue?", proposed_scope: "feature", confirm_command: "aidlc engine orchestrate next --scope feature", compose_command: "aidlc engine orchestrate next compose", scope_commands: [], choices: [{ label: "Continue", command: "aidlc engine orchestrate next --scope feature" }, { label: "Tailor", command: "aidlc engine orchestrate next compose" }] };
+    writeFileSync(join(root, "directive.json"), JSON.stringify(ask));
+    result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, ask)], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("active run-stage directive");
+  });
+  test("public CLI cannot bypass the verified host boundary", () => {
+    const root = project({});
+    const tools = join(root, ".claude", "tools"); mkdirSync(join(root, ".claude", "sensors"), { recursive: true }); mkdirSync(join(tools, "ui-poc"), { recursive: true }); mkdirSync(join(tools, "data"), { recursive: true });
+    for (const path of [join(root, ".claude", "sensors", "aidlc-ui-poc-evidence.md"), join(tools, "ui-poc", "c-stage-routing.json"), join(tools, "data", "plugin-contrib-ui-poc.json"), join(tools, "data", "plugin-files-ui-poc.json")]) writeFileSync(path, "{}");
+    writeFileSync(join(tools, "aidlc-orchestrate.ts"), "process.exit(99);\n");
+    writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design" }));
+    let result = spawnSync(process.execPath, [publicCli, "--project-dir", root, "--stage-check-input", "input.json"], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("requires --directive-file");
+    const directive = { ...officialDirective(), gate: true }; writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
+    writeFileSync(join(tools, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify({ directive })}\n`)});\n`);
+    result = spawnSync(process.execPath, [publicCli, "--project-dir", root, "--stage-check-input", "input.json", "--directive-file", "directive.json"], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ status: "disabled-or-not-applicable", stage: "functional-design" });
+    writeFileSync(join(root, "directive.json"), JSON.stringify({ ...directive, stage: "code-generation" }));
+    result = spawnSync(process.execPath, [publicCli, "--project-dir", root, "--stage-check-input", "input.json", "--directive-file", "directive.json"], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("stage mismatch");
   });
   test("rejects input and output paths outside the product", () => {
     const root = project({ features: { requirementIdValidation: true } });

@@ -16,7 +16,9 @@ if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabl
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");
 if (stageCheckInput) {
-  const check = spawnSync(process.execPath, [join(import.meta.dir, "d-feature-checks.ts"), "--project-dir", projectDir, "--input", stageCheckInput], { cwd: projectDir, encoding: "utf8" });
+  const directiveFile = value("--directive-file");
+  if (!directiveFile) throw new Error("--stage-check-input requires --directive-file so the official stage boundary can be verified");
+  const check = spawnSync(process.execPath, [join(import.meta.dir, "host-stage-boundary.ts"), "--project-dir", projectDir, "--directive-file", directiveFile, "--manifest", stageCheckInput, "--engine-dir", tools], { cwd: projectDir, encoding: "utf8" });
   process.stdout.write(check.stdout); process.stderr.write(check.stderr); process.exit(check.status ?? 1);
 }
 const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });

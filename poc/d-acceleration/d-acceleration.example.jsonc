@@ -17,11 +17,11 @@
   "features": {
     // 機能21 / 対象: refined-mockupsとfunctional-designの成果物作成後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: CのUI契約と公式traceability（機能22/27/28には非依存）。利用場面: C UI契約を使う案件。
     "requirementIdValidation": false,
-    // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。利用場面: 大規模Unitの設計文書を統制するとき。
+    // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: 機能21/27/28には非依存、functionalDesignBudgetsだけを使用。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
-    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。利用場面: brownfield設計。roots空では停止する。
+    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須で空なら停止。利用場面: brownfield設計。
     "sourceGrounding": false,
-    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。利用場面: 外部仕様準拠が必要な案件。roots空では停止する。
+    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須で空なら停止。利用場面: 外部仕様準拠が必要な案件。
     "specGrounding": false,
   },
   "featureInputs": {
@@ -45,7 +45,7 @@
     "ambiguityPolicy": "halt",
     // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
     "assumptionLedger": true,
-    // 一時失敗時のbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとに公式状態をIssue番号で再照合できる場合だけ再試行し、照合不能時は停止する。
+    // 明示的な一時失敗時の指数backoff付きbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとにprovider/repository/Issue番号の構造化keyで公式状態を再照合できる場合だけ再試行し、曖昧・認証・入力失敗や照合不能時は停止する。
     "maxRetries": 2,
     // 自動進行の最大公式directive数。no-progress検出とは別のhard stop。既定値: 64。
     "maxSteps": 64,

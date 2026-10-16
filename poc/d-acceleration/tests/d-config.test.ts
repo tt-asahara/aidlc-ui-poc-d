@@ -57,5 +57,11 @@ describe("D JSONC configuration", () => {
       expect(comment).toContain("既定値:");
       expect(comment).toContain("利用場面:");
     }
+    const featureComments = lines.slice(lines.findIndex((line) => line.includes('"features"')), lines.findIndex((line) => line.includes('"featureInputs"'))).join("\n");
+    for (const id of ["機能21", "機能22", "機能27", "機能28"]) expect(featureComments).toContain(id);
+    expect(featureComments.match(/既定値: OFF/g)).toHaveLength(4);
+    expect(featureComments.match(/依存関係:/g)).toHaveLength(4);
+    expect(featureComments).toContain("sourceRoots必須で空なら停止");
+    expect(featureComments).toContain("specRoots必須で空なら停止");
   });
 });
