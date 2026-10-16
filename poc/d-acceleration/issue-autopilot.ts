@@ -127,7 +127,7 @@ export type AutopilotResult = {
   attempts?: number;
   detail?: string;
   directive?: OfficialDirective;
-  hostControl?: { through: string | null; maxSteps: number; deadlineMs: number };
+  hostControl?: { through: string | null; maxSteps: number; deadlineMs: number; claim: { issueNumber: number; owner: string; leaseMs: number } };
 };
 
 /** Serializable status for `/loop` output; it grants no execution authority. */
@@ -208,20 +208,6 @@ function slug(title: string, number: number): string {
   return value || `issue-${number}`;
 }
 
-async function withRetries<T>(limit: number, operation: () => Promise<T>): Promise<{ value?: T; attempts: number; error?: unknown }> {
-  let attempts = 0;
-  let error: unknown;
-  while (attempts <= limit) {
-    attempts += 1;
-    try {
-      return { value: await operation(), attempts };
-    } catch (caught) {
-      error = caught;
-    }
-  }
-  return { attempts, error };
-}
-
 async function resolveIssue(selection: IntakeSelection, source: IssueSource): Promise<Issue | null | "cancelled"> {
   if ("issueNumber" in selection) {
     if (!Number.isSafeInteger(selection.issueNumber) || selection.issueNumber <= 0) throw new Error("issue number must be a positive integer");
@@ -258,6 +244,7 @@ export async function runIssueAutopilot(input: {
     return { status: "stopped", reason: "claim-busy", issueNumber: issue.number };
   }
 
+  let retainClaim = false;
   try {
     const assessment = await input.deps.assessor.assess(Object.freeze(structuredClone(issue)), config.uncertaintyPolicy);
     if (assessment.unresolved.length > 0 && config.uncertaintyPolicy === "halt") {
@@ -285,24 +272,37 @@ export async function runIssueAutopilot(input: {
     // Intent creation is non-idempotent. Reconcile from durable official state
     // before every create, so a later poll of the same Issue resumes the bound
     // intent instead of creating a duplicate.
-    let created: { value?: OfficialDirective; attempts: number; error?: unknown };
-    const existing = await input.deps.engine.reconcileIntent?.(issue.number);
-    if (existing) {
-      created = { value: existing, attempts: 0 };
-    } else {
-      try {
-        created = { value: await input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]), attempts: 1 };
-      } catch (error) {
-        const reconciled = await input.deps.engine.reconcileIntent?.(issue.number);
-        created = reconciled ? { value: reconciled, attempts: 1 } : { attempts: 1, error };
+    let created: { value?: OfficialDirective; attempts: number; error?: unknown } = { attempts: 0 };
+    const reconcile = () => input.deps.engine.reconcileIntent?.(issue.number) ?? Promise.resolve(null);
+    const existing = await reconcile();
+    if (existing) created = { value: existing, attempts: 0 };
+    else {
+      // Creation is non-idempotent. A failed invocation is never retried until
+      // durable official state has been reconciled for this exact Issue.
+      while (created.attempts <= config.maxRetries && !created.value) {
+        created.attempts += 1;
+        try {
+          created.value = await input.deps.engine.createIntent(["--new-intent", "--scope", input.scope, "--label", slug(issue.title, issue.number), description]);
+        } catch (error) {
+          created.error = error;
+          // Without a durable reconciliation adapter there is no safe way to
+          // distinguish "failed" from "created but response lost".
+          if (!input.deps.engine.reconcileIntent) break;
+          const reconciled = await reconcile();
+          if (reconciled) created.value = reconciled;
+        }
       }
     }
     if (!created.value) {
       return { status: "stopped", reason: "failure", issueNumber: issue.number, attempts: created.attempts, detail: String(created.error) };
     }
     const result = { status: "stopped" as const, reason: "intent-created" as const, issueNumber: issue.number, attempts: created.attempts, directive: created.value };
-    return config.sessionAuto ? { ...result, hostControl: { through: config.through ?? null, maxSteps: config.maxSteps, deadlineMs: config.deadlineMs } } : result;
+    if (config.sessionAuto) {
+      retainClaim = true;
+      return { ...result, hostControl: { through: config.through ?? null, maxSteps: config.maxSteps, deadlineMs: config.deadlineMs, claim: { issueNumber: issue.number, owner: input.owner, leaseMs: config.deadlineMs } } };
+    }
+    return result;
   } finally {
-    await input.deps.claims.release(issue.number, input.owner);
+    if (!retainClaim) await input.deps.claims.release(issue.number, input.owner);
   }
 }

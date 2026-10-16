@@ -13,7 +13,7 @@ export function resolveThroughBoundary(value: string | undefined, activeStages: 
   }
   const matches = policy.stages.filter((entry) => entry.phase === value && active.has(entry.stage));
   if (!matches.length) throw new Error(`through phase has no active stage in this scope: ${value}`);
-  return matches.at(-1)!.stage;
+  return matches[matches.length - 1].stage;
 }
 
 export function directiveProgressFingerprint(directive: Readonly<OfficialDirective>): string {
@@ -23,14 +23,22 @@ export function directiveProgressFingerprint(directive: Readonly<OfficialDirecti
     kind: directive.kind, stage: directive.stage ?? null, gate: directive.gate ?? null,
     unit: typeof unit === "string" ? unit : unit?.slug ?? unit?.name ?? null,
     waveBatch: wave?.batch_index ?? wave?.batchIndex ?? null,
-    waveUnits: Array.isArray(wave?.entries) ? (wave!.entries as Array<Record<string, unknown>>).map((entry) => entry.unit ?? entry.slug) : [],
+    waveUnits: Array.isArray(wave?.entries) ? (wave.entries as Array<Record<string, unknown>>).map((entry) => entry.unit ?? entry.slug) : [],
     attempt: directive.attempt ?? directive.attempt_id ?? null,
     reviewIteration: directive.review_iteration ?? directive.reviewIteration ?? null,
     reviewState: directive.review_state ?? null,
+    // Steering can be streamed in several otherwise-identical parts.  These
+    // official continuation tokens are progress; omitting them makes part 2
+    // look like a replay of part 1 and stops before the stage body is loaded.
+    part: directive.part ?? null,
+    parts: directive.parts ?? directive.total_parts ?? null,
+    receipt: directive.receipt ?? null,
+    progressToken: directive.progress_token ?? directive.progressToken ?? directive.cursor ?? null,
   });
 }
 
-export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; lastFingerprint?: string; lastStage?: string };
+export type HostSessionClaim = { issueNumber: number; owner: string; leaseMs: number };
+export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; endedAt?: number; terminalReason?: string };
 export function checkpointHostSession(state: HostSessionState, directive: Readonly<OfficialDirective>, now = Date.now()): { action: "continue" | "stop"; reason?: string; state: HostSessionState } {
   if (state.through && state.lastStage === state.through && directive.stage !== state.through) return { action: "stop", reason: "boundary-reached", state };
   if (now - state.startedAt >= state.deadlineMs) return { action: "stop", reason: "deadline-exceeded", state };
@@ -38,6 +46,7 @@ export function checkpointHostSession(state: HostSessionState, directive: Readon
   const fingerprint = directiveProgressFingerprint(directive);
   if (fingerprint === state.lastFingerprint) return { action: "stop", reason: "no-progress", state };
   const next = { ...state, steps: state.steps + 1, lastFingerprint: fingerprint, lastStage: directive.stage ?? state.lastStage };
+  if (directive.completed || directive.kind === "complete") return { action: "stop", reason: "complete", state: next };
   // run-stage gate:true means execute the stage and then enter its approval
   // protocol. Only an actual ask is already waiting on the human.
   if (directive.kind === "ask") return { action: "stop", reason: "human-gate", state: next };

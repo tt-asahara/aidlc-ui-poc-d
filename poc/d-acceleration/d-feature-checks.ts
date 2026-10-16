@@ -24,13 +24,13 @@ const manifest = JSON.parse(readFileSync(bounded(inputPath), "utf8")) as Manifes
 const config = resolveDConfig(projectDir), readJson = (path: string) => JSON.parse(readFileSync(bounded(path), "utf8"));
 const results: Record<string, unknown> = {}, notReady: string[] = [];
 const applicableEnabled =
-  (config.features.requirementIdValidation && ["ui-ux-design", "functional-design"].includes(manifest.stage)) ||
+  (config.features.requirementIdValidation && ["refined-mockups", "functional-design"].includes(manifest.stage)) ||
   (config.features.functionalDesignDocumentDiscipline && manifest.stage === "functional-design") ||
   (config.features.sourceGrounding && manifest.stage === "domain-design") ||
   (config.features.specGrounding && ["domain-design", "functional-design", "code-generation"].includes(manifest.stage));
 if (!applicableEnabled) { process.stdout.write(`${JSON.stringify({ status: "disabled-or-not-applicable", stage: manifest.stage, reads: 0, workerCalls: 0, artifactsWritten: 0 })}\n`); process.exit(0); }
 
-if (config.features.requirementIdValidation && ["ui-ux-design", "functional-design"].includes(manifest.stage)) {
+if (config.features.requirementIdValidation && ["refined-mockups", "functional-design"].includes(manifest.stage)) {
   if (!manifest.traceabilityPath || !manifest.uiContractPath) throw new Error("enabled requirement ID validation requires traceabilityPath and uiContractPath");
   const result = runRequirementUiCrossValidation(true, () => ({ traceability: readJson(manifest.traceabilityPath!), contract: readJson(manifest.uiContractPath!), bridges: config.featureInputs.requirementIdBridges }));
   results.requirementIdValidation = result; if (!result.pass) notReady.push("requirementIdValidation");

@@ -51,6 +51,21 @@ describe("D source/spec grounding", () => {
     if (result.action === "grounding-findings") expect(result.findings[0]?.evidencePaths[0]).toBe(realpathSync(join(projectDir, "src", "orders.ts")));
   });
 
+  test("fails closed for an empty result and rejects evidence-free assertions", async () => {
+    const projectDir = fixture();
+    const base = { lane: "spec" as const, stage: "domain-design" as const, projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } } };
+    const empty = await runGrounding({ ...base, worker: async () => ({ findings: [], uncertainty: [] }) });
+    expect(empty).toMatchObject({ action: "grounding-findings", verdict: "NOT-READY", findings: [] });
+    await expect(runGrounding({ ...base, worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "route exists", evidencePaths: [], detail: "asserted without a source" }], uncertainty: [] }) })).rejects.toThrow("requires at least one evidence path");
+    await expect(runGrounding({ ...base, worker: async () => ({ findings: [{ code: "refuted", severity: "warn", claim: "route absent", evidencePaths: [], detail: "asserted without a source" }], uncertainty: [] }) })).rejects.toThrow("requires at least one evidence path");
+  });
+
+  test("accepts a fully evidenced finding as READY", async () => {
+    const projectDir = fixture();
+    const result = await runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "orders endpoint is specified", evidencePaths: ["spec/api.md"], detail: "the endpoint is present literally" }], uncertainty: [] }) });
+    expect(result).toMatchObject({ action: "grounding-findings", verdict: "READY" });
+  });
+
   test("rejects fabricated approval and evidence outside configured project", async () => {
     const projectDir = fixture();
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [], uncertainty: [], approval: "approved" }) })).rejects.toThrow("must not create or claim approval");

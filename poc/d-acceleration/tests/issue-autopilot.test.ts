@@ -94,6 +94,16 @@ describe("D issue intake/autopilot", () => {
     expect(result).toMatchObject({ reason: "failure", attempts: 1 });
     expect(attempts).toBe(1);
 
+    const events: string[] = [];
+    const retrying = fixture({ engine: {
+      async createIntent() { events.push("create"); throw new Error("transient"); },
+      async reconcileIntent() { events.push("reconcile"); return null; },
+      async next() { throw new Error("unused"); }, async execute(value) { return value; },
+    } });
+    const retried = await runIssueAutopilot({ config: enabled({ maxRetries: 2 }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: retrying.deps });
+    expect(retried).toMatchObject({ reason: "failure", attempts: 3 });
+    expect(events).toEqual(["reconcile", "create", "reconcile", "create", "reconcile", "create", "reconcile"]);
+
     const reconciled = fixture({ engine: { async createIntent() { throw new Error("response lost"); }, async reconcileIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } } });
     expect(await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true } });
   });
@@ -101,7 +111,8 @@ describe("D issue intake/autopilot", () => {
   test("session auto delegates exact official directives to the bounded host", async () => {
     const gated = fixture({ engine: { async createIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("must not run"); }, async execute() { throw new Error("must not run"); } } });
     const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true, through: "inception" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: gated.deps });
-    expect(result).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true }, hostControl: { through: "inception", maxSteps: 64, deadlineMs: 900000 } });
+    expect(result).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true }, hostControl: { through: "inception", maxSteps: 64, deadlineMs: 900000, claim: { issueNumber: 42, owner: "worker", leaseMs: 900000 } } });
+    expect(gated.calls.releases).toEqual([]);
     expect(gated.calls.execute).toHaveLength(0);
   });
 

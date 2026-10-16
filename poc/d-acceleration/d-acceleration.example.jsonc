@@ -15,7 +15,7 @@
     "remote": "origin",
   },
   "features": {
-    // 機能21 / 対象: ui-ux-designのrefined handoffとfunctional-design完了後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。利用場面: C UI契約を使う案件。
+    // 機能21 / 対象: refined-mockupsとfunctional-designの成果物作成後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: CのUI契約と公式traceability（機能22/27/28には非依存）。利用場面: C UI契約を使う案件。
     "requirementIdValidation": false,
     // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
@@ -45,7 +45,7 @@
     "ambiguityPolicy": "halt",
     // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
     "assumptionLedger": true,
-    // claim失敗等のbounded retry回数（0〜10）。既定値: 2。
+    // 一時失敗時のbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとに公式状態をIssue番号で再照合できる場合だけ再試行し、照合不能時は停止する。
     "maxRetries": 2,
     // 自動進行の最大公式directive数。no-progress検出とは別のhard stop。既定値: 64。
     "maxSteps": 64,

@@ -180,7 +180,7 @@ describe("D approval persistence", () => {
   test("keeps ordinary hooks and restores its index ownership on hook failure", () => {
     const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
     const hook = join(root, ".git", "hooks", "pre-commit"); writeFileSync(hook, "#!/bin/sh\nexit 1\n"); chmodSync(hook, 0o755);
-    expect(() => persistCrossing(root, commit, crossing())).toThrow("git commit failed");
+    expect(() => persistCrossing(root, commit, crossing())).toThrow("pre-commit hook failed");
     expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
     expect(readFileSync(join(root, "aidlc/result.md"), "utf8")).toBe("approved\n");
   });
@@ -188,9 +188,33 @@ describe("D approval persistence", () => {
   test("a hook-added external path cannot enter the checkpoint commit", () => {
     const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n"); writeFileSync(join(root, "hook-owned.txt"), "hook\n");
     const hook = join(root, ".git", "hooks", "pre-commit"); writeFileSync(hook, "#!/bin/sh\ngit add hook-owned.txt\n"); chmodSync(hook, 0o755);
-    expect(() => persistCrossing(root, commit, crossing())).toThrow("rolled back");
+    expect(() => persistCrossing(root, commit, crossing())).toThrow("path set");
     expect(run(root, ["git", "show", "--pretty=", "--name-only", "HEAD"])).toBe("README.md");
-    expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("hook-owned.txt");
+    expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
+    expect(readFileSync(join(root, "hook-owned.txt"), "utf8")).toBe("hook\n");
+  });
+
+  test("rescans the hook-updated manifest blob before any commit object is created", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+    const beforeObjects = run(root, ["git", "count-objects", "-v"]);
+    const hook = join(root, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' 'AKIAABCDEFGHIJKLMNOP' > aidlc/result.md\ngit add aidlc/result.md\n`); chmodSync(hook, 0o755);
+    expect(() => persistCrossing(root, commit, crossing())).toThrow(/hook-updated persistence index/);
+    expect(run(root, ["git", "rev-list", "--count", "HEAD"])).toBe("1");
+    expect(run(root, ["git", "show", "HEAD:README.md"])).toBe("base");
+    expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
+    expect(readFileSync(join(root, "aidlc/result.md"), "utf8")).toBe("AKIAABCDEFGHIJKLMNOP\n");
+    // Blob objects written by git add are harmless; there must be no new commit.
+    expect(run(root, ["git", "count-objects", "-v"])).not.toBe(beforeObjects);
+  });
+
+  test("runs ordinary hooks against the isolated candidate and commits their safe manifest update", () => {
+    const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "approved\n");
+    const hook = join(root, ".git", "hooks", "pre-commit");
+    writeFileSync(hook, "#!/bin/sh\nprintf '%s\\n' 'approved by hook' > aidlc/result.md\ngit add aidlc/result.md\n"); chmodSync(hook, 0o755);
+    expect(persistCrossing(root, commit, crossing()).status).toBe("committed");
+    expect(run(root, ["git", "show", "HEAD:aidlc/result.md"])).toBe("approved by hook");
+    expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
   });
 
   test("records a fixed pending refspec and resumes the same push", () => {

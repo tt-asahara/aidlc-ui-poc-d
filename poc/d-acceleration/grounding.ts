@@ -65,6 +65,9 @@ function validateResult(value: GroundingWorkerResult, projectDir: string, eviden
     }
     const evidencePaths = finding.evidencePaths.map((path) => boundedExistingPath(projectDir, path));
     if (evidencePaths.some((path) => !insideAnyRoot(path, evidenceRoots))) throw new Error("grounding evidence path is outside configured roots");
+    if ((finding.code === "confirmed" || finding.code === "refuted") && evidencePaths.length === 0) {
+      throw new Error(`grounding ${finding.code} finding requires at least one evidence path`);
+    }
     return { ...finding, evidencePaths };
   });
   return { findings, uncertainty: value.uncertainty.map((item) => String(item).trim()).filter(Boolean) };
@@ -124,7 +127,7 @@ export async function runGrounding(input: {
     workerCalls: 1,
     artifactsWritten: 0,
     reviewsRun: 0,
-    verdict: result.uncertainty.length > 0 || result.findings.some((finding) => finding.severity === "error" || finding.code === "grounding-unavailable") ? "NOT-READY" : "READY",
+    verdict: result.findings.length === 0 || result.uncertainty.length > 0 || result.findings.some((finding) => finding.severity === "error" || finding.code === "grounding-unavailable") ? "NOT-READY" : "READY",
     findings: result.findings,
     uncertainty: result.uncertainty,
     approvalRecorded: false,

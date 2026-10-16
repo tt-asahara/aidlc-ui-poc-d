@@ -900,7 +900,7 @@ function buildTree(
       }
       const destination = join(treeRoot, "tools", "d-acceleration", file);
       mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts") {
+      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts") {
         const projected = readFileSync(source, "utf8").replace(
           'from "../../core/tools/aidlc-directive.ts"',
           'from "../aidlc-directive.ts"',

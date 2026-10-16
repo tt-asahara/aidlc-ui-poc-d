@@ -12,6 +12,9 @@ export type PersistenceResult = { status: "disabled" | "deferred" | "committed" 
 function git(projectDir: string, args: string[], input?: string) {
   return spawnSync("git", args, { cwd: projectDir, input, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
+function gitWithEnv(projectDir: string, args: string[], env: Record<string, string>, input?: string) {
+  return spawnSync("git", args, { cwd: projectDir, input, encoding: "utf8", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env } });
+}
 function out(projectDir: string, args: string[]): string {
   const r = git(projectDir, args); if (r.status !== 0) throw new Error((r.stderr || r.stdout || `git ${args[0]} failed`).trim()); return r.stdout.trim();
 }
@@ -295,6 +298,25 @@ function mainCheckoutOnly(projectDir: string): boolean {
 }
 function operationInProgress(projectDir: string): boolean { const gd = resolve(projectDir, out(projectDir, ["rev-parse", "--git-dir"])); return ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"].some((p) => existsSync(join(gd, p))); }
 function staged(projectDir: string): string[] { return out(projectDir, ["diff", "--cached", "--name-only", "-z"]).split("\0").filter(Boolean).sort(); }
+function stagedWithIndex(projectDir: string, indexPath: string): string[] {
+  const result = gitWithEnv(projectDir, ["diff", "--cached", "--name-only", "-z"], { GIT_INDEX_FILE: indexPath });
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || "cannot inspect isolated persistence index").trim());
+  return result.stdout.split("\0").filter(Boolean).sort();
+}
+function scanIndexManifest(projectDir: string, indexPath: string, paths: string[]): void {
+  for (const path of paths) {
+    const blob = gitWithEnv(projectDir, ["show", `:${path}`], { GIT_INDEX_FILE: indexPath });
+    if (blob.status !== 0) continue;
+    const bytes = Buffer.from(blob.stdout, "utf8");
+    if (bytes.length > 2_000_000) throw new Error(`persistence manifest file is too large to inspect after hooks: ${path}`);
+    const secret = detectHighConfidenceSecret(bytes);
+    if (secret) throw new Error(`high-confidence ${secret} detected in hook-updated persistence index: ${path}`);
+  }
+}
+function runHook(projectDir: string, indexPath: string, name: string, args: string[] = []): void {
+  const result = gitWithEnv(projectDir, ["hook", "run", "--ignore-missing", name, "--", ...args], { GIT_INDEX_FILE: indexPath });
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout || `${name} hook failed`).trim());
+}
 function acquireLock(path: string): number | null {
   for (let attempt = 0; attempt < 2; attempt++) {
     try { const fd = openSync(path, "wx", 0o600); writeFileSync(fd, `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`); return fd; }
@@ -349,46 +371,42 @@ export function persistCrossing(projectDir: string, config: DGitPersistenceConfi
     const manifest = normalizeManifest(projectDir, crossing.manifest);
     if (!manifest.length) return { status: "deferred", reason: "empty persistence manifest" };
     const head = out(projectDir, ["rev-parse", "HEAD"]);
-    let cached: string[] = [];
-    const add = git(projectDir, ["add", "--", ...manifest]);
-    if (add.status !== 0) {
-      const partial = staged(projectDir);
-      if (out(projectDir, ["rev-parse", "HEAD"]) === head && partial.every((path) => manifest.includes(path))) git(projectDir, ["reset", "--mixed", "HEAD", "--", ...partial]);
-      throw new Error((add.stderr || add.stdout).trim());
-    }
-    cached = staged(projectDir);
-    if (cached.some((path) => !manifest.includes(path))) {
-      throw new Error("staged path set contains a path outside the exact manifest; automatic cleanup is unsafe");
-    }
-    if (!cached.length) return { status: "deferred", reason: "manifest has no changes" };
+    const isolatedIndex = join(paths.root, `checkpoint-index-${process.pid}`);
+    rmSync(isolatedIndex, { force: true });
+    const indexEnv = { GIT_INDEX_FILE: isolatedIndex };
+    const seed = gitWithEnv(projectDir, ["read-tree", head], indexEnv);
+    if (seed.status !== 0) throw new Error((seed.stderr || seed.stdout).trim());
+    const add = gitWithEnv(projectDir, ["add", "--", ...manifest], indexEnv);
+    if (add.status !== 0) throw new Error((add.stderr || add.stdout).trim());
+    const cached = stagedWithIndex(projectDir, isolatedIndex);
+    if (!cached.length) { rmSync(isolatedIndex, { force: true }); return { status: "deferred", reason: "manifest has no changes" }; }
     const message = `chore(aidlc): persist approved transition ${crossing.events.map((e) => e.stage ?? e.event).join(", ")}\n\nAI-DLC-Receipt: ${crossing.receipt}\nAI-DLC-Approval: ${crossing.approvalOutcome ?? "pass"}`;
-    // --only constrains the commit even if an ordinary hook stages another path.
-    const committed = git(projectDir, ["commit", "--only", "-m", message, "--", ...manifest]);
-    if (committed.status !== 0) {
-      if (out(projectDir, ["rev-parse", "HEAD"]) === head && staged(projectDir).join("\0") === cached.join("\0")) git(projectDir, ["reset", "--mixed", "HEAD", "--", ...manifest]);
-      throw new Error((committed.stderr || committed.stdout || "git commit failed").trim());
-    }
-    const oid = out(projectDir, ["rev-parse", "HEAD"]);
-    if (out(projectDir, ["rev-parse", `${oid}^`]) !== head) throw new Error("checkpoint parent changed unexpectedly");
-    const committedPaths = out(projectDir, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", oid]).split("\0").filter(Boolean).sort();
-    if (committedPaths.join("\0") !== cached.join("\0")) {
-      // A hook may have staged an external path. Roll back only our just-created
-      // commit, retain the hook-added index entries, and leave every worktree
-      // byte untouched. Unknown concurrent HEAD movement is never rewritten.
-      if (out(projectDir, ["rev-parse", "HEAD"]) === oid) {
-        const external = committedPaths.filter((path) => !cached.includes(path));
-        git(projectDir, ["reset", "--soft", head]);
-        git(projectDir, ["reset", "HEAD", "--", ...manifest]);
-        if (external.length) git(projectDir, ["add", "--", ...external]);
-      }
-      throw new Error("checkpoint included a path outside the exact manifest; commit rolled back and push suppressed");
-    }
-    if (staged(projectDir).length) throw new Error("checkpoint postcondition failed; push suppressed");
-    ledger[crossing.receipt] = { commitOid: oid }; atomicJson(paths.ledger, ledger);
-    if (!config.push) return { status: "committed", commitOid: oid };
-    const refspec = `${oid}:refs/heads/${branch}`;
-    const next: Pending = { version: 1, receipt: crossing.receipt, commitOid: oid, remote: config.remote, branch, refspec, state: "pending", manifestHash: sha(manifest.join("\0")) };
-    atomicJson(paths.pending, next);
-    return pushPending(projectDir, paths.pending, next);
+    const messagePath = join(paths.root, `checkpoint-message-${process.pid}`);
+    try {
+      writeFileSync(messagePath, `${message}\n`, { mode: 0o600 });
+      runHook(projectDir, isolatedIndex, "pre-commit");
+      runHook(projectDir, isolatedIndex, "prepare-commit-msg", [messagePath, "message"]);
+      runHook(projectDir, isolatedIndex, "commit-msg", [messagePath]);
+      const hookPaths = stagedWithIndex(projectDir, isolatedIndex);
+      if (hookPaths.join("\0") !== cached.join("\0")) throw new Error("hook changed the exact persistence path set; commit suppressed");
+      scanIndexManifest(projectDir, isolatedIndex, cached);
+      const tree = gitWithEnv(projectDir, ["write-tree"], indexEnv);
+      if (tree.status !== 0) throw new Error((tree.stderr || tree.stdout).trim());
+      const committed = gitWithEnv(projectDir, ["commit-tree", tree.stdout.trim(), "-p", head, "-F", messagePath], indexEnv);
+      if (committed.status !== 0) throw new Error((committed.stderr || committed.stdout || "git commit-tree failed").trim());
+      const oid = committed.stdout.trim();
+      const updated = git(projectDir, ["update-ref", `refs/heads/${branch}`, oid, head]);
+      if (updated.status !== 0) throw new Error("checkpoint parent changed unexpectedly; commit was not attached to the branch");
+      const refresh = git(projectDir, ["reset", "--mixed", oid, "--", ...cached]);
+      if (refresh.status !== 0) throw new Error((refresh.stderr || refresh.stdout || "cannot refresh persistence paths in the primary index").trim());
+      runHook(projectDir, isolatedIndex, "post-commit");
+      if (staged(projectDir).length) throw new Error("checkpoint postcondition failed; push suppressed");
+      ledger[crossing.receipt] = { commitOid: oid }; atomicJson(paths.ledger, ledger);
+      if (!config.push) return { status: "committed", commitOid: oid };
+      const refspec = `${oid}:refs/heads/${branch}`;
+      const next: Pending = { version: 1, receipt: crossing.receipt, commitOid: oid, remote: config.remote, branch, refspec, state: "pending", manifestHash: sha(manifest.join("\0")) };
+      atomicJson(paths.pending, next);
+      return pushPending(projectDir, paths.pending, next);
+    } finally { rmSync(isolatedIndex, { force: true }); rmSync(messagePath, { force: true }); }
   } finally { closeSync(lock); rmSync(paths.lock, { force: true }); }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -43,6 +43,23 @@ describe("issue autopilot production adapters", () => {
     expect(await first.acquire(9, "gamma")).toBe("busy");
     await second.release(9, "beta");
     expect(await first.acquire(9, "gamma")).toBe("acquired");
+  });
+
+  test("a corrupt claim stays protected for one lease then is reclaimed", async () => {
+    const directory = join(temp(), "claims");
+    let time = Date.now();
+    const store = createFileClaimStore({ directory, leaseMs: 100, clock: () => time });
+    writeFileSync(join(directory, "issue-9.json"), "{truncated", { mode: 0o600 });
+    time = statSync(join(directory, "issue-9.json")).mtimeMs;
+    expect(await store.acquire(9, "alpha")).toBe("busy");
+    time += 101;
+    expect(await store.acquire(9, "alpha")).toBe("acquired");
+    expect(JSON.parse(readFileSync(join(directory, "issue-9.json"), "utf8"))).toMatchObject({ issueNumber: 9, owner: "alpha" });
+
+    await store.release(9, "alpha");
+    writeFileSync(join(directory, "issue-9.json"), JSON.stringify({ issueNumber: "9", owner: "alpha" }), { mode: 0o600 });
+    time = statSync(join(directory, "issue-9.json")).mtimeMs + 101;
+    expect(await store.acquire(9, "beta")).toBe("acquired");
   });
 
   test("assumption ledger appends durable JSONL atomically in session storage", async () => {

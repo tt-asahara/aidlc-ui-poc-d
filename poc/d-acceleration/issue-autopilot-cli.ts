@@ -35,7 +35,18 @@ function issueAlreadyExists(issueNumber: number): boolean {
       const path = join(dir, entry.name);
       if (entry.isDirectory()) pending.push(path);
       else if (entry.name === "project-description.json") {
-        try { if (readFileSync(path, "utf8").includes(`GitHub issue #${issueNumber}`)) return true; } catch {}
+        try {
+          const value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+          const pendingValues: unknown[] = [value];
+          while (pendingValues.length) {
+            const candidate = pendingValues.pop();
+            if (typeof candidate === "string") {
+              const match = /^Implement GitHub issue #(\d+):/m.exec(candidate);
+              if (match && Number(match[1]) === issueNumber) return true;
+            } else if (Array.isArray(candidate)) pendingValues.push(...candidate);
+            else if (candidate && typeof candidate === "object") pendingValues.push(...Object.values(candidate));
+          }
+        } catch {}
       }
     }
   }
@@ -75,12 +86,14 @@ const issues = createGhIssueSource({ cwd: projectDir, repository: value("--repo"
 if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
 const result = await runIssueAutopilot({
   config: effective,
-  selection: issueNumber ? { issueNumber } : { selectFromList: async (choices) => command === "list" ? null : choices.find((item) => item.labels.includes(requiredLabel!))?.number ?? null },
+  selection: issueNumber ? { issueNumber } : { selectFromList: async (choices) => command === "list" ? null : choices.find((item) => item.labels.includes(requiredLabel!) && !issueAlreadyExists(item.number))?.number ?? null },
   owner: value("--owner") ?? `pid-${process.pid}`,
   scope: value("--scope") ?? "feature",
   deps: {
     issues,
-    claims: createFileClaimStore({ directory: paths.claims, leaseMs: 60_000 }),
+    // A successful auto intake transfers this lease to host-session-cli.  Keep
+    // it valid for the whole bounded host deadline, including approval pauses.
+    claims: createFileClaimStore({ directory: paths.claims, leaseMs: config.deadlineMs }),
     assumptions: createFileAssumptionLedger(paths.assumptions),
     assessor: { async assess(issue, mode) { const unresolved = issue.title.trim() && issue.body.trim() ? [] : ["Issue title and body are required"]; return { unresolved, description: issue.body, assumptions: mode === "assume" && unresolved.length ? unresolved : [], researchedFacts: [] }; } },
     engine: new OfficialEngine(),

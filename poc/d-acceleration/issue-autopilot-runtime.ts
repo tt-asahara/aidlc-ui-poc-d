@@ -92,6 +92,17 @@ function readJson<T>(path: string): T | null {
   }
 }
 
+function readClaim(path: string): ClaimRecord | null {
+  const value = readJson<unknown>(path);
+  if (!value || typeof value !== "object") return null;
+  const claim = value as Partial<ClaimRecord>;
+  return Number.isSafeInteger(claim.issueNumber) && claim.issueNumber! > 0
+    && typeof claim.owner === "string" && !!claim.owner.trim()
+    && typeof claim.acquiredAt === "number" && Number.isFinite(claim.acquiredAt)
+    && typeof claim.expiresAt === "number" && Number.isFinite(claim.expiresAt)
+    ? claim as ClaimRecord : null;
+}
+
 function tryCreate(path: string, contents: string): boolean {
   let fd: number;
   try {
@@ -142,8 +153,17 @@ export function createFileClaimStore(options: {
       const recovery = `${path}.recovery`;
       if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return "busy";
       try {
-        const current = readJson<ClaimRecord>(path);
-        if (!current || current.issueNumber !== issueNumber || current.expiresAt > now()) return "busy";
+        const current = readClaim(path);
+        if (!current) {
+          // A truncated/corrupt claim must not wedge an Issue forever. Treat its
+          // filesystem age as the conservative lease when its JSON lease cannot
+          // be read; a fresh corrupt file remains busy and cannot be stolen.
+          try {
+            if (now() - statSync(path).mtimeMs <= options.leaseMs) return "busy";
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "busy";
+          }
+        } else if (current.issueNumber !== issueNumber || current.expiresAt > now()) return "busy";
         try {
           unlinkSync(path);
         } catch (error) {
@@ -158,7 +178,7 @@ export function createFileClaimStore(options: {
       const path = pathFor(issueNumber), recovery = `${path}.recovery`;
       if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return "lost";
       try {
-        const current = readJson<ClaimRecord>(path);
+        const current = readClaim(path);
         if (!current || current.issueNumber !== issueNumber || current.owner !== owner) return "lost";
         const renewed = { ...current, expiresAt: now() + options.leaseMs };
         const temporary = `${path}.renew-${process.pid}-${now()}`;
@@ -169,13 +189,13 @@ export function createFileClaimStore(options: {
     },
     async release(issueNumber, owner) {
       const path = pathFor(issueNumber);
-      const current = readJson<ClaimRecord>(path);
+      const current = readClaim(path);
       if (!current || current.issueNumber !== issueNumber || current.owner !== owner) return;
       // Recovery lock prevents release/reclaim from deleting a successor claim.
       const recovery = `${path}.recovery`;
       if (!acquireRecoverableLock(recovery, owner, now, options.leaseMs)) return;
       try {
-        const verified = readJson<ClaimRecord>(path);
+        const verified = readClaim(path);
         if (verified?.issueNumber === issueNumber && verified.owner === owner && verified.acquiredAt === current.acquiredAt) {
           try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
         }
