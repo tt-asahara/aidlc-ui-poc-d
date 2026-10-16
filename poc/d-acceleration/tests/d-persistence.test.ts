@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { captureAuditBoundary, discoverCrossing, persistCrossing, type Crossing } from "../d-persistence.ts";
+import { captureAuditBoundary, detectHighConfidenceSecret, discoverCrossing, persistCrossing, type Crossing } from "../d-persistence.ts";
 import { resolveDGitPersistence } from "../d-config.ts";
 import { createOrchestrationTestProject, FIXTURES_DIR, runOrchestrateNext, seedStateFile } from "../../../tests/harness/fixtures.ts";
 import { appendAuditEntry } from "../../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -157,8 +157,17 @@ describe("D approval persistence", () => {
 
   test("rejects high-confidence secret content", () => {
     const root = repo(); mkdirSync(join(root, "aidlc")); writeFileSync(join(root, "aidlc/result.md"), "-----BEGIN PRIVATE KEY-----\nsecret\n");
-    expect(() => persistCrossing(root, commit, crossing())).toThrow("secret detected");
+    expect(() => persistCrossing(root, commit, crossing())).toThrow(/high-confidence private-key detected/);
     expect(run(root, ["git", "diff", "--cached", "--name-only"])).toBe("");
+  });
+
+  test("the mandatory persistence scan covers common high-confidence token families", () => {
+    expect(detectHighConfidenceSecret(Buffer.from("ASIAABCDEFGHIJKLMNOP"))).toBe("aws-access-key");
+    expect(detectHighConfidenceSecret(Buffer.from(`ghp_${"a".repeat(36)}`))).toBe("github-token");
+    expect(detectHighConfidenceSecret(Buffer.from(`xoxb-${"a".repeat(24)}`))).toBe("slack-token");
+    expect(detectHighConfidenceSecret(Buffer.from(`AIza${"a".repeat(35)}`))).toBe("google-api-key");
+    expect(detectHighConfidenceSecret(Buffer.from(`sk_live_${"a".repeat(24)}`))).toBe("stripe-live-key");
+    expect(detectHighConfidenceSecret(Buffer.from("ordinary approved artifact"))).toBeNull();
   });
 
   test("recursively rejects protected files and symlinks inside artifact directories", () => {

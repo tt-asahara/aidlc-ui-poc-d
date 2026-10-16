@@ -19,6 +19,25 @@ function atomicJson(path: string, value: unknown) { mkdirSync(dirname(path), { r
 function sha(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
 function validateRefPart(value: string, label: string) { if (!value || /[\s~^:?*\\\[\]]/.test(value) || value.startsWith("-") || value.includes("..") || value.includes("@{")) throw new Error(`unsafe ${label}`); }
 
+const HIGH_CONFIDENCE_SECRETS: ReadonlyArray<{ kind: string; pattern: RegExp }> = [
+  { kind: "private-key", pattern: /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/ },
+  { kind: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { kind: "github-token", pattern: /\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b/ },
+  { kind: "slack-token", pattern: /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/ },
+  { kind: "google-api-key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { kind: "stripe-live-key", pattern: /\b(?:sk|rk)_live_[0-9A-Za-z]{16,}\b/ },
+];
+
+/** Persistence always scans the exact approved manifest; this is not optional. */
+export function detectHighConfidenceSecret(bytes: Buffer): string | null {
+  // NUL-heavy/binary files are not decoded as credential-bearing text. Path
+  // policy and the 2 MiB inspection cap still apply to them.
+  const sample = bytes.subarray(0, Math.min(bytes.length, 8192));
+  if (sample.length && sample.filter((byte) => byte === 0).length / sample.length > 0.05) return null;
+  const text = bytes.toString("utf8");
+  return HIGH_CONFIDENCE_SECRETS.find(({ pattern }) => pattern.test(text))?.kind ?? null;
+}
+
 function normalizeManifest(projectDir: string, paths: string[]): string[] {
   const root = realpathSync(projectDir); const unique = new Set<string>();
   const inspect = (raw: string): void => {
@@ -41,8 +60,8 @@ function normalizeManifest(projectDir: string, paths: string[]): string[] {
     if (!existsSync(absolute) || !statSync(absolute).isFile()) continue;
     const bytes = readFileSync(absolute);
     if (bytes.length > 2_000_000) throw new Error(`persistence manifest file is too large to inspect: ${path}`);
-    const text = bytes.toString("utf8");
-    if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(text) || /\bAKIA[0-9A-Z]{16}\b/.test(text) || /\b(?:ghp|github_pat)_[A-Za-z0-9_]{20,}\b/.test(text)) throw new Error(`high-confidence secret detected in persistence manifest: ${path}`);
+    const secret = detectHighConfidenceSecret(bytes);
+    if (secret) throw new Error(`high-confidence ${secret} detected in persistence manifest: ${path}`);
   }
   return manifest;
 }

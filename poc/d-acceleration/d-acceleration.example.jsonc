@@ -1,0 +1,44 @@
+{
+  // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
+  "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
+  // Clef委譲 / 対象: 明示したlow-risk Unit。ON時もloopbackだけ。既定値: OFF。
+  "clef": { "enabled": false, "url": "http://127.0.0.1:18742", "lowRiskUnits": [] },
+  // 承認境界のGit保存 / ON時: 既存の秘密検査を含むpersistence保護を使用。既定値: OFF。
+  "gitPersistence": { "enabled": false, "push": false, "remote": "origin" },
+  "features": {
+    // 機能21 / 対象: requirements-analysis〜code/test。ON時: 公式traceabilityとCのSCREEN/STATE/ACが既存要件IDを引用するか照合し、再採番しない。既定値: OFF。
+    "requirementIdValidation": false,
+    // 機能22 / 対象: functional-design。ON時: Sources・仮定・範囲・traceabilityを正本へ集約して重複メタ文書を抑制。既定値: OFF。
+    "functionalDesignDocumentDiscipline": false,
+    // 機能27 / 対象: 調査根拠を使うstage。ON時: source出典と取得事実を記録し、承認は生成・推定しない。既定値: OFF。
+    "sourceGrounding": false,
+    // 機能28 / 対象: specを入力にする設計・実装stage。ON時: 根拠箇所との対応を記録し、承認は生成・推定しない。既定値: OFF。
+    "specGrounding": false,
+  },
+  "featureInputs": {
+    // 機能21: CのAC-形式と公式AC形式が異なる場合だけ明示する。暗黙変換や再採番はしない。
+    "requirementIdBridges": [],
+    // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
+    "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },
+    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せず停止する。
+    "sourceRoots": [],
+    "specRoots": [],
+  },
+  // 自動進行 / 対象: 現在セッションの公式engine正規遷移のみ。既定値: OFF。
+  "auto": {
+    "enabled": false,
+    // ON時の停止stage。省略時は利用者が明示した範囲を超えない。
+    "through": "code-generation",
+    // セッションをまたぐ無人継続を禁止。既定値: true。
+    "sessionOnly": true,
+    // 不明点: halt=停止、assume=仮定台帳へ記録、research=調査後も不明なら停止。既定値: halt。
+    "ambiguityPolicy": "halt",
+    "assumptionLedger": true,
+    // claim失敗等のbounded retry回数（0〜10）。既定値: 2。
+    "maxRetries": 2,
+    // Issue自動処理を許可するlabel。空配列は許可対象なし。
+    "labelAllowlist": [],
+  },
+  // 機能17 / 対象: /loopからのIssue autopilot。Issue本文は未信頼入力。既定値: OFF、1回1件。
+  "issueAutopilot": { "enabled": false, "oneIssuePerRun": true },
+}
