@@ -4,6 +4,7 @@ plugin: ui-poc
 adds:
   scopes:
     - ui-poc-comparison
+    - ui-poc-application
   produces:
     - ui-poc-refined-contract
   sensors:

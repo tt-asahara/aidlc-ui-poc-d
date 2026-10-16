@@ -52,6 +52,18 @@ function fixture(t, stage='code-generation', facts={}) {
 test('routing explicitly covers every core stage', () => {
   assert.deepEqual(Object.keys(load().stages).sort(), expectedStages.sort());
 });
+test('ordinary UI routing is distinct, reproducible, and preserves explicit choice semantics', () => {
+  const scope=fs.readFileSync(path.join(root,'poc/ui-poc/scopes/ui-poc-application.md'),'utf8');
+  assert.match(scope,/name: ui-poc-application/);
+  for(const keyword of ['web app','dashboard','website','frontend','user interface','mobile app']) assert.ok(scope.includes(`  - ${keyword}`));
+  assert.match(scope,/Explicit user scope and execution choices always win/);
+  const delivery=fs.readFileSync(path.join(root,'poc/ui-poc/contributions/inception/delivery-planning.md'),'utf8');
+  assert.match(delivery,/dependency-independent and have disjoint writes/);
+  assert.match(delivery,/never record the proposal as approved/);
+  const readme=fs.readFileSync(path.join(root,'poc/ui-poc/README.md'),'utf8');
+  assert.match(readme,/\/aidlc\nBuild a household budget web app/);
+  assert.doesNotMatch(readme,/\/aidlc --scope ui-poc-comparison/);
+});
 test('unrelated stages deterministically select no skills', () => {
   assert.deepEqual(plan('build-and-test').invocations, []);
   assert.deepEqual(plan('functional-design').invocations, []);

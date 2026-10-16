@@ -4,6 +4,7 @@ plugin: ui-poc
 adds:
   scopes:
     - ui-poc-comparison
+    - ui-poc-application
   sensors:
     - ui-poc-evidence
   consumes:
