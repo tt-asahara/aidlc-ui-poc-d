@@ -59,7 +59,7 @@ describe("ordinary /aidlc D integration", () => {
     const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
     expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir \"$PWD\" --worker claude");
     expect(skill).not.toContain("--claude-fast opus --claude-balanced opus --claude-judgment opus");
-    expect(skill).toContain(".claude/d-acceleration.local.json");
+    expect(skill).toContain(".claude/d-acceleration.local.jsonc");
     expect(skill).toContain("If it returns `official-host-action-required`, continue below with the returned directive.");
     expect(skill).toContain("never mark a Unit complete from worker exit alone");
     expect(skill).toContain("Optional D checks (default off)");
@@ -97,8 +97,8 @@ describe("ordinary /aidlc D integration", () => {
   test("ordinary routing honors explicit D project/local settings before Opus defaults", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-d-models-"));
     mkdirSync(join(project, ".claude"), { recursive: true });
-    writeFileSync(join(project, ".claude", "d-acceleration.json"), JSON.stringify({ models: { fast: "project-fast", balanced: "project-balanced" } }));
-    writeFileSync(join(project, ".claude", "d-acceleration.local.json"), JSON.stringify({ models: { balanced: "local-balanced" } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ models: { fast: "project-fast", balanced: "project-balanced" } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ models: { balanced: "local-balanced" } }));
     expect(resolveDModels(project)).toEqual({
       models: { fast: "project-fast", balanced: "local-balanced", judgment: "opus" },
       sources: { fast: "project", balanced: "local", judgment: "default" },
@@ -110,11 +110,11 @@ describe("ordinary /aidlc D integration", () => {
     const project = mkdtempSync(join(tmpdir(), "aidlc-d-clef-"));
     mkdirSync(join(project, ".claude"), { recursive: true });
     expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.json"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web", "api"] } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web", "api"] } }));
     expect(clefRunnerArgs(resolveDClef(project))).toEqual(["--clef-url", "http://127.0.0.1:18742", "--clef-low-risk-units", "web,api"]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.json"), JSON.stringify({ clef: { enabled: false } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: false } }));
     expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.json"), JSON.stringify({ clef: { enabled: true, url: "http://example.com:18742" } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://example.com:18742" } }));
     expect(() => resolveDClef(project)).toThrow("loopback");
   });
 });

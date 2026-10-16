@@ -33,8 +33,9 @@ in `feature-21-22.md` and `grounding-integration.md`.
 
 The Claude projection includes a host-only PostToolUse coordinator that runs
 after a successful official `orchestrate report`. It remains disabled by
-default. Opt in through `.claude/d-acceleration.json`, with an optional
-`.claude/d-acceleration.local.json` override:
+default. Opt in through `.claude/d-acceleration.jsonc`, with an optional
+`.claude/d-acceleration.local.jsonc` override. Legacy `.json` names remain readable,
+but a `.jsonc`/`.json` pair in the same layer is rejected as ambiguous:
 
 ```json
 {

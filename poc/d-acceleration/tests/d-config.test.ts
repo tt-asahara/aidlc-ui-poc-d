@@ -17,6 +17,25 @@ describe("D JSONC configuration", () => {
     const root = project(); write(root, "d-acceleration.json", JSON.stringify({ fast: "legacy-fast", balanced: "legacy-balanced" }));
     expect(resolveDModels(root).models).toEqual({ fast: "legacy-fast", balanced: "legacy-balanced", judgment: "opus" });
   });
+  test("uses formal JSONC project and local layers, with CLI model overrides highest", () => {
+    const root = project();
+    write(root, "d-acceleration.jsonc", `{ // project\n "models": { "fast": "project-fast", "balanced": "project-balanced" }, }`);
+    write(root, "d-acceleration.local.jsonc", `{ // personal\n "models": { "balanced": "local-balanced" }, }`);
+    expect(resolveDModels(root, { fast: "cli-fast" })).toEqual({
+      models: { fast: "cli-fast", balanced: "local-balanced", judgment: "opus" },
+      sources: { fast: "cli", balanced: "local", judgment: "default" },
+    });
+  });
+  test("rejects ambiguous project or local filename pairs", () => {
+    const projectPair = project();
+    write(projectPair, "d-acceleration.jsonc", "{}");
+    write(projectPair, "d-acceleration.json", "{}");
+    expect(() => resolveDModels(projectPair)).toThrow(/ambiguous D configuration.*d-acceleration\.jsonc.*d-acceleration\.json/);
+    const localPair = project();
+    write(localPair, "d-acceleration.local.jsonc", "{}");
+    write(localPair, "d-acceleration.local.json", "{}");
+    expect(() => resolveDModels(localPair)).toThrow(/ambiguous D configuration.*d-acceleration\.local\.jsonc.*d-acceleration\.local\.json/);
+  });
   test("defaults optional execution paths off", () => {
     const root = project();
     expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false, mockupPngGeneration: false, visualRegression: false });
@@ -26,8 +45,8 @@ describe("D JSONC configuration", () => {
   });
   test("merges by field and preserves explicit local false", () => {
     const root = project();
-    write(root, "d-acceleration.json", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, "clef": { "enabled": true, "lowRiskUnits": ["web"] }, }`);
-    write(root, "d-acceleration.local.json", `{ "features": { "sourceGrounding": false, "specGrounding": true }, "auto": { "enabled": false, "ambiguityPolicy": "halt", "maxRetries": 1 }, "issueAutopilot": { "enabled": false }, "clef": { "enabled": false }, }`);
+    write(root, "d-acceleration.jsonc", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, "clef": { "enabled": true, "lowRiskUnits": ["web"] }, }`);
+    write(root, "d-acceleration.local.jsonc", `{ "features": { "sourceGrounding": false, "specGrounding": true }, "auto": { "enabled": false, "ambiguityPolicy": "halt", "maxRetries": 1 }, "issueAutopilot": { "enabled": false }, "clef": { "enabled": false }, }`);
     expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true, mockupPngGeneration: false, visualRegression: false });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: "code-generation", sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 1, maxSteps: 64, deadlineMs: 900000, labelAllowlist: ["aidlc"] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });

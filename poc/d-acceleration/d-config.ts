@@ -90,7 +90,16 @@ function readConfig(path: string): DFileConfig {
   if (issueAutopilot) for (const key of ["enabled", "oneIssuePerRun"] as const) bool(issueAutopilot[key], `issue autopilot ${key}`, path);
   return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig> };
 }
-function layers(projectDir: string) { return { project: readConfig(join(projectDir, ".claude", "d-acceleration.json")), local: readConfig(join(projectDir, ".claude", "d-acceleration.local.json")) }; }
+function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
+  const directory = join(projectDir, ".claude");
+  const jsonc = join(directory, `${stem}.jsonc`);
+  const legacyJson = join(directory, `${stem}.json`);
+  if (existsSync(jsonc) && existsSync(legacyJson)) {
+    throw new Error(`ambiguous D configuration: both ${jsonc} and ${legacyJson} exist; keep only one (prefer ${jsonc})`);
+  }
+  return existsSync(jsonc) ? jsonc : legacyJson;
+}
+function layers(projectDir: string) { return { project: readConfig(configPath(projectDir, "d-acceleration")), local: readConfig(configPath(projectDir, "d-acceleration.local")) }; }
 
 export function resolveDGitPersistence(projectDir: string): DGitPersistenceConfig { const { project, local } = layers(projectDir), base = project.gitPersistence ?? {}, override = local.gitPersistence ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, push: override.push ?? base.push ?? false, remote: (override.remote ?? base.remote ?? "origin").trim(), branch: override.branch?.trim() ?? base.branch?.trim() }; }
 export function resolveDModels(projectDir: string, cli: Partial<DModelCatalog> = {}): { models: DModelCatalog; sources: Record<DModelTier, "cli" | "local" | "project" | "default"> } { const { project, local } = layers(projectDir), models = {} as DModelCatalog, sources = {} as Record<DModelTier, "cli" | "local" | "project" | "default">; for (const tier of ["fast", "balanced", "judgment"] as const) { const choices = [[cli[tier], "cli"], [local.models[tier], "local"], [project.models[tier], "project"], [DEFAULT_D_MODEL, "default"]] as const, selected = choices.find(([model]) => typeof model === "string" && model.trim())!; models[tier] = selected[0]!.trim(); sources[tier] = selected[1]; } return { models, sources }; }

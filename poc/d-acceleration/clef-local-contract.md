@@ -45,8 +45,8 @@ never starts or stops Clef.
 ## Ordinary `/aidlc` configuration
 
 Clef remains off when omitted. To enable an already-running loopback service,
-save this as `.claude/d-acceleration.json` for the project or
-`.claude/d-acceleration.local.json` for a personal override:
+save this as `.claude/d-acceleration.jsonc` for the project or
+`.claude/d-acceleration.local.jsonc` for a personal override:
 
 ```json
 {

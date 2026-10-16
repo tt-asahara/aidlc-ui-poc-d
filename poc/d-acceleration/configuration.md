@@ -1,11 +1,13 @@
 # D acceleration configuration
 
-`<project>/.claude/d-acceleration.json` を読み、その各フィールドを
-`<project>/.claude/d-acceleration.local.json` で上書きします。したがって
+正式名 `<project>/.claude/d-acceleration.jsonc` を読み、その各フィールドを
+`<project>/.claude/d-acceleration.local.jsonc` で上書きします。したがって
 local が project より優先されます。モデルの明示CLI引数だけは両ファイルより
 優先されます。
 
-両ファイルはstrict JSONとJSONC（行・ブロックコメント、末尾カンマ）に対応します。
+旧 `.json` 名も後方互換として読みます。同じレイヤーに `.jsonc` と `.json` が
+両方ある場合は、曖昧な選択をせず明示エラーで停止します。両ファイルはstrict JSONと
+JSONC（行・ブロックコメント、末尾カンマ）に対応します。
 従来のroot直下 `fast`、`balanced`、`judgment` 形式も互換です。全schemaと安全な
 既定値は `d-acceleration.example.jsonc` を参照してください。
 
