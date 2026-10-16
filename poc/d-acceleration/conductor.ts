@@ -7,6 +7,10 @@ import { execute } from "./scheduler.ts";
 import type { WorkerKind } from "./worker-adapters.ts";
 
 type ConductOptions = { projectDir: string; engineDir: string; workerKind: WorkerKind; requestedClaudeModels?: Record<string, string | undefined>; requestedClaudeEffort?: string; disposableTestMode?: boolean; clefUrl?: string; clefLowRiskUnits?: string[]; timeoutMs?: number; env?: Record<string, string | undefined> };
+export const DEFAULT_CLAUDE_MODEL = "opus";
+export function withDefaultClaudeModels(models: ConductOptions["requestedClaudeModels"]): Record<string, string> {
+  return { fast: models?.fast?.trim() || DEFAULT_CLAUDE_MODEL, balanced: models?.balanced?.trim() || DEFAULT_CLAUDE_MODEL, judgment: models?.judgment?.trim() || DEFAULT_CLAUDE_MODEL };
+}
 function invoke(tool: string, args: string[], options: ConductOptions): any {
   const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", options.projectDir], { cwd: options.projectDir, env: options.env ?? process.env, encoding: "utf8", timeout: options.timeoutMs ?? 30_000 });
   if (result.status !== 0) throw new Error(`${tool} failed: ${result.stderr || result.stdout}`);
@@ -14,6 +18,7 @@ function invoke(tool: string, args: string[], options: ConductOptions): any {
 }
 
 export async function conduct(options: ConductOptions) {
+  const requestedClaudeModels = options.workerKind === "claude" ? withDefaultClaudeModels(options.requestedClaudeModels) : options.requestedClaudeModels;
   const orchestrate = join(options.engineDir, "aidlc-orchestrate.ts"); const state = join(options.engineDir, "aidlc-state.ts"); const history: any[] = []; const workerRuns: any[] = []; const dispatchedBuildWaves = new Set<string>();
   for (let step = 0; step < 100; step++) {
     const directive = invoke(orchestrate, ["next"], options); history.push(directive);
@@ -29,7 +34,7 @@ export async function conduct(options: ConductOptions) {
       } catch (error) {
         return { status: "official-host-action-required", reason: "c-ui-baseline-not-composed", error: error instanceof Error ? error.message : String(error), directive, history, workerRuns };
       }
-      const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels: options.requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs });
+      const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs });
       workerRuns.push({ stage: directive.stage, batchIndex: directive.wave.batch_index, result });
       if (result.status !== "completed") return { status: "worker-action-required", directive, result, history, workerRuns };
       const missing = adapted.tasks.flatMap((task) => task.writeSet).filter((path) => !existsSync(isAbsolute(path) ? path : join(options.projectDir, path)));

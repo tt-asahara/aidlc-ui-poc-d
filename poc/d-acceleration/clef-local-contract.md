@@ -36,4 +36,8 @@ quality or end-to-end acceleration.
 
 The adapter permits only `http://127.0.0.1`, rejects redirects, applies a
 timeout and confidence threshold, validates the returned choice, and falls
-back to the judgment tier on any failure. It never starts or stops Clef.
+back to the task's conservative fallback tier on any failure. Each route
+records `attempted`, `available`, `used`, the loopback endpoint, and a bounded
+outcome (`selected`, `unavailable`, `invalid-response`, `low-confidence`, or
+`not-eligible`). Availability never implies that Clef's answer was used. It
+never starts or stops Clef.

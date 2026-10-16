@@ -7,7 +7,8 @@ export type Execution = "serial" | "official-wave" | "official-swarm";
 export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; builderBrief?: unknown; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
 export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
-type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number };
+type ClefEvidence = { attempted: boolean; available: boolean | null; used: boolean; endpoint: string; outcome: "not-eligible" | "selected" | "unavailable" | "invalid-response" | "low-confidence" };
+type Route = { tier: Tier; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number; clef: ClefEvidence };
 
 const TASK_TYPES = new Set(["templated", "implementation", "review", "design", "security", "compliance", "approval", "ambiguous"]);
 const EXECUTIONS = new Set(["serial", "official-wave", "official-swarm"]);
@@ -39,7 +40,10 @@ function validate(input: Input): void {
   for (const [tier, model] of Object.entries(input.modelCatalog ?? {})) if (!(["fast", "balanced", "judgment"].includes(tier)) || typeof model !== "string" || !model.trim()) throw new Error(`invalid model catalog entry: ${tier}`);
 }
 
-function deterministicRoute(task: Task): Omit<Route, "routingMs"> | null {
+function clefEndpoint(input: Input): string { return input.clef?.url ?? "http://127.0.0.1:18742"; }
+function notEligible(input: Input): ClefEvidence { return { attempted: false, available: null, used: false, endpoint: clefEndpoint(input), outcome: "not-eligible" }; }
+
+function deterministicRoute(task: Task): Omit<Route, "routingMs" | "clef"> | null {
   if (["security", "compliance", "approval"].includes(task.taskType) || task.risk === "high" || task.difficulty === "high") return { tier: "judgment", reason: "high-risk, approval, or high-difficulty work cannot be downgraded", source: "rule", escalation: "human-review" };
   if (task.taskType === "review" || task.taskType === "design" || task.risk === "medium" || task.difficulty === "medium") return { tier: "balanced", reason: "review/design or medium complexity requires balanced reasoning", source: "rule", escalation: "judgment" };
   if (task.taskType === "templated") return { tier: "fast", reason: "explicit low-risk templated work", source: "rule", escalation: "balanced" };
@@ -47,35 +51,42 @@ function deterministicRoute(task: Task): Omit<Route, "routingMs"> | null {
   return null;
 }
 
+class ClefRouteError extends Error { constructor(readonly outcome: "unavailable" | "invalid-response" | "low-confidence", message: string) { super(message); } }
+
 async function clefRoute(task: Task, config: NonNullable<Input["clef"]>): Promise<{ tier: Tier; confidence: number; ms: number }> {
   const url = config.url ?? "http://127.0.0.1:18742";
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") throw new Error("Clef URL must be local http://127.0.0.1");
   const started = performance.now();
-  const response = await fetch(`${url.replace(/\/$/, "")}/v1/systemone`, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(config.timeoutMs ?? 1500), body: JSON.stringify({ model: "clef", state: task.assessmentState ?? { stage: task.stage, unit: task.unit, outputs: task.writeSet }, questions: { tier: { type: "choice", instructions: "Classify only the reasoning effort for this explicitly low-risk task.", criteria: { fast: "deterministic or templated", balanced: "moderate reasoning", judgment: "complex or uncertain" } } } }) });
-  if (!response.ok) throw new Error(`Clef HTTP ${response.status}`);
+  let response: Response;
+  try {
+    response = await fetch(`${url.replace(/\/$/, "")}/v1/systemone`, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(config.timeoutMs ?? 1500), body: JSON.stringify({ model: "clef", state: task.assessmentState ?? { stage: task.stage, unit: task.unit, outputs: task.writeSet }, questions: { tier: { type: "choice", instructions: "Classify only the reasoning effort for this explicitly low-risk task.", criteria: { fast: "deterministic or templated", balanced: "moderate reasoning", judgment: "complex or uncertain" } } } }) });
+  } catch { throw new ClefRouteError("unavailable", "Clef transport unavailable"); }
+  if (!response.ok) throw new ClefRouteError("unavailable", `Clef HTTP ${response.status}`);
   const body = await response.json() as any;
   const answer = body?.answers?.tier;
-  if (!answer || !["fast", "balanced", "judgment"].includes(answer.choice) || typeof answer.confidence !== "number") throw new Error("invalid Clef response");
-  if (answer.confidence < (config.confidenceThreshold ?? 0.75)) throw new Error("low-confidence Clef response");
+  if (!answer || !["fast", "balanced", "judgment"].includes(answer.choice) || typeof answer.confidence !== "number") throw new ClefRouteError("invalid-response", "invalid Clef response");
+  if (answer.confidence < (config.confidenceThreshold ?? 0.75)) throw new ClefRouteError("low-confidence", "low-confidence Clef response");
   return { tier: answer.choice, confidence: answer.confidence, ms: performance.now() - started };
 }
 
 async function route(task: Task, input: Input): Promise<Route> {
   const started = performance.now();
   const ruled = deterministicRoute(task);
-  if (ruled) return { ...ruled, routingMs: performance.now() - started };
+  if (ruled) return { ...ruled, routingMs: performance.now() - started, clef: notEligible(input) };
   if (task.risk === "low" && input.clef?.enabled) {
     try {
       const selected = await clefRoute(task, input.clef);
       const order: Tier[] = ["fast", "balanced", "judgment"]; const tier = order.indexOf(selected.tier) < order.indexOf(task.minimumTier ?? "fast") ? task.minimumTier! : selected.tier;
-      return { tier, reason: "local Clef classified an explicitly low-risk task, subject to its minimum tier", source: "clef", escalation: tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started };
-    } catch {
-      // Fail closed; transport and model details intentionally do not affect policy.
+      return { tier, reason: "local Clef classified an explicitly low-risk task, subject to its minimum tier", source: "clef", escalation: tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : "human-review", confidence: selected.confidence, routingMs: performance.now() - started, clef: { attempted: true, available: true, used: true, endpoint: clefEndpoint(input), outcome: "selected" } };
+    } catch (error) {
+      const outcome = error instanceof ClefRouteError ? error.outcome : "unavailable";
+      const fallback = task.fallbackTier ?? "judgment";
+      return { tier: fallback, reason: `Clef ${outcome}; used the task's conservative fallback`, source: "fallback", escalation: fallback === "fast" ? "balanced" : fallback === "balanced" ? "judgment" : "human-review", routingMs: performance.now() - started, clef: { attempted: true, available: outcome === "unavailable" ? false : true, used: false, endpoint: clefEndpoint(input), outcome } };
     }
   }
   const fallback = task.fallbackTier ?? "judgment";
-  return { tier: fallback, reason: "ambiguous classification used the task's conservative fallback", source: "fallback", escalation: fallback === "fast" ? "balanced" : fallback === "balanced" ? "judgment" : "human-review", routingMs: performance.now() - started };
+  return { tier: fallback, reason: "ambiguous classification used the task's conservative fallback", source: "fallback", escalation: fallback === "fast" ? "balanced" : fallback === "balanced" ? "judgment" : "human-review", routingMs: performance.now() - started, clef: notEligible(input) };
 }
 
 function normalizedPath(value: string): string { return value.replaceAll("\\", "/").split("/").reduce<string[]>((parts, part) => part === ".." ? parts.slice(0, -1) : part && part !== "." ? [...parts, part] : parts, []).join("/"); }
@@ -111,7 +122,7 @@ export async function plan(input: Input) {
   for (let index = 0; index < input.tasks.length; index += routingCap) for (const [id, value] of await Promise.all(input.tasks.slice(index, index + routingCap).map(async (task) => [task.id, await route(task, input)] as const))) routes[id] = value;
   const waves = buildWaves(input.tasks, input, input.maxParallel ?? 4);
   const routeValues = Object.values(routes);
-  return { schemaVersion: 1, routes, waves, routingMetrics: { plannerWallMs: performance.now() - started, clefSuccesses: routeValues.filter((r) => r.source === "clef").length, fallbackCount: routeValues.filter((r) => r.source === "fallback").length, costObservable: Object.values(routes).every((r) => r.model !== undefined) ? "runtime-usage-required" : "unavailable-without-runtime-model-catalog" }, constraints: { deterministicRulesFirst: true, humanApprovalTasksSerial: true, securityTasksSerial: true, officialDirectiveEntriesOnly: true } };
+  return { schemaVersion: 1, routes, waves, routingMetrics: { plannerWallMs: performance.now() - started, clefAttempts: routeValues.filter((r) => r.clef.attempted).length, clefSuccesses: routeValues.filter((r) => r.clef.used).length, clefUnavailable: routeValues.filter((r) => r.clef.outcome === "unavailable").length, fallbackCount: routeValues.filter((r) => r.source === "fallback").length, costObservable: Object.values(routes).every((r) => r.model !== undefined) ? "runtime-usage-required" : "unavailable-without-runtime-model-catalog" }, constraints: { deterministicRulesFirst: true, humanApprovalTasksSerial: true, securityTasksSerial: true, officialDirectiveEntriesOnly: true } };
 }
 
 async function main() {

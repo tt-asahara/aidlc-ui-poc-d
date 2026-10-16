@@ -860,6 +860,42 @@ function buildTree(
       writeFileSync(outPath, out);
     }
   }
+
+  // Arm D's Claude-only acceleration runtime is authored beside its PoC so
+  // the experiment stays separable from the framework core.  A Claude
+  // projection nevertheless has to carry the runtime it tells /aidlc to run:
+  // installed projects cannot reach back into this source checkout.
+  if (m.name === "claude") {
+    const accelerationRoot = join(REPO_ROOT, "poc", "d-acceleration");
+    const accelerationRuntime = [
+      "aidlc-acceleration-plan.ts",
+      "conductor.ts",
+      "fake-worker.ts",
+      "official-next-adapter.ts",
+      "read-only-fanout.ts",
+      "run.ts",
+      "scheduler.ts",
+      "stage-policy.json",
+      "worker-adapters.ts",
+    ];
+    for (const file of accelerationRuntime) {
+      const source = join(accelerationRoot, file);
+      if (!existsSync(source) || !lstatSync(source).isFile()) {
+        throw new Error(`[claude] D acceleration runtime source is missing: ${file}`);
+      }
+      const destination = join(treeRoot, "tools", "d-acceleration", file);
+      mkdirSync(dirname(destination), { recursive: true });
+      if (file === "read-only-fanout.ts") {
+        const projected = readFileSync(source, "utf8").replace(
+          'from "../../core/tools/aidlc-directive.ts"',
+          'from "../aidlc-directive.ts"',
+        );
+        writeFileSync(destination, projected);
+      } else {
+        cpSync(source, destination);
+      }
+    }
+  }
   const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
   if (fmMissed.length > 0) {
     throw new Error(

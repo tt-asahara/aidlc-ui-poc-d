@@ -3,6 +3,7 @@ import { plan, type Input } from "../aidlc-acceleration-plan.ts";
 import { execute } from "../scheduler.ts";
 import { adaptOfficialNext } from "../official-next-adapter.ts";
 import { claudeLaunch } from "../claude-worker-adapter.ts";
+import { DEFAULT_CLAUDE_MODEL, withDefaultClaudeModels } from "../conductor.ts";
 import fixture from "../fixtures/synthetic-plan.json";
 const projectDir = process.cwd();
 const withoutApproval = () => { const input = structuredClone(fixture) as Input; input.tasks = input.tasks.filter((task) => task.id !== "approval"); input.tasks.find((task) => task.id === "code-a")!.dependsOn = ["fd-a", "fd-b", "fd-c"]; return input; };
@@ -21,6 +22,10 @@ describe("D acceleration harness", () => {
   test("constructs Claude argv without shell interpolation", () => {
     const launch = claudeLaunch("runtime-model", "medium", "synthetic prompt");
     expect(launch.args).toContain("runtime-model"); expect(launch.args.at(-1)).toBe("synthetic prompt");
+  });
+  test("defaults every Claude reasoning tier to the confirmed Opus alias", () => {
+    expect(withDefaultClaudeModels(undefined)).toEqual({ fast: DEFAULT_CLAUDE_MODEL, balanced: DEFAULT_CLAUDE_MODEL, judgment: DEFAULT_CLAUDE_MODEL });
+    expect(withDefaultClaudeModels({ balanced: "custom-balanced" })).toEqual({ fast: "opus", balanced: "custom-balanced", judgment: "opus" });
   });
   test("stops at approval and runs real children with overlap", async () => {
     const stopped = await execute(fixture as Input, { projectDir });
@@ -48,6 +53,8 @@ describe("D acceleration harness", () => {
   test("falls back when Clef is unavailable", async () => {
     const input: Input = { clef: { enabled: true, url: "http://127.0.0.1:1", timeoutMs: 25 }, tasks: [{ id: "x", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] }] };
     const result = await plan(input); expect(result.routes.x?.source).toBe("fallback");
+    expect(result.routes.x?.clef).toMatchObject({ attempted: true, available: false, used: false, outcome: "unavailable" });
+    expect(result.routingMetrics).toMatchObject({ clefAttempts: 1, clefSuccesses: 0, clefUnavailable: 1 });
   });
   test("native design keeps balanced baseline when Clef is disabled, times out, or is low confidence", async () => {
     const directive = { kind: "run-stage", stage: "functional-design", rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
@@ -57,6 +64,7 @@ describe("D acceleration harness", () => {
     try {
       const low = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742", confidenceThreshold: 0.8 } });
       const result = await plan(low); expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced"); expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
+      expect(result.routes["functional-design:alpha"]?.clef).toMatchObject({ attempted: true, available: true, used: false, outcome: "low-confidence" });
     } finally { globalThis.fetch = originalFetch; }
   });
   test("native design actually aborts a slow Clef call and falls back to balanced", async () => {
@@ -79,6 +87,7 @@ describe("D acceleration harness", () => {
       input.modelCatalog = { judgment: "fixture-judgment" };
       const result = await execute(input, { projectDir, workerKind: "fake" });
       expect(result.records[0]?.tier).toBe("judgment"); expect(result.records[0]?.requestedModel).toBe("fixture-judgment");
+      expect((await plan(input)).routes["functional-design:alpha"]?.clef).toMatchObject({ attempted: true, available: true, used: true, outcome: "selected" });
     } finally { globalThis.fetch = originalFetch; }
   });
   test("rejects false directives, invalid levels, and unsafe swarm", async () => {
