@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import type { DGitPersistenceConfig } from "./d-config.ts";
 
 export type Crossing = { receipt: string; events: Array<{ event: "STAGE_COMPLETED" | "STAGE_SKIPPED" | "WORKFLOW_COMPLETED"; stage?: string }>; manifest: string[]; approvalOutcome?: "pass" | "override" };
+export type AuditBoundary = { version: 1; files: Record<string, { bytes: number; prefixHash: string }> };
 type Pending = { version: 1; receipt: string; commitOid: string; remote: string; branch: string; refspec: string; state: "pending" | "pushed"; manifestHash: string };
 export type PersistenceResult = { status: "disabled" | "deferred" | "committed" | "pushed" | "already-processed"; reason?: string; commitOid?: string };
 
@@ -15,7 +16,7 @@ function out(projectDir: string, args: string[]): string {
   const r = git(projectDir, args); if (r.status !== 0) throw new Error((r.stderr || r.stdout || `git ${args[0]} failed`).trim()); return r.stdout.trim();
 }
 function atomicJson(path: string, value: unknown) { mkdirSync(dirname(path), { recursive: true }); const temp = `${path}.${process.pid}.tmp`; writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); renameSync(temp, path); }
-function sha(value: string) { return createHash("sha256").update(value).digest("hex"); }
+function sha(value: string | Buffer) { return createHash("sha256").update(value).digest("hex"); }
 function validateRefPart(value: string, label: string) { if (!value || /[\s~^:?*\\\[\]]/.test(value) || value.startsWith("-") || value.includes("..") || value.includes("@{")) throw new Error(`unsafe ${label}`); }
 
 function normalizeManifest(projectDir: string, paths: string[]): string[] {
@@ -56,26 +57,170 @@ function walk(root: string): string[] {
   return found;
 }
 function field(block: string, name: string): string | undefined { return block.match(new RegExp(`^\\*\\*${name}\\*\\*:[ \\t]*(.+)$`, "m"))?.[1]?.trim(); }
+function recordRootForAudit(path: string): string { const parent = dirname(path); return parent.split(sep).at(-1) === "audit" ? dirname(parent) : parent; }
+
+function officialDagUnits(recordDir: string): Set<string> {
+  const path = join(recordDir, "runtime-graph.json");
+  let value: unknown;
+  try { value = JSON.parse(readFileSync(path, "utf8")); } catch { throw new Error("cannot read official current Unit DAG from runtime-graph.json"); }
+  const dag = value && typeof value === "object" && !Array.isArray(value) ? (value as { bolt_dag?: unknown }).bolt_dag : undefined;
+  if (!dag || typeof dag !== "object" || Array.isArray(dag)) throw new Error("official current Unit DAG is missing from runtime-graph.json");
+  const batches = (dag as { batches?: unknown }).batches;
+  if (!Array.isArray(batches) || !batches.every((batch) => Array.isArray(batch) && batch.every((unit) => typeof unit === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(unit)))) {
+    throw new Error("official current Unit DAG is malformed in runtime-graph.json");
+  }
+  const units = batches.flat() as string[];
+  if (!units.length || new Set(units).size !== units.length) throw new Error("official current Unit DAG is empty or duplicated in runtime-graph.json");
+  return new Set(units);
+}
+
+function currentReadyReviews(blocks: string[], stage: string, obligations: ReadonlySet<string>): string[] {
+  const latestAttempt = new Map<string, string>();
+  for (const body of blocks) {
+    if (!["UNIT_STARTED", "UNIT_RESUMED", "UNIT_COMPLETED"].includes(field(body, "Event") ?? "") || field(body, "Stage") !== stage) continue;
+    const unit = field(body, "Unit"); const attempt = field(body, "Attempt Generation");
+    if (unit && obligations.has(unit) && attempt) latestAttempt.set(unit, attempt);
+  }
+  const newest = new Map<string, string>();
+  for (const body of blocks) {
+    if (field(body, "Event") !== "REVIEW_COMPLETED" || field(body, "Stage") !== stage) continue;
+    const unit = field(body, "Unit"); if (!unit || !obligations.has(unit)) continue;
+    const requiredAttempt = latestAttempt.get(unit);
+    if (!requiredAttempt || field(body, "Attempt Generation") !== requiredAttempt) continue;
+    newest.set(unit, body);
+  }
+  return [...newest.values()].filter((body) => field(body, "Verdict") === "READY");
+}
+
+function serialConstructionSources(projectDir: string, manifestPaths: string[], evidenceBlocks: string[]): string[] {
+  const expanded: string[] = [];
+  for (const manifestPath of manifestPaths) {
+    const matched = /(?:^|\/)construction\/([^/]+)\/([^/]+)\/source-manifest\.json$/.exec(manifestPath);
+    if (!matched) continue;
+    const [, unit, stage] = matched;
+    const absolute = join(projectDir, manifestPath);
+    const obligations = officialDagUnits(dirname(dirname(dirname(dirname(absolute)))));
+    if (!obligations.has(unit)) throw new Error(`serial Construction source manifest unit is not in the official current DAG: ${unit}`);
+    const swarmLanded = evidenceBlocks.some((body) => field(body, "Event") === "SWARM_SOURCE_MERGED" &&
+      (field(body, "Unit") === unit || field(body, "Unit name") === unit) && field(body, "Stage") === stage);
+    if (swarmLanded) continue;
+    const raw = readFileSync(absolute);
+    let value: unknown;
+    try { value = JSON.parse(raw.toString("utf8")); } catch { throw new Error(`invalid serial Construction source manifest: ${manifestPath}`); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid serial Construction source manifest: ${manifestPath}`);
+    const object = value as Record<string, unknown>;
+    if (object.version !== 1 || object.stage !== stage || ("unit" in object && object.unit !== unit) || !Array.isArray(object.writes) ||
+      Object.keys(object).some((key) => !["version", "stage", "unit", "writes"].includes(key))) {
+      throw new Error(`invalid serial Construction source manifest binding: ${manifestPath}`);
+    }
+    const manifestSha = sha(raw);
+    const reviews = currentReadyReviews(evidenceBlocks, stage, obligations).filter((body) => field(body, "Unit") === unit);
+    let reviewedEvidence: string | undefined;
+    const binding = reviews.findLast((body) => {
+      const fingerprint = field(body, "Unit Source Fingerprint");
+      if (!/^sha256:[0-9a-f]{64}$/.test(fingerprint ?? "")) return false;
+      const evidence = readdirSync(dirname(absolute)).filter((name) => /^reviewed-source-[0-9a-f]{12}\.tsv$/.test(name));
+      return evidence.some((name) => {
+        const bytes = readFileSync(join(dirname(absolute), name));
+        const match = `sha256:${sha(bytes)}` === fingerprint && bytes.toString("utf8").startsWith(`manifest\t${manifestSha}\t-\n`);
+        if (match) reviewedEvidence = join(dirname(manifestPath), name).split(sep).join("/");
+        return match;
+      });
+    });
+    if (!binding || !reviewedEvidence) throw new Error(`serial Construction source manifest lacks a matching reviewed validation receipt: ${manifestPath}`);
+    const listing = readFileSync(join(projectDir, reviewedEvidence), "utf8").split("\n").slice(1).filter(Boolean).map((line) => {
+      const fields = line.split("\t");
+      if (fields.length !== 4 || fields[0] !== "" || !/^[^\\\t\r\n]+$/.test(fields[1]) || !/^100(?:644|755)$/.test(fields[2]) || !/^[0-9a-f]{40,64}$/.test(fields[3])) {
+        throw new Error(`invalid reviewed source evidence: ${reviewedEvidence}`);
+      }
+      return { path: fields[1], mode: fields[2], oid: fields[3] };
+    });
+    expanded.push(reviewedEvidence);
+    for (const [index, write] of object.writes.entries()) {
+      if (!write || typeof write !== "object" || Array.isArray(write) || typeof (write as Record<string, unknown>).path !== "string" ||
+        Object.keys(write as object).some((key) => !["path", "repo"].includes(key))) throw new Error(`invalid writes[${index}] in ${manifestPath}`);
+      const repo = (write as Record<string, unknown>).repo;
+      if (repo !== undefined) throw new Error(`serial Construction persistence does not support recorded-repo claim ${JSON.stringify(repo)}`);
+      const claim = (write as { path: string }).path;
+      const prefix = claim.endsWith("/");
+      const normalized = claim.replace(/\/+$/, "");
+      const covered = listing.filter((entry) => entry.path === normalized || (prefix && entry.path.startsWith(`${normalized}/`)));
+      if (!covered.length) {
+        // A reviewed exact-path deletion has no current listing row. It is
+        // nevertheless a real claim when HEAD still owns that exact path;
+        // `git add -- <path>` below records the deletion. Empty directory
+        // prefixes remain ambiguous and fail closed.
+        const trackedDeletion = !prefix && !existsSync(join(projectDir, normalized)) &&
+          git(projectDir, ["cat-file", "-e", `HEAD:${normalized}`]).status === 0;
+        if (!trackedDeletion) throw new Error(`reviewed source evidence does not cover writes[${index}] in ${manifestPath}`);
+        expanded.push(normalized);
+      }
+      for (const entry of covered) {
+        const source = join(projectDir, entry.path);
+        if (!existsSync(source) || !statSync(source).isFile()) throw new Error(`reviewed serial Construction source is missing: ${entry.path}`);
+        const oid = out(projectDir, ["hash-object", "--", entry.path]);
+        const mode = statSync(source).mode & 0o111 ? "100755" : "100644";
+        if (oid !== entry.oid || mode !== entry.mode) throw new Error(`reviewed serial Construction source hash changed: ${entry.path}`);
+        expanded.push(entry.path);
+      }
+    }
+  }
+  return expanded;
+}
+
+function auditBlocks(projectDir: string) {
+  return walk(join(projectDir, "aidlc")).filter((path) => /(?:^|[\\/])audit(?:[\\/].+|[^\\/]*)\.md$/i.test(path)).map((path) => ({
+    path,
+    rel: relative(projectDir, path).split(sep).join("/"),
+    raw: readFileSync(path),
+    bodies: readFileSync(path, "utf8").replace(/\r\n/g, "\n").split(/\n---\n/),
+  }));
+}
+
+/** Immutable audit prefix captured immediately before one report invocation. */
+export function captureAuditBoundary(projectDir: string): AuditBoundary {
+  const files: AuditBoundary["files"] = {};
+  for (const { rel, raw } of auditBlocks(projectDir)) files[rel] = { bytes: raw.length, prefixHash: sha(raw) };
+  return { version: 1, files };
+}
 
 /** Build one receipt from the report-owned audit tail; never treats approval alone as a crossing. */
-export function discoverCrossing(projectDir: string): Crossing | null {
-  const auditFiles = walk(join(projectDir, "aidlc")).filter((path) => /audit.*\.md$/i.test(path));
-  const blocks = auditFiles.flatMap((path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n").split(/\n---\n/).map((body) => ({ body, path, mtime: statSync(path).mtimeMs })));
+export function discoverCrossing(projectDir: string, boundary?: AuditBoundary): Crossing | null {
+  const files = auditBlocks(projectDir);
+  if (boundary && boundary.version !== 1) return null;
+  if (boundary) {
+    for (const [rel, before] of Object.entries(boundary.files)) {
+      const current = files.find((file) => file.rel === rel);
+      if (!current || current.raw.length < before.bytes || sha(current.raw.subarray(0, before.bytes)) !== before.prefixHash) return null;
+    }
+  }
+  const blocks = files.flatMap(({ path, rel, bodies }) => bodies.map((body, index) => ({ body, path, rel, index })));
   blocks.sort((a, b) => (field(a.body, "Timestamp") ?? "").localeCompare(field(b.body, "Timestamp") ?? "") || a.path.localeCompare(b.path));
   const terminal = new Set(["STAGE_COMPLETED", "STAGE_SKIPPED", "WORKFLOW_COMPLETED"]);
-  const newest = blocks.findLastIndex(({ body }) => terminal.has(field(body, "Event") ?? ""));
-  if (newest < 0) return null;
-  const shard = blocks[newest].path;
-  // A single human turn can approve several approvesTogether stages. The
-  // report emits all of their terminal events after that HUMAN_TURN, followed
-  // by auto-advance. Bind exactly that report-owned suffix.
-  let floor = newest;
-  while (floor > 0 && !(blocks[floor - 1].path === shard && field(blocks[floor - 1].body, "Event") === "HUMAN_TURN")) floor--;
-  const window = blocks.slice(floor, newest + 1).filter(({ path }) => path === shard);
-  const relevant = window.filter(({ body }) => terminal.has(field(body, "Event") ?? ""));
+  const appended = boundary ? files.flatMap(({ path, rel, raw }) => {
+    const offset = boundary.files[rel]?.bytes ?? 0;
+    return raw.subarray(offset).toString("utf8").replace(/\r\n/g, "\n").split(/\n---\n/)
+      .map((body) => body.replace(/^\s*---\s*\n/, "").trim())
+      .filter(Boolean)
+      .map((body, index) => ({ body, path, rel, index }));
+  }) : blocks;
+  const relevant = appended.filter(({ body }) => terminal.has(field(body, "Event") ?? ""));
   if (!relevant.length) return null;
+  const shards = new Set(relevant.map(({ path }) => path));
+  if (shards.size !== 1) return null;
+  const shard = relevant[0].path;
+  // Bind terminal events to the approval evidence in the same audit shard.
+  // The evidence may precede the report boundary; it is selected only for the
+  // stages whose terminal events were appended by this exact report.
+  const approvedStages = new Set(relevant.map(({ body }) => field(body, "Stage")).filter(Boolean));
+  const newest = Math.max(...relevant.map((entry) => blocks.findLastIndex((block) => block.path === entry.path && block.body.trim() === entry.body.trim())));
+  let floor = newest;
+  while (floor > 0 && !(
+    blocks[floor - 1].path === shard &&
+    ["HUMAN_TURN", "GATE_APPROVED"].includes(field(blocks[floor - 1].body, "Event") ?? "")
+  )) floor--;
+  const window = blocks.slice(floor, newest + 1).filter(({ path }) => path === shard);
   const events = relevant.map(({ body }) => ({ event: field(body, "Event") as Crossing["events"][number]["event"], stage: field(body, "Stage") }));
-  const approvedStages = new Set(events.map((event) => event.stage).filter(Boolean));
   let evidenceFloor = floor - 1;
   while (evidenceFloor > 0 && !(blocks[evidenceFloor - 1].path === shard && terminal.has(field(blocks[evidenceFloor - 1].body, "Event") ?? ""))) evidenceFloor--;
   const evidenceWindow = blocks.slice(evidenceFloor, newest + 1).filter(({ path }) => path === shard);
@@ -89,12 +234,37 @@ export function discoverCrossing(projectDir: string): Crossing | null {
   // this crossing. Never widen this to every dirty path under aidlc/: another
   // user or process may be editing a different intent concurrently.
   const frameworkRecords = relevant.flatMap(({ path }) => {
-    const recordDir = dirname(path);
+    const recordDir = recordRootForAudit(path);
     return [relative(projectDir, path), relative(projectDir, join(recordDir, "aidlc-state.md"))];
   });
-  const receiptBytes = relevant.map(({ body, path }) => `${relative(projectDir, path)}\0${body}`).join("\0");
+  // workspace_requires source manifests are engine-required bindings rather
+  // than ordinary declared artifacts, so include the exact completed Unit's
+  // binding even when STAGE_AWAITING_APPROVAL omits it from Artifacts.
+  const constructionBindings = relevant.flatMap(({ body, path }) => {
+    const stage = field(body, "Stage");
+    if (!stage) return [];
+    const recordDir = recordRootForAudit(path);
+    const available = walk(join(recordDir, "construction")).filter((candidate) =>
+      candidate.split(sep).join("/").endsWith(`/${stage}/source-manifest.json`));
+    if (!available.length) return [];
+    const obligations = officialDagUnits(recordDir);
+    const units = new Set(currentReadyReviews(evidenceWindow.map(({ body: evidence }) => evidence), stage, obligations)
+      .map((evidence) => field(evidence, "Unit")).filter((unit): unit is string => Boolean(unit)));
+    return [...units].flatMap((unit) => {
+      const candidate = join(recordDir, "construction", unit, stage, "source-manifest.json");
+      return existsSync(candidate) ? [relative(projectDir, candidate)] : [];
+    });
+  });
+  const approvalEvidence = evidenceWindow.filter(({ body }) => {
+    const event = field(body, "Event");
+    const stage = field(body, "Stage");
+    return event === "HUMAN_TURN" || ((event === "GATE_APPROVED" || event === "STAGE_AWAITING_APPROVAL") && (!stage || approvedStages.has(stage)));
+  });
+  const receiptBytes = [...approvalEvidence, ...relevant].map(({ body, path }) => `${relative(projectDir, path)}\0${body}`).join("\0");
   const override = evidenceWindow.some(({ body }) => /\*\*(Blocking Sensor Override|Override)\*\*:[ \t]*(yes|true)[ \t]*$/im.test(body));
-  return { receipt: `sha256:${sha(receiptBytes)}`, events, manifest: [...frameworkRecords, ...artifacts], approvalOutcome: override ? "override" : "pass" };
+  const baseManifest = [...frameworkRecords, ...artifacts, ...constructionBindings];
+  const sources = serialConstructionSources(projectDir, baseManifest, evidenceWindow.map(({ body }) => body));
+  return { receipt: `sha256:${sha(receiptBytes)}`, events, manifest: [...baseManifest, ...sources], approvalOutcome: override ? "override" : "pass" };
 }
 
 function statePaths(projectDir: string) { const root = join(resolve(projectDir, out(projectDir, ["rev-parse", "--git-dir"])), "aidlc-d-persistence"); return { root, lock: join(root, "lock"), ledger: join(root, "ledger.json"), pending: join(root, "pending-push.json") }; }
@@ -160,10 +330,17 @@ export function persistCrossing(projectDir: string, config: DGitPersistenceConfi
     const manifest = normalizeManifest(projectDir, crossing.manifest);
     if (!manifest.length) return { status: "deferred", reason: "empty persistence manifest" };
     const head = out(projectDir, ["rev-parse", "HEAD"]);
+    let cached: string[] = [];
     const add = git(projectDir, ["add", "--", ...manifest]);
-    if (add.status !== 0) throw new Error((add.stderr || add.stdout).trim());
-    const cached = staged(projectDir);
-    if (cached.join("\0") !== manifest.filter((p) => existsSync(join(projectDir, p)) || git(projectDir, ["ls-files", "--error-unmatch", "--", p]).status === 0).sort().join("\0")) throw new Error("staged path set differs from exact manifest");
+    if (add.status !== 0) {
+      const partial = staged(projectDir);
+      if (out(projectDir, ["rev-parse", "HEAD"]) === head && partial.every((path) => manifest.includes(path))) git(projectDir, ["reset", "--mixed", "HEAD", "--", ...partial]);
+      throw new Error((add.stderr || add.stdout).trim());
+    }
+    cached = staged(projectDir);
+    if (cached.some((path) => !manifest.includes(path))) {
+      throw new Error("staged path set contains a path outside the exact manifest; automatic cleanup is unsafe");
+    }
     if (!cached.length) return { status: "deferred", reason: "manifest has no changes" };
     const message = `chore(aidlc): persist approved transition ${crossing.events.map((e) => e.stage ?? e.event).join(", ")}\n\nAI-DLC-Receipt: ${crossing.receipt}\nAI-DLC-Approval: ${crossing.approvalOutcome ?? "pass"}`;
     // --only constrains the commit even if an ordinary hook stages another path.

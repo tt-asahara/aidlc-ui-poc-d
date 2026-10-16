@@ -57,6 +57,11 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook review-freeze",
             "timeout": 1800
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/d-acceleration/d-persistence-hook.ts\" pre",
+            "timeout": 1800
           }
         ]
       },
@@ -153,7 +158,7 @@
           },
           {
             "type": "command",
-            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/d-acceleration/d-persistence-hook.ts\"",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/d-acceleration/d-persistence-hook.ts\" post",
             "timeout": 1800
           }
         ]
