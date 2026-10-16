@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -181,20 +182,61 @@ const origin = configuredRepository ? null : spawnSync("git", ["config", "--get"
 repository = canonicalGitHubRepository(configuredRepository ?? (origin?.status === 0 ? origin.stdout.trim() : ""));
 const bindings = createFileIntakeBindingStore(paths.bindings);
 
+type PartialRepairJournal = { phase: "lock" | "prepared" | "moved" | "audited" | "binding-repaired"; pid: number; owner: string; token: string; issueNumber: number; key: string; source?: string; archive?: string; binding?: { provider: string; repository: string; issueNumber: number; intakeKey: string } };
+const repairLockPath = (key: string) => join(paths.bindings, `partial-repair-${key}.lock`);
+const journalPath = (lock: string) => join(lock, "journal.json");
+const writeJournal = (lock: string, journal: PartialRepairJournal) => {
+  const temporary = join(lock, `journal-${process.pid}.tmp`);
+  writeFileSync(temporary, `${JSON.stringify(journal)}\n`, { mode: 0o600, flag: "wx" }); renameSync(temporary, journalPath(lock));
+};
+const livePid = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+async function recoverPartialRepair(issueNumber: number, key: string): Promise<{ busy?: true; completedArchive?: string }> {
+  const lock = repairLockPath(key);
+  if (!existsSync(lock)) return {};
+  let journal: PartialRepairJournal | null = null;
+  try { journal = JSON.parse(readFileSync(journalPath(lock), "utf8")) as PartialRepairJournal; } catch {}
+  if (!journal) {
+    if (Date.now() - statSync(lock).mtimeMs <= 60_000) return { busy: true };
+    rmSync(lock, { recursive: true, force: true }); return {};
+  }
+  if (journal.issueNumber !== issueNumber || journal.key !== key || !journal.token || !Number.isSafeInteger(journal.pid)
+    || journal.binding?.provider !== "github" || journal.binding.repository !== repository || journal.binding.issueNumber !== issueNumber || journal.binding.intakeKey !== key) return { busy: true };
+  if (livePid(journal.pid)) return { busy: true };
+  // The dead transaction's exact owner claim can now be released; owner-bound
+  // release cannot remove a successor claim.
+  await createFileClaimStore({ directory: paths.claims, leaseMs: 60_000 }).release(issueNumber, journal.owner);
+  if (journal.phase === "binding-repaired") { const archive = journal.archive; rmSync(lock, { recursive: true, force: true }); return archive ? { completedArchive: archive } : {}; }
+  if ((journal.phase === "moved" || journal.phase === "audited") && journal.source && journal.archive) {
+    const spaces = realpathSync(join(projectDir, "aidlc", "spaces"));
+    const source = resolve(journal.source), archive = resolve(journal.archive), quarantine = realpathSync(resolve(paths.bindings, "quarantine"));
+    if (!source.startsWith(`${spaces}/`) || !existsSync(archive) || lstatSync(archive).isSymbolicLink() || !lstatSync(archive).isDirectory()
+      || !realpathSync(archive).startsWith(`${quarantine}/`) || existsSync(source)) return { busy: true };
+    renameSync(archive, source);
+  }
+  rmSync(lock, { recursive: true, force: true }); return {};
+}
+
 if (command === "repair") {
   const repairIssue = Number(value("--issue-number"));
   if (!Number.isSafeInteger(repairIssue) || repairIssue <= 0) throw new Error("repair requires --issue-number");
+  const key = intakeKey(repairIssue), recovered = await recoverPartialRepair(repairIssue, key);
+  if (recovered.busy) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "repair-busy", issueNumber: repairIssue })}\n`); process.exit(0); }
+  if (recovered.completedArchive) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "partial-quarantined", issueNumber: repairIssue, archive: recovered.completedArchive, recovered: true })}\n`); process.exit(0); }
   const details = issueIntentDetails(repairIssue);
   const partialRepair = argv.includes("--partial");
   if (partialRepair && details.state === "partial" && details.exactPartialDirs.length === 1) {
-    const owner = value("--owner") ?? `repair-${process.pid}`, key = intakeKey(repairIssue);
+    const owner = value("--owner") ?? `repair-${process.pid}`;
     const binding = { provider: "github", repository, issueNumber: repairIssue, intakeKey: key };
     await bindings.reserve(binding, "migration-partial");
-    const repairLock = join(paths.bindings, `partial-repair-${key}.lock`);
+    const repairLock = repairLockPath(key), token = randomUUID();
     try { mkdirSync(repairLock); } catch { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "repair-busy", issueNumber: repairIssue })}\n`); process.exit(0); }
+    let journal: PartialRepairJournal = { phase: "lock", pid: process.pid, owner, token, issueNumber: repairIssue, key, binding };
+    writeJournal(repairLock, journal);
+    if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-lock") process.kill(process.pid, "SIGKILL");
     const claims = createFileClaimStore({ directory: paths.claims, leaseMs: 60_000 });
     if (await claims.acquire(repairIssue, owner) !== "acquired") { rmSync(repairLock, { recursive: true, force: true }); process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "repair-busy", issueNumber: repairIssue })}\n`); process.exit(0); }
     let quarantined = "";
+    let createdAudit = false;
     let repairError: unknown;
     try {
       const verified = issueIntentDetails(repairIssue);
@@ -203,15 +245,26 @@ if (command === "repair") {
       if (lstatSync(source).isSymbolicLink() || !lstatSync(source).isDirectory() || !actual.startsWith(`${spaces}/`)) throw new Error("unsafe partial intent path");
       const quarantineParent = join(paths.bindings, "quarantine"); mkdirSync(quarantineParent, { recursive: true, mode: 0o700 });
       quarantined = join(quarantineParent, `${key}-${Date.now()}-${basename(source)}`);
+      journal = { ...journal, phase: "prepared", source: actual, archive: quarantined }; writeJournal(repairLock, journal);
       renameSync(source, quarantined);
-      writeFileSync(join(quarantined, "partial-repair-audit.json"), `${JSON.stringify({ repairedAt: Date.now(), repairedBy: owner, reason: value("--reason") ?? "operator-requested partial quarantine", binding, originalPath: relative(projectDir, source) })}\n`, { mode: 0o600, flag: "wx" });
+      journal = { ...journal, phase: "moved" }; writeJournal(repairLock, journal);
+      if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-move") process.kill(process.pid, "SIGKILL");
+      const auditPath = join(quarantined, "partial-repair-audit.json");
+      if (!existsSync(auditPath)) {
+        writeFileSync(auditPath, `${JSON.stringify({ repairedAt: Date.now(), repairedBy: owner, reason: value("--reason") ?? "operator-requested partial quarantine", binding, originalPath: relative(projectDir, source) })}\n`, { mode: 0o600, flag: "wx" });
+        createdAudit = true;
+      }
+      journal = { ...journal, phase: "audited" }; writeJournal(repairLock, journal);
+      if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-audit") process.kill(process.pid, "SIGKILL");
       if (!bindings.repair) throw new Error("intake binding repair is unavailable");
       const repaired = await bindings.repair(binding, owner, value("--reason") ?? "operator-requested partial quarantine");
       if (repaired !== "repaired") throw new Error(`binding repair failed: ${repaired}`);
+      if (process.env.AIDLC_PARTIAL_REPAIR_FAIL_AT === "after-binding") process.kill(process.pid, "SIGKILL");
+      journal = { ...journal, phase: "binding-repaired" }; writeJournal(repairLock, journal);
     } catch (error) {
       repairError = error;
       if (quarantined && existsSync(quarantined)) {
-        try { unlinkSync(join(quarantined, "partial-repair-audit.json")); } catch {}
+        if (createdAudit) try { unlinkSync(join(quarantined, "partial-repair-audit.json")); } catch {}
         const original = details.exactPartialDirs[0]; if (!existsSync(original)) renameSync(quarantined, original);
       }
     } finally { await claims.release(repairIssue, owner); rmSync(repairLock, { recursive: true, force: true }); }

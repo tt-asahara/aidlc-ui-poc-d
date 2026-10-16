@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -132,6 +132,39 @@ describe("packaged Issue autopilot command routing", () => {
     const repaired = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "8"], { cwd: root, encoding: "utf8" });
     expect(JSON.parse(repaired.stdout)).toMatchObject({ reason: "repair-refused" });
     expect(readFileSync(join(bindings, `${binding.intakeKey}.json`), "utf8")).toContain("ambiguous");
+  });
+
+  test("partial repair recovers dead locks and every crash phase without data loss", () => {
+    for (const phase of ["after-lock", "after-move", "after-audit", "after-binding"]) {
+      const root = mkdtempSync(join(tmpdir(), `d-auto-crash-${phase}-`)); mkdirSync(join(root, ".claude"), { recursive: true });
+      writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
+      const repository = "github.com/owner/repo", binding = { provider: "github", repository, issueNumber: 9, intakeKey: intakeBindingKey({ provider: "github", repository }, 9) };
+      const bindings = join(root, ".aidlc/issue-autopilot/bindings"), record = join(root, "aidlc/spaces/default/intents/partial"); mkdirSync(bindings, { recursive: true }); mkdirSync(record, { recursive: true });
+      writeFileSync(join(bindings, `${binding.intakeKey}.json`), JSON.stringify({ ...binding, state: "pending", owner: "migration-partial" }));
+      writeFileSync(join(record, "project-description.json"), JSON.stringify(`Implement GitHub issue #9: Nine\nAIDLC-INTAKE: ${JSON.stringify(binding)}`));
+      const args = [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "9", "--partial"];
+      const crashed = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", env: { ...process.env, AIDLC_PARTIAL_REPAIR_FAIL_AT: phase } });
+      expect(crashed.signal).toBe("SIGKILL");
+      const recovered = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+      expect(recovered.status).toBe(0);
+      const result = JSON.parse(recovered.stdout) as { reason: string; archive: string };
+      expect(result.reason).toBe("partial-quarantined");
+      expect(readFileSync(join(result.archive, "project-description.json"), "utf8")).toContain("GitHub issue #9");
+      expect(existsSync(record)).toBeFalse();
+    }
+  });
+
+  test("partial repair preserves a pre-existing audit file", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-auto-existing-audit-")); mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
+    const repository = "github.com/owner/repo", binding = { provider: "github", repository, issueNumber: 10, intakeKey: intakeBindingKey({ provider: "github", repository }, 10) };
+    const bindings = join(root, ".aidlc/issue-autopilot/bindings"), record = join(root, "aidlc/spaces/default/intents/partial"); mkdirSync(bindings, { recursive: true }); mkdirSync(record, { recursive: true });
+    writeFileSync(join(bindings, `${binding.intakeKey}.json`), JSON.stringify({ ...binding, state: "pending", owner: "migration-partial" }));
+    writeFileSync(join(record, "project-description.json"), JSON.stringify(`Implement GitHub issue #10: Ten\nAIDLC-INTAKE: ${JSON.stringify(binding)}`));
+    writeFileSync(join(record, "partial-repair-audit.json"), "existing-audit\n");
+    const repaired = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "10", "--partial"], { cwd: root, encoding: "utf8" });
+    const result = JSON.parse(repaired.stdout) as { reason: string; archive: string };
+    expect(result.reason).toBe("partial-quarantined"); expect(readFileSync(join(result.archive, "partial-repair-audit.json"), "utf8")).toBe("existing-audit\n");
   });
 
   test("a later slash process resumes the durable owner before intake", () => {
