@@ -41,3 +41,25 @@ records `attempted`, `available`, `used`, the loopback endpoint, and a bounded
 outcome (`selected`, `unavailable`, `invalid-response`, `low-confidence`, or
 `not-eligible`). Availability never implies that Clef's answer was used. It
 never starts or stops Clef.
+
+## Ordinary `/aidlc` configuration
+
+Clef remains off when omitted. To enable an already-running loopback service,
+save this as `.claude/d-acceleration.json` for the project or
+`.claude/d-acceleration.local.json` for a personal override:
+
+```json
+{
+  "clef": {
+    "enabled": true,
+    "url": "http://127.0.0.1:18742",
+    "lowRiskUnits": ["explicit-unit-slug"]
+  }
+}
+```
+
+Local fields override project fields. Only `http://127.0.0.1` is accepted.
+Enabling Clef never starts it and never makes every Unit eligible; each
+low-risk Unit must be named explicitly. If the service is stopped, the route
+records `attempted:true`, `available:false`, `used:false`, and
+`outcome:"unavailable"`, then uses the conservative fallback tier.

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { resolveDModels } from "../d-config.ts";
+import { clefRunnerArgs, resolveDClef, resolveDModels } from "../d-config.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -50,5 +50,17 @@ describe("ordinary /aidlc D integration", () => {
       sources: { fast: "project", balanced: "local", judgment: "default" },
     });
     expect(resolveDModels(project, { fast: "cli-fast" }).models).toEqual({ fast: "cli-fast", balanced: "local-balanced", judgment: "opus" });
+  });
+
+  test("ordinary routing forwards only explicitly enabled loopback Clef and named low-risk Units", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-d-clef-"));
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
+    writeFileSync(join(project, ".claude", "d-acceleration.json"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web", "api"] } }));
+    expect(clefRunnerArgs(resolveDClef(project))).toEqual(["--clef-url", "http://127.0.0.1:18742", "--clef-low-risk-units", "web,api"]);
+    writeFileSync(join(project, ".claude", "d-acceleration.local.json"), JSON.stringify({ clef: { enabled: false } }));
+    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
+    writeFileSync(join(project, ".claude", "d-acceleration.local.json"), JSON.stringify({ clef: { enabled: true, url: "http://example.com:18742" } }));
+    expect(() => resolveDClef(project)).toThrow("loopback");
   });
 });
