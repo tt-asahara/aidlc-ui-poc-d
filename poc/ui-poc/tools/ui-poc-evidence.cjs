@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const fidelity = require('./ui-poc-fidelity.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const contracts = {
   'rough-mockups': 'ui-poc-rough-contract.md',
@@ -17,7 +18,7 @@ function boundedFile(root, rel) {
   if (!resolved.startsWith(rootReal + path.sep) || !fs.statSync(resolved).isFile()) throw Error('Evidence escapes contract directory or is not a file');
   return fs.readFileSync(resolved);
 }
-function check({stage, outputPath, approvalLedger}, seen = new Set(), contractName = contracts[stage], depth = 0) {
+function check({stage, outputPath, approvalLedger, imageFeatures = {}}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
   try {
     if (!Object.hasOwn(contracts, stage)) throw Error('Unsupported stage');
@@ -35,12 +36,12 @@ function check({stage, outputPath, approvalLedger}, seen = new Set(), contractNa
     const blocks = [...text.matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
     if (blocks.length !== 1) throw Error('Expected exactly one ui-poc-contract JSON block');
     const c = JSON.parse(blocks[0][1]);
-    if (c.schema !== 1 || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
+    if (![1,2].includes(c.schema) || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
     if (!Array.isArray(c.assets) || !c.assets.length || !Array.isArray(c.mappings) || !c.mappings.length) throw Error('Empty assets or mappings');
     const assets = new Map();
     for (const a of c.assets) {
       if (!a || assets.has(a.path) || !/^[a-f0-9]{64}$/.test(a.sha256)) throw Error('Duplicate or invalid asset');
-      if (!/\.(html|css|js|png|jpg|jpeg|svg|webp|woff2)$/.test(a.path)) throw Error('Unsupported evidence asset type');
+      if (!/\.(html|css|js|json|png|jpg|jpeg|svg|webp|woff2)$/.test(a.path)) throw Error('Unsupported evidence asset type');
       const asset = boundedFile(root, a.path);
       if (hash(asset) !== a.sha256) throw Error('Asset hash mismatch: ' + a.path);
       assets.set(a.path, a);
@@ -53,6 +54,41 @@ function check({stage, outputPath, approvalLedger}, seen = new Set(), contractNa
       ids.add(key);
     }
     if (!Array.isArray(c.requiredMappings) || !c.requiredMappings.length || c.requiredMappings.some(x => !ids.has(x)) || new Set(c.requiredMappings).size !== c.requiredMappings.length || c.requiredMappings.length !== ids.size) throw Error('Required mapping coverage mismatch');
+    if (c.schema === 2) {
+      if (!c.fidelity || !c.fidelity.approvedSnapshot || !assets.has(c.fidelity.approvedSnapshot.path) || c.fidelity.approvedSnapshot.sha256 !== assets.get(c.fidelity.approvedSnapshot.path).sha256) throw Error('Missing approved semantic snapshot');
+      const approved = JSON.parse(boundedFile(root, c.fidelity.approvedSnapshot.path).toString('utf8'));
+      const snapshotFindings = fidelity.validateSnapshot(approved);
+      if (snapshotFindings.length) throw Error('Invalid approved semantic snapshot: ' + snapshotFindings.join('; '));
+      const htmlAsset = assets.get(approved.source.path);
+      if (!htmlAsset || htmlAsset.sha256 !== approved.source.sha256) throw Error('Semantic snapshot is not bound to its approved HTML asset');
+      const wantsPng = imageFeatures.mockupPngGeneration === true || imageFeatures.visualRegression === true;
+      if (wantsPng && (!approved.png || !assets.has(approved.png.path) || assets.get(approved.png.path).sha256 !== approved.png.sha256)) throw Error('Enabled PNG evidence is missing or not bound to the approved snapshot');
+      const requiredStates = new Set(c.mappings.map(mapping => `${mapping.screen}/${mapping.state}`));
+      const capturedStates = new Set(approved.captures.map(capture => `${capture.screen}/${capture.state}`));
+      if (requiredStates.size !== capturedStates.size || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
+      const dispositions = c.fidelity.dispositions || [];
+      if (!Array.isArray(dispositions)) throw Error('Fidelity dispositions must be an array');
+      if (stage === 'code-generation') {
+        let ledger = {};
+        if (dispositions.length) {
+          if (!approvalLedger) throw Error('Trusted approval ledger is not configured for UI deviations');
+          ledger = JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8'));
+        }
+        for (const disposition of dispositions) if (!fidelity.dispositionReceipt(disposition, ledger, fidelity.hashJson(approved))) throw Error(`UI disposition has no matching detached approval receipt: ${disposition?.elementKey || '?'}`);
+      }
+      if (stage === 'build-and-test') {
+        if (!c.fidelity.actualSnapshot || !assets.has(c.fidelity.actualSnapshot.path) || c.fidelity.actualSnapshot.sha256 !== assets.get(c.fidelity.actualSnapshot.path).sha256) throw Error('Missing measured implementation semantic snapshot');
+        const actual = JSON.parse(boundedFile(root, c.fidelity.actualSnapshot.path).toString('utf8'));
+        const ledger = approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+        const comparison = fidelity.compareSnapshots(approved, actual, dispositions, ledger);
+        if (!comparison.pass) throw Error('Implementation fidelity failed: ' + comparison.findings.join('; '));
+        if (imageFeatures.visualRegression === true) {
+          if (!actual.png || !assets.has(actual.png.path) || assets.get(actual.png.path).sha256 !== actual.png.sha256) throw Error('Enabled visual regression has no measured implementation PNG');
+          const visual = fidelity.compareImages(path.join(root, approved.png.path), path.join(root, actual.png.path), approved, actual);
+          if (!visual.pass) throw Error('Visual regression failed: ' + visual.findings.join('; '));
+        }
+      }
+    }
     // Producer gates do not fabricate a pre-existing approval for their new draft.
     // Consumers require an independently captured approval of the upstream contract.
     const prior = {'code-generation':'refined-mockups','build-and-test':'code-generation'}[stage];
@@ -63,9 +99,13 @@ function check({stage, outputPath, approvalLedger}, seen = new Set(), contractNa
       const upstreamBlocks = [...upstreamBytes.toString('utf8').matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
       if (upstreamBlocks.length !== 1) throw Error('Invalid upstream contract block');
       const parent = JSON.parse(upstreamBlocks[0][1]);
-      if (parent.schema !== 1 || parent.stage !== prior || parent.arm !== c.arm || JSON.stringify(parent.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Upstream contract identity or inventory differs');
+      if (![1,2].includes(parent.schema) || parent.schema !== c.schema || parent.stage !== prior || parent.arm !== c.arm || JSON.stringify(parent.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Upstream contract identity or inventory differs');
+      if (c.schema === 2) {
+        if (parent.fidelity?.approvedSnapshot?.sha256 !== c.fidelity?.approvedSnapshot?.sha256) throw Error('Approved semantic snapshot changed across the handoff');
+        if (stage === 'build-and-test' && fidelity.canonical(parent.fidelity?.dispositions || []) !== fidelity.canonical(c.fidelity?.dispositions || [])) throw Error('Approved UI dispositions changed after code-generation approval');
+      }
       const upstreamPath = fs.realpathSync(path.join(root, c.upstream.path));
-      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger}, seen, path.basename(upstreamPath), depth + 1);
+      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures}, seen, path.basename(upstreamPath), depth + 1);
       if (!inherited.pass) throw Error('Invalid upstream evidence: ' + inherited.findings.join('; '));
       if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
       const ledgerReal = fs.realpathSync(approvalLedger), rootReal = fs.realpathSync(root);

@@ -1,4 +1,4 @@
-# UI evidence contract, version 1
+# UI evidence contract, versions 1 and 2
 
 This contract supplements, never replaces, the core Markdown deliverables. An HTML preview alone is not an AI-DLC handoff. Write the stage's plugin-prefixed Markdown artifact in the same engine-resolved stage directory as its core outputs:
 
@@ -21,6 +21,89 @@ Example shape (placeholders below are deliberately not valid runtime evidence):
   "requiredMappings": ["SCREEN-HOME/STATE-EMPTY/AC-001"]
 }
 ```
+
+Schema 1 remains readable for existing evidence chains. New refined-mockups,
+code-generation, and build-and-test contracts use schema 2 and add `fidelity`.
+The approved semantic snapshot is produced from the rendered HTML, not copied
+from a hand-written inventory. It records every declared screen/state render,
+visible text, control, field, important conditional region, computed truncation
+facts, and observable action result. Important interactive, conditional,
+exact-copy, and business-value elements carry stable `data-ui-id` values;
+ordinary static text may use the capture tool's deterministic fingerprint.
+
+```ui-poc-contract
+{
+  "schema": 2,
+  "stage": "refined-mockups",
+  "arm": "C",
+  "assets": [
+    {"path": "assets/home.html", "sha256": "..."},
+    {"path": "assets/ui-semantic-snapshot.json", "sha256": "..."}
+  ],
+  "mappings": [{"screen":"SCREEN-HOME","state":"STATE-READY","ac":"AC-001","asset":"assets/home.html","check":"..."}],
+  "requiredMappings": ["SCREEN-HOME/STATE-READY/AC-001"],
+  "fidelity": {
+    "approvedSnapshot": {"path":"assets/ui-semantic-snapshot.json","sha256":"..."},
+    "dispositions": []
+  }
+}
+```
+
+At Functional Design, only actual changes or omissions receive a disposition:
+`upstream-revised`, `approved-deviation`, or `intentionally-omitted`. Every
+disposition names the snapshot element key, a non-empty reason, and a detached
+`approvalReceipt`. The receipt is recorded for the existing Functional Design
+approval in `UI_POC_APPROVAL_LEDGER`; it binds `decisionId`,
+`stage: "functional-design"`, `status: "approved"`, the canonical
+`snapshotSha256`, exact `elementKeys`, canonical `dispositionSha256` over
+element key/status/reason, and `deltaSha256` over the exact observed difference,
+plus source and reviewer. An omission receipt therefore cannot approve a later
+copy or behavior change. An omission is not
+accepted merely because an agent wrote a reason. No additional approval gate is
+introduced.
+
+Build and Test adds `fidelity.actualSnapshot`, captured from the running
+implementation through the same observation schema but a separate execution
+path. The checker compares it with the frozen approved snapshot. It never
+regenerates an expected snapshot from implementation code. Exact copy, element
+presence, role, computed truncation, and declared action-to-state observations
+are deterministic checks. Natural-language equivalence, design quality, and
+whether an approved change is wise remain reviewer/human judgement.
+
+The actual snapshot also binds its reported observation metadata to the
+loopback URL and source hash. This detects substitution inside the evidence
+chain, but it is not a cryptographic attestation that an agent launched the
+browser; the capture command/result and sensor-verified bytes remain part of
+the review evidence.
+
+Run the packaged tool with Bun. `capture` requires a local Chrome/Edge CDP
+renderer and fails with `BROWSER_TOOL_UNAVAILABLE` or a render-state error; it
+never substitutes regex parsing or reports an unrendered state as passing.
+
+```text
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --html <approved.html> --out <snapshot.json> [--png <baseline.png>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --url <loopback-url> --out <actual.json> [--setup-click ELEMENT-ID@STATE-ID,...]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs compare --approved <approved.json> --actual <actual.json> [--dispositions <json>] [--approval-ledger <json>]
+```
+
+The HTML render root carries `data-ui-screen` and `data-ui-state`. Important
+elements use `data-ui-id` plus `data-ui-important`; exact copy additionally uses
+`data-ui-exact-copy`. A truncation requirement uses
+`data-ui-require-truncation`. An observable control action uses
+`data-ui-action-id`, `data-ui-expected-state`, and `data-ui-action-target` for
+the truncated element it expands; the capture fails the later comparison unless
+the click actually changes the root to the expected state and expands that
+target.
+Capture each conditional screen/state separately. A hidden node in a different
+state is not coverage for the state where it must be visible.
+
+`features.mockupPngGeneration` and `features.visualRegression` are independent,
+default-off D settings. Effective baseline PNG generation is enabled when
+either is true. Visual comparison may consume only a baseline generated before
+approval and bound to the approved HTML hash and rendering environment; it must
+not create or update a baseline during Build and Test. DOM semantic capture is
+mandatory for schema 2 and may still use the renderer when both image settings
+are off. The image settings govern only PNG capture and pixel comparison.
 
 Paths are relative to this contract's stage directory. Absolute paths, parent traversal, backslashes, missing assets, non-files and symlink escapes are rejected. Declare every referenced HTML, CSS, JS, PNG/JPEG/SVG/WebP image and WOFF2 font in assets with its exact SHA-256. No remote dependencies are allowed. Browser-dependency completeness is a separate review obligation; this checker verifies declared assets and does not parse every possible dynamic import or network request. An independently approved inventory of screen/state/AC triples must cover loading, empty, success, error and interaction recovery states where applicable. A syntactically valid ID does not establish semantic completeness; reviewer comparison with requirements remains mandatory.
 

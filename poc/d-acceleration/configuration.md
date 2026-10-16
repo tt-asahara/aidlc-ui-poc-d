@@ -17,3 +17,16 @@ local が project より優先されます。モデルの明示CLI引数だけ�
 挙動、既定値、利用場面、親スイッチや別コマンド依存を記載しています。setupが
 配布する `.claude/tools/d-acceleration/d-acceleration.example.jsonc` はこのひな形と
 byte-identicalです。機能7の永続化前secret scanは必須で、無効化スイッチはありません。
+
+## UI fidelity image settings
+
+`features.mockupPngGeneration` と `features.visualRegression` は独立した既定OFFの
+設定です。承認前の有効な基準PNG生成は両者の論理ORなので、画像比較をONにすると
+必要な基準PNG生成も有効になります。Build and Testで基準を初回生成または更新しては
+いけません。両方OFFでもschema 2のsemantic DOM renderingは必須であり、これらは
+PNG撮影と画像比較だけを切り替えます。
+
+画像比較ON時は同じviewport、renderer/font環境、承認済みbaseline hashが必要です。
+browser、baseline、状態再現、互換環境のいずれかがなければNOT-READYであり、passへ
+縮退しません。決定論laneが保証するのは観測可能なDOM事実とrendered PNG bytesの
+一致です。自然文仕様の意味的同値が必要な場合だけ既存`specGrounding`を使用します。

@@ -2,6 +2,8 @@
 // This adapter intentionally has no upstream imports or third-party dependencies.
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const { check, contracts } = require('./ui-poc-evidence.cjs');
 const { verify } = require('./ui-poc-c-routing.cjs');
@@ -14,14 +16,17 @@ function args(argv) {
   }
   return out;
 }
-function main(argv) {
+async function main(argv) {
   const findings = [];
   try {
     const parsed = args(argv), stage = parsed['--stage'], outputPath = parsed['--output-path'];
     if (!stage || !outputPath) throw Error('Invalid arguments');
     const root = dirname(resolve(outputPath));
     if (Object.hasOwn(contracts, stage)) {
-      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER});
+      let imageFeatures = {};
+      const configModule = resolve(dirname(fileURLToPath(import.meta.url)), 'd-acceleration', 'd-config.ts');
+      if (existsSync(configModule)) imageFeatures = (await import(pathToFileURL(configModule).href)).resolveDFeatureFlags(process.cwd());
+      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures});
       findings.push(...evidence.findings);
     }
     const factsPath = resolve(root, 'ui-poc-routing-facts.json');
@@ -37,4 +42,4 @@ function main(argv) {
   } catch (e) { findings.push(e.message); }
   console.log(JSON.stringify({pass:findings.length === 0,findings_count:findings.length,findings}));
 }
-main(process.argv.slice(2));
+await main(process.argv.slice(2));

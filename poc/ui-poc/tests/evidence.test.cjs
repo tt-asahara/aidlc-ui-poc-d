@@ -74,3 +74,15 @@ test('rejects previously visited contract identity',t=>{const f=fixture(t);asser
 
 test('actual TS adapter emits script verdict JSON on missing input',()=>{const {spawnSync}=require('node:child_process');const r=spawnSync(process.execPath,[path.resolve(__dirname,'../tools/aidlc-sensor-ui-poc-evidence.ts'),'--stage','code-generation','--output-path','/nonexistent-ui-poc-test-input'],{encoding:'utf8'});assert.equal(r.status,0);const o=JSON.parse(r.stdout);assert.equal(o.pass,false);assert.ok(o.findings_count>=1);assert.match(o.findings.join(' '),/(Declared deliverable is missing|ENOENT)/);});
 test('regression: approved metadata-only implementation envelope is rejected',t=>{const f=buildFixture(t);const broken={schema:1,stage:'code-generation',arm:'A',requiredMappings:['SCREEN-HOME/STATE-EMPTY/AC-001']};fs.writeFileSync(f.outputPath,'```ui-poc-contract\n'+JSON.stringify(broken)+'\n```\n');f.approveImplementation();assert.equal(f.runBuild().pass,false);});
+
+test('schema 2 refined evidence binds the rendered semantic snapshot to its HTML source',t=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-v2-'));t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ const html=Buffer.from('<main data-ui-screen="SCREEN-HOME" data-ui-state="STATE-READY">Ready</main>');fs.writeFileSync(path.join(temp,'screen.html'),html);
+ const snapshot={schema:1,kind:'ui-semantic-snapshot',source:{path:'screen.html',sha256:hash(html)},captures:[{screen:'SCREEN-HOME',state:'STATE-READY',rendered:true,elements:[{key:'AUTO-ready',explicitId:false,kind:'text',text:'Ready'}]}]};
+ fs.writeFileSync(path.join(temp,'snapshot.json'),JSON.stringify(snapshot));
+ const c={schema:2,stage:'refined-mockups',arm:'C',assets:[{path:'screen.html',sha256:hash(html)},{path:'snapshot.json',sha256:hash(fs.readFileSync(path.join(temp,'snapshot.json')))}],mappings:[{screen:'SCREEN-HOME',state:'STATE-READY',ac:'AC-001',asset:'screen.html',check:'Ready text'}],requiredMappings:['SCREEN-HOME/STATE-READY/AC-001'],fidelity:{approvedSnapshot:{path:'snapshot.json',sha256:hash(fs.readFileSync(path.join(temp,'snapshot.json')))},dispositions:[]}};
+ const outputPath=path.join(temp,'ui-poc-refined-contract.md');fs.writeFileSync(outputPath,render(c));
+ assert.equal(check({stage:'refined-mockups',outputPath}).pass,true);
+ c.assets[0].sha256='0'.repeat(64);fs.writeFileSync(outputPath,render(c));
+ assert.equal(check({stage:'refined-mockups',outputPath}).pass,false);
+});

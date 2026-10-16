@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseDJsonc, resolveDAutomation, resolveDClef, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
+import { effectivePngGeneration, parseDJsonc, resolveDAutomation, resolveDClef, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -19,7 +19,7 @@ describe("D JSONC configuration", () => {
   });
   test("defaults optional execution paths off", () => {
     const root = project();
-    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false });
+    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false, mockupPngGeneration: false, visualRegression: false });
     expect(resolveDFeatureInputs(root)).toEqual({ requirementIdBridges: [], functionalDesignBudgets: { artifactBytes: 60000, unitBytes: 160000, metadataBytes: 30000 }, sourceRoots: [], specRoots: [] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, maxSteps: 64, deadlineMs: 900000, labelAllowlist: [] });
@@ -28,10 +28,16 @@ describe("D JSONC configuration", () => {
     const root = project();
     write(root, "d-acceleration.json", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, "clef": { "enabled": true, "lowRiskUnits": ["web"] }, }`);
     write(root, "d-acceleration.local.json", `{ "features": { "sourceGrounding": false, "specGrounding": true }, "auto": { "enabled": false, "ambiguityPolicy": "halt", "maxRetries": 1 }, "issueAutopilot": { "enabled": false }, "clef": { "enabled": false }, }`);
-    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true });
+    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true, mockupPngGeneration: false, visualRegression: false });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: "code-generation", sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 1, maxSteps: 64, deadlineMs: 900000, labelAllowlist: ["aidlc"] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDClef(root).enabled).toBe(false);
+  });
+  test("visual regression implies effective PNG generation without rewriting the explicit switch", () => {
+    const root = project(); write(root, "d-acceleration.json", '{ "features": { "visualRegression": true, "mockupPngGeneration": false } }');
+    const features = resolveDFeatureFlags(root);
+    expect(features.mockupPngGeneration).toBe(false);
+    expect(effectivePngGeneration(features)).toBe(true);
   });
   test("merges feature inputs without inventing grounding roots or ID bridges", () => {
     const root = project();
@@ -47,7 +53,7 @@ describe("D JSONC configuration", () => {
   test("documents every boolean switch in Japanese with timing and ON/OFF/default behavior", () => {
     const lines = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8").split("\n");
     const switches = lines.flatMap((line, index) => /"([^"]+)"\s*:\s*(true|false)/.test(line) ? [{ index }] : []);
-    expect(switches.length).toBe(12);
+    expect(switches.length).toBe(14);
     for (const entry of switches) {
       const comment = lines.slice(Math.max(0, entry.index - 2), entry.index).join(" ");
       expect(comment).toMatch(/[ぁ-んァ-ヶ一-龠]/);
@@ -59,8 +65,8 @@ describe("D JSONC configuration", () => {
     }
     const featureComments = lines.slice(lines.findIndex((line) => line.includes('"features"')), lines.findIndex((line) => line.includes('"featureInputs"'))).join("\n");
     for (const id of ["機能21", "機能22", "機能27", "機能28"]) expect(featureComments).toContain(id);
-    expect(featureComments.match(/既定値: OFF/g)).toHaveLength(4);
-    expect(featureComments.match(/依存関係:/g)).toHaveLength(4);
+    expect(featureComments.match(/既定値: OFF/g)).toHaveLength(6);
+    expect(featureComments.match(/依存関係:/g)).toHaveLength(6);
     expect(featureComments).toContain("sourceRoots必須で空なら停止");
     expect(featureComments).toContain("specRoots必須で空なら停止");
   });

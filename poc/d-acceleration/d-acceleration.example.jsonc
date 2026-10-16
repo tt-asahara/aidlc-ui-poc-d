@@ -23,6 +23,10 @@
     "sourceGrounding": false,
     // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須で空なら停止。利用場面: 外部仕様準拠が必要な案件。
     "specGrounding": false,
+    // UI fidelity / 対象: refined-mockups承認前。役割: 承認HTMLと同じrenderer実行から人向け基準PNGを生成する。ON時: PNGをHTML hash・viewport・renderer情報へ結合、OFF時: PNG専用captureを行わない。既定値: OFF。依存関係: visualRegressionがONならこの値に関係なく基準PNG生成も有効。負担: browser撮影と画像保管。利用場面: 人が承認時の見た目を後から確認したい画面。
+    "mockupPngGeneration": false,
+    // UI fidelity / 対象: build-and-test。役割: 承認時に固定した基準PNGと実装画面の視覚差を補助検査する。ON時: 基準PNG生成も有効になり欠落・環境不一致はNOT-READY、OFF時: pixel比較なし。既定値: OFF。依存関係: 承認時baselineと固定viewport/fontが必要。比較時の基準生成・更新は禁止。負担: browser実行とfalse-positive調査。利用場面: DOM契約では表せない重要レイアウトの回帰確認。
+    "visualRegression": false,
   },
   "featureInputs": {
     // 機能21: CのAC-形式と公式AC形式が異なる場合だけ明示する。暗黙変換や再採番はしない。
