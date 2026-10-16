@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { resolveDModels } from "./d-config.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
@@ -29,7 +30,9 @@ if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
 }
 const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
-for (const flag of ["--claude-fast", "--claude-balanced", "--claude-judgment", "--claude-effort", "--clef-url", "--clef-low-risk-units", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
+const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
+for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);
+for (const flag of ["--claude-effort", "--clef-url", "--clef-low-risk-units", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
 if (args.includes("--disposable-test-mode")) command.push("--disposable-test-mode");
 const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

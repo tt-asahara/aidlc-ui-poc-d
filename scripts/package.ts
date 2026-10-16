@@ -870,6 +870,7 @@ function buildTree(
     const accelerationRuntime = [
       "aidlc-acceleration-plan.ts",
       "conductor.ts",
+      "d-config.ts",
       "fake-worker.ts",
       "official-next-adapter.ts",
       "read-only-fanout.ts",
