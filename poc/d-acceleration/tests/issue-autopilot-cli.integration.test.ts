@@ -20,6 +20,8 @@ describe("packaged Issue autopilot command routing", () => {
     expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ reason: "intent-created", issueNumber: 42, attempts: 1, hostControl: { through: "units-generation" }, directive: { kind: "ask", gate: true } });
     expect(JSON.parse(readFileSync(join(root, "gh-argv.json"), "utf8"))).toEqual(["issue", "view", "42", "--repo", "github.com/owner/repo", "--json", "number,title,body,labels,state"]);
     const utility = JSON.parse(readFileSync(join(root, "utility-argv.json"), "utf8")); expect(utility.slice(0, 5)).toEqual(["intent-create", "--scope", "feature", "--label", "budget-api"]); expect(utility.filter((value: string) => value === "intent-create")).toHaveLength(1);
+    const activeRepair = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "42", "--partial"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(activeRepair.stdout)).toMatchObject({ reason: "repair-refused" });
     // The real bounded host owns and releases this transferred claim. Simulate
     // that terminal release before the next independent poll.
     unlinkSync(join(root, ".aidlc", "issue-autopilot", "claims", "issue-42.json"));
@@ -80,6 +82,11 @@ describe("packaged Issue autopilot command routing", () => {
     const result = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", repository, "--gh-executable", gh, "7"], { cwd: root, encoding: "utf8" });
     expect(result.status).toBe(0); expect(JSON.parse(result.stdout)).toMatchObject({ reason: "reconcile-required", attempts: 0, detail: expect.stringContaining("reconciliation required") });
     expect(() => readFileSync(join(root, "unexpected-create"), "utf8")).toThrow();
+    const partialRepair = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", repository, "repair", "--issue-number", "7", "--partial"], { cwd: root, encoding: "utf8" });
+    const repaired = JSON.parse(partialRepair.stdout) as { reason: string; archive: string };
+    expect(repaired.reason).toBe("partial-quarantined"); expect(readFileSync(join(repaired.archive, "project-description.json"), "utf8")).toContain("AIDLC-INTAKE"); expect(readFileSync(join(repaired.archive, "partial-repair-audit.json"), "utf8")).toContain("originalPath");
+    const retry = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", repository, "--gh-executable", gh, "7"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(retry.stdout)).toMatchObject({ reason: "intent-created", attempts: 1 });
   });
 
   test("explicit repair archives ambiguous binding only after official absence", () => {
@@ -97,6 +104,34 @@ describe("packaged Issue autopilot command routing", () => {
     executable(join(tools, "aidlc-utility.ts"), `console.log("{}");`); executable(join(tools, "aidlc-orchestrate.ts"), `console.log(JSON.stringify({kind:"ask"}));`);
     const retry = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "--gh-executable", gh, "7"], { cwd: root, encoding: "utf8" });
     expect(JSON.parse(retry.stdout)).toMatchObject({ reason: "intent-created", attempts: 1 });
+  });
+
+  test("corrupt official description is unknown and preserves binding without GH", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-auto-unknown-")), tools = join(root, ".claude", "tools"); mkdirSync(tools, { recursive: true });
+    writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
+    const repository = "github.com/owner/repo", binding = { provider: "github", repository, issueNumber: 7, intakeKey: intakeBindingKey({ provider: "github", repository }, 7) };
+    const bindings = join(root, ".aidlc/issue-autopilot/bindings"), record = join(root, "aidlc/spaces/default/intents/broken"); mkdirSync(bindings, { recursive: true }); mkdirSync(record, { recursive: true });
+    writeFileSync(join(bindings, `${binding.intakeKey}.json`), JSON.stringify({ ...binding, state: "pending", owner: "crashed", outcome: "ambiguous" }));
+    writeFileSync(join(record, "project-description.json"), "{broken");
+    const gh = join(root, "fake-gh.ts"); executable(gh, `import {writeFileSync} from "node:fs"; writeFileSync("gh-called","yes"); console.log("{}");`);
+    const repaired = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "7", "--partial"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(repaired.stdout)).toMatchObject({ reason: "repair-refused" });
+    const intake = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "--gh-executable", gh, "7"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(intake.stdout)).toMatchObject({ reason: "reconcile-required" });
+    expect(readFileSync(join(bindings, `${binding.intakeKey}.json`), "utf8")).toContain("ambiguous");
+    expect(() => readFileSync(join(root, "gh-called"), "utf8")).toThrow();
+  });
+
+  test("official scan limit is unknown and repair preserves binding", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-auto-limit-")); mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
+    const repository = "github.com/owner/repo", binding = { provider: "github", repository, issueNumber: 8, intakeKey: intakeBindingKey({ provider: "github", repository }, 8) };
+    const bindings = join(root, ".aidlc/issue-autopilot/bindings"), spaces = join(root, "aidlc/spaces"); mkdirSync(bindings, { recursive: true }); mkdirSync(spaces, { recursive: true });
+    writeFileSync(join(bindings, `${binding.intakeKey}.json`), JSON.stringify({ ...binding, state: "pending", owner: "crashed", outcome: "ambiguous" }));
+    for (let index = 0; index < 4097; index += 1) mkdirSync(join(spaces, `d-${index}`));
+    const repaired = spawnSync(process.execPath, [cli, "--project-dir", root, "--repo", "owner/repo", "repair", "--issue-number", "8"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(repaired.stdout)).toMatchObject({ reason: "repair-refused" });
+    expect(readFileSync(join(bindings, `${binding.intakeKey}.json`), "utf8")).toContain("ambiguous");
   });
 
   test("a later slash process resumes the durable owner before intake", () => {
@@ -153,6 +188,30 @@ describe("packaged Issue autopilot command routing", () => {
       const status = spawnSync(process.execPath, [cli, "--project-dir", root, "status"], { cwd: root, encoding: "utf8" });
       expect(JSON.parse(status.stdout).activeSession).toBeNull();
     }
+  });
+
+  test("stop remains pending across a lifecycle lock and is consumed only after terminalization", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-auto-stop-busy-"));
+    mkdirSync(join(root, ".aidlc-engine"), { recursive: true }); mkdirSync(join(root, ".aidlc", "issue-autopilot", "claims"), { recursive: true }); mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ auto: { enabled: true, sessionOnly: false, labelAllowlist: ["aidlc-auto"] }, issueAutopilot: { enabled: true } }));
+    const claim = join(root, ".aidlc", "issue-autopilot", "claims", "issue-42.json"), session = join(root, ".aidlc-engine", "d-autopilot-session.json"), lock = `${session}.lifecycle.lock`;
+    writeFileSync(claim, JSON.stringify({ issueNumber: 42, owner: "owner-a", acquiredAt: Date.now(), expiresAt: Date.now() + 900000 }));
+    writeFileSync(session, JSON.stringify({ startedAt: Date.now(), deadlineMs: 900000, maxSteps: 64, steps: 1, through: null, claim: { issueNumber: 42, owner: "owner-a", leaseMs: 900000 } }));
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    const pending = spawnSync(process.execPath, [cli, "--project-dir", root, "stop"], { cwd: root, encoding: "utf8" });
+    expect(JSON.parse(pending.stdout)).toMatchObject({ reason: "stop-pending" });
+    expect(readFileSync(join(root, ".aidlc", "issue-autopilot", "stop"), "utf8")).toContain("stop");
+    expect(JSON.parse(readFileSync(session, "utf8")).endedAt).toBeUndefined();
+    expect(JSON.parse(readFileSync(claim, "utf8")).owner).toBe("owner-a");
+
+    unlinkSync(lock);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const status = spawnSync(process.execPath, [cli, "--project-dir", root, "status"], { cwd: root, encoding: "utf8" });
+      expect(JSON.parse(status.stdout).activeSession).toBeNull();
+    }
+    expect(JSON.parse(readFileSync(session, "utf8")).terminalReason).toBe("operator-stop");
+    expect(() => readFileSync(claim, "utf8")).toThrow();
+    expect(() => readFileSync(join(root, ".aidlc", "issue-autopilot", "stop"), "utf8")).toThrow();
   });
 
   test("corrupt session recovery fails closed before GitHub intake", () => {
