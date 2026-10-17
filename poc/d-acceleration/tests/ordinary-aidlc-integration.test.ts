@@ -60,6 +60,7 @@ describe("ordinary /aidlc D integration", () => {
       "grounding-runtime.ts",
       "generic-auto-cli.ts",
       "issue-ambiguity-assessor.ts",
+      "gh-host.ts",
       "issue-autopilot-cli.ts",
       "host-session.ts",
       "host-session-cli.ts",

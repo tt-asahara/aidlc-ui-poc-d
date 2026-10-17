@@ -1,0 +1,15 @@
+{
+  "enabled": false,
+  "mode": "single-issue-per-run",
+  "sessionAuto": false,
+  "through": null,
+  "uncertaintyPolicy": "halt",
+  "labelAllowlist": [],
+  "maxAttempts": 3,
+  "maxSteps": 64,
+  "deadlineMs": 900000,
+  "activeSession": null,
+  "sessionRecoveryBusy": false,
+  "heartbeatPresent": false,
+  "inspectionError": null
+}

@@ -879,6 +879,7 @@ function buildTree(
       "decision-issue-summary.ts",
       "fake-worker.ts",
       "functional-design-discipline.ts",
+      "gh-host.ts",
       "d-feature-checks.ts",
       "grounding.ts",
       "grounding-runtime.ts",
