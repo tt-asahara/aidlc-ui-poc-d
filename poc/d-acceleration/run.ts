@@ -11,8 +11,9 @@ const runtime = join(projectDir, ".claude"); const tools = join(runtime, "tools"
 const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.md"), join(tools, "ui-poc", "c-stage-routing.json"), join(tools, "data", "plugin-contrib-ui-poc.json"), join(tools, "data", "plugin-files-ui-poc.json")];
 const missing = required.filter((path) => !existsSync(path));
 if (args.some((arg) => arg === "--clef-url" || arg === "--clef-low-risk-units")) { process.stderr.write(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units\n`); process.exit(2); }
-const optional = { ...resolveDConfig(projectDir), gitPersistence: resolveDGitPersistence(projectDir) };
-const prerequisites = checkDPrerequisites(projectDir);
+// Invalid D configuration fails closed with its one-line reason (key and allowed range), never a stack trace.
+const configured = (() => { try { return { optional: { ...resolveDConfig(projectDir), gitPersistence: resolveDGitPersistence(projectDir) }, prerequisites: checkDPrerequisites(projectDir) }; } catch (error) { process.stderr.write(`D configuration invalid: ${(error as Error).message}\n`); process.exit(2); } })();
+const { optional, prerequisites } = configured;
 const unmet = prerequisites.filter((row) => !row.satisfied);
 const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, unsupported: "all other stages return to official host", runtime: runtime, missing, prerequisites: { checked: prerequisites, unmet } };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : unmet.length ? 3 : 0); }

@@ -36,9 +36,11 @@
     "requirementIdBridges": [],
     // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
     "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },
-    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せずoff-no-valid-roots(NOT-READY、準拠主張なし)を記録する。root配下は合計200 file・1,000,000 byte以内、symlink不可。
+    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せずoff-no-valid-roots(NOT-READY、準拠主張なし)を記録する。root配下はlaneごとにgroundingLimits以内（既定: 200 file・1,000,000 byte）、symlink不可。
     "sourceRoots": [],
     "specRoots": [],
+    // 機能27/28 / 対象: sourceGrounding・specGroundingの各laneがworker起動前に作るsnapshot。役割: lane単位のfile数(maxEvidenceFiles)と成果物+証拠の合計byte数(maxInputBytes)の上限。ON時（各laneの機能がON）: 上限超過はworker呼出し前にgrounding-failed(NOT-READY、準拠主張なし)。OFF時（両機能OFF）: 参照しない。既定値: 200 file・1,000,000 byte（未設定時）。許容範囲: maxEvidenceFiles 1〜5000、maxInputBytes 1〜4000000の正の整数。範囲外・小数・文字列・未知keyは丸めずに設定エラーで停止。上限根拠: snapshot全体が1つのworker promptに埋め込まれるため、4,000,000 byteは最大1M token context相当（約4 byte/token）でpromptサイズと費用を制限する。依存関係: localがprojectよりfield単位で優先。実効値は run.ts --preflight と証拠JSONの各lane結果 limits に記録。利用場面: brownfieldでrootを絞っても既定上限に当たるとき（引上げはprompt費用増に直結）。
+    "groundingLimits": { "maxEvidenceFiles": 200, "maxInputBytes": 1000000 },
   },
   // 自動進行 / 対象: 現在セッションの公式engine正規遷移のみ。既定値: OFF。
   "auto": {

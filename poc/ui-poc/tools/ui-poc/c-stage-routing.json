@@ -10,6 +10,11 @@
       "id": "application-c",
       "scope": "ui-poc-application",
       "comparisonTreatment": null
+    },
+    "ui-poc-requirements": {
+      "id": "requirements-c",
+      "scope": "ui-poc-requirements",
+      "comparisonTreatment": null
     }
   },
   "sourceCommit": "49dd158d1076134a641b33efb035946536778336",

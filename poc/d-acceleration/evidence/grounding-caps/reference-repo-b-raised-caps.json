@@ -1,0 +1,161 @@
+{
+  "repo": "reference-repo-B (read-only)",
+  "head": "79a2baab9d5ca3aa80a3fb3dad06fc51986327fe",
+  "workerCalls": 0,
+  "artifact": "README.md",
+  "profiles": {
+    "default": {
+      "maxEvidenceFiles": 200,
+      "maxInputBytes": 1000000
+    },
+    "raised": {
+      "maxEvidenceFiles": 1000,
+      "maxInputBytes": 2000000
+    },
+    "ceiling": {
+      "maxEvidenceFiles": 5000,
+      "maxInputBytes": 4000000
+    }
+  },
+  "cases": [
+    {
+      "name": "small source root",
+      "lane": "source",
+      "roots": [
+        "core/tools/aidlc-version.ts"
+      ],
+      "default": {
+        "action": "planned",
+        "evidenceFiles": 1,
+        "bytes": 12255,
+        "ms": 6
+      },
+      "raised": {
+        "action": "planned",
+        "evidenceFiles": 1,
+        "bytes": 12255,
+        "ms": 0
+      },
+      "ceiling": {
+        "action": "planned",
+        "evidenceFiles": 1,
+        "bytes": 12255,
+        "ms": 0
+      }
+    },
+    {
+      "name": "module source root",
+      "lane": "source",
+      "roots": [
+        "harness/kddi/tools"
+      ],
+      "default": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)",
+        "ms": 1
+      },
+      "raised": {
+        "action": "planned",
+        "evidenceFiles": 32,
+        "bytes": 1162225,
+        "ms": 277
+      },
+      "ceiling": {
+        "action": "planned",
+        "evidenceFiles": 32,
+        "bytes": 1162225,
+        "ms": 2
+      }
+    },
+    {
+      "name": "large source root",
+      "lane": "source",
+      "roots": [
+        "core/tools"
+      ],
+      "default": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)",
+        "ms": 1
+      },
+      "raised": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 2000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)",
+        "ms": 0
+      },
+      "ceiling": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 4000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)",
+        "ms": 0
+      }
+    },
+    {
+      "name": "spec root docs/reference",
+      "lane": "spec",
+      "roots": [
+        "docs/reference"
+      ],
+      "default": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)",
+        "ms": 1
+      },
+      "raised": {
+        "action": "planned",
+        "evidenceFiles": 49,
+        "bytes": 1638801,
+        "ms": 362
+      },
+      "ceiling": {
+        "action": "planned",
+        "evidenceFiles": 49,
+        "bytes": 1638801,
+        "ms": 3
+      }
+    },
+    {
+      "name": "whole repo root",
+      "lane": "source",
+      "roots": [
+        "."
+      ],
+      "default": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 200 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 14
+      },
+      "raised": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 1000 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 64
+      },
+      "ceiling": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 5000 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 166
+      }
+    },
+    {
+      "name": "node_modules root",
+      "lane": "source",
+      "roots": [
+        "node_modules"
+      ],
+      "default": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 200 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 16
+      },
+      "raised": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 1000 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 30
+      },
+      "ceiling": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 5000 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)",
+        "ms": 196
+      }
+    }
+  ]
+}
