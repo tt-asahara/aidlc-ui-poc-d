@@ -102,3 +102,43 @@ Approval checkpoint persistence is a separate, project-controlled D feature. It 
 The ordinary `/aidlc` skill runs only the installed `run.ts`; it resolves PRODUCT's composed engine/framework and obtains a fresh official directive. Workers write only their issued disjoint output sets; the native gate/state owner integrates and settles them. The D tools must never bypass the C plugin's HTML deliverables, approval receipts, `ui-poc-evidence` sensor, or refined-to-code-to-test handoff. Save preflight, stdout, stderr, enabled-feature summary, and returned official handoff as the D execution record; import checks alone are not setup completion.
 
 Report the retained C source pins and licenses, UI compose status, D source commit, acceleration mode, directive validation, fallback disposition, requested/runtime model IDs, evidence paths, and exact official next handoff. Fixtures, fake workers, dry runs, and benchmark estimates are synthetic evidence and are not live-model or speed claims.
+
+## Optional PR Lens supplemental review (opt-in only)
+
+`poc/pr-lens-review` is an optional plugin. It adds a supplemental PR Lens
+diagram and review at Build and Test. The switch `features.prLensReview` is
+OFF by default because a review run is slow. Do not install the plugin or
+enable the switch unless the person explicitly asked for PR Lens review in
+this PRODUCT. Setup itself must never set `features.prLensReview`.
+
+When asked, read [`../../../poc/pr-lens-review/README.md`](../../../poc/pr-lens-review/README.md).
+Then, from `SRC`, after the D install:
+
+```bash
+bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/pr-lens-review claude --json
+bun poc/pr-lens-review/scripts/setup-pr-lens.ts --product "$PRODUCT" --dry-run
+```
+
+Present the preview. It lists the fetch of
+`https://github.com/coldteadotai/pr-lens.git` at exactly
+`7a9115c8202da4db030be5954ada8862e6135dce` (MIT) into
+`PRODUCT/.vendor/pr-lens`, the pnpm install/build, the receipt, the local
+`.git/info/exclude` lines, and the project-local compose. Apply by rerunning
+the same command without `--dry-run`. Add `--offline` when only the local
+pnpm store may be used.
+
+The setup stops on any of these, and you report it as a setup failure:
+
+- an existing checkout at another commit
+- a changed licence
+- dirty compose surfaces
+- a non-idempotent compose
+
+The person turns the review on in `.claude/d-acceleration.local.jsonc` or
+`.claude/d-acceleration.jsonc` with `{ "features": { "prLensReview": true } }`.
+Then preflight must show `supplementalReview.prLensReview.status: ready` and
+no unmet `features.prLensReview` row.
+
+The review never replaces official reviewers, sensors, approvals, or gates.
+When it is OFF it does nothing. When it is ON without the pinned install, it
+fails closed with a one-line next step.

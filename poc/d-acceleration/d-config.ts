@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 import { DEFAULT_GROUNDING_LIMITS, groundingLimitError, type GroundingLimits } from "./grounding.ts";
+import { checkPrLensInstall, checkPrLensPluginComposed, PR_LENS_PIN, PR_LENS_VENDOR_DIR } from "./pr-lens-pin.ts";
 
 /** One owner for the fail-closed notice used by config, planner input, and runner flags. */
 export const CLEF_REMOVED = "Clef routing support was removed from D (owner decision 2026-10-17)";
@@ -10,7 +11,7 @@ export const DECISION_RECORD_PATH_REMOVED = "aiApproval.decisionRecordPath was r
 export type DModelTier = "fast" | "balanced" | "judgment";
 export type DModelCatalog = Record<DModelTier, string>;
 export type DGitPersistenceConfig = { enabled: boolean; push: boolean; remote: string; branch?: string };
-export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesignDocumentDiscipline: boolean; sourceGrounding: boolean; specGrounding: boolean; mockupPngGeneration: boolean; visualRegression: boolean };
+export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesignDocumentDiscipline: boolean; sourceGrounding: boolean; specGrounding: boolean; mockupPngGeneration: boolean; visualRegression: boolean; prLensReview: boolean };
 export type DAmbiguityPolicy = "halt" | "assume" | "research";
 export type DAutomationConfig = { enabled: boolean; through?: string; sessionOnly: boolean; ambiguityPolicy: DAmbiguityPolicy; assumptionLedger: boolean; maxRetries: number; maxSteps: number; deadlineMs: number; labelAllowlist: string[] };
 export type DIssueAutopilotConfig = { enabled: boolean; oneIssuePerRun: boolean };
@@ -82,7 +83,7 @@ function readConfig(path: string): DFileConfig {
   const gitPersistence = object(value.gitPersistence, "Git persistence", path);
   if (gitPersistence) { for (const key of Object.keys(gitPersistence)) if (!["enabled", "push", "remote", "branch"].includes(key)) throw new Error(`unknown D Git persistence key ${key} in ${path}`); for (const key of ["enabled", "push"] as const) bool(gitPersistence[key], `Git persistence ${key}`, path); for (const key of ["remote", "branch"] as const) if (gitPersistence[key] !== undefined && (typeof gitPersistence[key] !== "string" || !gitPersistence[key].trim())) throw new Error(`invalid D Git persistence ${key} in ${path}`); }
   const features = object(value.features, "features", path);
-  if (features) for (const key of ["requirementIdValidation", "functionalDesignDocumentDiscipline", "sourceGrounding", "specGrounding", "mockupPngGeneration", "visualRegression"] as const) bool(features[key], `feature ${key}`, path);
+  if (features) for (const key of ["requirementIdValidation", "functionalDesignDocumentDiscipline", "sourceGrounding", "specGrounding", "mockupPngGeneration", "visualRegression", "prLensReview"] as const) bool(features[key], `feature ${key}`, path);
   const featureInputs = object(value.featureInputs, "feature inputs", path);
   if (featureInputs) {
     strings(featureInputs.sourceRoots, "feature sourceRoots", path); strings(featureInputs.specRoots, "feature specRoots", path);
@@ -140,7 +141,7 @@ function layers(projectDir: string) { return { project: readConfig(configPath(pr
 
 export function resolveDGitPersistence(projectDir: string): DGitPersistenceConfig { const { project, local } = layers(projectDir), base = project.gitPersistence ?? {}, override = local.gitPersistence ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, push: override.push ?? base.push ?? false, remote: (override.remote ?? base.remote ?? "origin").trim(), branch: override.branch?.trim() ?? base.branch?.trim() }; }
 export function resolveDModels(projectDir: string, cli: Partial<DModelCatalog> = {}): { models: DModelCatalog; sources: Record<DModelTier, "cli" | "local" | "project" | "default"> } { const { project, local } = layers(projectDir), models = {} as DModelCatalog, sources = {} as Record<DModelTier, "cli" | "local" | "project" | "default">; for (const tier of ["fast", "balanced", "judgment"] as const) { const choices = [[cli[tier], "cli"], [local.models[tier], "local"], [project.models[tier], "project"], [DEFAULT_D_MODEL, "default"]] as const, selected = choices.find(([model]) => typeof model === "string" && model.trim())!; models[tier] = selected[0]!.trim(); sources[tier] = selected[1]; } return { models, sources }; }
-export function resolveDFeatureFlags(projectDir: string): DFeatureFlags { const { project, local } = layers(projectDir), base = project.features ?? {}, override = local.features ?? {}; return { requirementIdValidation: override.requirementIdValidation ?? base.requirementIdValidation ?? false, functionalDesignDocumentDiscipline: override.functionalDesignDocumentDiscipline ?? base.functionalDesignDocumentDiscipline ?? false, sourceGrounding: override.sourceGrounding ?? base.sourceGrounding ?? false, specGrounding: override.specGrounding ?? base.specGrounding ?? false, mockupPngGeneration: override.mockupPngGeneration ?? base.mockupPngGeneration ?? false, visualRegression: override.visualRegression ?? base.visualRegression ?? false }; }
+export function resolveDFeatureFlags(projectDir: string): DFeatureFlags { const { project, local } = layers(projectDir), base = project.features ?? {}, override = local.features ?? {}; return { requirementIdValidation: override.requirementIdValidation ?? base.requirementIdValidation ?? false, functionalDesignDocumentDiscipline: override.functionalDesignDocumentDiscipline ?? base.functionalDesignDocumentDiscipline ?? false, sourceGrounding: override.sourceGrounding ?? base.sourceGrounding ?? false, specGrounding: override.specGrounding ?? base.specGrounding ?? false, mockupPngGeneration: override.mockupPngGeneration ?? base.mockupPngGeneration ?? false, visualRegression: override.visualRegression ?? base.visualRegression ?? false, prLensReview: override.prLensReview ?? base.prLensReview ?? false }; }
 export function effectivePngGeneration(features: DFeatureFlags): boolean { return features.mockupPngGeneration || features.visualRegression; }
 export function resolveDFeatureInputs(projectDir: string): DFeatureInputs { const { project, local } = layers(projectDir), base = project.featureInputs ?? {}, override = local.featureInputs ?? {}, baseBudget = base.functionalDesignBudgets ?? {}, overrideBudget = override.functionalDesignBudgets ?? {}; return { requirementIdBridges: override.requirementIdBridges ?? base.requirementIdBridges ?? [], functionalDesignBudgets: { artifactBytes: overrideBudget.artifactBytes ?? baseBudget.artifactBytes ?? 60_000, unitBytes: overrideBudget.unitBytes ?? baseBudget.unitBytes ?? 160_000, metadataBytes: overrideBudget.metadataBytes ?? baseBudget.metadataBytes ?? 30_000 }, sourceRoots: override.sourceRoots ?? base.sourceRoots ?? [], specRoots: override.specRoots ?? base.specRoots ?? [], groundingLimits: { maxEvidenceFiles: override.groundingLimits?.maxEvidenceFiles ?? base.groundingLimits?.maxEvidenceFiles ?? DEFAULT_GROUNDING_LIMITS.maxEvidenceFiles, maxInputBytes: override.groundingLimits?.maxInputBytes ?? base.groundingLimits?.maxInputBytes ?? DEFAULT_GROUNDING_LIMITS.maxInputBytes } }; }
 export function resolveDAutomation(projectDir: string): DAutomationConfig { const { project, local } = layers(projectDir), base = project.auto ?? {}, override = local.auto ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, through: override.through?.trim() ?? base.through?.trim(), sessionOnly: override.sessionOnly ?? base.sessionOnly ?? true, ambiguityPolicy: override.ambiguityPolicy ?? base.ambiguityPolicy ?? "halt", assumptionLedger: override.assumptionLedger ?? base.assumptionLedger ?? true, maxRetries: override.maxRetries ?? base.maxRetries ?? 2, maxSteps: override.maxSteps ?? base.maxSteps ?? 64, deadlineMs: override.deadlineMs ?? base.deadlineMs ?? 900_000, labelAllowlist: override.labelAllowlist ?? base.labelAllowlist ?? [] }; }
@@ -169,6 +170,12 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
     for (const name of ["requirementIdValidation", "mockupPngGeneration", "visualRegression"] as const) {
       if (config.features[name]) need(`features.${name}`, "composed C UI contract (.claude/tools/ui-poc/c-stage-routing.json)", existsSync(contract));
     }
+  }
+  if (config.features.prLensReview) {
+    const install = checkPrLensInstall(projectDir);
+    need("features.prLensReview", `pinned PR Lens installed at ${PR_LENS_VENDOR_DIR} (commit ${PR_LENS_PIN}, built, receipt matches; run poc/pr-lens-review/scripts/setup-pr-lens.ts)${install.ok ? "" : `: ${install.detail}`}`, install.ok);
+    const composed = checkPrLensPluginComposed(projectDir);
+    need("features.prLensReview", `pr-lens-review plugin composed into Build and Test${composed.ok ? "" : `: ${composed.detail}`}`, composed.ok);
   }
   if (config.issueAutopilot.enabled) {
     need("issueAutopilot.enabled", "auto.enabled is true", config.auto.enabled);

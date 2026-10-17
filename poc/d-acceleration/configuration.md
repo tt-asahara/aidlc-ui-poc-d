@@ -134,6 +134,45 @@ ONへ戻してもDはIntentを `swarm` へ戻しません。`AIDLC_USE_SWARM` �
 （env > local > project > machine）は発行済み `invoke-swarm` の実行方式選択だけで、
 D OFF中にswarmを再有効化しません。
 
+## PR Lens補助レビュー (`features.prLensReview`)
+
+既定OFFです。1回のレビューに数分以上かかり、モデル利用も増えるためです。localの
+`.claude/d-acceleration.local.jsonc` がprojectの `.claude/d-acceleration.jsonc` より
+優先されます。不正な値（boolean以外）は1行の設定エラーで停止します。
+
+ONにすると、任意plugin `poc/pr-lens-review` がBuild and Testで補助レビューを作ります。
+対象はアプリ実装がある場合だけです。pluginはStep 11の前に合成されています。
+固定版のPR Lens（`coldteadotai/pr-lens@7a9115c8202da4db030be5954ada8862e6135dce`、MIT）が
+差分の図を描き、evidence付きのレビューを書きます。このレビューは補助です。
+公式のreview・sensor・テスト判定・承認・gateの結果を変えず、gateも決めません。
+
+断片は最初に `bun .claude/tools/d-acceleration/pr-lens-gate.ts` を実行します。
+
+- **OFF時:** `skipped-by-config` を返します。PR Lensもレビュー用ファイルも作りません。
+  この結果は、Dの証拠 `aidlc/.aidlc-engine/d-evidence/build-and-test-pr-lens-review.json` に
+  だけ記録します。
+- **ON時に次のどれかがある場合:** exit 2で停止します（fail-closed）。
+  - 固定版がinstallされていない
+  - pinが一致しない
+  - LICENSEが違う
+  - buildがsetup receiptと違う
+  - pluginの断片が合成されていない
+
+  成功扱いにはしません。stderrの1行で次の1手を示します。次の1手は
+  `poc/pr-lens-review/scripts/setup-pr-lens.ts --product <PRODUCT>` の実行か、
+  `features.prLensReview=false` への変更です。
+
+固定版の取得・build・receipt・合成は、setup（`setup-pr-lens.ts`）が行います。
+setupはこのスイッチを変更しません。ONにするかどうかは利用者が決めます。
+
+`run.ts --preflight` は次の3つを表示します。
+
+- 実効値 `optional.features.prLensReview`
+- gate状態 `supplementalReview.prLensReview`（`skipped-by-config` / `ready` / `not-ready` と理由）
+- ON時の前提2行（固定版install、plugin合成）
+
+前提が未充足のときは、他のswitchと同じくexit 3です。
+
 ## UI fidelity image settings
 
 `features.mockupPngGeneration` と `features.visualRegression` は独立した既定OFFの

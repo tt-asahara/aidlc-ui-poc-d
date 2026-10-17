@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { CLEF_REMOVED, checkDPrerequisites, resolveDConfig, resolveDGitPersistence, resolveDModelContract, resolveDModels } from "./d-config.ts";
 import { enforceParallelOff } from "./parallel-guard.ts";
+import { prLensGate } from "./pr-lens-gate.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
@@ -15,7 +16,7 @@ if (args.some((arg) => arg === "--clef-url" || arg === "--clef-low-risk-units"))
 const configured = (() => { try { return { optional: { ...resolveDConfig(projectDir), gitPersistence: resolveDGitPersistence(projectDir) }, prerequisites: checkDPrerequisites(projectDir) }; } catch (error) { process.stderr.write(`D configuration invalid: ${(error as Error).message}\n`); process.exit(2); } })();
 const { optional, prerequisites } = configured;
 const unmet = prerequisites.filter((row) => !row.satisfied);
-const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, unsupported: "all other stages return to official host", runtime: runtime, missing, prerequisites: { checked: prerequisites, unmet } };
+const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, supplementalReview: (() => { const gate = prLensGate(projectDir); return { prLensReview: { enabled: gate.enabled, status: gate.status, ...(gate.reason ? { reason: gate.reason, detail: gate.detail, next: gate.next } : {}), pin: gate.pin, decidesGates: false } }; })(), unsupported: "all other stages return to official host", runtime: runtime, missing, prerequisites: { checked: prerequisites, unmet } };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : unmet.length ? 3 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");

@@ -1,0 +1,37 @@
+# Real smoke of poc/pr-lens-review in a scratch PRODUCT (fresh-install.ts install + setup-pr-lens.ts --offline), 2026-10-17T13:46:38Z
+# vendor HEAD: 7a9115c8202da4db030be5954ada8862e6135dce
+
+## features.prLensReview=false (local)
+
+$ bun .claude/tools/d-acceleration/pr-lens-gate.ts --no-record
+{"schema":1,"stage":"build-and-test","feature":"features.prLensReview","pin":"7a9115c8202da4db030be5954ada8862e6135dce","prLensRun":false,"gateDecision":"none","approvalRecorded":false,"enabled":false,"status":"skipped-by-config"}
+[exit 0]
+
+$ bun .claude/tools/pr-lens-review.ts validate-render
+{"status":"skipped-by-config","command":"validate-render","prLensRun":false}
+[exit 0]
+
+## features.prLensReview=true (local)
+
+$ bun .claude/tools/d-acceleration/pr-lens-gate.ts --no-record
+{"schema":1,"stage":"build-and-test","feature":"features.prLensReview","pin":"7a9115c8202da4db030be5954ada8862e6135dce","prLensRun":false,"gateDecision":"none","approvalRecorded":false,"enabled":true,"status":"ready"}
+[exit 0]
+
+$ bun .claude/tools/pr-lens-review.ts verify-report --context .pr-lens/review-context.json --report aidlc/spaces/default/intents/smoke/construction/build-and-test/pr-lens-review.md --metadata aidlc/spaces/default/intents/smoke/construction/build-and-test/pr-lens-review.json
+review file integrity and provenance valid; semantic quality remains an AI judgment; this is a supplement and decides no gate
+[exit 0]
+## after a late source edit
+
+$ bun .claude/tools/pr-lens-review.ts verify-report --context .pr-lens/review-context.json --report aidlc/spaces/default/intents/smoke/construction/build-and-test/pr-lens-review.md --metadata aidlc/spaces/default/intents/smoke/construction/build-and-test/pr-lens-review.json
+pr-lens-review verify-report: application HEAD/path set/content changed after prepare
+[exit 1]
+## receipt removed (setup not finished)
+
+$ bun .claude/tools/pr-lens-review.ts validate-render
+PR Lens review is ON but not ready (receipt-missing: .vendor/pr-lens.receipt.json is missing (the setup did not finish)); next: run the D pr-lens setup (bun <D checkout>/poc/pr-lens-review/scripts/setup-pr-lens.ts --product <PRODUCT>) or set features.prLensReview=false
+[exit 2]
+## receipt restored
+
+$ bun .claude/tools/d-acceleration/pr-lens-gate.ts --no-record
+{"schema":1,"stage":"build-and-test","feature":"features.prLensReview","pin":"7a9115c8202da4db030be5954ada8862e6135dce","prLensRun":false,"gateDecision":"none","approvalRecorded":false,"enabled":true,"status":"ready"}
+[exit 0]

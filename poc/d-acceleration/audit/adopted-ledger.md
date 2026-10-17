@@ -53,6 +53,15 @@ Observed 2026-10-17 at source tree `bb813a16…`. This tree is shared by
 | 27 | Optional bounded source grounding, default off | `grounding.ts` (added `dce8819d`, last change `ed507a88`), `grounding-runtime.ts` (added `e7978ce6`), same entry | `features.sourceGrounding` = `false`; `featureInputs.sourceRoots` = `[]`. With no roots it stays OFF. | `grounding.test.ts`: 9/0. `grounding-runtime.test.ts`: 1/0 | 未実施. Brownfield validation belongs to #15. | Same as 21 |
 | 28 | Optional bounded specification grounding, default off | Same as 27 | `features.specGrounding` = `false`; `featureInputs.specRoots` = `[]` | Same as 27 | 未実施 | Same as 21 |
 
+## Optional plugin: PR Lens supplemental review (issue #10, accepted 2026-10-17)
+
+This is not a numbered adopted feature. The owner accepted it on issue #10 as an
+optional, default-OFF plugin.
+
+| Item | Implementation path | Config key / default / effective | Test (result) | Installed run | Status |
+|---|---|---|---|---|---|
+| PR Lens supplemental review at Build and Test | `poc/pr-lens-review/` (fragment `before-step:11`, tool, skill, doctor check, setup `scripts/setup-pr-lens.ts`); D owners `pr-lens-pin.ts` (pin `7a9115c8…`, MIT licence hash, receipt, install check) and `pr-lens-gate.ts` (switch + install → `skipped-by-config` / `ready` / fail-closed `not-ready`); preflight rows in `d-config.ts`, gate status in `run.ts --preflight` | `features.prLensReview` = `false`; effective = `false` (OFF, skipped-by-config) | `poc/pr-lens-review/tests/pr-lens-review.test.ts` and `d-config.test.ts` (see the workstream report for counts) | Smoke in a scratch fresh-install PRODUCT with the real pinned fetch, build, compose, synthetic render, and verify: `../evidence/pr-lens/`. No real application review was run in D. | accepted, default OFF, toggle key `features.prLensReview` |
+
 ## Packaged path and hash
 
 `bun scripts/package.ts` exits 0, and `bun scripts/package.ts --check` exits 0
