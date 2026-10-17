@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DECISION_RECORD_PATH_REMOVED, effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
+import { spawnSync } from "node:child_process";
+import { DECISION_RECORD_PATH_REMOVED, effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels, resolveDUiDesign } from "../d-config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -38,7 +39,7 @@ describe("D JSONC configuration", () => {
   });
   test("defaults optional execution paths off", () => {
     const root = project();
-    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false, mockupPngGeneration: false, visualRegression: false });
+    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: false, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: false, mockupPngGeneration: false, visualRegression: false, prLensReview: false });
     expect(resolveDFeatureInputs(root)).toEqual({ requirementIdBridges: [], functionalDesignBudgets: { artifactBytes: 60000, unitBytes: 160000, metadataBytes: 30000 }, sourceRoots: [], specRoots: [], groundingLimits: { maxEvidenceFiles: 200, maxInputBytes: 1000000 } });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, maxSteps: 64, deadlineMs: 900000, labelAllowlist: [] });
@@ -64,11 +65,61 @@ describe("D JSONC configuration", () => {
     const root = project();
     write(root, "d-acceleration.jsonc", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, }`);
     write(root, "d-acceleration.local.jsonc", `{ "features": { "sourceGrounding": false, "specGrounding": true }, "auto": { "enabled": false, "ambiguityPolicy": "halt", "maxRetries": 1 }, "issueAutopilot": { "enabled": false }, }`);
-    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true, mockupPngGeneration: false, visualRegression: false });
+    expect(resolveDFeatureFlags(root)).toEqual({ requirementIdValidation: true, functionalDesignDocumentDiscipline: false, sourceGrounding: false, specGrounding: true, mockupPngGeneration: false, visualRegression: false, prLensReview: false });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: "code-generation", sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 1, maxSteps: 64, deadlineMs: 900000, labelAllowlist: ["aidlc"] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
   });
 
+  test("features.prLensReview defaults OFF, local overrides project in both directions, and a non-boolean fails closed", () => {
+    const root = project();
+    expect(resolveDFeatureFlags(root).prLensReview).toBe(false);
+    write(root, "d-acceleration.jsonc", `{ "features": { "prLensReview": true } }`);
+    expect(resolveDFeatureFlags(root).prLensReview).toBe(true);
+    write(root, "d-acceleration.local.jsonc", `{ // personal: too slow today\n "features": { "prLensReview": false, }, }`);
+    expect(resolveDFeatureFlags(root).prLensReview).toBe(false);
+    write(root, "d-acceleration.jsonc", `{ "features": { "prLensReview": false } }`);
+    write(root, "d-acceleration.local.jsonc", `{ "features": { "prLensReview": true } }`);
+    expect(resolveDFeatureFlags(root).prLensReview).toBe(true);
+    for (const value of ['"yes"', "1", "null"]) {
+      write(root, "d-acceleration.local.jsonc", `{ "features": { "prLensReview": ${value} } }`);
+      expect(() => resolveDFeatureFlags(root)).toThrow(/^invalid D feature prLensReview in .*d-acceleration\.local\.jsonc$/);
+    }
+  });
+  test("uiDesign.refinedMockupSkill defaults to the routing default, local overrides project, and malformed values fail closed", () => {
+    const root = project();
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: null });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": "impeccable" } }`);
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: "impeccable" });
+    write(root, "d-acceleration.local.jsonc", `{ // try the search-driven system\n "uiDesign": { "refinedMockupSkill": "ui-ux-pro-max", }, }`);
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: "ui-ux-pro-max" });
+    for (const value of ['""', '"Impeccable"', '"a b"', "true", "null"]) {
+      write(root, "d-acceleration.local.jsonc", `{ "uiDesign": { "refinedMockupSkill": ${value} } }`);
+      expect(() => resolveDUiDesign(root)).toThrow(/^invalid D uiDesign refinedMockupSkill in .*d-acceleration\.local\.jsonc$/);
+    }
+    write(root, "d-acceleration.local.jsonc", `{ "uiDesign": { "roughMockupSkill": "impeccable" } }`);
+    expect(() => resolveDUiDesign(root)).toThrow(/^unknown D uiDesign key roughMockupSkill in /);
+  });
+  test("print-ui-design prints the resolved choice and exits 2 on invalid configuration", () => {
+    const root = project();
+    const cli = () => spawnSync(process.execPath, [join(import.meta.dir, "..", "d-config.ts"), "print-ui-design", root], { encoding: "utf8" });
+    expect(JSON.parse(cli().stdout)).toEqual({ refinedMockupSkill: null });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": "impeccable" } }`);
+    expect(JSON.parse(cli().stdout)).toEqual({ refinedMockupSkill: "impeccable" });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": 1 } }`);
+    const failed = cli();
+    expect(failed.status).toBe(2);
+    expect(failed.stderr).toMatch(/invalid D uiDesign refinedMockupSkill/);
+  });
+  test("the example JSONC lists exactly the routing config's design-skill choices, with the default first", () => {
+    const example = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8");
+    const routing = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "ui-poc", "tools", "ui-poc", "c-stage-routing.json"), "utf8"));
+    const listed = [...example.matchAll(/^\s*\/\/\s+"([a-z0-9-]+)"\s+…/gm)].map((match) => match[1]);
+    expect(listed).toEqual(Object.keys(routing.designSkillChoices));
+    expect(listed[0]).toBe(routing.defaultDesignSkill);
+    expect(example).toContain(`"refinedMockupSkill": "${routing.defaultDesignSkill}",`);
+    const parsed = parseDJsonc(example) as { uiDesign: { refinedMockupSkill: string } };
+    expect(parsed.uiDesign.refinedMockupSkill).toBe(routing.defaultDesignSkill);
+  });
   test("a leftover clef key fails closed with a one-line removal notice", () => {
     for (const layer of ["d-acceleration.jsonc", "d-acceleration.local.jsonc"]) {
       const root = project();
@@ -123,7 +174,7 @@ describe("D JSONC configuration", () => {
   test("documents every boolean switch in Japanese with timing and ON/OFF/default behavior", () => {
     const lines = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8").split("\n");
     const switches = lines.flatMap((line, index) => /"([^"]+)"\s*:\s*(true|false)/.test(line) ? [{ index }] : []);
-    expect(switches.length).toBe(16);
+    expect(switches.length).toBe(17);
     for (const entry of switches) {
       const comment = lines.slice(Math.max(0, entry.index - 2), entry.index).join(" ");
       expect(comment).toMatch(/[ぁ-んァ-ヶ一-龠]/);
@@ -135,8 +186,8 @@ describe("D JSONC configuration", () => {
     }
     const featureComments = lines.slice(lines.findIndex((line) => line.includes('"features"')), lines.findIndex((line) => line.includes('"featureInputs"'))).join("\n");
     for (const id of ["機能21", "機能22", "機能27", "機能28"]) expect(featureComments).toContain(id);
-    expect(featureComments.match(/既定値: OFF/g)).toHaveLength(6);
-    expect(featureComments.match(/依存関係:/g)).toHaveLength(6);
+    expect(featureComments.match(/既定値: OFF/g)).toHaveLength(7);
+    expect(featureComments.match(/依存関係:/g)).toHaveLength(7);
     expect(featureComments).toContain("sourceRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない");
     const limitsIndex = lines.findIndex((line) => line.includes('"groundingLimits"'));
     const limitsComment = lines[limitsIndex - 1]!;

@@ -1,8 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 import { DEFAULT_GROUNDING_LIMITS, groundingLimitError, type GroundingLimits } from "./grounding.ts";
+import { checkPrLensInstall, checkPrLensPluginComposed, PR_LENS_PIN, PR_LENS_VENDOR_DIR } from "./pr-lens-pin.ts";
 
 /** One owner for the fail-closed notice used by config, planner input, and runner flags. */
 export const CLEF_REMOVED = "Clef routing support was removed from D (owner decision 2026-10-17)";
@@ -10,7 +12,7 @@ export const DECISION_RECORD_PATH_REMOVED = "aiApproval.decisionRecordPath was r
 export type DModelTier = "fast" | "balanced" | "judgment";
 export type DModelCatalog = Record<DModelTier, string>;
 export type DGitPersistenceConfig = { enabled: boolean; push: boolean; remote: string; branch?: string };
-export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesignDocumentDiscipline: boolean; sourceGrounding: boolean; specGrounding: boolean; mockupPngGeneration: boolean; visualRegression: boolean };
+export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesignDocumentDiscipline: boolean; sourceGrounding: boolean; specGrounding: boolean; mockupPngGeneration: boolean; visualRegression: boolean; prLensReview: boolean };
 export type DAmbiguityPolicy = "halt" | "assume" | "research";
 export type DAutomationConfig = { enabled: boolean; through?: string; sessionOnly: boolean; ambiguityPolicy: DAmbiguityPolicy; assumptionLedger: boolean; maxRetries: number; maxSteps: number; deadlineMs: number; labelAllowlist: string[] };
 export type DIssueAutopilotConfig = { enabled: boolean; oneIssuePerRun: boolean };
@@ -18,11 +20,13 @@ export type DAiApprovalConfig = { mode: "human" | "stage-gates"; minConfidence: 
 export type DDecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type DConstructionDefaults = { iteration: "official" | "stage-major"; execution: "official" | "swarm" };
 export type DParallelConfig = { enabled: boolean };
+/** null = the routing config's default design skill (the pinned Arm C component). */
+export type DUiDesignConfig = { refinedMockupSkill: string | null };
 export type DFeatureInputs = { requirementIdBridges: Array<{ uiAc: string; officialId: string }>; functionalDesignBudgets: { artifactBytes: number; unitBytes: number; metadataBytes: number }; sourceRoots: string[]; specRoots: string[]; groundingLimits: GroundingLimits };
-export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; parallel: DParallelConfig; constructionDefaults: DConstructionDefaults };
+export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; parallel: DParallelConfig; constructionDefaults: DConstructionDefaults; uiDesign: DUiDesignConfig };
 export const DEFAULT_D_MODEL = "opus";
 
-type DFileConfig = { models: Partial<DModelCatalog>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults> };
+type DFileConfig = { models: Partial<DModelCatalog>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults>; uiDesign?: { refinedMockupSkill?: string } };
 
 /** Parse JSONC without changing comment-like text inside strings. */
 export function parseDJsonc(source: string, path = "D configuration"): unknown {
@@ -82,7 +86,7 @@ function readConfig(path: string): DFileConfig {
   const gitPersistence = object(value.gitPersistence, "Git persistence", path);
   if (gitPersistence) { for (const key of Object.keys(gitPersistence)) if (!["enabled", "push", "remote", "branch"].includes(key)) throw new Error(`unknown D Git persistence key ${key} in ${path}`); for (const key of ["enabled", "push"] as const) bool(gitPersistence[key], `Git persistence ${key}`, path); for (const key of ["remote", "branch"] as const) if (gitPersistence[key] !== undefined && (typeof gitPersistence[key] !== "string" || !gitPersistence[key].trim())) throw new Error(`invalid D Git persistence ${key} in ${path}`); }
   const features = object(value.features, "features", path);
-  if (features) for (const key of ["requirementIdValidation", "functionalDesignDocumentDiscipline", "sourceGrounding", "specGrounding", "mockupPngGeneration", "visualRegression"] as const) bool(features[key], `feature ${key}`, path);
+  if (features) for (const key of ["requirementIdValidation", "functionalDesignDocumentDiscipline", "sourceGrounding", "specGrounding", "mockupPngGeneration", "visualRegression", "prLensReview"] as const) bool(features[key], `feature ${key}`, path);
   const featureInputs = object(value.featureInputs, "feature inputs", path);
   if (featureInputs) {
     strings(featureInputs.sourceRoots, "feature sourceRoots", path); strings(featureInputs.specRoots, "feature specRoots", path);
@@ -125,7 +129,13 @@ function readConfig(path: string): DFileConfig {
   }
   const parallel = object(value.parallel, "parallel", path);
   if (parallel) { for (const key of Object.keys(parallel)) if (key !== "enabled") throw new Error(`unknown D parallel key ${key} in ${path}`); bool(parallel.enabled, "parallel enabled", path); }
-  return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults> };
+  // The choice set lives in the composed C routing config; here only the shape is checked.
+  const uiDesign = object(value.uiDesign, "uiDesign", path);
+  if (uiDesign) {
+    for (const key of Object.keys(uiDesign)) if (key !== "refinedMockupSkill") throw new Error(`unknown D uiDesign key ${key} in ${path}`);
+    if (uiDesign.refinedMockupSkill !== undefined && (typeof uiDesign.refinedMockupSkill !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(uiDesign.refinedMockupSkill))) throw new Error(`invalid D uiDesign refinedMockupSkill in ${path}`);
+  }
+  return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults>, uiDesign: uiDesign as { refinedMockupSkill?: string } };
 }
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
   const directory = join(projectDir, ".claude");
@@ -140,7 +150,7 @@ function layers(projectDir: string) { return { project: readConfig(configPath(pr
 
 export function resolveDGitPersistence(projectDir: string): DGitPersistenceConfig { const { project, local } = layers(projectDir), base = project.gitPersistence ?? {}, override = local.gitPersistence ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, push: override.push ?? base.push ?? false, remote: (override.remote ?? base.remote ?? "origin").trim(), branch: override.branch?.trim() ?? base.branch?.trim() }; }
 export function resolveDModels(projectDir: string, cli: Partial<DModelCatalog> = {}): { models: DModelCatalog; sources: Record<DModelTier, "cli" | "local" | "project" | "default"> } { const { project, local } = layers(projectDir), models = {} as DModelCatalog, sources = {} as Record<DModelTier, "cli" | "local" | "project" | "default">; for (const tier of ["fast", "balanced", "judgment"] as const) { const choices = [[cli[tier], "cli"], [local.models[tier], "local"], [project.models[tier], "project"], [DEFAULT_D_MODEL, "default"]] as const, selected = choices.find(([model]) => typeof model === "string" && model.trim())!; models[tier] = selected[0]!.trim(); sources[tier] = selected[1]; } return { models, sources }; }
-export function resolveDFeatureFlags(projectDir: string): DFeatureFlags { const { project, local } = layers(projectDir), base = project.features ?? {}, override = local.features ?? {}; return { requirementIdValidation: override.requirementIdValidation ?? base.requirementIdValidation ?? false, functionalDesignDocumentDiscipline: override.functionalDesignDocumentDiscipline ?? base.functionalDesignDocumentDiscipline ?? false, sourceGrounding: override.sourceGrounding ?? base.sourceGrounding ?? false, specGrounding: override.specGrounding ?? base.specGrounding ?? false, mockupPngGeneration: override.mockupPngGeneration ?? base.mockupPngGeneration ?? false, visualRegression: override.visualRegression ?? base.visualRegression ?? false }; }
+export function resolveDFeatureFlags(projectDir: string): DFeatureFlags { const { project, local } = layers(projectDir), base = project.features ?? {}, override = local.features ?? {}; return { requirementIdValidation: override.requirementIdValidation ?? base.requirementIdValidation ?? false, functionalDesignDocumentDiscipline: override.functionalDesignDocumentDiscipline ?? base.functionalDesignDocumentDiscipline ?? false, sourceGrounding: override.sourceGrounding ?? base.sourceGrounding ?? false, specGrounding: override.specGrounding ?? base.specGrounding ?? false, mockupPngGeneration: override.mockupPngGeneration ?? base.mockupPngGeneration ?? false, visualRegression: override.visualRegression ?? base.visualRegression ?? false, prLensReview: override.prLensReview ?? base.prLensReview ?? false }; }
 export function effectivePngGeneration(features: DFeatureFlags): boolean { return features.mockupPngGeneration || features.visualRegression; }
 export function resolveDFeatureInputs(projectDir: string): DFeatureInputs { const { project, local } = layers(projectDir), base = project.featureInputs ?? {}, override = local.featureInputs ?? {}, baseBudget = base.functionalDesignBudgets ?? {}, overrideBudget = override.functionalDesignBudgets ?? {}; return { requirementIdBridges: override.requirementIdBridges ?? base.requirementIdBridges ?? [], functionalDesignBudgets: { artifactBytes: overrideBudget.artifactBytes ?? baseBudget.artifactBytes ?? 60_000, unitBytes: overrideBudget.unitBytes ?? baseBudget.unitBytes ?? 160_000, metadataBytes: overrideBudget.metadataBytes ?? baseBudget.metadataBytes ?? 30_000 }, sourceRoots: override.sourceRoots ?? base.sourceRoots ?? [], specRoots: override.specRoots ?? base.specRoots ?? [], groundingLimits: { maxEvidenceFiles: override.groundingLimits?.maxEvidenceFiles ?? base.groundingLimits?.maxEvidenceFiles ?? DEFAULT_GROUNDING_LIMITS.maxEvidenceFiles, maxInputBytes: override.groundingLimits?.maxInputBytes ?? base.groundingLimits?.maxInputBytes ?? DEFAULT_GROUNDING_LIMITS.maxInputBytes } }; }
 export function resolveDAutomation(projectDir: string): DAutomationConfig { const { project, local } = layers(projectDir), base = project.auto ?? {}, override = local.auto ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, through: override.through?.trim() ?? base.through?.trim(), sessionOnly: override.sessionOnly ?? base.sessionOnly ?? true, ambiguityPolicy: override.ambiguityPolicy ?? base.ambiguityPolicy ?? "halt", assumptionLedger: override.assumptionLedger ?? base.assumptionLedger ?? true, maxRetries: override.maxRetries ?? base.maxRetries ?? 2, maxSteps: override.maxSteps ?? base.maxSteps ?? 64, deadlineMs: override.deadlineMs ?? base.deadlineMs ?? 900_000, labelAllowlist: override.labelAllowlist ?? base.labelAllowlist ?? [] }; }
@@ -149,7 +159,8 @@ export function resolveDAiApproval(projectDir: string): DAiApprovalConfig { cons
 export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssueSummaryConfig { const { project, local } = layers(projectDir), base = project.decisionIssueSummary ?? {}, override = local.decisionIssueSummary ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, repository: override.repository?.trim() ?? base.repository?.trim(), send: override.send ?? base.send ?? false, maxRetries: override.maxRetries ?? base.maxRetries ?? 2 }; }
 export function resolveDParallel(projectDir: string): DParallelConfig { const { project, local } = layers(projectDir); return { enabled: local.parallel?.enabled ?? project.parallel?.enabled ?? true }; }
 export function resolveDConstructionDefaults(projectDir: string): DConstructionDefaults { const { project, local } = layers(projectDir), base = project.constructionDefaults ?? {}, override = local.constructionDefaults ?? {}; const resolved: DConstructionDefaults = { iteration: override.iteration ?? base.iteration ?? "official", execution: override.execution ?? base.execution ?? "official" }; if (resolved.execution === "swarm" && resolved.iteration !== "stage-major") throw new Error("D constructionDefaults.execution=swarm requires constructionDefaults.iteration=stage-major"); return resolveDParallel(projectDir).enabled ? resolved : { iteration: "official", execution: "official" }; }
-export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir) }; }
+export function resolveDUiDesign(projectDir: string): DUiDesignConfig { const { project, local } = layers(projectDir); return { refinedMockupSkill: local.uiDesign?.refinedMockupSkill ?? project.uiDesign?.refinedMockupSkill ?? null }; }
+export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir), uiDesign: resolveDUiDesign(projectDir) }; }
 
 export type DPrerequisite = { setting: string; requires: string; satisfied: boolean };
 /**
@@ -169,6 +180,18 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
     for (const name of ["requirementIdValidation", "mockupPngGeneration", "visualRegression"] as const) {
       if (config.features[name]) need(`features.${name}`, "composed C UI contract (.claude/tools/ui-poc/c-stage-routing.json)", existsSync(contract));
     }
+  }
+  if (config.features.prLensReview) {
+    const install = checkPrLensInstall(projectDir);
+    need("features.prLensReview", `pinned PR Lens installed at ${PR_LENS_VENDOR_DIR} (commit ${PR_LENS_PIN}, built, receipt matches; run poc/pr-lens-review/scripts/setup-pr-lens.ts)${install.ok ? "" : `: ${install.detail}`}`, install.ok);
+    const composed = checkPrLensPluginComposed(projectDir);
+    need("features.prLensReview", `pr-lens-review plugin composed into Build and Test${composed.ok ? "" : `: ${composed.detail}`}`, composed.ok);
+  }
+  if (config.uiDesign.refinedMockupSkill !== null) {
+    // The composed C routing tool owns the choice set, the pins, and the install check.
+    const routing = join(projectDir, ".claude", "tools", "ui-poc-c-routing.cjs");
+    const status = existsSync(routing) ? createRequire(import.meta.url)(routing).designSkillStatus(config.uiDesign.refinedMockupSkill, projectDir) as { ok: boolean; detail?: string } : { ok: false, detail: "composed C UI contract (.claude/tools/ui-poc-c-routing.cjs) is missing" };
+    need("uiDesign.refinedMockupSkill", `"${config.uiDesign.refinedMockupSkill}" is a design-skill choice of the composed C routing and its pinned files and licences are installed${status.ok ? "" : `: ${status.detail}`}`, status.ok);
   }
   if (config.issueAutopilot.enabled) {
     need("issueAutopilot.enabled", "auto.enabled is true", config.auto.enabled);
@@ -192,11 +215,16 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
 
 if (import.meta.main) {
   const [command, projectDir] = process.argv.slice(2);
-  if (command !== "print-ai-approval" || !projectDir || !isAbsolute(projectDir)) {
-    process.stderr.write("usage: d-config.ts print-ai-approval ABS_PROJECT_DIR\n");
+  if (!["print-ai-approval", "print-ui-design"].includes(command ?? "") || !projectDir || !isAbsolute(projectDir)) {
+    process.stderr.write("usage: d-config.ts print-ai-approval|print-ui-design ABS_PROJECT_DIR\n");
     process.exit(2);
   }
-  process.stdout.write(`${JSON.stringify(resolveDAiApproval(projectDir))}\n`);
+  try {
+    process.stdout.write(`${JSON.stringify(command === "print-ui-design" ? resolveDUiDesign(projectDir) : resolveDAiApproval(projectDir))}\n`);
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    process.exit(2);
+  }
 }
 
 /**

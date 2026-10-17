@@ -1,0 +1,26 @@
+{
+  "mode": "apply",
+  "product": "<scratch>/product",
+  "vendorDir": "<scratch>/product/.vendor/pr-lens",
+  "repository": "https://github.com/coldteadotai/pr-lens.git",
+  "pin": "7a9115c8202da4db030be5954ada8862e6135dce",
+  "fetch": true,
+  "build": "install+build",
+  "compose": "<SRC>/poc/pr-lens-review/dist/claude",
+  "receipt": {
+    "schema": 1,
+    "repository": "https://github.com/coldteadotai/pr-lens.git",
+    "commit": "7a9115c8202da4db030be5954ada8862e6135dce",
+    "licenseSha256": "f95e90af396c71c9a94648bd58e4f5bb2dcab4f6ac3ab7d3d2ca3f4e4f4a1ae7",
+    "cli": "packages/cli/dist/bin.js",
+    "buildSha256": "0d2f1326f1d03f613cf4cf4768d8352a71a977874c9990f4e867857f5186c362"
+  },
+  "gitInfoExcludeAdded": [
+    "/.vendor/pr-lens/",
+    "/.vendor/pr-lens.receipt.json",
+    "/.pr-lens/"
+  ],
+  "composedTreeSha256": "c19ebeadaa3bab9bbf1d7239bff57919828334234fc31c04af485d03a64ac7d8",
+  "ready": true,
+  "switch": "features.prLensReview is unchanged (default OFF); set it to true in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to opt in"
+}

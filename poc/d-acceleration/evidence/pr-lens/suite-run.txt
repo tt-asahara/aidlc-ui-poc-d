@@ -1,0 +1,13 @@
+$ bun test --timeout 120000 poc/d-acceleration/tests poc/ui-poc/tests poc/pr-lens-review/tests   (2026-10-17)
+bun test v1.3.14 (0d9b296a)
+
+ 562 pass
+ 1 skip
+ 0 fail
+ 2100 expect() calls
+Ran 563 tests across 51 files. [350.71s]
+
+$ bun scripts/package.ts --check
+package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, kiro, kiro-ide, opencode.
+
+$ git diff --quiet 6a378b53 HEAD -- core  -> exit 0

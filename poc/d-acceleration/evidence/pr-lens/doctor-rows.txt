@@ -1,0 +1,2 @@
+40:  ok    Plugin check (pr-lens-review): pr-lens-review: features.prLensReview is ON; pinned PR Lens ready
+58:  warn  Plugins: 2 need attention - pr-lens-review:installed-missing, ui-poc:installed-missing

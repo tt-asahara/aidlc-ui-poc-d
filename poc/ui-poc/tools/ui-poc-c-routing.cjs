@@ -3,9 +3,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {spawnSync} = require('node:child_process');
 
 const configPath = path.join(__dirname, 'ui-poc', 'c-stage-routing.json');
 const sourceLockPath = path.join(__dirname, 'ui-poc', 'treatments', 'source-lock.json');
+const designSkillLockPath = path.join(__dirname, 'ui-poc', 'design-skill-lock.json');
+const D_CONFIG_FILES = ['d-acceleration.json', 'd-acceleration.jsonc', 'd-acceleration.local.json', 'd-acceleration.local.jsonc'];
 const hash = b => crypto.createHash('sha256').update(b).digest('hex');
 const gitBlobHash = b => crypto.createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');
 const load = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -48,7 +51,10 @@ function stateField(content, name) {
   return content.match(new RegExp(`^(?:[-*]\\s+)?\\*\\*${escaped}\\*\\*:\\s*(.+?)\\s*$`, 'm'))?.[1] ?? null;
 }
 
-function deriveEngineContext(outputPath, stage, cfg = load()) {
+// The engine record a dispatched stage output belongs to: the nearest
+// aidlc-state.md inside the project, its recorded Scope, and the Construction
+// Unit named by the output path.
+function engineRecord(outputPath, stage) {
   let output;
   try { output = fs.realpathSync(outputPath); } catch (e) { throw Error(`Cannot resolve stage output: ${e.message}`); }
   const projectRoot = fs.realpathSync(process.cwd());
@@ -65,29 +71,88 @@ function deriveEngineContext(outputPath, stage, cfg = load()) {
   const unit = rel[0] === 'construction' && stageIndex === 2 ? rel[1] : null;
   if (rel[0] === 'construction' && stageIndex !== 2) throw Error('Construction output path has no unambiguous Unit');
   const stateBytes = fs.readFileSync(path.join(recordRoot, 'aidlc-state.md'));
-  const scope = stateField(stateBytes.toString('utf8'), 'Scope');
+  return {recordRoot,unit,stateBytes,scope:stateField(stateBytes.toString('utf8'), 'Scope')};
+}
+
+function deriveEngineContext(outputPath, stage, cfg = load()) {
+  const {recordRoot,unit,stateBytes,scope} = engineRecord(outputPath, stage);
   runtimeProfile(cfg, scope);
   return {stage,scope,recordId:path.basename(recordRoot),unit,engineStateSha256:hash(stateBytes)};
 }
 
+function lockedSource(skill) {
+  const lock = JSON.parse(fs.readFileSync(skill.lock === 'design-skill-lock' ? designSkillLockPath : sourceLockPath, 'utf8'));
+  return lock.sources?.find(x => x.repository === skill.repository && x.commit === skill.commit) ?? (lock.selected_C?.repository === skill.repository && lock.selected_C?.commit === skill.commit ? lock.selected_C : null);
+}
 function lockedEntrypoint(skillName, entrypoint) {
   const cfg = load(), skill = cfg.skills[skillName];
   if (!skill || !skill.sourcePaths || !skill.sourcePaths[entrypoint]) throw Error(`Missing source-lock mapping: ${skillName} ${entrypoint}`);
-  const lock = JSON.parse(fs.readFileSync(sourceLockPath, 'utf8'));
-  const source = lock.sources?.find(x => x.repository === skill.repository && x.commit === skill.commit) ?? (lock.selected_C?.repository === skill.repository && lock.selected_C?.commit === skill.commit ? lock.selected_C : null);
-  const record = source?.files?.find(x => x.path === skill.sourcePaths[entrypoint]);
+  const record = lockedSource(skill)?.files?.find(x => x.path === skill.sourcePaths[entrypoint]);
   if (!record || !/^[a-f0-9]{40}$/.test(record.git_blob_sha || '') || !Number.isInteger(record.bytes)) throw Error(`Missing pinned source-lock record: ${skillName} ${entrypoint}`);
   return record;
 }
+/** Why an installed entrypoint is not the pinned one, or null when it is. */
+function entrypointProblem(skillName, entrypoint, projectRoot = process.cwd()) {
+  const local = path.resolve(projectRoot, entrypoint);
+  if (!fs.existsSync(local)) return `Installed entrypoint is missing: ${entrypoint}`;
+  const bytes = fs.readFileSync(local), locked = lockedEntrypoint(skillName, entrypoint);
+  if (bytes.length !== locked.bytes || gitBlobHash(bytes) !== locked.git_blob_sha) return `Installed entrypoint differs from source-lock: ${entrypoint}`;
+  return null;
+}
 
-function plan(stage, facts = {}, scope) {
+// The refined-mockups design skill is chosen by uiDesign.refinedMockupSkill in
+// D configuration. D's resolver is the one owner of reading that setting; the
+// choices, their pins, and the default live in this routing config.
+function designChoice(cfg, id) {
+  const selected = id ?? cfg.defaultDesignSkill;
+  const choice = cfg.designSkillChoices?.[selected];
+  if (!choice || !cfg.skills[choice.skill]) throw Error(`Unknown uiDesign.refinedMockupSkill: ${selected} (choices: ${Object.keys(cfg.designSkillChoices || {}).join(', ')})`);
+  return {...choice, id: selected};
+}
+function resolveDesignSkill(projectRoot = process.cwd(), toolsDir = __dirname) {
+  const resolver = path.join(toolsDir, 'd-acceleration', 'd-config.ts');
+  if (!fs.existsSync(resolver)) {
+    if (D_CONFIG_FILES.some(name => fs.existsSync(path.join(projectRoot, '.claude', name)))) throw Error('D configuration is present but the D config resolver is not installed beside this tool; uiDesign.refinedMockupSkill cannot be resolved');
+    return null;
+  }
+  const result = spawnSync(process.versions.bun ? process.execPath : 'bun', [resolver, 'print-ui-design', path.resolve(projectRoot)], {encoding: 'utf8'});
+  if (result.status !== 0) throw Error(`D configuration invalid: ${(result.stderr || result.stdout || '').trim()}`);
+  return JSON.parse(result.stdout).refinedMockupSkill ?? null;
+}
+const hasDesignSlot = (cfg, stage) => (cfg.stages[stage] || []).some(rule => rule.designSkillSlot);
+/** Whether a design-skill choice is known and its pinned entrypoints and licences are installed. */
+function designSkillStatus(id, projectRoot = process.cwd()) {
+  const cfg = load();
+  let design;
+  try { design = designChoice(cfg, id); } catch (e) { return {ok: false, detail: e.message}; }
+  const skill = cfg.skills[design.skill], setupHint = design.install ? `; run: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill ${design.id}` : '';
+  for (const entrypoint of skill.entrypoints) {
+    let problem;
+    try { problem = entrypointProblem(design.skill, entrypoint, projectRoot); } catch (e) { problem = e.message; }
+    if (problem) return {ok: false, detail: problem + setupHint};
+  }
+  const licenses = lockedSource(skill)?.licenseFiles || [];
+  for (const license of design.install?.licenses || []) {
+    const pinned = licenses.find(x => x.path === license.from), target = path.resolve(projectRoot, license.to);
+    if (!pinned || !fs.existsSync(target) || hash(fs.readFileSync(target)) !== pinned.sha256) return {ok: false, detail: `Pinned licence is missing or differs: ${license.to}${setupHint}`};
+  }
+  return {ok: true, id: design.id, skill: design.skill, repository: skill.repository, commit: skill.commit};
+}
+
+function plan(stage, facts = {}, scope, designSkill) {
   const cfg = load();
   let profile;
   try { profile = runtimeProfile(cfg, scope); } catch (e) { return fail(e.message); }
   if (cfg.designCommit !== '209444a9d552c18bcaa74e26bf66a25fc568a767' || cfg.accessibilityCorrections?.largeTextNormalCssPx !== 24 || cfg.accessibilityCorrections?.largeTextBoldCssPx !== 18.6667) return fail('Invalid C design pin or WCAG correction policy');
   if (!Object.hasOwn(cfg.stages, stage)) return fail(`Unknown stage: ${stage}`);
+  let design = null;
+  if (hasDesignSlot(cfg, stage)) {
+    try { design = designChoice(cfg, designSkill); } catch (e) { return fail(e.message); }
+    if (profile.comparisonTreatment === 'C' && design.id !== cfg.defaultDesignSkill) return fail(`Scope ${scope} compares the pinned Arm C treatment; uiDesign.refinedMockupSkill=${design.id} applies only outside ui-poc-comparison`);
+  }
   const invocations = [];
-  for (const rule of cfg.stages[stage]) {
+  for (const slotRule of cfg.stages[stage]) {
+    const rule = slotRule.designSkillSlot ? {...slotRule, skill: design.skill, adapter: design.adapter ?? slotRule.adapter, outputs: design.outputs ?? slotRule.outputs} : slotRule;
     let result = rule.decision;
     if (result === 'conditional') {
       if (!Object.hasOwn(facts, rule.condition)) return fail(`Missing routing fact: ${rule.condition}`);
@@ -96,20 +161,29 @@ function plan(stage, facts = {}, scope) {
     }
     const skill = cfg.skills[rule.skill];
     if (!skill || skill.lifecyclePolicy === 'disabled') return fail(`Disabled or unknown lifecycle skill: ${rule.skill}`);
-    invocations.push({...rule, decision:result, repository:skill.repository, commit:skill.commit, applicationKind:skill.applicationKind || 'skill', entrypoints:skill.entrypoints});
+    const {designSkillSlot, ...shown} = rule;
+    invocations.push({...shown, decision:result, repository:skill.repository, commit:skill.commit, applicationKind:skill.applicationKind || 'skill', entrypoints:skill.entrypoints, designApplication:Boolean(designSkillSlot) || rule.skill === 'frontend-design'});
   }
-  return {pass:true, schema:1, runtimeProfile:profile.id, comparisonTreatment:profile.comparisonTreatment, stage, configSha256:hash(fs.readFileSync(configPath)), invocations};
+  return {pass:true, schema:1, runtimeProfile:profile.id, comparisonTreatment:profile.comparisonTreatment, stage, configSha256:hash(fs.readFileSync(configPath)), ...(design ? {designSkill:design.id} : {}), invocations};
+}
+
+/** The configured design skill for a stage with a design slot (undefined elsewhere, so no resolver runs). */
+function selectedDesignSkill(stage, options) {
+  if (Object.hasOwn(options, 'designSkill')) return options.designSkill;
+  return hasDesignSlot(load(), stage) ? resolveDesignSkill(process.cwd()) : undefined;
 }
 
 function verify(stage, logPath, facts = {}, options = {}) {
-  let engine;
-  try { engine = deriveEngineContext(options.outputPath, stage); } catch (e) { return fail(e.message); }
-  const expected = plan(stage, facts, engine.scope);
+  let engine, designSkill;
+  try { engine = deriveEngineContext(options.outputPath, stage); designSkill = selectedDesignSkill(stage, options); } catch (e) { return fail(e.message); }
+  const expected = plan(stage, facts, engine.scope, designSkill);
   if (!expected.pass) return expected;
   if (!expected.invocations.length && (!logPath || !fs.existsSync(logPath))) return {pass:true, findings_count:0, findings:[]};
   let log;
   try { log = JSON.parse(fs.readFileSync(logPath, 'utf8')); } catch (e) { return fail(`Unreadable evidence log: ${e.message}`); }
   if (log.schema !== 1 || log.runtimeProfile !== expected.runtimeProfile || log.comparisonTreatment !== expected.comparisonTreatment || log.stage !== stage || log.configSha256 !== expected.configSha256) return fail('Evidence log identity does not match the routing plan');
+  // A log written before design-skill selection omits the field; that only stands for the default.
+  if (expected.designSkill !== undefined && (log.designSkill ?? load().defaultDesignSkill) !== expected.designSkill) return fail(`Evidence log design skill ${log.designSkill ?? load().defaultDesignSkill} does not match the configured uiDesign.refinedMockupSkill ${expected.designSkill}`);
   if (!Array.isArray(log.events)) return fail('Evidence log events must be an array');
   if (expected.invocations.length) {
     if (!options.contextPath || !options.factsPath || !options.outputPath) return fail('Routing context, facts path, and output path are required');
@@ -133,11 +207,9 @@ function verify(stage, logPath, facts = {}, options = {}) {
     for (const entrypoint of entrypoints) {
       const event = log.events.find(e => e.type === 'skill-read' && e.skill === invocation.skill && e.entrypoint === entrypoint && /^[a-f0-9]{64}$/.test(e.sha256 || ''));
       if (!event) return fail(`Missing skill-read evidence: ${invocation.skill} ${entrypoint}`);
-      const local = path.resolve(entrypoint);
-      if (!fs.existsSync(local)) return fail(`Installed entrypoint is missing: ${entrypoint}`);
-      const bytes = fs.readFileSync(local), locked = lockedEntrypoint(invocation.skill, entrypoint);
-      if (bytes.length !== locked.bytes || gitBlobHash(bytes) !== locked.git_blob_sha) return fail(`Installed entrypoint differs from source-lock: ${entrypoint}`);
-      if (hash(bytes) !== event.sha256) return fail(`Skill-read hash does not match installed entrypoint: ${entrypoint}`);
+      const problem = entrypointProblem(invocation.skill, entrypoint);
+      if (problem) return fail(problem);
+      if (hash(fs.readFileSync(path.resolve(entrypoint))) !== event.sha256) return fail(`Skill-read hash does not match installed entrypoint: ${entrypoint}`);
     }
     const applications = log.events.filter(e => e.type === 'skill-applied' && e.skill === invocation.skill);
     if (applications.length !== 1) return fail(`Expected exactly one skill-applied event: ${invocation.skill}`);
@@ -156,18 +228,21 @@ function verify(stage, logPath, facts = {}, options = {}) {
         } else return fail(`Invalid ${kind} reference kind: ${invocation.skill} ${ref.name}`);
       }
     }
-    if (invocation.skill === 'frontend-design') {
+    if (invocation.designApplication) {
       const context = applied.inputs.find(ref => ref.name === 'creator-confirmed-design-context-snapshot');
-      const correction = applied.outputs.find(ref => ref.name === 'accessibility-correction-report');
+      // Only the pinned historical component carries the erroneous large-text statement the report corrects.
+      const correction = invocation.outputs.includes('accessibility-correction-report') ? applied.outputs.find(ref => ref.name === 'accessibility-correction-report') : null;
       if (context?.kind !== 'file') return fail('Design Context must be a hashed creator-confirmed file snapshot');
-      if (correction?.kind !== 'file') return fail('WCAG correction report must be a hashed output file');
+      if (correction !== null && correction?.kind !== 'file') return fail('WCAG correction report must be a hashed output file');
       try {
         const design = artifactJson(process.cwd(), context, 'Design Context snapshot');
         if (design.schema !== 1 || design.creatorConfirmed !== true || !['loaded-instructions','impeccable-file','aidlc-questions'].includes(design.source?.kind) || !['audience','useCases','brandTone'].every(k => typeof design[k] === 'string' && design[k].trim())) return fail('Design Context snapshot lacks observed confirmation, source provenance, common brief binding, or required fields');
         verifiedArtifactRef(process.cwd(), design.source, 'Design Context confirmation source');
         verifiedArtifactRef(process.cwd(), design.commonBrief, 'common comparison brief');
-        const report = artifactJson(process.cwd(), correction, 'WCAG correction report');
-        if (report.schema !== 1 || report.pinnedSourcePreserved !== true || report.sourceStatement !== '18px+ or 14px bold' || report.normalCssPx !== 24 || report.boldCssPx !== 18.6667 || report.normativeBasis !== 'WCAG 18pt or 14pt bold') return fail('WCAG correction report does not apply the declared pinned-source adapter');
+        if (correction) {
+          const report = artifactJson(process.cwd(), correction, 'WCAG correction report');
+          if (report.schema !== 1 || report.pinnedSourcePreserved !== true || report.sourceStatement !== '18px+ or 14px bold' || report.normalCssPx !== 24 || report.boldCssPx !== 18.6667 || report.normativeBasis !== 'WCAG 18pt or 14pt bold') return fail('WCAG correction report does not apply the declared pinned-source adapter');
+        }
       } catch (e) { return fail(e.message); }
     }
   }
@@ -203,10 +278,10 @@ function parse(argv) {
 function main(argv) {
   try {
     const command = argv.shift(), args = parse(argv);
-    const result = command === 'plan' ? plan(args.stage, args.facts, args.scope) : command === 'verify' ? verify(args.stage, args.log, args.facts, {contextPath:args.context,factsPath:args.factsPath,outputPath:args.outputPath}) : fail('Expected plan or verify');
+    const result = command === 'plan' ? plan(args.stage, args.facts, args.scope, selectedDesignSkill(args.stage, {})) : command === 'verify' ? verify(args.stage, args.log, args.facts, {contextPath:args.context,factsPath:args.factsPath,outputPath:args.outputPath}) : fail('Expected plan or verify');
     console.log(JSON.stringify(result, null, 2));
     process.exitCode = result.pass ? 0 : 1;
   } catch (e) { console.log(JSON.stringify(fail(e.message), null, 2)); process.exitCode = 1; }
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {plan, verify, load, lockedEntrypoint, deriveEngineContext, runtimeProfile};
+module.exports = {plan, verify, load, lockedEntrypoint, lockedSource, engineRecord, deriveEngineContext, runtimeProfile, designChoice, resolveDesignSkill, designSkillStatus, gitBlobHash};

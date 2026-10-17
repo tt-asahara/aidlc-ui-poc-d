@@ -1,0 +1,154 @@
+{
+  "schemaVersion": "0.2.0",
+  "kind": "graph",
+  "generatedAt": "2026-10-17T00:00:00.000Z",
+  "title": "Synthetic greet module",
+  "summary": "Synthetic smoke sample: a greet function and its unit tests.",
+  "lenses": [
+    "architecture"
+  ],
+  "provenance": {
+    "repo": {
+      "owner": "example",
+      "name": "synthetic-product",
+      "host": "github.com"
+    },
+    "base": {
+      "sha": "6ad124a47b672fcb3d18d698f8ba0c6859d71490",
+      "ref": "main"
+    },
+    "head": {
+      "sha": "6ad124a47b672fcb3d18d698f8ba0c6859d71490",
+      "ref": "main"
+    }
+  },
+  "lanes": [
+    {
+      "id": "app",
+      "label": "App",
+      "subtitle": "src",
+      "order": 0
+    },
+    {
+      "id": "tests",
+      "label": "Tests",
+      "subtitle": "bun test",
+      "order": 1
+    }
+  ],
+  "nodes": [
+    {
+      "id": "greet",
+      "label": "greet()",
+      "kind": "module",
+      "delta": "added",
+      "lane": "app",
+      "subtitle": "app/src/greet.ts",
+      "summary": "Trims a name and greets it; rejects empty names.",
+      "files": [
+        {
+          "path": "app/src/greet.ts"
+        }
+      ],
+      "badges": []
+    },
+    {
+      "id": "greet-test",
+      "label": "greet tests",
+      "kind": "test",
+      "delta": "added",
+      "lane": "tests",
+      "subtitle": "app/tests/greet.test.ts",
+      "summary": "Two unit tests: trimmed greeting and empty-name rejection.",
+      "files": [
+        {
+          "path": "app/tests/greet.test.ts"
+        }
+      ],
+      "badges": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "test-to-greet",
+      "from": "greet-test",
+      "to": "greet",
+      "kind": "call",
+      "delta": "added",
+      "label": "exercises",
+      "emphasis": "normal",
+      "animated": false,
+      "files": []
+    }
+  ],
+  "flows": [],
+  "stats": {
+    "filesChanged": 2,
+    "additions": 8,
+    "deletions": 0,
+    "chips": []
+  },
+  "views": [
+    {
+      "id": "overview",
+      "title": "Architecture",
+      "lens": "architecture",
+      "summary": "The synthetic change.",
+      "scope": {
+        "kind": "all"
+      },
+      "defaultOpen": true,
+      "children": []
+    }
+  ],
+  "walkthrough": {
+    "steps": [
+      {
+        "id": "greet-added",
+        "heading": "greet() added",
+        "body": "A trimmed name is greeted; an empty name is rejected.",
+        "stage": {
+          "kind": "view",
+          "view": "overview"
+        },
+        "focus": {
+          "kind": "selection",
+          "lanes": [],
+          "nodes": [
+            "greet"
+          ],
+          "edges": [],
+          "messages": []
+        }
+      },
+      {
+        "id": "tests-added",
+        "heading": "Unit tests added",
+        "body": "Both behaviours are covered by bun tests.",
+        "stage": {
+          "kind": "view",
+          "view": "overview"
+        },
+        "focus": {
+          "kind": "selection",
+          "lanes": [],
+          "nodes": [
+            "greet-test"
+          ],
+          "edges": [
+            "test-to-greet"
+          ],
+          "messages": []
+        }
+      }
+    ]
+  },
+  "layout": {
+    "direction": "right",
+    "laneOrder": [
+      "app",
+      "tests"
+    ],
+    "rank": {}
+  }
+}

@@ -14,6 +14,7 @@ node_modules/
 /dist-release/
 # Locally built AIDLC plugin projections (aidlc-plugin-build output)
 /poc/ui-poc/dist/
+/poc/pr-lens-review/dist/
 build/
 
 # Zensical documentation-site build output and env (`uv run zensical build`;

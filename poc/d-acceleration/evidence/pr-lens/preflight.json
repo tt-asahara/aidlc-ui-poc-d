@@ -1,0 +1,43 @@
+{
+  "off": {
+    "features.prLensReview": false,
+    "supplementalReview": {
+      "prLensReview": {
+        "enabled": false,
+        "status": "skipped-by-config",
+        "pin": "7a9115c8202da4db030be5954ada8862e6135dce",
+        "decidesGates": false
+      }
+    },
+    "prerequisites": {
+      "checked": [],
+      "unmet": []
+    }
+  },
+  "on": {
+    "features.prLensReview": true,
+    "supplementalReview": {
+      "prLensReview": {
+        "enabled": true,
+        "status": "ready",
+        "pin": "7a9115c8202da4db030be5954ada8862e6135dce",
+        "decidesGates": false
+      }
+    },
+    "prerequisites": {
+      "checked": [
+        {
+          "setting": "features.prLensReview",
+          "requires": "pinned PR Lens installed at .vendor/pr-lens (commit 7a9115c8202da4db030be5954ada8862e6135dce, built, receipt matches; run poc/pr-lens-review/scripts/setup-pr-lens.ts)",
+          "satisfied": true
+        },
+        {
+          "setting": "features.prLensReview",
+          "requires": "pr-lens-review plugin composed into Build and Test",
+          "satisfied": true
+        }
+      ],
+      "unmet": []
+    }
+  }
+}

@@ -254,6 +254,22 @@ ledger remains the trust anchor.
 
 `UI_POC_APPROVAL_LEDGER` must point to an operator-managed detached JSON file outside the stage evidence directory. It contains `approvals` entries with `contractSha256`, `stage`, `arm`, `status: "approved"`, `source`, `reviewer`, and `requiredMappings` in contract order. This is a local plugin trust input, NOT a claimed built-in AI-DLC approval schema or API. The workflow agent must not create or amend its own approval entries. The operator records a real approval's exact source only after actual review. No production ledger ships here.
 
+Each engine scope picks its upstream approval source in
+`tools/ui-poc/scope-evidence.json`. `upstreamApproval: "ledger"`
+(`ui-poc-comparison` and any unlisted scope) requires the detached ledger above.
+`upstreamApproval: "engine-record"` (`ui-poc-application`,
+`ui-poc-requirements`) leaves approval to the official stage gate and reads no
+ledger for it: the upstream copy must be byte-identical to the contract the
+engine record holds for that stage, in the intent's refined-mockups directory or
+in this Unit's Construction stage directory. Deviation and omission dispositions
+need their detached receipts in either mode. `sensor: "off"` declares the sensor
+not applicable to a scope; it then passes with `notApplicable` and checks neither
+contracts nor routing. Inside a Construction Unit, functional-design and
+code-generation contracts may carry the Unit's slice of the refined inventory:
+every mapping must exist upstream, and the upstream approval is checked against
+the refined contract's full inventory. Build and Test runs once per intent and
+still needs one upstream contract with the same inventory.
+
 For code-generation, include upstream: {path, sha256, stage: "refined-mockups"}; for build-and-test, use stage: "code-generation". The path points to a byte-identical local evidence copy of that upstream contract, and the approval ledger binds its SHA-256 and mapping inventory. For functional-design, use stage: "refined-mockups". The checker recursively validates the complete refined → functional design → implementation → testing chain, including every ancestor’s headings, assets, hashes, mappings and required prior approval. The chain is bounded to four stage contracts; a repeated real file identity along one ancestry path is rejected. Copy the entire referenced snapshot tree, not Markdown alone. Each ancestor resolves its own relative asset and upstream paths from its containing directory, with nested paths confined within the current-stage evidence root. Upstream copies are evidence, never substituted for engine-resolved core artifacts. Approval does not assert that generated implementation assets are byte-identical to design prototypes. The ledger path is environment-configured, not supplied by untrusted contract text. Filesystem isolation/ownership and actual human identity are deployment responsibilities; the checker cannot authenticate the purported reviewer or protect a ledger writable by the same agent. A writable self-authored ledger is NOT acceptable production evidence. Verify these controls before live runs. Unit tests intentionally create synthetic approvals solely to exercise validation.
 
 The gate sensor is a preflight evidence check. Rough and refined producer gates validate draft shape and hashes without demanding an additional human approval. The consuming code-generation and build-and-test gates require a receipt of the prior stage’s ordinary approval, not approval of their own new draft. This receipt does not impersonate or replace the core stage-approval event. If approval infrastructure is unavailable, block and report the missing evidence; never set approved to make tests green.
