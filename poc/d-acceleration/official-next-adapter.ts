@@ -11,7 +11,7 @@ function consumedArtifact(value: unknown): string | null {
   const leaf = value.replaceAll("\\", "/").split("/").at(-1) ?? "";
   return leaf.endsWith(".md") ? leaf.slice(0, -3) : leaf;
 }
-export function adaptOfficialNext(value: any, options: { clefLowRiskUnits?: string[]; clef?: Input["clef"] } = {}): Input {
+export function adaptOfficialNext(value: any): Input {
   const directive = value?.directive ?? value;
   if (directive?.kind !== "run-stage") throw new Error(`expected official run-stage directive, got ${String(directive?.kind)}`);
   if (!directive.wave || !WAVE_STAGES.has(directive.stage)) throw new Error("run-stage has no supported official design wave");
@@ -31,11 +31,10 @@ export function adaptOfficialNext(value: any, options: { clefLowRiskUnits?: stri
     const consumedArtifacts = new Set(consumes.map(consumedArtifact).filter(Boolean));
     const missingUiConsumes = requiredUiConsumes.filter((artifact) => !consumedArtifacts.has(artifact));
     if (missingUiConsumes.length) throw new Error(`official ${directive.stage} wave is missing composed Arm C UI consumes: ${missingUiConsumes.join(", ")}`);
-    const clefEligible = options.clefLowRiskUnits?.includes(entry.unit) === true;
     const builderBrief = { ceremony: directive.ceremony, protocol_modules: directive.protocol_modules, stage_file: directive.stage_file, inline_context_paths: directive.inline_context_paths ?? [], context_warnings: directive.context_warnings ?? [], rules_content: ruleContent ?? [], rules_in_context: rulePaths, rules_held: directive.rules_held, rules_held_note: directive.rules_held_note, unit_memory_path: entry.unit_memory_path, entry: structuredClone(entry) };
-    return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], inputSet: consumes, builderBrief, estimatedMs: 1, taskType: clefEligible ? "ambiguous" : "design", difficulty: clefEligible ? "low" : "medium", risk: clefEligible ? "low" : "medium", execution: "official-wave", writeSet: entry.required_produces, ...(clefEligible ? { minimumTier: "balanced" as const, fallbackTier: "balanced" as const, assessmentState: { stage: directive.stage, unit: entry.unit, unit_kind: entry.unit_kind, consumes, consumes_absent: entry.consumes_absent, required_produces: entry.required_produces } } : {}) };
+    return { id: `${directive.stage}:${entry.unit}`, stage: directive.stage, unit: entry.unit, dependsOn: [], inputSet: consumes, builderBrief, estimatedMs: 1, taskType: "design", difficulty: "medium", risk: "medium", execution: "official-wave", writeSet: entry.required_produces };
   });
-  return { tasks, directives: [{ kind: "wave", stage: directive.stage, entries: tasks.map((task) => task.id) }], sourceDirective: structuredClone(directive), clef: options.clef };
+  return { tasks, directives: [{ kind: "wave", stage: directive.stage, entries: tasks.map((task) => task.id) }], sourceDirective: structuredClone(directive) };
 }
 if (import.meta.main) {
   const path = process.argv[2]; const text = path ? readFileSync(path, "utf8") : await Bun.stdin.text();

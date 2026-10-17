@@ -1,0 +1,266 @@
+{
+ "p1-update-after-allowlist-change": {
+  "mode": "update",
+  "product": "<SCRATCH>/product1",
+  "replacedComposeOwned": [
+   ".claude/aidlc-common/stages/construction/build-and-test.md",
+   ".claude/aidlc-common/stages/construction/code-generation.md",
+   ".claude/aidlc-common/stages/construction/functional-design.md",
+   ".claude/aidlc-common/stages/construction/infrastructure-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-requirements.md",
+   ".claude/aidlc-common/stages/ideation/approval-handoff.md",
+   ".claude/aidlc-common/stages/ideation/intent-capture.md",
+   ".claude/aidlc-common/stages/ideation/rough-mockups.md",
+   ".claude/aidlc-common/stages/ideation/scope-definition.md",
+   ".claude/aidlc-common/stages/ideation/team-formation.md",
+   ".claude/aidlc-common/stages/inception/contract-design.md",
+   ".claude/aidlc-common/stages/inception/delivery-planning.md",
+   ".claude/aidlc-common/stages/inception/domain-design.md",
+   ".claude/aidlc-common/stages/inception/practices-discovery.md",
+   ".claude/aidlc-common/stages/inception/refined-mockups.md",
+   ".claude/aidlc-common/stages/inception/requirements-analysis.md",
+   ".claude/aidlc-common/stages/inception/reverse-engineering.md",
+   ".claude/aidlc-common/stages/inception/units-generation.md",
+   ".claude/aidlc-common/stages/inception/user-stories.md",
+   ".claude/aidlc-common/stages/initialization/state-init.md",
+   ".claude/aidlc-common/stages/initialization/workspace-detection.md",
+   ".claude/aidlc-common/stages/initialization/workspace-scaffold.md"
+  ],
+  "cPayload": {
+   "added": 0,
+   "identical": 24
+  },
+  "composedTree": {
+   "sha256": "8a35b851d0902cb09d781d68fbe01d0c70eb583e2a5f0237d0eeeccd683abd72",
+   "files": 363
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "entrypoints": 31,
+   "outsideProduct": [],
+   "changedFromDist": []
+  },
+  "preflight": {
+   "uiBaseline": "C-composed",
+   "missing": [],
+   "runtime": "<SCRATCH>/product1/.claude"
+  }
+ },
+ "p3-update-no-receipt-refused": {
+  "raw": "setup stop: update stops: .claude/d-install-receipt.json is missing, so the 24 conflicting file(s) cannot be proven to be unmodified setup output (pass --legacy-install-commit <product commit that recorded the install> to compare against that commit): .claude/aidlc-common/stages/construction/build-and-test.md, .claude/aidlc-common/stages/construction/code-generation.md, .claude/aidlc-common/stages/construction/functional-design.md, .claude/aidlc-common/stages/construction/infrastructure-design.md, .claude/aidlc-common/stages/construction/nfr-design.md, .claude/aidlc-common/stages/construction/nfr-requirements.md, .claude/aidlc-common/stages/ideation/approval-handoff.md, .claude/aidlc-common/stages/ideation/intent-capture.md, .claude/aidlc-common/stages/ideation/rough-mockups.md, .claude/aidlc-common/stages/ideation/scope-definition.md, .claude/aidlc-common/stages/ideation/team-formation.md, .claude/aidlc-common/stages/inception/contract-design.md, .claude/aidlc-common/stages/inception/delivery-planning.md, .claude/aidlc-common/stages/inception/domain-design.md, .claude/aidlc-common/stages/inception/practices-discovery.md, .claude/aidlc-common/stages/inception/refined-mockups.md, .claude/aidlc-common/stages/inception/requirements-analysis.md, .claude/aidlc-common/stages/inception/reverse-engineering.md, .claude/aidlc-common/stages/inception/units-generation.md, .claude/aidlc-common/stages/inception/user-stories.md, .claude/aidlc-common/stages/initialization/state-init.md, .claude/aidlc-common/stages/initialization/workspace-detection.md, .claude/aidlc-common/stages/initialization/workspace-scaffold.md, .claude/skills/aidlc/SKILL.md\n"
+ },
+ "p3-update-legacy-commit": {
+  "mode": "update",
+  "product": "<SCRATCH>/product3",
+  "replacedComposeOwned": [
+   ".claude/aidlc-common/stages/construction/build-and-test.md",
+   ".claude/aidlc-common/stages/construction/code-generation.md",
+   ".claude/aidlc-common/stages/construction/functional-design.md",
+   ".claude/aidlc-common/stages/construction/infrastructure-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-requirements.md",
+   ".claude/aidlc-common/stages/ideation/approval-handoff.md",
+   ".claude/aidlc-common/stages/ideation/intent-capture.md",
+   ".claude/aidlc-common/stages/ideation/rough-mockups.md",
+   ".claude/aidlc-common/stages/ideation/scope-definition.md",
+   ".claude/aidlc-common/stages/ideation/team-formation.md",
+   ".claude/aidlc-common/stages/inception/contract-design.md",
+   ".claude/aidlc-common/stages/inception/delivery-planning.md",
+   ".claude/aidlc-common/stages/inception/domain-design.md",
+   ".claude/aidlc-common/stages/inception/practices-discovery.md",
+   ".claude/aidlc-common/stages/inception/refined-mockups.md",
+   ".claude/aidlc-common/stages/inception/requirements-analysis.md",
+   ".claude/aidlc-common/stages/inception/reverse-engineering.md",
+   ".claude/aidlc-common/stages/inception/units-generation.md",
+   ".claude/aidlc-common/stages/inception/user-stories.md",
+   ".claude/aidlc-common/stages/initialization/state-init.md",
+   ".claude/aidlc-common/stages/initialization/workspace-detection.md",
+   ".claude/aidlc-common/stages/initialization/workspace-scaffold.md",
+   ".claude/skills/aidlc/SKILL.md"
+  ],
+  "cPayload": {
+   "added": 0,
+   "identical": 24
+  },
+  "composedTree": {
+   "sha256": "55c7ced0d091da7a350140ff23868c8edff9e22905ad7d85ab70af565ec4a426",
+   "files": 363
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "entrypoints": 31,
+   "outsideProduct": [],
+   "changedFromDist": []
+  },
+  "preflight": {
+   "uiBaseline": "C-composed",
+   "missing": [],
+   "runtime": "<SCRATCH>/product3/.claude"
+  }
+ },
+ "p3-update-receipt": {
+  "mode": "update",
+  "product": "<SCRATCH>/product3",
+  "replacedComposeOwned": [
+   ".claude/aidlc-common/stages/construction/build-and-test.md",
+   ".claude/aidlc-common/stages/construction/code-generation.md",
+   ".claude/aidlc-common/stages/construction/functional-design.md",
+   ".claude/aidlc-common/stages/construction/infrastructure-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-requirements.md",
+   ".claude/aidlc-common/stages/ideation/approval-handoff.md",
+   ".claude/aidlc-common/stages/ideation/intent-capture.md",
+   ".claude/aidlc-common/stages/ideation/rough-mockups.md",
+   ".claude/aidlc-common/stages/ideation/scope-definition.md",
+   ".claude/aidlc-common/stages/ideation/team-formation.md",
+   ".claude/aidlc-common/stages/inception/contract-design.md",
+   ".claude/aidlc-common/stages/inception/delivery-planning.md",
+   ".claude/aidlc-common/stages/inception/domain-design.md",
+   ".claude/aidlc-common/stages/inception/practices-discovery.md",
+   ".claude/aidlc-common/stages/inception/refined-mockups.md",
+   ".claude/aidlc-common/stages/inception/requirements-analysis.md",
+   ".claude/aidlc-common/stages/inception/reverse-engineering.md",
+   ".claude/aidlc-common/stages/inception/units-generation.md",
+   ".claude/aidlc-common/stages/inception/user-stories.md",
+   ".claude/aidlc-common/stages/initialization/state-init.md",
+   ".claude/aidlc-common/stages/initialization/workspace-detection.md",
+   ".claude/aidlc-common/stages/initialization/workspace-scaffold.md"
+  ],
+  "cPayload": {
+   "added": 0,
+   "identical": 24
+  },
+  "composedTree": {
+   "sha256": "25a00a65b106f9f85d547b929edf6f49c2e3b1e0675625e1c67392b512d74a82",
+   "files": 364
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "entrypoints": 31,
+   "outsideProduct": [],
+   "changedFromDist": []
+  },
+  "preflight": {
+   "uiBaseline": "C-composed",
+   "missing": [],
+   "runtime": "<SCRATCH>/product3/.claude"
+  }
+ },
+ "p3-update-stale-plugin-refused": {
+  "raw": "setup stop: update stops: conflicts not proven to be unmodified compose output recorded in .claude/d-install-receipt.json: .claude/tools/ui-poc-c-routing.cjs\n"
+ },
+ "p3-update-stale-plugin-legacy": {
+  "mode": "update",
+  "product": "<SCRATCH>/product3",
+  "replacedComposeOwned": [
+   ".claude/aidlc-common/stages/construction/build-and-test.md",
+   ".claude/aidlc-common/stages/construction/code-generation.md",
+   ".claude/aidlc-common/stages/construction/functional-design.md",
+   ".claude/aidlc-common/stages/construction/infrastructure-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-requirements.md",
+   ".claude/aidlc-common/stages/ideation/approval-handoff.md",
+   ".claude/aidlc-common/stages/ideation/intent-capture.md",
+   ".claude/aidlc-common/stages/ideation/rough-mockups.md",
+   ".claude/aidlc-common/stages/ideation/scope-definition.md",
+   ".claude/aidlc-common/stages/ideation/team-formation.md",
+   ".claude/aidlc-common/stages/inception/contract-design.md",
+   ".claude/aidlc-common/stages/inception/delivery-planning.md",
+   ".claude/aidlc-common/stages/inception/domain-design.md",
+   ".claude/aidlc-common/stages/inception/practices-discovery.md",
+   ".claude/aidlc-common/stages/inception/refined-mockups.md",
+   ".claude/aidlc-common/stages/inception/requirements-analysis.md",
+   ".claude/aidlc-common/stages/inception/reverse-engineering.md",
+   ".claude/aidlc-common/stages/inception/units-generation.md",
+   ".claude/aidlc-common/stages/inception/user-stories.md",
+   ".claude/aidlc-common/stages/initialization/state-init.md",
+   ".claude/aidlc-common/stages/initialization/workspace-detection.md",
+   ".claude/aidlc-common/stages/initialization/workspace-scaffold.md"
+  ],
+  "replacedPluginFiles": [
+   ".claude/tools/ui-poc-c-routing.cjs"
+  ],
+  "cPayload": {
+   "added": 0,
+   "identical": 24
+  },
+  "composedTree": {
+   "sha256": "10f3a0aaef27153eab18b941c2a6f31f1e7340d1b6ca005c6ddf59594661c8dc",
+   "files": 364
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "entrypoints": 31,
+   "outsideProduct": [],
+   "changedFromDist": [],
+   "pluginPayload": {
+    "missing": [],
+    "changed": []
+   }
+  },
+  "preflight": {
+   "uiBaseline": "C-composed",
+   "missing": [],
+   "runtime": "<SCRATCH>/product3/.claude"
+  }
+ },
+ "p3-update-final": {
+  "mode": "update",
+  "product": "<SCRATCH>/product3",
+  "replacedComposeOwned": [
+   ".claude/aidlc-common/stages/construction/build-and-test.md",
+   ".claude/aidlc-common/stages/construction/code-generation.md",
+   ".claude/aidlc-common/stages/construction/functional-design.md",
+   ".claude/aidlc-common/stages/construction/infrastructure-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-design.md",
+   ".claude/aidlc-common/stages/construction/nfr-requirements.md",
+   ".claude/aidlc-common/stages/ideation/approval-handoff.md",
+   ".claude/aidlc-common/stages/ideation/intent-capture.md",
+   ".claude/aidlc-common/stages/ideation/rough-mockups.md",
+   ".claude/aidlc-common/stages/ideation/scope-definition.md",
+   ".claude/aidlc-common/stages/ideation/team-formation.md",
+   ".claude/aidlc-common/stages/inception/contract-design.md",
+   ".claude/aidlc-common/stages/inception/delivery-planning.md",
+   ".claude/aidlc-common/stages/inception/domain-design.md",
+   ".claude/aidlc-common/stages/inception/practices-discovery.md",
+   ".claude/aidlc-common/stages/inception/refined-mockups.md",
+   ".claude/aidlc-common/stages/inception/requirements-analysis.md",
+   ".claude/aidlc-common/stages/inception/reverse-engineering.md",
+   ".claude/aidlc-common/stages/inception/units-generation.md",
+   ".claude/aidlc-common/stages/inception/user-stories.md",
+   ".claude/aidlc-common/stages/initialization/state-init.md",
+   ".claude/aidlc-common/stages/initialization/workspace-detection.md",
+   ".claude/aidlc-common/stages/initialization/workspace-scaffold.md"
+  ],
+  "replacedPluginFiles": [],
+  "cPayload": {
+   "added": 0,
+   "identical": 24
+  },
+  "composedTree": {
+   "sha256": "d51f65254a28bd2735b2a8d2907f6d2b7cc9b75def26287cd4b1b4b163258ca4",
+   "files": 364
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "entrypoints": 31,
+   "outsideProduct": [],
+   "changedFromDist": [],
+   "pluginPayload": {
+    "missing": [],
+    "changed": []
+   }
+  },
+  "preflight": {
+   "uiBaseline": "C-composed",
+   "missing": [],
+   "runtime": "<SCRATCH>/product3/.claude"
+  }
+ }
+}

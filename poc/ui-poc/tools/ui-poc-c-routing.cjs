@@ -44,7 +44,8 @@ function verifiedArtifactRef(projectRoot, ref, label) {
 
 function stateField(content, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return content.match(new RegExp(`^\\*\\*${escaped}\\*\\*:\\s*(.+?)\\s*$`, 'm'))?.[1] ?? null;
+  // The official engine writes state fields as list items (`- **Scope**: x`).
+  return content.match(new RegExp(`^(?:[-*]\\s+)?\\*\\*${escaped}\\*\\*:\\s*(.+?)\\s*$`, 'm'))?.[1] ?? null;
 }
 
 function deriveEngineContext(outputPath, stage, cfg = load()) {

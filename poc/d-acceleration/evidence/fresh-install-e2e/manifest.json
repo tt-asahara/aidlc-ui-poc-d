@@ -1,0 +1,593 @@
+{
+ "schema": "aidlc-d-clean-target/v1",
+ "source": {
+  "sha": "9bab65f313c9a65e266307bc72fa29962e07a8a4",
+  "branch": "d/fresh-install-e2e",
+  "dirtyFiles": []
+ },
+ "package": {
+  "distClaude": {
+   "sha256": "a71fb7c93406bf3ee1e7f03d0302665a7bbade323b641a7d9de9ad234ce02e48",
+   "files": 344
+  },
+  "dAcceleration": {
+   "sha256": "66c8830b53402f05b95663e325d8bcc0e36ea96fc35beadaccf7fcedc0a3f4ae",
+   "files": 29
+  },
+  "uiPocPlugin": {
+   "sha256": "ca180e0ecf43e4fb375b1f505d4080189d8fc3ab2843f45a90382343b2f94e0b",
+   "files": 41
+  },
+  "cPayload": {
+   "sha256": "d48a0bff1808f82243f6f05002be944364dab09dce34ccab91f87816cb09e669",
+   "files": 24
+  }
+ },
+ "runtime": {
+  "installedClaude": {
+   "sha256": "d2b0a22df5a31e32373ade9f89f4bbecf0b2a9d5b383c27ceda23f205adf2fed",
+   "files": 364
+  },
+  "dAcceleration": {
+   "sha256": "66c8830b53402f05b95663e325d8bcc0e36ea96fc35beadaccf7fcedc0a3f4ae",
+   "files": 29
+  },
+  "cPayload": {
+   "sha256": "d48a0bff1808f82243f6f05002be944364dab09dce34ccab91f87816cb09e669",
+   "files": 24
+  },
+  "parity": {
+   "ok": true,
+   "resolvedModules": 120,
+   "outsideProduct": 0,
+   "changedFromDist": []
+  }
+ },
+ "tools": {
+  "bun": "1.3.14",
+  "claude": "2.1.302 (Claude Code)",
+  "aidlc": "aidlc 2.11.0 (runtime 2.11.0)"
+ },
+ "config": {
+  "files": [
+   {
+    "path": ".claude/d-acceleration.jsonc",
+    "sha256": "c382f91de1a54369d760a9eedb53dd2c5345c4f12f41643dbe31a085757c14a9",
+    "content": "{\n  // fresh-install-e2e: explicit bounded generic auto for a synthetic todo CLI.\n  \"auto\": { \"enabled\": true, \"sessionOnly\": false, \"through\": \"requirements-analysis\", \"maxSteps\": 12, \"deadlineMs\": 1800000 },\n  // fresh-install-e2e: approved-transition checkpoint commit + push to a LOCAL bare remote only.\n  \"gitPersistence\": { \"enabled\": true, \"push\": true, \"remote\": \"origin\", \"branch\": \"main\" }\n}\n"
+   }
+  ],
+  "effective": {
+   "features": {
+    "requirementIdValidation": false,
+    "functionalDesignDocumentDiscipline": false,
+    "sourceGrounding": false,
+    "specGrounding": false,
+    "mockupPngGeneration": false,
+    "visualRegression": false
+   },
+   "featureInputs": {
+    "requirementIdBridges": [],
+    "functionalDesignBudgets": {
+     "artifactBytes": 60000,
+     "unitBytes": 160000,
+     "metadataBytes": 30000
+    },
+    "sourceRoots": [],
+    "specRoots": []
+   },
+   "auto": {
+    "enabled": true,
+    "through": "requirements-analysis",
+    "sessionOnly": false,
+    "ambiguityPolicy": "halt",
+    "assumptionLedger": true,
+    "maxRetries": 2,
+    "maxSteps": 12,
+    "deadlineMs": 1800000,
+    "labelAllowlist": []
+   },
+   "issueAutopilot": {
+    "enabled": false,
+    "oneIssuePerRun": true
+   },
+   "aiApproval": {
+    "mode": "human",
+    "minConfidence": 0.9,
+    "decisionRecordPath": "decisions/ai-approval-decisions.jsonl"
+   },
+   "decisionIssueSummary": {
+    "enabled": false,
+    "send": false,
+    "maxRetries": 2
+   },
+   "parallel": {
+    "enabled": true
+   },
+   "constructionDefaults": {
+    "iteration": "official",
+    "execution": "official"
+   }
+  },
+  "settingsSha256": "c465753bede3c025c1ddbb73643c067936e9b16a41581d51cc0ee104cd0cf610",
+  "installReceipt": {
+   "path": ".claude/d-install-receipt.json",
+   "sha256": "03a11549e3c4e2940a56056005229cf26a1606f01ac9ad3edbf600f7672df447"
+  }
+ },
+ "models": [
+  {
+   "log": "t1-auto.jsonl",
+   "sha256": "a729835ffca64f863fc599e04de204b507904a97a2ee7929ebef738ce17cad12",
+   "sessionId": "9505da41-9826-4780-96c1-d4dd18277632",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.28118,
+   "numTurns": 4,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t10-restart3.jsonl",
+   "sha256": "173194c891de14129a4a4d596cadedecc8906ed9b3d206c11da196620429e96e",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.4678627,
+   "numTurns": 14,
+   "terminal": "success",
+   "permissionDenials": 2
+  },
+  {
+   "log": "t11-confirm.jsonl",
+   "sha256": "8dd2d087b16f25f4ef019ed8d838e4c883a80698a0bc4371ba8e957d7a2e3945",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.8984568,
+   "numTurns": 12,
+   "terminal": "success",
+   "permissionDenials": 1
+  },
+  {
+   "log": "t12-nothing.jsonl",
+   "sha256": "63f46b77a2aebaa54cdc073f72d414fb1fd55bf42f1f7d388e7417fc51fb2d8d",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 1.0050874,
+   "numTurns": 7,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t13-override.jsonl",
+   "sha256": "e7cbad00577cb0eccd2abeca71874e456055d7102a0fa818b6b60fa3ad813771",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 1.0715575000000002,
+   "numTurns": 5,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t14-override2.jsonl",
+   "sha256": "b7e202a3ffa0b014b3d4644262898a3db48a435ac9674b90cfd8d810c2d2e792",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 1.1326547000000002,
+   "numTurns": 4,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t15-override3.jsonl",
+   "sha256": "eeba5bfb488c1e788c19a2a9c07f585c1bd9de740637abfdd03c3d45087a6d29",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 1.1874648,
+   "numTurns": 3,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t16-approve.jsonl",
+   "sha256": "08d1b8b6dbb6c34d7a80f875c4d16dd2f922a076dc9189fbe10c0cbda5235c06",
+   "sessionId": "cb90a601-3a5b-41bb-b479-56b77031e1a7",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 1.3009626,
+   "numTurns": 5,
+   "terminal": "success",
+   "permissionDenials": 1
+  },
+  {
+   "log": "t2-scope.jsonl",
+   "sha256": "24de749523583ec77a9983da4d7b9885291fe6cbccbd2c4e1fa640573ba7e9d4",
+   "sessionId": "9505da41-9826-4780-96c1-d4dd18277632",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.6462714,
+   "numTurns": 17,
+   "terminal": "success",
+   "permissionDenials": 2
+  },
+  {
+   "log": "t3-answers-crash.jsonl",
+   "sha256": "1c1f81f3f5850271d28cc189dee965b35b536412848c6e004b0a747ed99e0d21",
+   "sessionId": "9505da41-9826-4780-96c1-d4dd18277632",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.8094537000000003,
+   "numTurns": 13,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t4-confirm-crash.jsonl",
+   "sha256": "7a148fd1e2cd40cbe08a57ec360f2cbd6bcfc254458d06734f5e148b70628d13",
+   "sessionId": "9505da41-9826-4780-96c1-d4dd18277632",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.9084800000000003,
+   "numTurns": 7,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t5-accept-crash.jsonl",
+   "sha256": "a5176b34196cad370325ce7078ca59bc41388e8b470092ef4f1ee260bd366278",
+   "sessionId": "9505da41-9826-4780-96c1-d4dd18277632",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [],
+   "costUSD": null,
+   "numTurns": null,
+   "terminal": "no-result (killed or crashed)",
+   "permissionDenials": null
+  },
+  {
+   "log": "t6-restart.jsonl",
+   "sha256": "78757e120cba106e7dba2d6164607ff25f21d49042f27c64e69cb980e83b5d27",
+   "sessionId": "93732d05-c3d4-4a77-a741-b21c22881bc9",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [],
+   "costUSD": null,
+   "numTurns": null,
+   "terminal": "no-result (killed or crashed)",
+   "permissionDenials": null
+  },
+  {
+   "log": "t7-restart2.jsonl",
+   "sha256": "2313b933f82e4ccfb85c191353e7a55b5e91ad63a9f4cb2b827609723524a171",
+   "sessionId": "e1db46e4-6cb7-4bbf-9a4d-0e14bab4720c",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.43327480000000007,
+   "numTurns": 22,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t8-learnings.jsonl",
+   "sha256": "411b6ab7580ad3d3ca04eb36145ee847121c7e09f14489d10b9b92ff6d83e723",
+   "sessionId": "e1db46e4-6cb7-4bbf-9a4d-0e14bab4720c",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.48236640000000003,
+   "numTurns": 4,
+   "terminal": "success",
+   "permissionDenials": 0
+  },
+  {
+   "log": "t9-approve.jsonl",
+   "sha256": "10b83eca6ba69b2d935368dfc2c94f4e6d65c624908c0a9b93ddb44d3ef8b621",
+   "sessionId": "e1db46e4-6cb7-4bbf-9a4d-0e14bab4720c",
+   "claudeCodeVersion": "2.1.302",
+   "sessionModel": "claude-sonnet-5-5",
+   "assistantModels": [
+    "claude-sonnet-5-5"
+   ],
+   "runtimeModels": [
+    "claude-sonnet-5-5"
+   ],
+   "costUSD": 0.651991,
+   "numTurns": 7,
+   "terminal": "success",
+   "permissionDenials": 0
+  }
+ ],
+ "official": {
+  "intentCount": 1,
+  "intents": [
+   {
+    "space": "default",
+    "intent": "261017-build-a-tiny-command-lin",
+    "stages": [
+     {
+      "mark": "x",
+      "stage": "workspace-scaffold",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": "x",
+      "stage": "workspace-detection",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": "x",
+      "stage": "state-init",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": "x",
+      "stage": "intent-capture",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": " ",
+      "stage": "market-research",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "feasibility",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "scope-definition",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "team-formation",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "rough-mockups",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "approval-handoff",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "reverse-engineering",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "practices-discovery",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": "x",
+      "stage": "requirements-analysis",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": " ",
+      "stage": "user-stories",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "refined-mockups",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "domain-design",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "units-generation",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "contract-design",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "delivery-planning",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "functional-design",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "nfr-requirements",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "nfr-design",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "infrastructure-design",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": "-",
+      "stage": "code-generation",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": " ",
+      "stage": "build-and-test",
+      "disposition": "EXECUTE"
+     },
+     {
+      "mark": " ",
+      "stage": "ci-pipeline",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "deployment-pipeline",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "environment-provisioning",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "deployment-execution",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "observability-setup",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "incident-response",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "performance-validation",
+      "disposition": "SKIP"
+     },
+     {
+      "mark": " ",
+      "stage": "feedback-optimization",
+      "disposition": "SKIP"
+     }
+    ],
+    "receipts": [
+     {
+      "path": "aidlc/spaces/default/intents/261017-build-a-tiny-command-lin/.aidlc-engine/reviews/intent-capture/stage/a1cf03774758b036/1.json",
+      "sha256": "78a9690b1ddd44eae633787c774933b5e7f2a295817b36fe63ac03a1acf2776a",
+      "bytes": 556
+     },
+     {
+      "path": "aidlc/spaces/default/intents/261017-build-a-tiny-command-lin/.aidlc-engine/reviews/requirements-analysis/stage/9a251f74e42c7dce/1.json",
+      "sha256": "ce8da0049e2b049e76939a5d5069086fb8be65b022912ae0f4d61ef97a315fbf",
+      "bytes": 10297
+     },
+     {
+      "path": "aidlc/spaces/default/intents/261017-build-a-tiny-command-lin/aidlc-state.md",
+      "sha256": "53a7a8dbd15f08242e1477b0aced1408fef906c8e0aebc82a10a457b57c100ac",
+      "bytes": 3832
+     },
+     {
+      "path": "aidlc/spaces/default/intents/261017-build-a-tiny-command-lin/audit/cb-329-local-6ad4e20d7f2b.md",
+      "sha256": "b891efc44593edce83c03317be94443d7143ce1851fa6a6993f96f8ddf3e3df8",
+      "bytes": 59380
+     }
+    ]
+   }
+  ]
+ },
+ "productGit": {
+  "head": "ce8571e20a9da76ca53af88b79df6ac0ddccc909",
+  "refs": [
+   "refs/heads/main ce8571e20a9da76ca53af88b79df6ac0ddccc909",
+   "refs/remotes/origin/main 85d600cdee2a6536737a421535bea950ba8245f7"
+  ],
+  "dirty": 0
+ }
+}

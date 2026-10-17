@@ -1,0 +1,782 @@
+{
+  "autoOff": [
+    {
+      "config": "auto-off",
+      "args": [
+        "3"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "auto-off",
+      "args": [
+        "aidlc-auto"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "auto-off",
+      "args": [
+        "list"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "autopilot-off",
+      "args": [
+        "3"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "autopilot-off",
+      "args": [
+        "aidlc-auto"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "autopilot-off",
+      "args": [
+        "list"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "default",
+      "args": [
+        "3"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "default",
+      "args": [
+        "aidlc-auto"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    },
+    {
+      "config": "default",
+      "args": [
+        "list"
+      ],
+      "result": {
+        "status": "stopped",
+        "reason": "disabled"
+      }
+    }
+  ],
+  "ghAuth": {
+    "denied": {
+      "status": "stopped",
+      "reason": "gh-auth-required",
+      "host": "github.com",
+      "repository": "github.com/sandbox/app",
+      "nextStep": "gh auth login --hostname github.com",
+      "detail": "You are not logged into any accounts on github.com"
+    },
+    "gheAllowed": {
+      "status": "stopped",
+      "reason": "intent-created",
+      "issueNumber": 3,
+      "attempts": 1,
+      "directive": {
+        "kind": "ask",
+        "gate": true,
+        "stage": "requirements-analysis"
+      },
+      "selection": {
+        "mode": "explicit-number",
+        "selectedIssueNumber": 3
+      }
+    },
+    "argv": [
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.kddi.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "3",
+          "--repo",
+          "github.kddi.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      }
+    ]
+  },
+  "explicitNumber": {
+    "present": {
+      "status": "stopped",
+      "reason": "intent-created",
+      "issueNumber": 3,
+      "attempts": 1,
+      "directive": {
+        "kind": "ask",
+        "gate": true,
+        "stage": "requirements-analysis"
+      },
+      "selection": {
+        "mode": "explicit-number",
+        "selectedIssueNumber": 3
+      }
+    },
+    "rerun": {
+      "status": "stopped",
+      "reason": "intent-created",
+      "issueNumber": 3,
+      "attempts": 0,
+      "directive": {
+        "kind": "ask",
+        "gate": true,
+        "stage": "requirements-analysis"
+      },
+      "selection": {
+        "mode": "explicit-number",
+        "selectedIssueNumber": 3
+      }
+    },
+    "readError": {
+      "status": "stopped",
+      "reason": "github-read-failed",
+      "repository": "github.com/sandbox/app",
+      "detail": "gh issue read failed (1): HTTP 502: injected fault for issue view"
+    },
+    "intentCreates": 1,
+    "argv": [
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "3",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "3",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "4",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "6",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "999",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": null
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "5",
+          "--repo",
+          "github.com/sandbox/app",
+          "--json",
+          "number,title,body,labels,state"
+        ],
+        "ghHost": null
+      }
+    ]
+  },
+  "discoveryLoop": {
+    "listed": {
+      "status": "selection-required",
+      "selectionStrategy": "issue-number-ascending",
+      "issues": [
+        {
+          "number": 3,
+          "title": "Sandbox task 3",
+          "labels": [
+            "aidlc-auto"
+          ]
+        },
+        {
+          "number": 4,
+          "title": "Sandbox task 4",
+          "labels": []
+        },
+        {
+          "number": 5,
+          "title": "Sandbox task 5",
+          "labels": [
+            "aidlc-auto"
+          ]
+        }
+      ]
+    },
+    "polls": [
+      {
+        "status": "stopped",
+        "reason": "intent-created",
+        "issueNumber": 3,
+        "attempts": 1,
+        "directive": {
+          "kind": "ask",
+          "gate": true,
+          "stage": "requirements-analysis"
+        },
+        "selection": {
+          "mode": "label-poll",
+          "strategy": "issue-number-ascending",
+          "reason": "first eligible unbound Issue in ascending issue-number order",
+          "eligibleIssueNumbers": [
+            3,
+            5
+          ],
+          "selectedIssueNumber": 3
+        }
+      },
+      {
+        "status": "stopped",
+        "reason": "intent-created",
+        "issueNumber": 5,
+        "attempts": 1,
+        "directive": {
+          "kind": "ask",
+          "gate": true,
+          "stage": "requirements-analysis"
+        },
+        "selection": {
+          "mode": "label-poll",
+          "strategy": "issue-number-ascending",
+          "reason": "first eligible unbound Issue in ascending issue-number order",
+          "eligibleIssueNumbers": [
+            5
+          ],
+          "selectedIssueNumber": 5
+        }
+      },
+      {
+        "status": "stopped",
+        "reason": "selection-cancelled",
+        "selection": {
+          "mode": "label-poll",
+          "strategy": "issue-number-ascending",
+          "reason": "first eligible unbound Issue in ascending issue-number order",
+          "eligibleIssueNumbers": [],
+          "selectedIssueNumber": null
+        }
+      }
+    ],
+    "stop": {
+      "status": "stopped",
+      "reason": "operator-stop",
+      "stopFile": "<sandbox>/ap-loop/product/.git/aidlc/issue-autopilot/stop"
+    },
+    "intentCreates": 2
+  },
+  "ledgerAndOneIssue": {
+    "assume": {
+      "statusPolicy": "halt",
+      "run": {
+        "status": "stopped",
+        "reason": "uncertainty",
+        "issueNumber": 3,
+        "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+        "selection": {
+          "mode": "explicit-number",
+          "selectedIssueNumber": 3
+        }
+      }
+    },
+    "research": {
+      "statusPolicy": "halt",
+      "run": {
+        "status": "stopped",
+        "reason": "uncertainty",
+        "issueNumber": 3,
+        "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+        "selection": {
+          "mode": "explicit-number",
+          "selectedIssueNumber": 3
+        }
+      }
+    },
+    "oneIssuePerRunFalse": "95 |     for (const key of [\"enabled\", \"oneIssuePerRun\"] as const) bool(issueAutopilot[key], `issue autopilot ${key}`, path);"
+  },
+  "throughBoundaries": {
+    "none": {
+      "hostControl": {
+        "through": null,
+        "maxSteps": 64,
+        "deadlineMs": 900000,
+        "claim": {
+          "issueNumber": 3,
+          "owner": "pid-89008",
+          "leaseMs": 900000
+        }
+      }
+    },
+    "initialization": {
+      "failedClosed": "11 |     if (!active.has(value)) throw new Error(`through stage is not active in this scope: ${value}`);"
+    },
+    "ideation": {
+      "failedClosed": "11 |     if (!active.has(value)) throw new Error(`through stage is not active in this scope: ${value}`);"
+    },
+    "inception": {
+      "hostControl": {
+        "through": "delivery-planning",
+        "maxSteps": 64,
+        "deadlineMs": 900000,
+        "claim": {
+          "issueNumber": 3,
+          "owner": "pid-89080",
+          "leaseMs": 900000
+        }
+      }
+    },
+    "construction": {
+      "hostControl": {
+        "through": "ci-pipeline",
+        "maxSteps": 64,
+        "deadlineMs": 900000,
+        "claim": {
+          "issueNumber": 3,
+          "owner": "pid-89368",
+          "leaseMs": 900000
+        }
+      }
+    },
+    "operation": {
+      "failedClosed": "11 |     if (!active.has(value)) throw new Error(`through stage is not active in this scope: ${value}`);"
+    },
+    "units-generation": {
+      "hostControl": {
+        "through": "units-generation",
+        "maxSteps": 64,
+        "deadlineMs": 900000,
+        "claim": {
+          "issueNumber": 3,
+          "owner": "pid-89854",
+          "leaseMs": 900000
+        }
+      }
+    },
+    "code-generation": {
+      "hostControl": {
+        "through": "code-generation",
+        "maxSteps": 64,
+        "deadlineMs": 900000,
+        "claim": {
+          "issueNumber": 3,
+          "owner": "pid-90019",
+          "leaseMs": 900000
+        }
+      }
+    },
+    "deployment-execution": {
+      "failedClosed": "11 |     if (!active.has(value)) throw new Error(`through stage is not active in this scope: ${value}`);"
+    }
+  },
+  "decisionSummary": {
+    "steps": {
+      "disabled": {
+        "status": "stopped",
+        "reason": "disabled"
+      },
+      "sendOff": {
+        "status": "generated",
+        "published": false,
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "noPermission": {
+        "status": "stopped",
+        "reason": "{\"error\":\"Decision summary publication lacks an exact latest host-recorded human permission\"}\n",
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "stalePayloadHash": {
+        "status": "stopped",
+        "reason": "{\"error\":\"Decision summary publication lacks an exact latest host-recorded human permission\"}\n",
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "ghAuthMissing": {
+        "status": "stopped",
+        "reason": "gh-auth-required",
+        "host": "github.com",
+        "nextStep": "gh auth login --hostname github.com",
+        "detail": "You are not logged into any accounts on github.com",
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "ambiguousCreate": {
+        "status": "stopped",
+        "reason": "create-result-ambiguous",
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "reconciled": {
+        "status": "published",
+        "operation": "updated",
+        "issueNumber": 40,
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      },
+      "rerun": {
+        "status": "published",
+        "operation": "updated",
+        "issueNumber": 40,
+        "payload": {
+          "key": "364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "repository": "sandbox/app",
+          "intent": "aidlc/spaces/default/intents/budget",
+          "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        }
+      }
+    },
+    "humanPermissionWords": "AI-DLC authorize-decision-summary --repository sandbox/app --intent aidlc/spaces/default/intents/budget --payload-sha256 0f8403882b7db6797f5fc1a9677261a56eef32efc3df4e9d14e3870abb12fa68",
+    "argv": [
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "create",
+          "--repo",
+          "sandbox/app",
+          "--title",
+          "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "--body",
+          "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "list",
+          "--repo",
+          "sandbox/app",
+          "--state",
+          "all",
+          "--search",
+          "aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677",
+          "--json",
+          "number",
+          "--limit",
+          "2"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "40",
+          "--repo",
+          "sandbox/app",
+          "--json",
+          "body"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "edit",
+          "40",
+          "--repo",
+          "sandbox/app",
+          "--title",
+          "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "--body",
+          "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "auth",
+          "status",
+          "--hostname",
+          "github.com"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "view",
+          "40",
+          "--repo",
+          "sandbox/app",
+          "--json",
+          "body"
+        ],
+        "ghHost": "github.com"
+      },
+      {
+        "argv": [
+          "issue",
+          "edit",
+          "40",
+          "--repo",
+          "sandbox/app",
+          "--title",
+          "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+          "--body",
+          "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+        ],
+        "ghHost": "github.com"
+      }
+    ],
+    "finalIssues": [
+      {
+        "number": 40,
+        "title": "AI-DLC decisions: aidlc/spaces/default/intents/budget",
+        "body": "<!-- aidlc-decision-summary:364056259f5b0f1e0bd2236e4d01e27110679d94803640c4b7a658d3e4329677 -->\n# Decision summary\n\n- **111111111111** · requirements-analysis · approve: Keep deletion confirmation count-only ([source](aidlc/spaces/default/intents/budget/requirements.md))\n- **222222222222** · requirements-analysis · approve: CSV export uses comma ([source](aidlc/spaces/default/intents/budget/requirements.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created.",
+        "labels": [],
+        "state": "OPEN"
+      }
+    ]
+  },
+  "pinnedExecutable": {
+    "script": {
+      "status": "stopped",
+      "reason": "host-pinned gh executable must be a native binary, not a script"
+    },
+    "digestMismatch": {
+      "status": "stopped",
+      "reason": "host-pinned gh executable digest mismatch"
+    }
+  },
+  "persistence": {
+    "steps": {
+      "defaultOff": {
+        "status": "disabled"
+      },
+      "commitOnly": {
+        "status": "committed",
+        "commitOid": "f6fd9a28feb952b73a0aedfb4f28b5c72293d2d4"
+      },
+      "remoteOffline": {
+        "status": "deferred",
+        "reason": "push pending: fatal: '<sandbox>/persist/remote.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.",
+        "commitOid": "af229d52d8e2257154471f0142aece32ca2a29d8"
+      },
+      "retry": {
+        "status": "pushed",
+        "commitOid": "af229d52d8e2257154471f0142aece32ca2a29d8"
+      },
+      "next": {
+        "status": "pushed",
+        "commitOid": "26fc700b8fac771cb6888b4f9a5b5ac218bb3f53"
+      },
+      "nonFastForward": {
+        "status": "deferred",
+        "reason": "push pending: To <sandbox>/persist/remote.git\n ! [rejected]        c65c62e439efa0569fc2849f2bdb81c3f85d9cc5 -> main (fetch first)\nerror: failed to push some refs to '<sandbox>/persist/remote.git'\nhint: Updates were rejected because the remote contains work that you do not\nhint: have locally. This is usually caused by another repository pushing to\nhint: the same ref. If you want to integrate the remote changes, use\nhint: 'git pull' before pushing again.\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.",
+        "commitOid": "c65c62e439efa0569fc2849f2bdb81c3f85d9cc5"
+      },
+      "branchMoved": {
+        "status": "deferred",
+        "reason": "branch moved since checkpoint; fixed pending refspec was not pushed",
+        "commitOid": "c65c62e439efa0569fc2849f2bdb81c3f85d9cc5"
+      }
+    },
+    "remoteBranches": [
+      "refs/heads/main"
+    ],
+    "remoteLog": [
+      "5e2140e68aa70d4dd4859119c4166bfe1f07d3ea other",
+      "26fc700b8fac771cb6888b4f9a5b5ac218bb3f53 chore(aidlc): persist approved transition user-stories",
+      "af229d52d8e2257154471f0142aece32ca2a29d8 chore(aidlc): persist approved transition requirements-analysis",
+      "f6fd9a28feb952b73a0aedfb4f28b5c72293d2d4 chore(aidlc): persist approved transition intent-capture",
+      "24791714975c272b550f0626876ac34d9cc6bd80 base"
+    ]
+  }
+}

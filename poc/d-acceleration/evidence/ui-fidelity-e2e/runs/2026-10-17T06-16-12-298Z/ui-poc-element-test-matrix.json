@@ -1,0 +1,385 @@
+{
+  "schema": 1,
+  "kind": "ui-element-test-matrix",
+  "approvedSnapshotSha256": "0db80e06afad05038330ef6af407c6d450db8666e3d0c9318280d8505fe8543f",
+  "actualSnapshotSha256": "36aee5826e3df5416132d88fd06078aac8ffa49844d0940e58cb13c8dd0f3844",
+  "ruleMatrixSha256": "8e412ddc5265941b2ff4712edc337c05e827fda36a7556ca2145e35bdbc58544",
+  "rows": [
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CANCEL-DELETE",
+      "ruleIds": [
+        "FR-DELETE-CANCEL",
+        "FC-CANCEL-DELETE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CONFIRM-DELETE",
+      "ruleIds": [
+        "FR-DELETE-EXEC",
+        "FC-CONFIRM-DELETE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL",
+      "ruleIds": [
+        "FR-DELETE-CONFIRM-DETAIL",
+        "FC-DELETE-DIALOG"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE",
+      "ruleIds": [
+        "FR-DELETE-CONFIRM-TITLE",
+        "FC-DELETE-DIALOG"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-DIALOG",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/DELETE-COMPLETE",
+      "ruleIds": [
+        "FR-DELETE-DONE",
+        "FC-DELETE-COMPLETE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/DELETE-NOTE",
+      "ruleIds": [
+        "FR-DELETE-REQ",
+        "FC-DELETE-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/EXPAND-MEMO",
+      "ruleIds": [
+        "FR-EXPAND",
+        "FC-EXPAND-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/MEMO-BODY",
+      "ruleIds": [
+        "FR-MEMO-TRUNC",
+        "FC-MEMO-BODY"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "truncation-required"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/NOTE-TITLE-1",
+      "ruleIds": [
+        "FR-NOTE-TITLE",
+        "FC-NOTE-TITLE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/SAVE-NOTE",
+      "ruleIds": [
+        "FR-SAVE",
+        "FC-SAVE-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/DELETE-NOTE",
+      "ruleIds": [
+        "FR-DELETE-REQ",
+        "FC-DELETE-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/EXPAND-MEMO",
+      "ruleIds": [
+        "FR-EXPAND",
+        "FC-EXPAND-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/MEMO-BODY",
+      "ruleIds": [
+        "FR-MEMO-TRUNC",
+        "FC-MEMO-BODY"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "truncation-required"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/NOTE-TITLE-1",
+      "ruleIds": [
+        "FR-NOTE-TITLE",
+        "FC-NOTE-TITLE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/PRIVATE-MODE-GUIDANCE",
+      "ruleIds": [
+        "FR-PRIVATE-GUIDE",
+        "FC-PRIVATE-GUIDE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/SAVE-NOTE",
+      "ruleIds": [
+        "FR-SAVE",
+        "FC-SAVE-BUTTON"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/SAVE-COMPLETE",
+      "ruleIds": [
+        "FR-SAVE-DONE",
+        "FC-SAVE-COMPLETE"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/RETRY-LOAD",
+      "ruleIds": [
+        "FR-RETRY-LOAD",
+        "FC-RETRY-LOAD"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/STORAGE-READ-ERROR",
+      "ruleIds": [
+        "FR-STORAGE-ERR",
+        "FC-STORAGE-ERROR"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    }
+  ],
+  "summary": {
+    "total": 26,
+    "pass": 26,
+    "fail": 0,
+    "deviated": 0
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "recordedAt": "2026-10-17T05:56:56.166Z",
+  "endpoint": "http://127.0.0.1:18742",
+  "healthy": false,
+  "health": "Error: Unable to connect. Is the computer able to access the url?",
+  "repeat": 3,
+  "routes": 15,
+  "clefApplied": 0,
+  "fallbacks": 15,
+  "outcomes": {
+    "unavailable": 15
+  },
+  "accuracyWhenApplied": null,
+  "designBelowBalanced": 0,
+  "throughputRoutesPerSec": 2481.748805658384,
+  "routingMsP50": 0.16620799999998326,
+  "routingMsP95": 1.1356660000000147,
+  "detail": [
+    {
+      "round": 0,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 1.1356660000000147
+    },
+    {
+      "round": 0,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.2543749999999818
+    },
+    {
+      "round": 0,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.18000000000000682
+    },
+    {
+      "round": 0,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.16620799999998326
+    },
+    {
+      "round": 0,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.13883399999997437
+    },
+    {
+      "round": 1,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.30212499999998954
+    },
+    {
+      "round": 1,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.19324999999997772
+    },
+    {
+      "round": 1,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.1437090000000012
+    },
+    {
+      "round": 1,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.11125000000004093
+    },
+    {
+      "round": 1,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.12216699999999037
+    },
+    {
+      "round": 2,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.25275000000004866
+    },
+    {
+      "round": 2,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.19054199999999355
+    },
+    {
+      "round": 2,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.15783399999997982
+    },
+    {
+      "round": 2,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.12291699999997263
+    },
+    {
+      "round": 2,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable",
+      "confidence": null,
+      "routingMs": 0.12104199999998855
+    }
+  ]
+}

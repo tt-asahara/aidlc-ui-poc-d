@@ -12,9 +12,12 @@ review, audit, or Testing Contract boundaries. Most of it remains outside
 seam so AI decisions cannot masquerade as human replies. An install must opt in
 before dispatching work through the existing engine directives.
 
+A separate clean target (install, receipt-proven update, package parity,
+headless real-host turns, and an evidence manifest) follows
+[`clean-target.md`](clean-target.md).
+
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
-surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
-local service contract.
+surfaces.
 
 The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
 exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
@@ -45,6 +48,18 @@ Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.
+
+## Design document (`/aidlc --doc`)
+
+Ported from the KDDI harness. `/aidlc --doc` merges a product-level design
+document spanning every intent into the space-level
+`aidlc/spaces/<space>/design-document/`; `/aidlc --doc --full` regenerates it
+after `design-document.ts doc-snapshot` keeps one previous generation under the
+already-ignored `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`. The LLM
+writes the document following `design-document-guide.md`; `design-document.ts
+doc-manifest --json` owns the deterministic input set. It is read-only with
+respect to workflow state. The KDDI critic loop (`docCriticLoop`, design-doc
+audit and reviewer agent) is not ported.
 
 ## Approved-transition Git persistence
 
@@ -83,12 +98,14 @@ remain authoritative.
 
 ## Safety contract
 
-- Deterministic rules win. Clef is consulted only for ambiguous, low-risk task
-  classification. Security, compliance, approval, and review decisions never
-  go to Clef.
-- Clef is optional and local-only (`127.0.0.1`). Timeout, transport failure,
-  malformed output, an unknown choice, or confidence below the configured
-  threshold falls back to the conservative `judgment` tier.
+- Deterministic rules decide every tier, and routing makes no network call.
+  The planner owns a quality floor: security, compliance, and approval stay at
+  `judgment`, and design-wave stages and design tasks stay at `balanced` or
+  above, whatever a caller's `minimumTier`/`fallbackTier` says. Ambiguous work
+  falls back to the conservative `judgment` tier.
+- Clef routing was evaluated and then declined on 2026-10-17 (see
+  `evidence/model-routing/README.md`). A leftover `clef` config key, planner
+  input key, or `--clef-*` flag fails closed with a one-line removal notice.
 - Parallel output is limited to official execution seams: `official-wave` for
   engine-emitted design-stage waves, and `official-swarm` for isolated
   Code-Generation worktrees. `unit-major`, approval barriers, reviewers, and
@@ -118,9 +135,7 @@ bun poc/d-acceleration/scheduler.ts \
   --ledger /tmp/d-resume.json --output /tmp/d-scheduler.json
 ```
 
-Set `clef.enabled` in the input only when the existing local service is already
-running. The planner never starts or stops it. See `schema.md` for the input and
-output contract.
+See `schema.md` for the input and output contract.
 
 The scheduler requires an explicit, existing absolute project directory and
 checks output paths against its real path, including symlink ancestors. It
@@ -142,7 +157,13 @@ must only be used with a throwaway fixture project.
 separately. D can request Opus for its own workers, but it cannot silently
 change an already-running parent Claude session; when the parent model is not
 observable, preflight gives the exact session action instead of claiming the
-worker request applies to inline stages. It likewise reports that safe
+worker request applies to inline stages. The parent model comes only from a
+caller's `AIDLC_PARENT_MODEL` report, labelled `unverified-caller-report`.
+`modelContract.dWorkers` lists the requested worker models with their sources
+(`cli`/`local`/`project`/`default`) and the per-tier effort. Every D worker
+passes an explicit `--model`, so a parent default such as `ANTHROPIC_MODEL` or
+`CLAUDE_CODE_SUBAGENT_MODEL` never selects a worker model. Each worker result
+carries its own `modelIdentity` (see `schema.md`). It likewise reports that safe
 Construction parallelism remains `stage-major/swarm` only after the official
 Unit DAG proves independent ready Units with disjoint writes and the person's
 recorded request authorizes the policy change.
@@ -154,7 +175,8 @@ project memory, but no project setting that initializes those two Construction
 fields; memory remains guidance rather than a policy setter. D therefore calls
 the official setters once, immediately after creating a new Intent, and only
 when that scope contains both Units Generation and Code Generation. Existing
-Intents are never changed. A later explicit per-Intent setter wins because a
+Intents are never changed by these defaults (only `parallel.enabled=false`
+moves an existing swarm Intent to serial, see below). A later explicit per-Intent setter wins because a
 bootstrap replay never reapplies the defaults. `swarm` requires `stage-major`;
 a single Unit runs as the serial-equivalent case, while multiple Units still
 parallelize only where the official DAG and isolated-worktree checks allow it.
@@ -163,17 +185,52 @@ Set either value to `official` to retain the AI-DLC default.
 `parallel.enabled` is D's single master switch and defaults to `true`. It does
 not relax dependencies: enabled mode still uses only policy-approved read-only
 fanout or the official independent-Unit DAG with disjoint writes and a wave
-barrier. `false` serializes read-only fanout and suppresses D's Construction
-swarm defaults for newly bootstrapped Intents. Generic-auto records the resolved
-value in its bootstrap journal, so changing the file does not alter a run
-already in progress.
+barrier. `false` holds every D dispatch to one worker at a time and keeps work
+away from the official parallel swarm (`parallel-guard.ts` owns this rule):
 
-The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
-comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
-Clef. Design waves retain `balanced` as their minimum and failure fallback, so
-Clef can escalate uncertain work to `judgment` but cannot downgrade design to
-`fast`. This PoC therefore does not claim universal fast-tier coverage across
-all AI-DLC stages.
+- D design-wave workers already issued by the official engine, their retries
+  and tier escalations, and read-only fanout workers run strictly one at a
+  time. The scheduler result reports `parallel.maxConcurrentWorkers`.
+- New generic-auto Intents get no D swarm default (`constructionDefaults` is
+  ignored while OFF).
+- An existing Intent whose official `Construction Execution` is `swarm` is
+  moved to `serial` only through the official
+  `aidlc-state.ts set-construction-execution serial` setter, at the next D
+  boundary (run.ts/conductor step, generic-auto or issue-autopilot checkpoint,
+  or the `invoke-swarm` guard). The setter's own guards stay authoritative:
+  before Construction it applies; inside Construction an unattended run is
+  refused and an interactive run needs the person to have asked. While it is
+  refused, D still runs its own work serially, returns the one-line `recovery`,
+  and refuses every official `invoke-swarm` hand-off
+  (`parallel-off-action-required` from run.ts/conductor, `stop` from the host
+  checkpoint and from `parallel-guard.ts`). After the setter succeeds the host
+  gets `refresh` and obtains a fresh official directive.
+- `AIDLC_USE_SWARM` and `flags.swarm` (env, then local, project, machine
+  settings) only choose the driver for an `invoke-swarm` the engine already
+  issued. They never re-enable a swarm while D is OFF.
+
+Timing: OFF applies immediately. Every D boundary re-reads the configuration,
+and the scheduler re-reads it before every worker launch, so switching to OFF
+during a wave serializes every later launch of that wave (workers already
+running finish). ON never widens work already in progress: a run or wave that
+started under OFF stays at one worker, and ON applies from the next D
+invocation. An unreadable configuration counts as OFF at those boundaries. D
+never moves an Intent back to `swarm` when ON returns; use the official setter.
+The generic-auto bootstrap journal keeps the value seen at bootstrap as
+evidence only.
+
+Design waves route at `balanced`. Escalation after a worker failure can raise
+them to `judgment`, but nothing lowers design to `fast`. This PoC therefore
+does not claim universal fast-tier coverage across all AI-DLC stages.
+
+While an official stage waits at its human gate, `cross-stage-speculation.ts`
+can run independent, no-tool, read-only pre-research for a later analysis stage.
+It writes only D-private drafts that are bound by a Merkle root, and does
+nothing when `parallel.enabled` is `false`. Drafts are discarded when any input
+changes. They are consumed as evidence only after a fresh official `run-stage`
+for that stage, with every upstream settled. Official stages stay serial. See
+[`cross-stage-speculation.md`](cross-stage-speculation.md) for the contract
+and what remains out of scope.
 
 `stage-policy.json` is the machine-readable, test-enforced classification of
 all 33 official stages. Only official design waves are executable here;
@@ -211,6 +268,13 @@ model quality, or speed.
 `benchmark.ts` compares the same synthetic task durations under serial order and
 the generated dependency waves. Those durations are fixture estimates, not
 measured LLM latency or cost. The output separately reports planner wall time,
-Clef routing time, retries, model/cost observability, critical-path estimate,
+retries, model/cost observability, critical-path estimate,
 and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
+`model-routing-probe.ts` produces that evidence. The
+2026-10-17 results are in `evidence/model-routing/README.md`.
+
+The A/B/C/D lineage, the adopted-number ledger (items 7, 9–17, 21, 22, 27,
+28), stage-to-skill invocation evidence, and the pr-lens record are in
+[`audit/`](audit/README.md). Reproduce the lineage comparison with
+`bash poc/d-acceleration/audit/lineage.sh`.

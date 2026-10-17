@@ -1,7 +1,6 @@
 {
   "maxParallel": 3,
   "modelCatalog": { "fast": "fixture-fast", "balanced": "fixture-balanced", "judgment": "fixture-judgment" },
-  "clef": { "enabled": false },
   "directives": [
     { "kind": "wave", "stage": "functional-design", "entries": ["fd-a", "fd-b", "fd-c"] }
   ],

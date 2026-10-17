@@ -65,6 +65,8 @@ export type InputAssessment = {
   researchedFacts?: string[];
   /** The description after optional research; never executable instructions. */
   description: string;
+  /** Requested-vs-runtime-reported model identity when a model assessor ran. */
+  modelIdentity?: import("./worker-adapters.ts").ModelIdentity;
 };
 
 export interface InputAssessor {
@@ -77,6 +79,8 @@ export interface AssumptionLedger {
     policy: "assume" | "research";
     assumptions: string[];
     researchedFacts: string[];
+    /** Present when a model assessor ran; `unverified` when the runtime reported no identity. */
+    modelIdentity?: import("./worker-adapters.ts").ModelIdentity;
   }): Promise<void>;
 }
 
@@ -309,7 +313,7 @@ export async function runIssueAutopilot(input: {
       const assumptions = assessment.assumptions ?? [];
       const researchedFacts = assessment.researchedFacts ?? [];
       if (assumptions.length > 0 || researchedFacts.length > 0) {
-        await input.deps.assumptions.append({ issueNumber: issue.number, policy: config.uncertaintyPolicy, assumptions, researchedFacts });
+        await input.deps.assumptions.append({ issueNumber: issue.number, policy: config.uncertaintyPolicy, assumptions, researchedFacts, ...(assessment.modelIdentity ? { modelIdentity: assessment.modelIdentity } : {}) });
       }
       if (assessment.unresolved.length > 0) {
         return { status: "stopped", reason: "uncertainty", issueNumber: issue.number, detail: assessment.unresolved.join("; ") };

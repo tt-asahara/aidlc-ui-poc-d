@@ -4,6 +4,7 @@ This contract supplements, never replaces, the core Markdown deliverables. An HT
 
 - rough-mockups: ui-poc-rough-contract.md
 - refined-mockups: ui-poc-refined-contract.md
+- functional-design: ui-poc-functional-contract.md (schema 2 only)
 - code-generation: ui-poc-implementation-contract.md
 - build-and-test: ui-poc-test-contract.md
 
@@ -84,9 +85,11 @@ renderer and fails with `BROWSER_TOOL_UNAVAILABLE` or a render-state error; it
 never substitutes regex parsing or reports an unrendered state as passing.
 
 ```text
-bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --html <approved.html> --out <snapshot.json> [--png <baseline.png>]
-bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --url <loopback-url> --out <actual.json> [--setup-click ELEMENT-ID@STATE-ID,...]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --html <approved.html> [--query scenario=...] --out <snapshot.json> [--png <baseline.png>] [--width N --height N --device-scale-factor 1|2|3] [--visual-policy <policy.json>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --url <loopback-url> --out <actual.json> [--png <actual.png> ...same viewport/policy...] [--setup-click ELEMENT-ID@STATE-ID,...]
 bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs compare --approved <approved.json> --actual <actual.json> [--dispositions <json>] [--approval-ledger <json>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs visual-compare --baseline <baseline.png> --actual <actual.png> --baseline-snapshot <approved.json> --actual-snapshot <actual.json> [--diff-out <diff.png>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs visual-calibrate --a <one.png> --b <two.png> [--a-snapshot <one.json> --b-snapshot <two.json>]
 ```
 
 The HTML render root carries `data-ui-screen` and `data-ui-state`. Important
@@ -97,6 +100,15 @@ elements use `data-ui-id` plus `data-ui-important`; exact copy additionally uses
 the truncated element it expands; the capture fails the later comparison unless
 the click actually changes the root to the expected state and expands that
 target.
+Element kind is derived from the rendered DOM: inputs/selects/textareas are
+`field`; buttons, links, interactive roles, and `data-ui-action-id` elements are
+`control`; `data-ui-business-value` is `business-value`; truncation targets,
+`data-ui-region`, and other roles are `region`; everything else is `text`.
+States reached by an environment condition (storage failure, private mode) use
+a query scenario: `--query scenario=...` for approved HTML, or the query in the
+loopback URL. `merge` combines per-state captures of one page; loopback
+captures that differ only in query keep every bound observation under
+`observations`.
 Capture each conditional screen/state separately. A hidden node in a different
 state is not coverage for the state where it must be visible.
 
@@ -108,13 +120,141 @@ not create or update a baseline during Build and Test. DOM semantic capture is
 mandatory for schema 2 and may still use the renderer when both image settings
 are off. The image settings govern only PNG capture and pixel comparison.
 
+### PNG capture and visual comparison
+
+Capture is deterministic by construction, not by hope. The tool launches the
+local Chrome/Edge with a fixed flag set (`--headless=new`, `--hide-scrollbars`,
+`--force-color-profile=srgb`, `--font-render-hinting=none`,
+`--disable-lcd-text`, ...), sets the viewport and device scale factor
+(default 1280x720 at 1x), emulates `prefers-reduced-motion: reduce` and a light
+colour scheme, then freezes CSS animations/transitions, caret blink and Web
+Animations before observing; a capture with an animation still running fails
+`ANIMATION_NOT_FROZEN`. It waits for `document.fonts.ready`, fails on any font
+load error or remote `@font-face` source, hashes every bundled font file, and
+records the platform fonts that actually rendered glyphs (from the renderer,
+not from CSS). With policy `fonts: "bundled-only"` any glyph rendered by an
+unpinned system font fails `FONT_NOT_PINNED`.
+
+Each PNG snapshot records `environment` = renderer (`/json/version` browser
+product, WebKit revision, protocol and V8 versions, executable name), OS
+(platform, release, arch), viewport (width, height, deviceScaleFactor), colour
+profile, animation mode, a hash of the renderer flags, and the font fingerprint;
+plus `visual` = the validated policy, its SHA-256, and the resolved mask
+rectangles. `visual-compare` **refuses** (status `NOT-READY`, no pixel result)
+when any of that metadata is missing or differs, when the actual capture used a
+different policy than the approved baseline, when a mask target is missing in
+either capture, or when masks would hide more than `maxMaskRatio`. A different
+image size is a `FAIL`; there is no "common area" comparison.
+
+The visual policy (JSON, all keys optional, unknown keys rejected):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `colorThreshold` | `0.1` | YIQ colour distance (0..1) below which a pixel is equal |
+| `antiAliasing` | `true` | ignore pixels classified as anti-aliased edges in either image |
+| `maxDiffPixels` | `16` | absolute budget for isolated noise |
+| `maxDiffRatio` | `0.0005` | relative budget (differing / compared pixels); both budgets must hold |
+| `maxMaskRatio` | `0.25` (max `0.5`) | masks can never hide more than this share |
+| `fonts` | `"any"` | `"bundled-only"` requires every glyph from a hashed web font |
+| `masks` | `[]` | `{id, selector, reason}` for dynamic regions (clock, random IDs) |
+
+The policy is chosen at Refined Mockups and approved with the baseline; Build
+and Test cannot loosen it. The pixel classifier re-implements the pixelmatch
+YIQ delta and anti-aliasing detector (ISC) without a dependency.
+
+False-positive handling, in order:
+
+1. `NOT-READY` (environment/policy/mask refusal): re-run the actual capture in
+   the recorded environment with the recorded viewport, scale factor and
+   policy. Never compare across renderers, OS releases, fonts or scale factors.
+2. `FAIL`: open the `--diff-out` image (red = differing, yellow = tolerated
+   anti-aliasing, blue = masked). Isolated specks and edge anti-aliasing within
+   the budget already pass.
+3. Dynamic content (time, generated IDs, live data): add a mask with a reason
+   (or make the state deterministic) at Refined Mockups and re-approve the
+   baseline through the ordinary gate. Masks are not added during Build and
+   Test.
+4. Renderer noise between two captures of the same build: run
+   `visual-calibrate`; it reports the observed noise and recommends 3x that
+   noise as a budget (never below the defaults). The recommendation is advice
+   for the person approving the policy, never applied automatically.
+5. A real but intended change: record an approved deviation or upstream
+   revision through the existing disposition receipts. A sub-pixel layout shift
+   of whole content re-rasterizes every glyph and is treated as a real change.
+
+Recorded real run (Chrome 155, macOS arm64): see
+`poc/d-acceleration/evidence/visual-regression/summary.json`.
+
 Paths are relative to this contract's stage directory. Absolute paths, parent traversal, backslashes, missing assets, non-files and symlink escapes are rejected. Declare every referenced HTML, CSS, JS, PNG/JPEG/SVG/WebP image and WOFF2 font in assets with its exact SHA-256. No remote dependencies are allowed. Browser-dependency completeness is a separate review obligation; this checker verifies declared assets and does not parse every possible dynamic import or network request. An independently approved inventory of screen/state/AC triples must cover loading, empty, success, error and interaction recovery states where applicable. A syntactically valid ID does not establish semantic completeness; reviewer comparison with requirements remains mandatory.
+
+## Element matrices and approved-upstream change control (schema 2)
+
+`tools/ui-poc-element-matrix.cjs` derives two deterministic matrices from the
+frozen approved snapshot. Tools own the denominator and every generated field;
+the Functional Design agent supplies only knowledge; the person supplies
+judgement through detached receipts.
+
+- **Element → rule / unimplemented-reason matrix** (`ui-poc-element-rule-matrix.json`,
+  produced at Functional Design with `rule-matrix generate`). One row per
+  approved `SCREEN/STATE/KEY`, with generated `kind`, `obligations`
+  (`exact-copy`, `action`, `truncation-*`, `interactive`, `important`,
+  `business-value`), `role`, `text`, `action`, `truncation`, and `requiresRule`,
+  plus agent-filled `ruleIds` or `unimplementedReason`. `rule-matrix check`
+  (also run by the sensor at the Functional Design gate) is bidirectional and
+  fails with: `MATRIX_SNAPSHOT_STALE`, `MATRIX_ROW_MISSING`/`EXTRA`/`DUPLICATE`,
+  `MATRIX_ROW_ALTERED` (an edited generated field), `ELEMENT_UNMAPPED`,
+  `RULE_ID_UNKNOWN` (ID absent from the Functional Design text),
+  `EXACT_COPY_NOT_PROPAGATED` (approved wording not verbatim in Functional
+  Design and no approved deviation), `UNIMPLEMENTED_WITHOUT_DISPOSITION`,
+  `DISPOSITION_WITHOUT_RECEIPT`, `EMPTY_DENOMINATOR`.
+- **Element-level Build and Test matrix** (`ui-poc-element-test-matrix.json`,
+  `test-matrix generate`). One row per approved element plus every important
+  explicit-ID element the implementation added; each row lists its rule IDs,
+  checks, observed differences, and `pass`, `fail`, or the approved
+  disposition status. The gate recomputes it byte-for-byte (canonical JSON); a
+  hand-edited row (`TEST_MATRIX_MISMATCH`), an empty denominator, or any
+  `fail` row is NOT-READY.
+
+Stage contracts:
+
+- functional-design: `ui-poc-functional-contract.md` with `upstream`
+  (refined-mockups), `fidelity.approvedSnapshot`, `fidelity.elementRuleMatrix`,
+  `fidelity.functionalDesign` (byte-identical Markdown copies), and
+  `fidelity.dispositions`. The producer gate needs the refined approval, not its
+  own.
+- code-generation additionally requires `fidelity.elementRuleMatrix` and
+  `fidelity.functionalDesignContract`, a byte-identical copy of the approved
+  Functional Design contract. The handoff is refused if that contract is
+  missing, unapproved in the ledger (`stage: "functional-design"`,
+  `contractSha256`), or if its snapshot, matrix, dispositions, or mapping
+  inventory differ from the implementation contract.
+- build-and-test additionally requires `fidelity.elementRuleMatrix` (unchanged
+  from code-generation) and `fidelity.elementTestMatrix`.
+
+Approved-upstream change control has exactly two legal paths. (1) An
+**artifact revision**: the revised refined contract declares
+`fidelity.revision = {previousSnapshot, changedElements, deltaSha256}`; the
+sensor recomputes the element delta between the two approved snapshots
+(`revision` command) and rejects any undeclared change; the person's ordinary
+approval of the revised contract is the confirmation, and every downstream
+matrix bound to the old snapshot is stale until regenerated
+(`rule-matrix generate --previous` keeps mappings only for unchanged rows). (2)
+A **user-confirmed deviation**: an `approved-deviation`, `upstream-revised`, or
+`intentionally-omitted` disposition with a detached Functional Design receipt
+bound to the snapshot, element, reason, and exact delta. Any other wording or
+element change (in Functional Design text, the matrix, the implementation, or
+the snapshot) fails closed.
+
+Limits: rule-ID presence and verbatim copy are deterministic; whether a rule
+correctly implements an element is reviewer judgement. A revision is detected
+only when the previously approved snapshot is supplied; the operator-managed
+ledger remains the trust anchor.
 
 ## Approval trust boundary
 
 `UI_POC_APPROVAL_LEDGER` must point to an operator-managed detached JSON file outside the stage evidence directory. It contains `approvals` entries with `contractSha256`, `stage`, `arm`, `status: "approved"`, `source`, `reviewer`, and `requiredMappings` in contract order. This is a local plugin trust input, NOT a claimed built-in AI-DLC approval schema or API. The workflow agent must not create or amend its own approval entries. The operator records a real approval's exact source only after actual review. No production ledger ships here.
 
-For code-generation, include upstream: {path, sha256, stage: "refined-mockups"}; for build-and-test, use stage: "code-generation". The path points to a byte-identical local evidence copy of that upstream contract, and the approval ledger binds its SHA-256 and mapping inventory. The checker recursively validates the complete refined → implementation → testing chain, including every ancestor’s headings, assets, hashes, mappings and required prior approval. The chain is bounded to three stage contracts; repeated real file identities are rejected. Copy the entire referenced snapshot tree, not Markdown alone. Each ancestor resolves its own relative asset and upstream paths from its containing directory, with nested paths confined within the current-stage evidence root. Upstream copies are evidence, never substituted for engine-resolved core artifacts. Approval does not assert that generated implementation assets are byte-identical to design prototypes. The ledger path is environment-configured, not supplied by untrusted contract text. Filesystem isolation/ownership and actual human identity are deployment responsibilities; the checker cannot authenticate the purported reviewer or protect a ledger writable by the same agent. A writable self-authored ledger is NOT acceptable production evidence. Verify these controls before live runs. Unit tests intentionally create synthetic approvals solely to exercise validation.
+For code-generation, include upstream: {path, sha256, stage: "refined-mockups"}; for build-and-test, use stage: "code-generation". The path points to a byte-identical local evidence copy of that upstream contract, and the approval ledger binds its SHA-256 and mapping inventory. For functional-design, use stage: "refined-mockups". The checker recursively validates the complete refined → functional design → implementation → testing chain, including every ancestor’s headings, assets, hashes, mappings and required prior approval. The chain is bounded to four stage contracts; a repeated real file identity along one ancestry path is rejected. Copy the entire referenced snapshot tree, not Markdown alone. Each ancestor resolves its own relative asset and upstream paths from its containing directory, with nested paths confined within the current-stage evidence root. Upstream copies are evidence, never substituted for engine-resolved core artifacts. Approval does not assert that generated implementation assets are byte-identical to design prototypes. The ledger path is environment-configured, not supplied by untrusted contract text. Filesystem isolation/ownership and actual human identity are deployment responsibilities; the checker cannot authenticate the purported reviewer or protect a ledger writable by the same agent. A writable self-authored ledger is NOT acceptable production evidence. Verify these controls before live runs. Unit tests intentionally create synthetic approvals solely to exercise validation.
 
 The gate sensor is a preflight evidence check. Rough and refined producer gates validate draft shape and hashes without demanding an additional human approval. The consuming code-generation and build-and-test gates require a receipt of the prior stage’s ordinary approval, not approval of their own new draft. This receipt does not impersonate or replace the core stage-approval event. If approval infrastructure is unavailable, block and report the missing evidence; never set approved to make tests green.
 

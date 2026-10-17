@@ -1,0 +1,3 @@
+2026-10-17T06:26:23Z
+{"status": "ok", "model": "clef"} exit=0
+{"object": "list", "data": [{"id": "clef", "object": "model"}]}

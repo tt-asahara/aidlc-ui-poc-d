@@ -151,9 +151,10 @@ describe("delegated AI stage questions", () => {
   test("records requested vs runtime-reported model from the Claude JSON envelope", async () => {
     const f = fixture(); writeFileSync(join(f.root, ".claude/d-acceleration.local.jsonc"), JSON.stringify({ models: { judgment: "claude-opus-5-5" } }));
     const one = await evaluate(f, model(f.root, ok(1), { modelUsage: { "claude-opus-5-5": { outputTokens: 10 } } }));
-    expect(one.decision!.model).toEqual({ requested: "claude-opus-5-5", runtimeReported: "claude-opus-5-5" });
-    const g = fixture(), two = await evaluate(g, model(g.root, ok(1), { modelUsage: { "claude-opus-5-5": {}, "claude-haiku-4-5": {} } }));
-    expect(two.decision!.model.runtimeReported).toBeNull();
+    expect(one.decision!.model).toEqual({ requested: "claude-opus-5-5", runtimeReported: "claude-opus-5-5", identityStatus: "verified-match" });
+    expect(one.telemetry!.modelIdentity.source).toBe("claude-modelUsage");
+    const g = fixture(), other = await evaluate(g, model(g.root, ok(1), { modelUsage: { "claude-haiku-4-5": {} } }));
+    expect(other.decision!.model).toMatchObject({ runtimeReported: "claude-haiku-4-5", identityStatus: "mismatch" });
   }, T);
 
   test("stops without delegation, for human-only questions, and below confidence", async () => {

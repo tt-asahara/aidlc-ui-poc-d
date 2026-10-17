@@ -1,0 +1,517 @@
+{
+  "meta": {
+    "cli": "2.1.302 (Claude Code)",
+    "recordedAt": "2026-10-17T05:55:25.431Z",
+    "observedParentSessionModel": "not-observable",
+    "parentEffortEnv": "medium"
+  },
+  "kind": "tier-comparison",
+  "fixtures": [
+    {
+      "id": "T1-extract-codes",
+      "taskType": "templated",
+      "difficulty": "low",
+      "prompt": "Return ONLY a JSON array (no prose) of the distinct two-letter US state codes mentioned below, sorted ascending.\nText: Shipments went to Texas (TX), Ohio (OH) and back to TX, then on to Utah (UT)."
+    },
+    {
+      "id": "T2-lexical-toposort",
+      "taskType": "implementation",
+      "difficulty": "low",
+      "prompt": "Dependencies (X <- Y means X depends on Y): api <- db, api <- auth, auth <- schema, db <- schema, ui <- api, tests <- api, tests <- ui. Also nodes cache and docs exist with no dependencies. Return ONLY a JSON array giving the topological order where, whenever several nodes are ready, the alphabetically smallest is taken first."
+    },
+    {
+      "id": "T3-requirements-conflict",
+      "taskType": "design",
+      "difficulty": "medium",
+      "prompt": "Requirements: R1 Users can permanently delete their account at any time. R2 All user records must be retained unaltered for 7 years. R3 Users can list their own orders. R4 Admins can export all orders as CSV.\nReturn ONLY JSON: {\"conflict\":[\"Rx\",\"Ry\"],\"endpoints\":[{\"method\":\"GET|POST|PUT|PATCH|DELETE\",\"path\":\"...\",\"requirement\":\"Rn\"}]} naming the one conflicting pair and a minimal REST endpoint per functional requirement R1, R3, R4."
+    }
+  ],
+  "models": {
+    "fast": "claude-haiku-5-5",
+    "balanced": "claude-sonnet-5-5",
+    "judgment": "claude-opus-5-5"
+  },
+  "grid": [
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 13,
+        "cacheReadInputTokens": 11697,
+        "cacheCreationInputTokens": 8240,
+        "costUSD": 0.0017716700000000001,
+        "costBasis": "list",
+        "durationMs": 1465,
+        "durationApiMs": 910
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4338,
+      "resultText": "[\"OH\",\"TX\",\"UT\"]",
+      "stderrHead": "",
+      "task": "T1-extract-codes",
+      "tier": "fast",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"OH\",\"TX\",\"UT\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 13,
+        "cacheReadInputTokens": 11697,
+        "cacheCreationInputTokens": 7463,
+        "costUSD": 0.0311557,
+        "costBasis": "list",
+        "durationMs": 1907,
+        "durationApiMs": 1216
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4512,
+      "resultText": "[\"OH\",\"TX\",\"UT\"]",
+      "stderrHead": "",
+      "task": "T1-extract-codes",
+      "tier": "balanced",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"OH\",\"TX\",\"UT\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 13,
+        "cacheReadInputTokens": 11304,
+        "cacheCreationInputTokens": 7457,
+        "costUSD": 0.0621848,
+        "costBasis": "list",
+        "durationMs": 3009,
+        "durationApiMs": 2421
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 5276,
+      "resultText": "[\"OH\",\"TX\",\"UT\"]",
+      "stderrHead": "",
+      "task": "T1-extract-codes",
+      "tier": "judgment",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"OH\",\"TX\",\"UT\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 439,
+        "cacheReadInputTokens": 14129,
+        "cacheCreationInputTokens": 5850,
+        "costUSD": 0.00153099,
+        "costBasis": "list",
+        "durationMs": 2965,
+        "durationApiMs": 2531
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 5239,
+      "resultText": "[\"cache\", \"docs\", \"schema\", \"auth\", \"db\", \"api\", \"ui\", \"tests\"]",
+      "stderrHead": "",
+      "task": "T2-lexical-toposort",
+      "tier": "fast",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 191,
+        "cacheReadInputTokens": 13349,
+        "cacheCreationInputTokens": 5853,
+        "costUSD": 0.026660899999999998,
+        "costBasis": "list",
+        "durationMs": 2395,
+        "durationApiMs": 1925
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4618,
+      "resultText": "[\"cache\", \"docs\", \"schema\", \"auth\", \"db\", \"api\", \"ui\", \"tests\"]",
+      "stderrHead": "",
+      "task": "T2-lexical-toposort",
+      "tier": "balanced",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 123,
+        "cacheReadInputTokens": 12956,
+        "cacheCreationInputTokens": 5847,
+        "costUSD": 0.0518352,
+        "costBasis": "list",
+        "durationMs": 2376,
+        "durationApiMs": 1941
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4577,
+      "resultText": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]",
+      "stderrHead": "",
+      "task": "T2-lexical-toposort",
+      "tier": "judgment",
+      "acceptance": {
+        "pass": true,
+        "detail": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 374,
+        "cacheReadInputTokens": 14129,
+        "cacheCreationInputTokens": 5907,
+        "costUSD": 0.0015098899999999998,
+        "costBasis": "list",
+        "durationMs": 3088,
+        "durationApiMs": 2485
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 5597,
+      "resultText": "{\"conflict\":[\"R1\",\"R2\"],\"endpoints\":[{\"method\":\"DELETE\",\"path\":\"/v1/users/me\",\"requirement\":\"R1\"},{\"method\":\"GET\",\"path\":\"/v1/users/me/orders\",\"requirement\":\"R3\"},{\"method\":\"GET\",\"path\":\"/v1/admin/orders/export\",\"requirement\":\"R4\"}]}",
+      "stderrHead": "",
+      "task": "T3-requirements-conflict",
+      "tier": "fast",
+      "acceptance": {
+        "pass": true,
+        "detail": "{\"conflict\":[\"R1\",\"R2\"],\"endpointCount\":3,\"covers\":true,\"methods\":[\"DELETE\",\"GET\"]}"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 112,
+        "cacheReadInputTokens": 13349,
+        "cacheCreationInputTokens": 5910,
+        "costUSD": 0.0260989,
+        "costBasis": "list",
+        "durationMs": 2044,
+        "durationApiMs": 1543
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4459,
+      "resultText": "{\"conflict\":[\"R1\",\"R2\"],\"endpoints\":[{\"method\":\"DELETE\",\"path\":\"/users/me\",\"requirement\":\"R1\"},{\"method\":\"GET\",\"path\":\"/users/me/orders\",\"requirement\":\"R3\"},{\"method\":\"GET\",\"path\":\"/admin/orders/export.csv\",\"requirement\":\"R4\"}]}",
+      "stderrHead": "",
+      "task": "T3-requirements-conflict",
+      "tier": "balanced",
+      "acceptance": {
+        "pass": true,
+        "detail": "{\"conflict\":[\"R1\",\"R2\"],\"endpointCount\":3,\"covers\":true,\"methods\":[\"DELETE\",\"GET\"]}"
+      }
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 179,
+        "cacheReadInputTokens": 12956,
+        "cacheCreationInputTokens": 5904,
+        "costUSD": 0.053411200000000006,
+        "costBasis": "list",
+        "durationMs": 3051,
+        "durationApiMs": 2541
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 5399,
+      "resultText": "{\"conflict\":[\"R1\",\"R2\"],\"endpoints\":[{\"method\":\"DELETE\",\"path\":\"/users/me\",\"requirement\":\"R1\"},{\"method\":\"GET\",\"path\":\"/users/me/orders\",\"requirement\":\"R3\"},{\"method\":\"GET\",\"path\":\"/admin/orders/export.csv\",\"requirement\":\"R4\"}]}",
+      "stderrHead": "",
+      "task": "T3-requirements-conflict",
+      "tier": "judgment",
+      "acceptance": {
+        "pass": true,
+        "detail": "{\"conflict\":[\"R1\",\"R2\"],\"endpointCount\":3,\"covers\":true,\"methods\":[\"DELETE\",\"GET\"]}"
+      }
+    }
+  ],
+  "matchedInput": {
+    "arms": {
+      "baselineSerialSingleModel": {
+        "model": "claude-opus-5-5",
+        "wallMs": 15252,
+        "criticalPathMs": 15252,
+        "acceptancePass": 3,
+        "costUSD": 0.1674312,
+        "outputTokens": 315
+      },
+      "dRoutedParallel": {
+        "tiers": {
+          "T1-extract-codes": "fast",
+          "T2-lexical-toposort": "balanced",
+          "T3-requirements-conflict": "balanced"
+        },
+        "wallMs": 5270.5584579999995,
+        "criticalPathMs": 5266,
+        "acceptancePass": 2,
+        "costUSD": 0.04980597,
+        "outputTokens": 309,
+        "routingMs": 0.896374999996624
+      }
+    },
+    "dRows": [
+      {
+        "workerType": "design-wave-worker",
+        "requestedModel": "claude-haiku-5-5",
+        "requestedEffort": "low",
+        "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+        "modelIdentity": {
+          "requested": "claude-haiku-5-5",
+          "runtimeReported": "claude-haiku-5-5",
+          "runtimeReportedModels": [
+            "claude-haiku-5-5"
+          ],
+          "status": "verified-match",
+          "source": "claude-modelUsage"
+        },
+        "usage": {
+          "inputTokens": 2,
+          "outputTokens": 13,
+          "cacheReadInputTokens": 19937,
+          "cacheCreationInputTokens": 0,
+          "costUSD": 0.00020607,
+          "costBasis": "list",
+          "durationMs": 2221,
+          "durationApiMs": 841
+        },
+        "ok": true,
+        "failure": null,
+        "exitCode": 0,
+        "wallMs": 4704,
+        "resultText": "[\"TX\",\"OH\",\"UT\"]",
+        "stderrHead": "",
+        "task": "T1-extract-codes",
+        "tier": "fast",
+        "acceptance": {
+          "pass": false,
+          "detail": "[\"TX\",\"OH\",\"UT\"]"
+        },
+        "routeReason": "explicit low-risk templated work"
+      },
+      {
+        "workerType": "design-wave-worker",
+        "requestedModel": "claude-sonnet-5-5",
+        "requestedEffort": "medium",
+        "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+        "modelIdentity": {
+          "requested": "claude-sonnet-5-5",
+          "runtimeReported": "claude-sonnet-5-5",
+          "runtimeReportedModels": [
+            "claude-sonnet-5-5"
+          ],
+          "status": "verified-match",
+          "source": "claude-modelUsage"
+        },
+        "usage": {
+          "inputTokens": 2,
+          "outputTokens": 184,
+          "cacheReadInputTokens": 13931,
+          "cacheCreationInputTokens": 5480,
+          "costUSD": 0.025157099999999998,
+          "costBasis": "list",
+          "durationMs": 2521,
+          "durationApiMs": 1881
+        },
+        "ok": true,
+        "failure": null,
+        "exitCode": 0,
+        "wallMs": 5004,
+        "resultText": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]",
+        "stderrHead": "",
+        "task": "T2-lexical-toposort",
+        "tier": "balanced",
+        "acceptance": {
+          "pass": true,
+          "detail": "[\"cache\",\"docs\",\"schema\",\"auth\",\"db\",\"api\",\"ui\",\"tests\"]"
+        },
+        "routeReason": "implementation defaults to balanced reasoning"
+      },
+      {
+        "workerType": "design-wave-worker",
+        "requestedModel": "claude-sonnet-5-5",
+        "requestedEffort": "medium",
+        "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+        "modelIdentity": {
+          "requested": "claude-sonnet-5-5",
+          "runtimeReported": "claude-sonnet-5-5",
+          "runtimeReportedModels": [
+            "claude-sonnet-5-5"
+          ],
+          "status": "verified-match",
+          "source": "claude-modelUsage"
+        },
+        "usage": {
+          "inputTokens": 2,
+          "outputTokens": 112,
+          "cacheReadInputTokens": 13988,
+          "cacheCreationInputTokens": 5480,
+          "costUSD": 0.0244428,
+          "costBasis": "list",
+          "durationMs": 2777,
+          "durationApiMs": 1444
+        },
+        "ok": true,
+        "failure": null,
+        "exitCode": 0,
+        "wallMs": 5266,
+        "resultText": "{\"conflict\":[\"R1\",\"R2\"],\"endpoints\":[{\"method\":\"DELETE\",\"path\":\"/users/me\",\"requirement\":\"R1\"},{\"method\":\"GET\",\"path\":\"/users/me/orders\",\"requirement\":\"R3\"},{\"method\":\"GET\",\"path\":\"/admin/orders/export.csv\",\"requirement\":\"R4\"}]}",
+        "stderrHead": "",
+        "task": "T3-requirements-conflict",
+        "tier": "balanced",
+        "acceptance": {
+          "pass": true,
+          "detail": "{\"conflict\":[\"R1\",\"R2\"],\"endpointCount\":3,\"covers\":true,\"methods\":[\"DELETE\",\"GET\"]}"
+        },
+        "routeReason": "review/design or medium complexity requires balanced reasoning"
+      }
+    ],
+    "rework": "none attempted (single attempt per task; failures are reported, not retried)",
+    "caveats": [
+      "n=1 per cell: no variance estimate, no significance claim",
+      "baseline reuses the serial judgment-tier grid runs; D arm ran afterwards (warm prompt cache possible for both)",
+      "tiny synthetic prompts; official stage context, reviews, and gates are not included",
+      "cost is the CLI-reported list-price costUSD, not an invoice"
+    ]
+  }
+}

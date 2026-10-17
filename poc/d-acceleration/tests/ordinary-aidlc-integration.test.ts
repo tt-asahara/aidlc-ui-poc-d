@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
+import { resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -60,11 +60,13 @@ describe("ordinary /aidlc D integration", () => {
       "grounding-runtime.ts",
       "generic-auto-cli.ts",
       "issue-ambiguity-assessor.ts",
+      "gh-host.ts",
       "issue-autopilot-cli.ts",
       "host-session.ts",
       "host-session-cli.ts",
       "host-stage-boundary.ts",
       "official-next-adapter.ts",
+      "parallel-guard.ts",
       "read-only-fanout.ts",
       "run.ts",
       "scheduler.ts",
@@ -95,14 +97,14 @@ describe("ordinary /aidlc D integration", () => {
 
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {
     const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
-    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir \"$PWD\" --worker claude");
-    expect(skill).toContain("generic-auto-cli.ts start --project-dir \"$PWD\" --description-file");
+    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude");
+    expect(skill).toContain("generic-auto-cli.ts start --project-dir <PRODUCT> --description-file");
     expect(skill).toContain("d-auto-request-<random>.txt");
-    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir \"$PWD\" --directive-file");
+    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file");
     expect(skill).toContain("machine_action.kind: \"intent-create\"");
-    expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir \"$PWD\" --directive-file");
-    expect(skill).toContain("generic-auto-cli.ts action-start --project-dir \"$PWD\"");
-    expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir \"$PWD\" --action-token");
+    expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir <PRODUCT> --directive-file");
+    expect(skill).toContain("generic-auto-cli.ts action-start --project-dir <PRODUCT>");
+    expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token");
     expect(skill).toContain("Never pass the literal `--auto` to official `orchestrate next`");
     expect(skill).toContain("**Read-only research fanout (optional).**");
     expect(skill).toContain("--fanout-input <fanout-json>");
@@ -114,6 +116,17 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("Optional D checks (default off)");
     expect(skill).toContain('it rejects `gate: "unresolved"`, asks, and invented or stale directives');
     expect(skill).toContain("never replace, waive, or reorder the C HTML evidence sensor");
+  });
+
+  test("the ordinary skill routes --doc to the installed design-document runtime", () => {
+    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    expect(skill).toContain("design-document.ts doc-manifest --json --project-dir \"$PWD\"");
+    expect(skill).toContain("design-document.ts doc-snapshot --project-dir \"$PWD\"");
+    expect(skill).toContain("never pass `--doc` to the engine");
+    const tools = join(repo, "dist", "claude", ".claude", "tools");
+    expect(readFileSync(join(tools, "d-acceleration", "design-document.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
+    expect(existsSync(join(tools, "aidlc-lib.ts"))).toBe(true);
+    expect(readFileSync(join(tools, "d-acceleration", "design-document-guide.md"), "utf8")).toContain(".claude/tools/d-acceleration/design-document.ts doc-manifest");
   });
 
   test("Claude packages Issue autopilot without overriding standard /loop", () => {
@@ -169,15 +182,15 @@ describe("ordinary /aidlc D integration", () => {
     expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "official", execution: "official" });
   });
 
-  test("ordinary routing forwards only explicitly enabled loopback Clef and named low-risk Units", () => {
-    const project = mkdtempSync(join(tmpdir(), "aidlc-d-clef-"));
+  test("ordinary routing refuses removed Clef config and flags instead of ignoring them", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-d-noclef-"));
     mkdirSync(join(project, ".claude"), { recursive: true });
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web", "api"] } }));
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual(["--clef-url", "http://127.0.0.1:18742", "--clef-low-risk-units", "web,api"]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: false } }));
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://example.com:18742" } }));
-    expect(() => resolveDClef(project)).toThrow("loopback");
+    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web"] } }));
+    expect(() => resolveDModels(project)).toThrow("Clef routing support was removed");
+    const fresh = mkdtempSync(join(tmpdir(), "aidlc-d-noclef-"));
+    const flagged = spawnSync(process.execPath, [join(import.meta.dir, "..", "run.ts"), "--project-dir", fresh, "--clef-url", "http://127.0.0.1:18742"], { cwd: fresh, encoding: "utf8" });
+    expect(flagged.status).toBe(2);
+    expect(flagged.stderr.trim().split("\n")).toHaveLength(1);
+    expect(flagged.stderr).toContain("Clef routing support was removed");
   });
 });

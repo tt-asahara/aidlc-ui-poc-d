@@ -151,9 +151,15 @@ details. That is the intended behaviour, not a defect to tune away.
 ## Real-model evidence (`evidence/delegated-questions/`)
 
 Requested model: `claude-opus-5-5` (`models.judgment`). The runtime-reported
-model is read from Claude Code's `modelUsage` key (`worker-adapters.ts`; it is
-set only when exactly one model reports). It was `claude-opus-5-5` on every
-call.
+model was `claude-opus-5-5` on every call. It is read from Claude Code's
+`modelUsage`. After the merge with develop, `worker-adapters.ts`
+`parseWorkerOutput`/`classifyModelIdentity` is the only parser that does this.
+The receipt binds `model.identityStatus` (`verified-match`, `alias-resolved`,
+`mismatch` or `unverified`), and block and answer results carry
+`telemetry.modelIdentity` and `telemetry.usage`.
+
+The evidence files were recorded before the merge. In them the telemetry still
+uses the earlier field names (`runtimeReportedModel`, `totalCostUsd`, `usage`).
 
 - `e2e-installed/` (`run-e2e.ts`): a fresh synthetic project using the
   generated Claude package.

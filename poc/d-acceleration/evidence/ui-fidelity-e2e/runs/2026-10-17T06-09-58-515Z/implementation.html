@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang='ja'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>メモ帳</title>
+<style>
+:root{color-scheme:light}
+body{font-family:system-ui,'Hiragino Sans','Noto Sans JP',sans-serif;margin:0;background:#f4f5f7;color:#1f2933;line-height:1.6}
+main{max-width:520px;margin:32px auto;padding:0 20px}
+h1{font-size:1.5rem;margin:0 0 16px}
+h2{font-size:1.15rem;margin:0 0 8px}
+.card{background:#fff;border:1px solid #c9d1d9;border-radius:8px;padding:16px 20px;margin-bottom:16px}
+.memo-body{width:280px;max-width:100%;line-height:1.4em;max-height:1.4em;overflow:hidden;white-space:normal;margin:0 0 12px}
+[data-ui-state='STATE-EXPANDED'] .memo-body{max-height:none}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;min-height:44px;padding:8px 16px;border-radius:6px;border:1px solid #3d4b5c;background:#fff;color:#1f2933;cursor:pointer}
+button:hover{background:#e8edf2}
+button:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+button.primary{background:#1d4ed8;border-color:#1d4ed8;color:#fff}
+button.primary:hover{background:#1e40af}
+button.danger{background:#b42318;border-color:#b42318;color:#fff}
+button.danger:hover{background:#912018}
+.note{background:#fff8e1;border:1px solid #8a6100;color:#4a3300;border-radius:6px;padding:10px 14px;margin:0 0 16px}
+.status{background:#e7f6ec;border:1px solid #1b6b3a;color:#0f4a27;border-radius:6px;padding:10px 14px;margin:0}
+.alert{background:#fdecea;border:1px solid #b42318;color:#7a1710;border-radius:6px;padding:10px 14px;margin:0 0 12px}
+[role='alertdialog']{background:#fff;border:2px solid #3d4b5c;border-radius:8px;padding:16px 20px}
+</style>
+</head>
+<body>
+<main data-ui-screen='SCREEN-NOTES' data-ui-state='STATE-LIST' id='root'></main>
+<script>
+(function(){
+  var root=document.getElementById('root');
+  var params=new URLSearchParams(location.search);
+  var scenario=params.get('scenario');
+  var isPrivate=scenario==='private';
+  var forceError=scenario==='storage-error';
+  var KEY='memo-notes-v1';
+  var notes=[];
+  var targetId=null;
+  var state='STATE-LIST';
+
+  function store(){return isPrivate?window.sessionStorage:window.localStorage;}
+  function seed(){return [{id:'note-1',title:'買い物リスト',body:'牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。',updatedAt:new Date(2026,9,1,12,0,0).toISOString()}];}
+  function load(){
+    if(forceError)throw new Error('storage unavailable');
+    var raw=store().getItem(KEY);
+    if(raw===null)return seed();
+    var data=JSON.parse(raw);
+    if(!Array.isArray(data))throw new Error('invalid data');
+    return data;
+  }
+  function persist(){store().setItem(KEY,JSON.stringify(notes));}
+  function pad(n){return String(n).padStart(2,'0');}
+  function fmtDate(iso){var d=new Date(iso);return d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate());}
+
+  function el(tag,text,attrs){
+    var e=document.createElement(tag);
+    if(text!==undefined&&text!==null)e.textContent=text;
+    if(attrs){Object.keys(attrs).forEach(function(k){if(attrs[k]!==false)e.setAttribute(k,attrs[k]===true?'':attrs[k]);});}
+    return e;
+  }
+  function ui(id,extra){var a={'data-ui-id':id,'data-ui-important':true,'data-ui-exact-copy':true};if(extra)Object.keys(extra).forEach(function(k){a[k]=extra[k];});return a;}
+  function actionButton(id,label,action,next,cls,extra){
+    var a=ui(id,{'data-ui-action-id':action,'data-ui-expected-state':next,type:'button'});
+    if(extra)Object.keys(extra).forEach(function(k){a[k]=extra[k];});
+    if(cls)a['class']=cls;
+    var b=el('button',label,a);
+    b.addEventListener('click',function(){dispatch(action);});
+    return b;
+  }
+
+  function go(next){state=next;render();}
+  function currentNote(){
+    for(var i=0;i<notes.length;i++)if(notes[i].id===targetId)return notes[i];
+    return notes[0]||null;
+  }
+
+  function dispatch(action){
+    var n=currentNote();
+    if(action==='EXPAND'){go('STATE-EXPANDED');}
+    else if(action==='SAVE'){
+      try{
+        if(n)n.updatedAt=n.updatedAt;
+        persist();
+        go('STATE-SAVED');
+      }catch(e){go('STATE-STORAGE-ERROR');}
+    }
+    else if(action==='DELETE'){targetId=n?n.id:null;go('STATE-CONFIRM-DELETE');}
+    else if(action==='CONFIRM-DELETE'){
+      notes=notes.filter(function(x){return x.id!==targetId;});
+      try{persist();}catch(e){}
+      go('STATE-DELETED');
+    }
+    else if(action==='CANCEL-DELETE'){go('STATE-LIST');}
+  }
+
+  function retry(){
+    try{notes=load();state='STATE-LIST';if(isPrivate)state='STATE-PRIVATE-MODE';}
+    catch(e){state='STATE-STORAGE-ERROR';}
+    render();
+  }
+
+  function renderList(frag){
+    if(state==='STATE-PRIVATE-MODE'){
+      frag.appendChild(el('p','プライベートモードでは、メモはこのタブを閉じると消えます。残したいメモは通常モードで保存してください。',ui('PRIVATE-MODE-GUIDANCE',{role:'note','class':'note'})));
+    }
+    notes.forEach(function(n,i){
+      var card=el('section',null,{'class':'card'});
+      var idx=i+1;
+      card.appendChild(el('h2',n.title,ui('NOTE-TITLE-'+idx)));
+      card.appendChild(el('div',n.body,{id:'MEMO-BODY','class':'memo-body','data-ui-id':'MEMO-BODY','data-ui-important':true,'data-ui-require-truncation':true}));
+      var row=el('div',null,{'class':'actions'});
+      row.appendChild(actionButton('EXPAND-MEMO','全文を表示','EXPAND','STATE-EXPANDED','',{'data-ui-action-target':'MEMO-BODY'}));
+      row.appendChild(actionButton('SAVE-NOTE','保存','SAVE','STATE-SAVED','primary'));
+      row.appendChild(actionButton('DELETE-NOTE','削除','DELETE','STATE-CONFIRM-DELETE',''));
+      card.appendChild(row);
+      frag.appendChild(card);
+    });
+  }
+
+  function render(){
+    var shown=state;
+    root.setAttribute('data-ui-state',shown);
+    var frag=document.createDocumentFragment();
+    frag.appendChild(el('h1','メモ'));
+    var focusTarget=null;
+    if(shown==='STATE-LIST'||shown==='STATE-EXPANDED'||shown==='STATE-PRIVATE-MODE'){
+      renderList(frag);
+    } else if(shown==='STATE-CONFIRM-DELETE'){
+      var n=currentNote();
+      var dlg=el('section',null,{role:'alertdialog','aria-labelledby':'confirm-title','aria-modal':'true','data-ui-id':'DELETE-DIALOG','data-ui-region':true});
+      var t=el('h2','メモを削除しますか？',ui('DELETE-CONFIRM-TITLE',{id:'confirm-title'}));
+      var title=n?n.title:'';
+      var when=n?fmtDate(n.updatedAt):'';
+      var d=el('p','「'+title+'」（'+when+' 更新）を削除します。この操作は取り消せません。',ui('DELETE-CONFIRM-DETAIL'));
+      var row=el('div',null,{'class':'actions'});
+      row.appendChild(actionButton('CONFIRM-DELETE','削除する','CONFIRM-DELETE','STATE-DELETED','danger'));
+      var cancel=actionButton('CANCEL-DELETE','キャンセル','CANCEL-DELETE','STATE-LIST','');
+      row.appendChild(cancel);
+      dlg.appendChild(t);dlg.appendChild(d);dlg.appendChild(row);
+      frag.appendChild(dlg);
+      focusTarget=cancel;
+    } else if(shown==='STATE-DELETED'){
+      frag.appendChild(el('p','メモを削除しました',ui('DELETE-COMPLETE',{role:'status','class':'status'})));
+    } else if(shown==='STATE-SAVED'){
+      frag.appendChild(el('p','✓ 保存しました',ui('SAVE-COMPLETE',{role:'status','class':'status'})));
+    } else if(shown==='STATE-STORAGE-ERROR'){
+      frag.appendChild(el('p','保存データを読み込めませんでした。ブラウザのストレージ設定を確認してから、再読み込みしてください。',ui('STORAGE-READ-ERROR',{role:'alert','class':'alert'})));
+      var rb=el('button','再読み込み',ui('RETRY-LOAD',{type:'button','class':'primary'}));
+      rb.addEventListener('click',retry);
+      frag.appendChild(rb);
+    }
+    root.replaceChildren(frag);
+    if(focusTarget)focusTarget.focus();
+  }
+
+  try{
+    notes=load();
+    state=isPrivate?'STATE-PRIVATE-MODE':'STATE-LIST';
+  }catch(e){
+    state='STATE-STORAGE-ERROR';
+  }
+  render();
+})();
+</script>
+</body>
+</html>

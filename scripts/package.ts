@@ -872,13 +872,17 @@ function buildTree(
       "ai-approval-controller.ts",
       "ai-question-controller.ts",
       "conductor.ts",
+      "cross-stage-speculation.ts",
       "d-config.ts",
       "d-acceleration.example.jsonc",
       "d-persistence-hook.ts",
       "d-persistence.ts",
       "decision-issue-summary.ts",
+      "design-document.ts",
+      "design-document-guide.md",
       "fake-worker.ts",
       "functional-design-discipline.ts",
+      "gh-host.ts",
       "d-feature-checks.ts",
       "grounding.ts",
       "grounding-runtime.ts",
@@ -891,8 +895,10 @@ function buildTree(
       "issue-ambiguity-assessor.ts",
       "issue-autopilot-cli.ts",
       "official-next-adapter.ts",
+      "parallel-guard.ts",
       "read-only-fanout.ts",
       "requirement-ui-cross-validation.ts",
+      "resume-ledger.ts",
       "run.ts",
       "scheduler.ts",
       "stage-policy.json",
@@ -905,9 +911,10 @@ function buildTree(
       }
       const destination = join(treeRoot, "tools", "d-acceleration", file);
       mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "ai-question-controller.ts") {
+      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "ai-question-controller.ts") {
         const projected = readFileSync(source, "utf8")
           .replace('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
+          .replace('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"')
           .replace('from "../../core/tools/aidlc-ai-answers.ts"', 'from "../aidlc-ai-answers.ts"');
         writeFileSync(destination, projected);
       } else {

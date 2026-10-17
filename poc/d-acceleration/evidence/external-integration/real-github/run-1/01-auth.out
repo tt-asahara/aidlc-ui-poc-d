@@ -1,0 +1,5 @@
+github.com
+  ✓ Logged in to github.com account tt-asahara (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'

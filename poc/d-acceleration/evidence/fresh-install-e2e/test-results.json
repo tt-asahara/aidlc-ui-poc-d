@@ -1,0 +1,15 @@
+{
+  "sourceSha": "9bab65f313c9a65e266307bc72fa29962e07a8a4",
+  "runs": [
+    { "command": "bun test poc/ui-poc/tests poc/d-acceleration/tests tests/resume-ledger.test.ts tests/integration/t40-settings-hook-config.test.ts --timeout 600000", "pass": 318, "fail": 1, "note": "the 1 failure is official-next.integration.test.ts erroring because only dist/claude was built (harness matrix needs every dist root); after `bun scripts/package.ts` that file passes 5/0" },
+    { "command": "bun test poc/d-acceleration/tests/official-next.integration.test.ts (after full package)", "pass": 5, "fail": 0 },
+    { "command": "node --test poc/ui-poc/tests/c-routing.test.cjs", "pass": 33, "fail": 0 },
+    { "command": "bun test poc/d-acceleration/tests/fresh-install.integration.test.ts", "pass": 5, "fail": 0 },
+    { "command": "bun test poc/d-acceleration/tests/clean-target-lifecycle.integration.test.ts", "pass": 5, "fail": 0 },
+    { "command": "bun scripts/package.ts --check", "result": "deterministic across two independent builds for all 7 harnesses" }
+  ],
+  "preExistingNotFixed": [
+    "tests/unit/t219-claude-project-dir-quoting.test.ts: 2 fails on base 29f4820d too (d-persistence-hook commands do not use the dispatcher prefix)",
+    "host-session-cli claimed-session tests use a 150ms lease and fail under high machine load (also on base 29f4820d); pass 7/7 when load is normal"
+  ]
+}
