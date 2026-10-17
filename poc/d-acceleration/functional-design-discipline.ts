@@ -21,7 +21,7 @@ export interface FunctionalDesignInput {
 }
 
 export interface FunctionalDesignFinding {
-  code: "WRONG_STAGE" | "ARTIFACT_BUDGET" | "UNIT_BUDGET" | "METADATA_BUDGET" | "DUPLICATE_METADATA";
+  code: "WRONG_STAGE" | "EMPTY_ARTIFACTS" | "MISSING_FUNCTIONAL_SPEC" | "ARTIFACT_BUDGET" | "UNIT_BUDGET" | "METADATA_BUDGET" | "DUPLICATE_METADATA";
   artifact?: string;
   detail: string;
 }
@@ -61,7 +61,15 @@ export function validateFunctionalDesignDiscipline(input: FunctionalDesignInput)
     findings.push({ code: "WRONG_STAGE", detail: `feature 22 only applies to functional-design, received ${input.stage}` });
   }
 
-  for (const [name, content] of Object.entries(input.artifacts)) {
+  const suppliedArtifacts = Object.entries(input.artifacts).filter(([, content]) => content !== undefined);
+  if (suppliedArtifacts.length === 0) {
+    findings.push({ code: "EMPTY_ARTIFACTS", detail: "functional-design document discipline requires stage artifacts" });
+  }
+  if (typeof input.artifacts["functional-spec.md"] !== "string" || !input.artifacts["functional-spec.md"]!.trim()) {
+    findings.push({ code: "MISSING_FUNCTIONAL_SPEC", artifact: "functional-spec.md", detail: "functional-spec.md is the canonical metadata document" });
+  }
+
+  for (const [name, content] of suppliedArtifacts) {
     if (content === undefined) continue;
     const size = bytes(content);
     artifactBytes[name] = size;

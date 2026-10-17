@@ -9,7 +9,7 @@ import { validateDirective } from "../../core/tools/aidlc-directive.ts";
 export type ResearchTask = { id: string; agent: string; objective: string; evidencePaths: string[] };
 type PolicyTier = "fast" | "balanced" | "judgment";
 type PolicyEffort = "low" | "medium" | "high";
-export type FanoutInput = { directive: any; tasks: ResearchTask[]; modelCatalog: Partial<Record<PolicyTier, string>>; maxParallel?: number };
+export type FanoutInput = { directive: any; tasks: ResearchTask[]; modelCatalog?: Partial<Record<PolicyTier, string>>; maxParallel?: number };
 export type FanoutOptions = { projectDir: string; frameworkDir: string; engineDir?: string; claudeExecutable?: string; timeoutMs?: number };
 
 const OFFICIAL_TOPOLOGIES = new Set(["mob", "subagent", "pipeline"]);
@@ -100,7 +100,13 @@ if (import.meta.main) {
   const args = process.argv.slice(2); const value = (flag: string) => { const index = args.indexOf(flag); return index < 0 ? undefined : args[index + 1]; };
   const inputPath = value("--input"); const projectDir = value("--project-dir"); const frameworkDir = value("--framework-dir"); const engineDir = value("--engine-dir");
   if (!inputPath || !projectDir || !frameworkDir) throw new Error("--input, --project-dir, and --framework-dir are required");
-  const input = JSON.parse(readFileSync(inputPath, "utf8"));
+  const input = JSON.parse(readFileSync(inputPath, "utf8")) as FanoutInput;
+  input.modelCatalog = {
+    ...input.modelCatalog,
+    ...(value("--model-fast") ? { fast: value("--model-fast") } : {}),
+    ...(value("--model-balanced") ? { balanced: value("--model-balanced") } : {}),
+    ...(value("--model-judgment") ? { judgment: value("--model-judgment") } : {}),
+  };
   const result = args.includes("--dry-run") ? planReadOnlyFanout(input, { projectDir, frameworkDir, engineDir }) : await runReadOnlyFanout(input, { projectDir, frameworkDir, engineDir });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.action === "official-host-action-required") process.exitCode = 2;

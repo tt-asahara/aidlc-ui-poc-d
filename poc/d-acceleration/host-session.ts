@@ -38,8 +38,12 @@ export function directiveProgressFingerprint(directive: Readonly<OfficialDirecti
 }
 
 export type HostSessionClaim = { issueNumber: number; owner: string; leaseMs: number };
-export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; endedAt?: number; terminalReason?: string };
+export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; activeStages?: string[]; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; endedAt?: number; terminalReason?: string };
 export function checkpointHostSession(state: HostSessionState, directive: Readonly<OfficialDirective>, now = Date.now()): { action: "continue" | "stop"; reason?: string; state: HostSessionState } {
+  if (state.through && state.activeStages?.length && directive.stage) {
+    const boundary = state.activeStages.indexOf(state.through), current = state.activeStages.indexOf(directive.stage);
+    if (boundary >= 0 && current > boundary) return { action: "stop", reason: "boundary-already-passed", state };
+  }
   if (state.through && state.lastStage === state.through && directive.stage !== state.through) return { action: "stop", reason: "boundary-reached", state };
   if (now - state.startedAt >= state.deadlineMs) return { action: "stop", reason: "deadline-exceeded", state };
   if (state.steps >= state.maxSteps) return { action: "stop", reason: "max-steps-exceeded", state };
@@ -50,6 +54,5 @@ export function checkpointHostSession(state: HostSessionState, directive: Readon
   // run-stage gate:true means execute the stage and then enter its approval
   // protocol. Only an actual ask is already waiting on the human.
   if (directive.kind === "ask") return { action: "stop", reason: "human-gate", state: next };
-  if (directive.dangerous) return { action: "stop", reason: "dangerous-operation", state: next };
   return { action: "continue", state: next };
 }

@@ -14,6 +14,18 @@ JSONC（行・ブロックコメント、末尾カンマ）に対応します。
 追加feature、Issue autopilot、自動進行はすべて既定OFFです。OFF時は追加の
 モデル呼出し・成果物・レビューを要求しません。自動進行は既定でセッション内に
 限定し、不明点で停止します。空の `labelAllowlist` は全許可ではなく許可対象なしです。
+Issue一覧とlabel pollingの候補はproviderの返却順に依存せずIssue番号昇順に正規化し、
+自動選択結果には候補・選択番号・選択理由を記録します。`/aidlc --auto status` は
+session/claim/heartbeatを変更しない観測専用で、回復処理はstopまたは次の実行開始時に行います。
+同じ `auto.enabled` は generic `/aidlc --auto <description>` の親スイッチでもあります。
+`sessionOnly: true` では generic と Issue のどちらもIntent作成後に停止し、bounded継続には
+明示的な `sessionOnly: false` と `through` / `maxSteps` / `deadlineMs` の上限が必要です。
+Feature 11のIssue判定は`models.judgment`を使う固定argvのClaude subprocessです。
+session永続化、MCP、slash command、全toolを無効化し、入力・出力・実行時間を制限します。
+`halt`は未解決点を残し、`assume`は低riskの仮定だけを台帳へ渡し、`research`は与えられた
+Issueと安定した一般知識だけから得た事実を台帳へ渡します。現在情報・外部情報・project証拠が
+必要な点は未解決のままです。モデル不可、timeout、余分なapproval fieldを含む不正schemaは
+intent作成前にfail-closedで停止し、approval recordを作成しません。
 
 全boolean切替の直前には、日本語で対象stageまたは実行時点、役割、ON/OFF時の
 挙動、既定値、利用場面、親スイッチや別コマンド依存を記載しています。setupが

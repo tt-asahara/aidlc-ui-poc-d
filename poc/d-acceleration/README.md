@@ -19,10 +19,11 @@ The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
 exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
 routing. Claude Code's standard `/loop` is not overwritten; it may schedule the
 dedicated command. The fixed-argv GitHub adapter, durable claim, and
-assumption ledger live in `issue-autopilot-runtime.ts`; policy and lifecycle
-stops live in `issue-autopilot.ts`. It delegates every workflow transition,
+assumption ledger live in `issue-autopilot-runtime.ts`; the bounded no-tool
+Claude ambiguity assessor lives in `issue-ambiguity-assessor.ts`; policy and
+lifecycle stops live in `issue-autopilot.ts`. It delegates every workflow transition,
 review, sensor, and approval to ordinary `/aidlc`. See `configuration.md` for
-JSONC settings. Setup never enables autopilot.
+JSONC settings. Setup never enables autopilot without an explicit user request.
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification

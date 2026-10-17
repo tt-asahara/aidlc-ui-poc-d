@@ -25,6 +25,8 @@ describe("ordinary /aidlc D integration", () => {
       "d-persistence.ts",
       "d-feature-checks.ts",
       "grounding-runtime.ts",
+      "generic-auto-cli.ts",
+      "issue-ambiguity-assessor.ts",
       "issue-autopilot-cli.ts",
       "host-session.ts",
       "host-session-cli.ts",
@@ -41,6 +43,7 @@ describe("ordinary /aidlc D integration", () => {
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');
+    expect(publicRunner).toContain('"--model-fast", models.models.fast');
     expect(readFileSync(join(root, "d-acceleration.example.jsonc"), "utf8")).toBe(readFileSync(join(repo, "poc", "d-acceleration", "d-acceleration.example.jsonc"), "utf8"));
   });
 
@@ -58,6 +61,16 @@ describe("ordinary /aidlc D integration", () => {
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {
     const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
     expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir \"$PWD\" --worker claude");
+    expect(skill).toContain("generic-auto-cli.ts start --project-dir \"$PWD\" --description-file");
+    expect(skill).toContain("d-auto-request-<random>.txt");
+    expect(skill).toContain("generic-auto-cli.ts init --project-dir \"$PWD\" --active-stages");
+    expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir \"$PWD\" --directive-file");
+    expect(skill).toContain("generic-auto-cli.ts action-start --project-dir \"$PWD\"");
+    expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir \"$PWD\" --action-token");
+    expect(skill).toContain("Never pass the literal `--auto` to official `orchestrate next`");
+    expect(skill).toContain("**Read-only research fanout (optional).**");
+    expect(skill).toContain("--fanout-input <fanout-json>");
+    expect(skill).toContain("the lead performs synthesis, writes every official artifact");
     expect(skill).not.toContain("--claude-fast opus --claude-balanced opus --claude-judgment opus");
     expect(skill).toContain(".claude/d-acceleration.local.jsonc");
     expect(skill).toContain("If it returns `official-host-action-required`, continue below with the returned directive.");

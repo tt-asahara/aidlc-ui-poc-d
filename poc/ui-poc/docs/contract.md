@@ -22,8 +22,11 @@ Example shape (placeholders below are deliberately not valid runtime evidence):
 }
 ```
 
-Schema 1 remains readable for existing evidence chains. New refined-mockups,
-code-generation, and build-and-test contracts use schema 2 and add `fidelity`.
+Schema 1 is accepted only for an explicit migration of an existing evidence
+chain, by an operator setting `UI_POC_SCHEMA1_MIGRATION=1` for that migration
+run. The default and every new refined-mockups, code-generation, and
+build-and-test contract require schema 2 and add `fidelity`. Do not set the
+migration input for new work; it is not a fidelity off switch.
 The approved semantic snapshot is produced from the rendered HTML, not copied
 from a hand-written inventory. It records every declared screen/state render,
 visible text, control, field, important conditional region, computed truncation

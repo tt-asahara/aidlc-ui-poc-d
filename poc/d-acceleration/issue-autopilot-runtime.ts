@@ -77,7 +77,7 @@ export function createGhIssueSource(options: {
       return value.flatMap((entry: GhIssue): IssueSummary[] => {
         const issue = parseIssue({ ...entry, body: "" });
         return issue ? [{ number: issue.number, title: issue.title, labels: issue.labels }] : [];
-      });
+      }).sort((left, right) => left.number - right.number);
     },
   };
 }

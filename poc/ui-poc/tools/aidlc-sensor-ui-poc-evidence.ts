@@ -26,7 +26,7 @@ async function main(argv) {
       let imageFeatures = {};
       const configModule = resolve(dirname(fileURLToPath(import.meta.url)), 'd-acceleration', 'd-config.ts');
       if (existsSync(configModule)) imageFeatures = (await import(pathToFileURL(configModule).href)).resolveDFeatureFlags(process.cwd());
-      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures});
+      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'});
       findings.push(...evidence.findings);
     }
     const factsPath = resolve(root, 'ui-poc-routing-facts.json');

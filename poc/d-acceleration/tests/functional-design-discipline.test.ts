@@ -29,6 +29,15 @@ describe("feature 22 functional-design discipline", () => {
     expect(result.findings.some((finding) => finding.code === "METADATA_BUDGET")).toBe(true);
   });
 
+  test("rejects an empty artifact set and a missing functional-spec without expanding document policy", () => {
+    const empty = validateFunctionalDesignDiscipline({ ...good, artifacts: {} });
+    expect(empty.findings.some((finding) => finding.code === "EMPTY_ARTIFACTS")).toBe(true);
+    expect(empty.findings.some((finding) => finding.code === "MISSING_FUNCTIONAL_SPEC")).toBe(true);
+    const missing = validateFunctionalDesignDiscipline({ ...good, artifacts: { "rules.md": "# Rules\n" } });
+    expect(missing.findings.some((finding) => finding.code === "MISSING_FUNCTIONAL_SPEC")).toBe(true);
+    expect(missing.findings.some((finding) => finding.code === "EMPTY_ARTIFACTS")).toBe(false);
+  });
+
   test("OFF is a no-op and does not load documents", () => {
     let loads = 0;
     const result = runFunctionalDesignDiscipline(false, () => {

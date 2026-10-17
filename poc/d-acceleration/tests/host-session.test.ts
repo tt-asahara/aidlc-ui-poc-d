@@ -20,6 +20,10 @@ describe("host-driven autopilot session", () => {
     const boundary = checkpointHostSession({ ...first.state, through: "functional-design", lastStage: "functional-design" }, { kind: "run-stage", stage: "code-generation" }, 300);
     expect(boundary.reason).toBe("boundary-reached");
   });
+  test("stops immediately when a resumed workflow is already beyond the configured boundary", () => {
+    const state = { startedAt: 100, deadlineMs: 1000, maxSteps: 3, steps: 0, through: "units-generation", activeStages: ["requirements-analysis", "units-generation", "functional-design"] };
+    expect(checkpointHostSession(state, { kind: "run-stage", stage: "functional-design", gate: false }, 200)).toMatchObject({ action: "stop", reason: "boundary-already-passed", state: { steps: 0 } });
+  });
   test("treats each official load-steering part and receipt as progress", () => {
     const first = { kind: "load-steering", stage: "functional-design", part: 1, parts: 2, receipt: "r1" };
     const second = { ...first, part: 2, receipt: "r2" };

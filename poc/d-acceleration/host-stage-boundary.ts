@@ -30,5 +30,36 @@ if (!freshValidation.valid) throw new Error(`host boundary fresh official direct
 // ceremony, paths, and engine-resolved execution surface. A stale saved copy or
 // a hand-built {kind, stage} object cannot authorize an optional check.
 if (JSON.stringify(freshDirective) !== JSON.stringify(directive)) throw new Error("host boundary directive is stale or does not match the fresh official next directive");
+
+function declaredArtifactPaths(value: any): string[] {
+  const result: string[] = [];
+  const add = (entry: any) => {
+    if (typeof entry === "string") result.push(entry);
+    else if (entry && typeof entry === "object") {
+      for (const key of ["path", "resolved_path", "output_path", "artifact_path"]) if (typeof entry[key] === "string") result.push(entry[key]);
+    }
+  };
+  for (const entry of value.consumes ?? []) add(entry);
+  for (const entry of value.produces ?? []) add(entry);
+  for (const waveEntry of value.wave?.entries ?? []) {
+    for (const entry of waveEntry.consumes ?? []) add(entry);
+    for (const entry of waveEntry.produces ?? []) add(entry);
+    for (const entry of waveEntry.required_produces ?? []) add(entry);
+  }
+  return result;
+}
+const normalized = (path: string) => relative(resolve(projectDir), resolve(projectDir, path));
+const declared = new Set(declaredArtifactPaths(freshDirective).map(normalized));
+const manifestArtifacts = [
+  manifest.traceabilityPath,
+  manifest.uiContractPath,
+  ...(manifest.artifactPaths ?? []),
+  ...Object.values(manifest.functionalArtifacts ?? {}),
+].filter((path): path is string => typeof path === "string" && path.length > 0);
+for (const artifact of manifestArtifacts) {
+  const rel = normalized(artifact);
+  if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`host boundary manifest artifact escapes project: ${artifact}`);
+  if (!declared.has(rel)) throw new Error(`host boundary manifest artifact is not declared by the fresh directive: ${artifact}`);
+}
 const result = spawnSync(process.execPath, [resolve(import.meta.dir, "d-feature-checks.ts"), "--project-dir", projectDir, "--input", manifestFile], { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

@@ -22,7 +22,9 @@ Example shape (placeholders below are deliberately not valid runtime evidence):
 }
 ```
 
-Schema 1 remains readable for existing evidence chains. New work uses schema 2
+Schema 1 is accepted only for an explicit migration of an existing evidence
+chain, by an operator setting `UI_POC_SCHEMA1_MIGRATION=1` for that migration
+run. New/default work uses schema 2
 with `fidelity.approvedSnapshot`, produced by rendering the refined HTML before
 approval. Important, exact-copy, conditional, and business-value elements need
 stable `data-ui-id` values. Required truncation uses

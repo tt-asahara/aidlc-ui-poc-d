@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { resolveDAutomation, resolveDIssueAutopilot } from "./d-config.ts";
+import { resolveDAutomation, resolveDIssueAutopilot, resolveDModels } from "./d-config.ts";
 import { runIssueAutopilot, issueAutopilotStatus, intakeBindingKey, canonicalGitHubRepository, type EngineAdapter, type OfficialDirective } from "./issue-autopilot.ts";
 import { createFileAssumptionLedger, createFileClaimStore, createFileIntakeBindingStore, createGhIssueSource, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
+import { createClaudeIssueAssessor } from "./issue-ambiguity-assessor.ts";
 import { resolveThroughBoundary, type HostSessionState } from "./host-session.ts";
 
 type Json = Record<string, unknown>;
@@ -26,6 +27,23 @@ const hostSessionFile = value("--session-file") ?? ".aidlc-engine/d-autopilot-se
 const hostSessionPath = resolve(projectDir, hostSessionFile);
 if (relative(resolve(projectDir), hostSessionPath).startsWith("..")) throw new Error("session file escapes project");
 type HostRecovery = { state: HostSessionState | null; lifecycleBusy: boolean; recoveredReason: string | null };
+type HostInspection = HostRecovery & { heartbeatPresent: boolean; inspectionError: string | null };
+const inspectHostSession = (): HostInspection => {
+  const heartbeat = `${hostSessionPath}.heartbeat.json`;
+  const lifecycleLock = `${hostSessionPath}.lifecycle.lock`;
+  if (!existsSync(hostSessionPath)) return { state: null, lifecycleBusy: existsSync(lifecycleLock), recoveredReason: null, heartbeatPresent: existsSync(heartbeat), inspectionError: null };
+  try {
+    return {
+      state: JSON.parse(readFileSync(hostSessionPath, "utf8")) as HostSessionState,
+      lifecycleBusy: existsSync(lifecycleLock),
+      recoveredReason: null,
+      heartbeatPresent: existsSync(heartbeat),
+      inspectionError: null,
+    };
+  } catch (error) {
+    return { state: null, lifecycleBusy: existsSync(lifecycleLock), recoveredReason: null, heartbeatPresent: existsSync(heartbeat), inspectionError: String(error) };
+  }
+};
 const recoverHostSession = (): HostRecovery => {
   if (!existsSync(hostSessionPath)) return { state: null, lifecycleBusy: false, recoveredReason: null };
   // This is deliberately an executable recovery boundary, not a JSON read.
@@ -131,6 +149,8 @@ class OfficialEngine implements EngineAdapter {
 }
 
 const auto = resolveDAutomation(projectDir), autopilot = resolveDIssueAutopilot(projectDir);
+const ambiguityModel = resolveDModels(projectDir, { judgment: value("--claude-judgment") }).models.judgment;
+const ambiguityAssessor = createClaudeIssueAssessor({ projectDir, model: ambiguityModel, executable: value("--claude-executable"), effort: value("--claude-effort") ?? "high" });
 const policy = JSON.parse(readFileSync(join(import.meta.dir, "stage-policy.json"), "utf8")) as { stages: Array<{ stage: string }> };
 const activeStages = (value("--active-stages")?.split(",").filter(Boolean) ?? policy.stages.map((entry) => entry.stage));
 // Phase resolution needs the actual active scope graph. Defer it to host init
@@ -138,8 +158,14 @@ const activeStages = (value("--active-stages")?.split(",").filter(Boolean) ?? po
 const through = value("--active-stages") ? resolveThroughBoundary(auto.through, activeStages) : auto.through;
 const config = { enabled: auto.enabled && autopilot.enabled, labelAllowlist: auto.labelAllowlist, uncertaintyPolicy: auto.assumptionLedger ? auto.ambiguityPolicy : "halt" as const, through: through ?? undefined, sessionAuto: !auto.sessionOnly, maxRetries: auto.maxRetries, maxSteps: auto.maxSteps, deadlineMs: auto.deadlineMs };
 if (command === "status") {
-  const recovery = requireHostRecovery();
-  process.stdout.write(`${JSON.stringify({ ...issueAutopilotStatus(config), activeSession: recovery.state?.endedAt ? null : recovery.state, sessionRecoveryBusy: recovery.lifecycleBusy }, null, 2)}\n`); process.exit(0);
+  const inspection = inspectHostSession();
+  process.stdout.write(`${JSON.stringify({
+    ...issueAutopilotStatus(config),
+    activeSession: inspection.state?.endedAt ? null : inspection.state,
+    sessionRecoveryBusy: inspection.lifecycleBusy,
+    heartbeatPresent: inspection.heartbeatPresent,
+    inspectionError: inspection.inspectionError,
+  }, null, 2)}\n`); process.exit(0);
 }
 if (!config.enabled && command !== "stop" && command !== "repair") { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
 const paths = issueAutopilotRuntimePaths(projectDir);
@@ -290,7 +316,7 @@ const issueNumber = /^\d+$/.test(command) ? Number(command) : undefined;
 const requiredLabel = issueNumber || command === "list" ? undefined : command;
 const effective = requiredLabel ? { ...config, labelAllowlist: [...config.labelAllowlist, requiredLabel] } : config;
 const issues = createGhIssueSource({ cwd: projectDir, repository, executable: value("--gh-executable") });
-if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
+if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", selectionStrategy: "issue-number-ascending", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
 const explicitState = issueNumber ? issueIntentState(issueNumber) : "none";
 if (issueNumber && explicitState === "unknown") {
   process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "reconcile-required", issueNumber, detail: "official intent state scan is incomplete or unreadable" })}\n`); process.exit(0);
@@ -298,9 +324,16 @@ if (issueNumber && explicitState === "unknown") {
 if (issueNumber && explicitState === "partial") {
   await bindings.reserve({ provider: "github", repository, issueNumber, intakeKey: intakeKey(issueNumber) }, "migration-partial");
 }
+let eligibleIssueNumbers: number[] = [];
 const result = await runIssueAutopilot({
   config: effective,
-  selection: issueNumber ? { issueNumber } : { candidatesFromList: async (choices) => choices.filter((item) => effective.labelAllowlist.every((label) => item.labels.includes(label)) && issueIntentState(item.number) === "none").map((item) => item.number) },
+  selection: issueNumber ? { issueNumber } : { candidatesFromList: async (choices) => {
+    eligibleIssueNumbers = choices
+      .filter((item) => effective.labelAllowlist.every((label) => item.labels.includes(label)) && issueIntentState(item.number) === "none")
+      .map((item) => item.number)
+      .sort((left, right) => left - right);
+    return eligibleIssueNumbers;
+  } },
   owner: value("--owner") ?? `pid-${process.pid}`,
   scope: value("--scope") ?? "feature",
   binding: { provider: "github", repository },
@@ -311,8 +344,11 @@ const result = await runIssueAutopilot({
     claims: createFileClaimStore({ directory: paths.claims, leaseMs: config.deadlineMs }),
     bindings,
     assumptions: createFileAssumptionLedger(paths.assumptions),
-    assessor: { async assess(issue, mode) { const unresolved = issue.title.trim() && issue.body.trim() ? [] : ["Issue title and body are required"]; return { unresolved, description: issue.body, assumptions: mode === "assume" && unresolved.length ? unresolved : [], researchedFacts: [] }; } },
+    assessor: ambiguityAssessor,
     engine: new OfficialEngine(),
   },
 });
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+const selection = issueNumber
+  ? { mode: "explicit-number", selectedIssueNumber: issueNumber }
+  : { mode: "label-poll", strategy: "issue-number-ascending", reason: "first eligible unbound Issue in ascending issue-number order", eligibleIssueNumbers, selectedIssueNumber: result.issueNumber ?? null };
+process.stdout.write(`${JSON.stringify({ ...result, selection }, null, 2)}\n`);

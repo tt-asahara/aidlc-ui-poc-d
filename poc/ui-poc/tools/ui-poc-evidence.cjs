@@ -18,7 +18,7 @@ function boundedFile(root, rel) {
   if (!resolved.startsWith(rootReal + path.sep) || !fs.statSync(resolved).isFile()) throw Error('Evidence escapes contract directory or is not a file');
   return fs.readFileSync(resolved);
 }
-function check({stage, outputPath, approvalLedger, imageFeatures = {}}, seen = new Set(), contractName = contracts[stage], depth = 0) {
+function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
   try {
     if (!Object.hasOwn(contracts, stage)) throw Error('Unsupported stage');
@@ -37,6 +37,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}}, seen = n
     if (blocks.length !== 1) throw Error('Expected exactly one ui-poc-contract JSON block');
     const c = JSON.parse(blocks[0][1]);
     if (![1,2].includes(c.schema) || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
+    if (c.schema === 1 && allowLegacySchema1 !== true) throw Error('Schema 1 is legacy migration input only; new/default UI evidence requires schema 2');
     if (!Array.isArray(c.assets) || !c.assets.length || !Array.isArray(c.mappings) || !c.mappings.length) throw Error('Empty assets or mappings');
     const assets = new Map();
     for (const a of c.assets) {
@@ -105,7 +106,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}}, seen = n
         if (stage === 'build-and-test' && fidelity.canonical(parent.fidelity?.dispositions || []) !== fidelity.canonical(c.fidelity?.dispositions || [])) throw Error('Approved UI dispositions changed after code-generation approval');
       }
       const upstreamPath = fs.realpathSync(path.join(root, c.upstream.path));
-      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures}, seen, path.basename(upstreamPath), depth + 1);
+      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures,allowLegacySchema1}, seen, path.basename(upstreamPath), depth + 1);
       if (!inherited.pass) throw Error('Invalid upstream evidence: ' + inherited.findings.join('; '));
       if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
       const ledgerReal = fs.realpathSync(approvalLedger), rootReal = fs.realpathSync(root);
@@ -126,7 +127,7 @@ function main(argv) {
     }
     args[argv[i]] = argv[i+1];
   }
-  console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER})));
+  console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
 module.exports = {check, hash, contracts, main};

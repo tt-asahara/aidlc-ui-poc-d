@@ -24,6 +24,9 @@ per Markdown artifact, 160,000 bytes across the Unit's functional-design
 Markdown, and 30,000 bytes of metadata. `traceability.json` remains an official
 artifact and is never removed, shortened, or rewritten by this check.
 Feature 22 is independent and does not require feature 21 or an ID bridge.
+An enabled check fails closed when no functional-design artifacts are supplied
+or when the canonical `functional-spec.md` is absent or empty; it does not add
+new required sections beyond this duplicate-metadata discipline.
 
 Both entry points accept an `enabled` flag and a lazy loader. When disabled the
 loader is not called, so they create no documents, perform no reads, and cannot

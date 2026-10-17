@@ -28,7 +28,7 @@ describe("durable claimed host session", () => {
     expect(JSON.parse(resumed.stdout)).toMatchObject({ action: "continue", resumed: true, state: { lastStage: "functional-design", through: "functional-design" } });
     writeFileSync(directive, JSON.stringify({ kind: "run-stage", stage: "code-generation", receipt: "next-stage" }));
     const boundary = run(root, ["checkpoint", "--directive-file", "directive.json"]);
-    expect(JSON.parse(boundary.stdout)).toMatchObject({ action: "stop", reason: "boundary-reached", state: { terminalReason: "boundary-reached" } });
+    expect(JSON.parse(boundary.stdout)).toMatchObject({ action: "stop", reason: "boundary-already-passed", state: { terminalReason: "boundary-already-passed" } });
     expect(existsSync(join(paths.claims, "issue-42.json"))).toBeFalse();
   });
 

@@ -27,6 +27,19 @@ describe("issue autopilot production adapters", () => {
     expect(calls).toEqual([{ executable: "gh", cwd: "/project", argv: ["issue", "view", "7", "--repo", "owner/repo", "--json", "number,title,body,labels,state"] }]);
   });
 
+  test("gh list normalizes provider order by ascending issue number", async () => {
+    const runner: CommandRunner = async () => ({
+      status: 0,
+      stderr: "",
+      stdout: JSON.stringify([
+        { number: 12, title: "Later", labels: [], state: "OPEN" },
+        { number: 3, title: "Earlier", labels: [], state: "OPEN" },
+      ]),
+    });
+    const source = createGhIssueSource({ cwd: "/project", runner });
+    expect((await source.list()).map((issue) => issue.number)).toEqual([3, 12]);
+  });
+
   test("claim creation is atomic, owner-only, and stale leases are bounded", async () => {
     const directory = join(temp(), "claims");
     let time = 1_000;

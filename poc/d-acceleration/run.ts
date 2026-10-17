@@ -34,6 +34,8 @@ if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   const input = value("--fanout-input");
   if (!input) { process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: "read-only-fanout-input-required", directive, enabled }, null, 2)}\n`); process.exit(2); }
   const command = [join(import.meta.dir, "read-only-fanout.ts"), "--input", input, "--project-dir", projectDir, "--framework-dir", runtime, "--engine-dir", tools];
+  const models = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
+  command.push("--model-fast", models.models.fast, "--model-balanced", models.models.balanced, "--model-judgment", models.models.judgment);
   if (args.includes("--dry-run")) command.push("--dry-run");
   const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" }); process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }

@@ -145,12 +145,12 @@ if (mode === "init") {
     if (!existing.endedAt && existing.awaitingHuman) existing = await resumeWaitingHuman(existing);
     const sameClaim = JSON.stringify(existing.claim ?? null) === JSON.stringify(claim ?? null);
     if (!existing.endedAt) {
-      if (existing.through !== through || !sameClaim) throw new Error("active host session does not match requested boundary/claim");
+      if (existing.through !== through || JSON.stringify(existing.activeStages ?? []) !== JSON.stringify(active) || !sameClaim) throw new Error("active host session does not match requested scope/boundary/claim");
       if (existing.hostAction || existsSync(heartbeat)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "host-action-busy", state: existing })}\n`); process.exit(0); }
       process.stdout.write(`${JSON.stringify({ action: "continue", resumed: true, state: existing })}\n`); process.exit(0);
     }
   }
-  const state = { startedAt: Date.now(), deadlineMs: Number(value("--deadline-ms") ?? 900000), maxSteps: Number(value("--max-steps") ?? 64), steps: 0, through, ...(claim ? { claim } : {}) };
+  const state = { startedAt: Date.now(), deadlineMs: Number(value("--deadline-ms") ?? 900000), maxSteps: Number(value("--max-steps") ?? 64), steps: 0, through, activeStages: active, ...(claim ? { claim } : {}) };
   if (claim && !claimIsOwned(state)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "claim-lost", state })}\n`); process.exit(0); }
   save(state); process.stdout.write(`${JSON.stringify({ action: "continue", state })}\n`); process.exit(0);
 }

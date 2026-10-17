@@ -30,7 +30,7 @@ describe("installed D feature-check entry", () => {
     writeFileSync(join(root, "ui.json"), JSON.stringify({ schema: 1, mappings: [{ screen: "s", state: "x", ac: "UNKNOWN" }], requiredMappings: ["s/x/UNKNOWN"] }));
     writeFileSync(join(root, "functional.md"), "# Functional\n");
     writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", traceabilityPath: "trace.json", uiContractPath: "ui.json", functionalArtifacts: { "functional-spec.md": "functional.md" } }));
-    const directive = officialDirective(); writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
+    const directive = { ...officialDirective(), consumes: ["trace.json", "ui.json"], produces: ["functional.md"] }; writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
     const result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, directive)], { cwd: root, encoding: "utf8" });
     expect(result.status).toBe(2); const output = JSON.parse(result.stdout); expect(output.verdict).toBe("NOT-READY"); expect(output.notReady).toContain("requirementIdValidation"); expect(existsSync(output.evidencePath)).toBe(true);
   });
@@ -59,6 +59,18 @@ describe("installed D feature-check entry", () => {
     const unresolved = { ...saved, gate: "unresolved" }; writeFileSync(join(root, "directive.json"), JSON.stringify(unresolved));
     result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, unresolved)], { cwd: root, encoding: "utf8" });
     expect(result.status).not.toBe(0); expect(result.stderr).toContain("resolved boolean run-stage gate");
+  });
+  test("binds every feature manifest input to the fresh directive artifact surface", () => {
+    const root = project({ features: { requirementIdValidation: true } });
+    writeFileSync(join(root, "trace.json"), JSON.stringify({ upstream_ids: ["AC1"], coverage: [] }));
+    writeFileSync(join(root, "ui.json"), JSON.stringify({ schema: 1, mappings: [{ screen: "s", state: "x", ac: "AC1" }], requiredMappings: ["s/x/AC1"] }));
+    writeFileSync(join(root, "other.json"), JSON.stringify({ schema: 1, mappings: [], requiredMappings: [] }));
+    writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", traceabilityPath: "trace.json", uiContractPath: "other.json" }));
+    const directive = { ...officialDirective(), consumes: ["trace.json", "ui.json"] };
+    writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
+    const result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, directive)], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("not declared by the fresh directive");
   });
   test("public CLI cannot bypass the verified host boundary", () => {
     const root = project({});
