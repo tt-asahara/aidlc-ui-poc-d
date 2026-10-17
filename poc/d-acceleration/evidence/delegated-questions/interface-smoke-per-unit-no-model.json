@@ -1,0 +1,21 @@
+{
+  "judgmentModel": "claude-opus-5-5",
+  "caseA": {
+    "controller": {
+      "status": "block",
+      "reason": "no trusted native Claude executable was found on PATH"
+    }
+  },
+  "caseB": {
+    "controller": {
+      "status": "block",
+      "reason": "no trusted native Claude executable was found on PATH"
+    }
+  },
+  "caseC": {
+    "controller": {
+      "status": "block",
+      "reason": "a Unit is active on a per-Unit Construction stage; name it with --unit"
+    }
+  }
+}

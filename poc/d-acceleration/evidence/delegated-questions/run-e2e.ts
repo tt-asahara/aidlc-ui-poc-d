@@ -5,12 +5,17 @@
 //   bun poc/d-acceleration/evidence/delegated-questions/run-e2e.ts --work-dir <scratch> --out <evidence dir> [--model claude-opus-5-5]
 //
 // It copies the generated Claude package into a brand-new synthetic project
-// and drives ONLY installed tools: generic-auto start/bootstrap, official
-// `orchestrate`, the record-human-turn hook for the person's exact delegation
-// words, `ai-approval-controller.ts grant`, `ai-question-controller.ts` (real
-// judgment model through the authenticated native `claude` on PATH),
-// `aidlc-ai-answers.ts`, the AI stage-gate approval, and official `next` to
-// the following stage. The driver plays two roles explicitly, and the
+// and drives ONLY installed tools: generic-auto start, the official print's
+// `intent create` command run exactly as printed (only `--label` filled), then
+// generic-auto bootstrap, official `orchestrate`, the record-human-turn hook
+// for the person's exact delegation words (the latest turn, as `grant`
+// requires), `ai-approval-controller.ts grant`, `ai-question-controller.ts`
+// (real judgment model through the authenticated native `claude` on PATH),
+// the D settler `d-acceleration/ai-question-answers.ts` (D ledger
+// `decisions/ai-question-answers.jsonl`, no audit event), the person's own
+// gate approval (AI stage-gate approval was dropped), and official `next` to
+// the following stage. The recorded files under e2e-installed/ predate the
+// core restore (typed intent-create, core settler) and are historical. The driver plays two roles explicitly, and the
 // evidence says so: the person (their exact typed delegation and ceremony
 // choice) and the conductor (writing the canonical questions file, copying
 // receipt answers into slots, writing the stage artifacts).
@@ -21,7 +26,7 @@ import { spawnSync } from "node:child_process";
 
 const argv = process.argv.slice(2), flag = (name: string, fallback?: string) => { const at = argv.indexOf(name); return at < 0 ? fallback : argv[at + 1]; };
 const repo = join(import.meta.dir, "..", "..", "..", "..");
-const workDir = flag("--work-dir"), out = flag("--out"), judgment = flag("--model", "claude-opus-5-5")!;
+const workDir = flag("--work-dir") ?? "", out = flag("--out") ?? "", judgment = flag("--model", "claude-opus-5-5")!;
 if (!workDir || !out) throw new Error("--work-dir and --out are required");
 mkdirSync(out, { recursive: true });
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
@@ -59,9 +64,19 @@ const started = run("auto-start", auto, ["start", "--description-file", ".aidlc-
 const ask = started.json.directive, selected = ask.ask_type === "scope-confirm" ? ask.confirm_command : ask.scope_commands.find((entry: any) => entry.scope === "poc")?.command;
 const scope = /--scope ([A-Za-z0-9._-]+)/.exec(selected)![1], request = /--request ([A-Fa-f0-9]{8})/.exec(selected)![1];
 log("scope-confirm", { ask_type: ask.ask_type, scope });
-const creation = engine("intent-create", ["orchestrate", "next", "--scope", scope, "--request", request]);
+// The person's scope choice returns an official print naming `intent create`;
+// run that exact command (fill only the `--label` the message leaves open).
+const creation = engine("scope-choice", ["orchestrate", "next", "--scope", scope, "--request", request]);
 writeFileSync(join(root, ".aidlc-engine", "creation.json"), creation.stdout);
-const boot = run("bootstrap", auto, ["bootstrap", "--directive-file", ".aidlc-engine/creation.json", "--project-dir", root]);
+const printed = /Run `([^`]+)`/.exec(String(creation.json?.message ?? ""))?.[1];
+if (creation.json?.kind !== "print" || !printed) { log("no-intent-create-print", { directive: creation.json }); finish("failed"); }
+const tokens = [...printed.matchAll(/"([^"]*)"|(\S+)/g)].map((match) => match[1] ?? match[2]);
+const at = tokens.indexOf("intent");
+if (at < 1 || tokens[at - 1] !== "engine" || tokens[at + 1] !== "create") { log("unexpected-intent-create", { printed }); finish("failed"); }
+const createArgs = tokens.slice(at - 1).map((token, index, all) => all[index - 1] === "--label" ? "memo app" : token);
+const created = run("intent-create", join(tools, "aidlc.ts"), [...createArgs, "--project-dir", root]);
+log("intent-create", { printed, ran: createArgs, stdout: created.stdout.slice(0, 1000) });
+const boot = run("bootstrap", auto, ["bootstrap", "--project-dir", root]);
 let directive = boot.json.directive; log("bootstrap", { directive: brief(directive) });
 while (directive.kind === "load-steering") { directive = engine("continue", ["orchestrate", "continue", directive.receipt]).json; log("continue", { directive: brief(directive) }); }
 if (directive.kind !== "run-stage" || directive.stage !== "intent-capture") { log("unexpected-directive", { directive: brief(directive) }); finish("failed"); }
@@ -151,12 +166,13 @@ if (controller.json?.status !== "answer") finish("blocked-at-question-controller
 const decision = controller.json.decision;
 writeFileSync(join(out, "question-decision-receipt.json"), readFileSync(join(root, controller.json.decisionFilePath)));
 
-// 5. Inline provenance, exactly as SKILL.md describes, then the core settlement.
+// 5. Inline provenance, exactly as SKILL.md describes, then the D settlement.
 let body = readFileSync(questionsPath, "utf8");
 for (const answer of decision.answers) body = body.replace(/^\[Answer\]:[ \t]*$/m, `[Answer]: ${answer.answer}\n[Answer Source]: ${answer.source}\n[AI Decision ID]: ${decision.decisionId}`);
 writeFileSync(questionsPath, body); writeFileSync(join(out, "intent-capture-questions.answered.md"), body);
-const settled = run("ai-answers", join(tools, "aidlc-ai-answers.ts"), ["--project-dir", root, "--stage", "intent-capture", "--ai-decision-file", controller.json.decisionFilePath]);
-const replay = run("ai-answers-replay", join(tools, "aidlc-ai-answers.ts"), ["--project-dir", root, "--stage", "intent-capture", "--ai-decision-file", controller.json.decisionFilePath]);
+const settler = join(tools, "d-acceleration", "ai-question-answers.ts");
+const settled = run("ai-answers", settler, ["--project-dir", root, "--stage", "intent-capture", "--ai-decision-file", controller.json.decisionFilePath]);
+const replay = run("ai-answers-replay", settler, ["--project-dir", root, "--stage", "intent-capture", "--ai-decision-file", controller.json.decisionFilePath]);
 log("settlement", { first: settled.json, replay: replay.json });
 
 // 6. The conductor writes the stage artifacts from the answers and opens the gate.
@@ -165,11 +181,9 @@ writeFileSync(join(stageDir, "intent-statement.md"), `# Intent Statement\n\n## P
 writeFileSync(join(stageDir, "stakeholder-map.md"), `# Stakeholder Map\n\n## Stakeholders\n| Stakeholder | Interest |\n|---|---|\n| PoC owner | ローカルで動く最小のメモアプリ |\n\n## Source\n- プロジェクト説明\n`);
 const awaiting = engine("report-awaiting", ["orchestrate", "report", "--stage", "intent-capture", "--result", "awaiting-approval"], { allowFail: true });
 log("report-awaiting-approval", { status: awaiting.status, directive: brief(awaiting.json), detail: awaiting.json?.kind === "ask" ? JSON.stringify(awaiting.json).slice(0, 3000) : undefined, stderr: awaiting.stderr.slice(0, 2000), stdout: awaiting.json ? undefined : awaiting.stdout.slice(0, 2000) });
-// The ordinary engine does not issue a `present-gate` directive from `next` or
-// `report` (aidlc-orchestrate.ts: "present-gate ... arrive in later waves"),
-// so the AI stage-gate approver has no official directive to bind to here.
-// The gate stays the person's judgement: they approve through the host hook
-// and the official report, exactly as the stage protocol describes.
+// Delegated AI stage-gate approval was dropped with the core restore: the
+// gate stays the person's judgement. They approve through the host hook and
+// the official report, exactly as the stage protocol describes.
 if (awaiting.json?.kind !== "print") finish("stopped-before-gate");
 let approvedVia = "person";
 personSays("human-turn-approve", "Approve");
@@ -180,10 +194,13 @@ let after = engine("next-after-approve", ["orchestrate", "next"]).json;
 while (after?.kind === "load-steering") after = engine("continue", ["orchestrate", "continue", after.receipt]).json;
 log("next-official-stage", { directive: brief(after) });
 
-// 8. Audit facts.
+// 8. Audit and D-ledger facts.
 const audit = readdirSync(join(intent, "audit")).map((name) => readFileSync(join(intent, "audit", name), "utf8")).join("\n");
 const count = (event: string) => (audit.match(new RegExp(`\\*\\*Event\\*\\*: ${event}\\n`, "g")) ?? []).length;
-const blocks = audit.split(/\n(?=## )/).filter((block) => /\*\*Event\*\*: (AI_QUESTION_ANSWERED|GATE_APPROVED|HUMAN_TURN|QUESTION_ANSWERED)\n/.test(block));
+const blocks = audit.split(/\n(?=## )/).filter((block) => /\*\*Event\*\*: (GATE_APPROVED|HUMAN_TURN|QUESTION_ANSWERED)\n/.test(block));
 writeFileSync(join(out, "audit-excerpt.md"), `${blocks.join("\n")}\n`);
-log("audit", { AI_QUESTION_ANSWERED: count("AI_QUESTION_ANSWERED"), QUESTION_ANSWERED: count("QUESTION_ANSWERED"), HUMAN_TURN: count("HUMAN_TURN"), GATE_APPROVED: count("GATE_APPROVED") });
+const ledgerPath = join(intent, "decisions", "ai-question-answers.jsonl");
+const ledgerRows = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8").split("\n").filter(Boolean) : [];
+writeFileSync(join(out, "ai-question-answers.jsonl"), ledgerRows.map((line) => `${line}\n`).join(""));
+log("audit", { dLedgerRows: ledgerRows.length, QUESTION_ANSWERED: count("QUESTION_ANSWERED"), HUMAN_TURN: count("HUMAN_TURN"), GATE_APPROVED: count("GATE_APPROVED") });
 finish(after?.stage === "requirements-analysis" ? "passed" : "stopped-after-approve");

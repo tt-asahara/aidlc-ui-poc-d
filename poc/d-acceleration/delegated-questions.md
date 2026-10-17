@@ -187,26 +187,41 @@ The receipt binds `model.identityStatus` (`verified-match`, `alias-resolved`,
 `mismatch` or `unverified`), and block and answer results carry
 `telemetry.modelIdentity` and `telemetry.usage`.
 
-The evidence files were recorded before the merge and before the core
-restore. In them the telemetry still uses the earlier field names
-(`runtimeReportedModel`, `totalCostUsd`, `usage`), the flow used the removed
-typed intent-create, and settlement used the removed core settler, so the
-`AI_QUESTION_ANSWERED` rows below are historical. Today the same settlement
-appends the equivalent rows to `decisions/ai-question-answers.jsonl`
-(re-verified offline by `tests/ai-question-controller.test.ts`; not re-run with
-a real model).
+**Historical record.** The files in `e2e-installed/`, `per-unit/` and
+`threshold-block/` were recorded before the merge and before the core restore.
+In them the telemetry uses the earlier field names (`runtimeReportedModel`,
+`totalCostUsd`, `usage`), the flow used the removed typed intent-create and an
+unbound grant, and settlement used the removed core settler
+(`core/tools/aidlc-ai-answers.ts`, `AI_QUESTION_ANSWERED` audit rows). The
+bullets below describe what those runs recorded, not today's behavior.
+
+**Current drivers.** `run-e2e.ts` and `run-per-unit.ts` now use today's
+interfaces: the official print's `intent create` command is run exactly as
+printed (only `--label` filled), `bootstrap` takes no directive and binds only
+to the Intent created since `start`, the person's delegation words are
+recorded by the record-human-turn hook immediately before `grant`, and
+settlement is `d-acceleration/ai-question-answers.ts`, which appends to
+`decisions/ai-question-answers.jsonl` (no audit event; the drivers also copy
+that ledger into their output). They were not re-run with a real model. A
+no-model interface smoke (no `claude` on PATH, so the assessor stops) is
+recorded in `interface-smoke-no-model.json` (scope print → `intent create` →
+`bootstrap` → `run-stage intent-capture` → three ceremony turns → hook-bound
+`grant`, then `block` at executable resolution) and
+`interface-smoke-per-unit-no-model.json` (hook-bound grants pass the precheck;
+case C still blocks without `--unit`). The settlement path is re-verified
+offline by `tests/ai-question-controller.test.ts`.
 
 - `e2e-installed/` (`run-e2e.ts`): a fresh synthetic project using the
   generated Claude package.
-  - Flow: official scope confirmation → typed intent-create → bootstrap → the
-    `run-stage intent-capture` directive.
+  - Flow (historical): official scope confirmation → typed intent-create →
+    bootstrap → the `run-stage intent-capture` directive.
   - The person's turns go through the record-human-turn hook: three ceremony
     choices, then the exact delegation command.
   - `grant` → canonical Japanese five-question file → real model `answer`
     (confidence 0.93, all `researched-fact`, 7.6 s, $0.017).
   - Inline `[Answer Source]` / `[AI Decision ID]` are written into the file.
-    `aidlc-ai-answers.ts` emits 5 `AI_QUESTION_ANSWERED` rows; the replay
-    returns `reused`.
+    The then-core `aidlc-ai-answers.ts` emitted 5 `AI_QUESTION_ANSWERED` rows
+    (historical; today: 5 D-ledger rows); the replay returned `reused`.
   - The audit holds 0 `QUESTION_ANSWERED` rows. The 5 `HUMAN_TURN` rows are
     exactly the person's 5 hook turns: 4 before the AI answers, plus the gate
     Approve.
@@ -215,7 +230,8 @@ a real model).
 - `per-unit/` (`run-per-unit.ts`): seeded unit-major state, installed tools.
   - Case A: the `notes-core` `nfr-requirements` answers settle only with
     `--unit notes-core`. Settling without it is refused with "Unit does not
-    match". Each audit row carries `Unit: notes-core`.
+    match". Each (then-)audit row carried `Unit: notes-core`; today each D-ledger
+    row carries `unit: "notes-core"`.
   - Case B: a question about silently syncing notes to the vendor's server was
     marked low-risk and passed the lexical guard. The model **blocked** it.
   - Case C: running without `--unit` stops before any model call.

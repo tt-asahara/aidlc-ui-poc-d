@@ -32,7 +32,12 @@ each result as `verified-match`, `alias-resolved`, `mismatch`, or
 | read-only fanout worker (`planReadOnlyFanout`, `--agent`) | verified-match | verified-match | verified-match | alias-resolved |
 | Issue ambiguity assessor (`ambiguityAssessorLaunch`) | verified-match | verified-match | verified-match | alias-resolved |
 | delegated question assessor (`questionAssessorLaunch`) | verified-match | verified-match | verified-match | alias-resolved |
-| delegated approval assessor (`approvalAssessorLaunch`, restricted PATH) | verified-match | verified-match | verified-match | alias-resolved |
+| delegated approval assessor (`approvalAssessorLaunch`, restricted PATH; historical, removed) | verified-match | verified-match | verified-match | alias-resolved |
+
+The approval-assessor row is historical: delegated AI stage-gate approval was
+dropped when core/ was restored to upstream v2.11.0, and `approvalAssessorLaunch`
+no longer exists (`ai-approval-controller.ts` now only mints the question
+delegation grant). The four remaining launchers are current.
 
 Mismatches: 0 of 20. Requested effort is recorded per run. The effective effort
 is `unverified` because the JSON result does not report effort. The parent
