@@ -1,0 +1,115 @@
+name: D acceleration
+
+# PR gate for the D acceleration / UI PoC line (issues #6 and #8).
+#
+# WHY A SEPARATE WORKFLOW. ci.yml fires only on `pull_request.branches: [main]`,
+# so a PR into develop or a feature branch ran nothing, and no workflow ran the
+# PoC suites under poc/ at all (tests/run-tests.ts does not discover them).
+# This file adds both without editing ci.yml:
+#   - `d-suites` runs `bun test poc/d-acceleration/tests` on every PR;
+#   - `ui-poc` runs `bun test poc/ui-poc/tests` on every PR;
+#   - `standard-gate` reuses ci.yml (workflow_call) for PRs whose base is NOT
+#     main, so the existing contract/smoke/unit/integration tiers also gate
+#     develop and feature-branch PRs. PRs into main already get ci.yml directly
+#     and skip this job, so nothing runs twice.
+#
+# RUNNER. This repository is on github.com, so GitHub-hosted ubuntu-latest is
+# available. (The reference KDDI fork learned the hard way that a GHES repo with
+# no registered self-hosted runner queues every job forever.)
+#
+# DETERMINISTIC ENVIRONMENT. The KDDI fork saw tests that were green locally go
+# red only in the runner because of injected color/terminal settings. Pin the
+# environment instead of inheriting it: no color, dumb terminal, UTC, C.UTF-8.
+# FORCE_COLOR is deliberately never set (any value, even empty, forces color
+# in common libraries).
+#
+# CREDENTIAL-FREE. No secrets are used. Every external action under test (gh,
+# git push, Claude workers) runs against local fakes: a stateful fake `gh`
+# compiled from poc/d-acceleration/fixtures/fake-gh.ts and a bare git remote
+# in a temp directory. The job never authenticates gh and never writes to
+# GitHub.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  push:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d-acceleration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NO_COLOR: '1'
+  TERM: dumb
+  TZ: UTC
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  GIT_TERMINAL_PROMPT: '0'
+
+jobs:
+  d-suites:
+    name: D acceleration suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Several D suites import the generated Claude runtime (dist/claude) and
+      # the harness matrix expects every dist/<harness> tree.
+      - name: Materialize generated harness trees
+        run: bun scripts/package.ts
+
+      # D persistence and sandbox suites create throwaway git repositories and
+      # commits; give git an identity that cannot be mistaken for a person.
+      - name: Configure a sandbox git identity
+        run: |
+          git config --global user.name "aidlc-ci-sandbox"
+          git config --global user.email "aidlc-ci-sandbox@example.invalid"
+          git config --global init.defaultBranch main
+
+      # --timeout raises bun's 5s per-test default: several suites spawn many
+      # short-lived bun processes, which is slower on shared runners.
+      - name: Run D acceleration tests
+        run: bun test --timeout 60000 poc/d-acceleration/tests
+
+  ui-poc:
+    name: UI PoC suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize generated harness trees
+        run: bun scripts/package.ts
+
+      - name: Run UI PoC tests
+        run: bun test --timeout 60000 poc/ui-poc/tests
+
+  standard-gate:
+    name: Standard CI tiers (non-main PRs)
+    if: github.event_name == 'pull_request' && github.base_ref != 'main'
+    uses: ./.github/workflows/ci.yml

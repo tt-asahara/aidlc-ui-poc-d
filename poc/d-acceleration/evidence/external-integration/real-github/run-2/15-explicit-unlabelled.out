@@ -1,0 +1,9 @@
+{
+  "status": "stopped",
+  "reason": "label-not-allowed",
+  "issueNumber": 3,
+  "selection": {
+    "mode": "explicit-number",
+    "selectedIssueNumber": 3
+  }
+}

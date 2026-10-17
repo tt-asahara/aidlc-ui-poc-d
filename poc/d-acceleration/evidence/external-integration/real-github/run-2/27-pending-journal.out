@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "receipt": "sandbox-receipt-2",
+  "commitOid": "a5c211de3e5d02a794ddfcb1a0274829d833e3ed",
+  "remote": "origin",
+  "branch": "aidlc-sandbox/20261017T065220Z",
+  "refspec": "a5c211de3e5d02a794ddfcb1a0274829d833e3ed:refs/heads/aidlc-sandbox/20261017T065220Z",
+  "state": "pending",
+  "manifestHash": "912f2f00da3c3260a85db797aa7075d0304f958e8dbb7f11954a31f561b08aae"
+}

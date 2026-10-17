@@ -47,11 +47,41 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 `send: true` には同様にhost process環境の `AIDLC_GH_EXECUTABLE_PATH` と
 `AIDLC_GH_EXECUTABLE_SHA256` が必要です。
 これらは外部送信許可を代替せず、payload-boundな最新の人間permissionも引き続き必須です。
+`repository` は `owner/name`(github.com)または `HOST/owner/name`(例:
+`github.kddi.com/owner/name` のGitHub Enterprise)です。host省略時はgithub.comで、
+継承した `GH_HOST` は使わず対象hostへ固定します。
+
+GitHub CLI認証preflight: issue autopilot(`--repo` またはoriginのURLからhostを判定)と
+decision summary送信は、GitHubへ触れる前に固定argvの `gh auth status --hostname <host>`
+を実行します。そのhostにloginがなければ `gh-auth-required` で停止し、次の1手
+`gh auth login --hostname <host>` を返します。別host(例: GHEだけにlogin)の認証は
+満たしません。GitHub読み取り失敗は `github-read-failed` で停止し、claimやintentを残しません。
+ローカルsandbox検証(fake gh + bare remote)は `tests/external-sandbox.integration.test.ts`、
+実GitHub sandbox repoでの手順は `scripts/real-github-sandbox-runbook.sh`(既定dry-run)です。
 
 全boolean切替の直前には、日本語で対象stageまたは実行時点、役割、ON/OFF時の
 挙動、既定値、利用場面、親スイッチや別コマンド依存を記載しています。setupが
 配布する `.claude/tools/d-acceleration/d-acceleration.example.jsonc` はこのひな形と
 byte-identicalです。機能7の永続化前secret scanは必須で、無効化スイッチはありません。
+
+## 並列実行の親スイッチ (`parallel.enabled`)
+
+既定はONです。OFFはD全体の同時worker数を1にします。対象は、公式engineが発行済みの
+設計wave（retry・tier昇格を含む）、read-only fanout、再起動・再開後の再発行waveです。
+既存Intentの公式 `Construction Execution` が `swarm` の場合は、次のD境界
+（run.ts / conductor、generic auto・Issue autopilotのcheckpoint、`invoke-swarm` 前の
+`parallel-guard.ts`）で公式setter `aidlc-state.ts set-construction-execution serial`
+だけを使って `serial` へ移します。state fileを直接編集しません。公式setterの判定が
+優先され、Construction前は適用、Construction中の無人実行は拒否、対話実行は本人の
+依頼が必要です。拒否中もD自身の処理は逐次で続け、公式swarmへのhand-offは
+`parallel-off-action-required` / `stop` と1行の `recovery` で止めます。
+
+反映時期: OFFは即時です。各D境界とworker起動ごとに設定を読み直すため、wave途中で
+OFFにすると以後の起動はすべて逐次になります（実行中workerは完了まで継続）。ONは
+進行中のrun/waveを広げず、次のD起動から有効です。読めない設定はOFF扱いです。
+ONへ戻してもDはIntentを `swarm` へ戻しません。`AIDLC_USE_SWARM` と `flags.swarm`
+（env > local > project > machine）は発行済み `invoke-swarm` の実行方式選択だけで、
+D OFF中にswarmを再有効化しません。
 
 ## UI fidelity image settings
 
@@ -63,5 +93,8 @@ PNG撮影と画像比較だけを切り替えます。
 
 画像比較ON時は同じviewport、renderer/font環境、承認済みbaseline hashが必要です。
 browser、baseline、状態再現、互換環境のいずれかがなければNOT-READYであり、passへ
-縮退しません。決定論laneが保証するのは観測可能なDOM事実とrendered PNG bytesの
-一致です。自然文仕様の意味的同値が必要な場合だけ既存`specGrounding`を使用します。
+縮退しません。renderer版・OS・viewport・deviceScaleFactor・font指紋・起動flag・
+visual policyのいずれかが基準と異なる場合、比較自体を拒否(NOT-READY)します。
+画素比較は承認済みpolicyの閾値・anti-alias許容・mask(理由必須)で行い、基準と
+policyはBuild and Testで生成・緩和できません。決定論laneが保証するのは観測可能な
+DOM事実と、記録済み環境・承認済みpolicy下のrendered PNG一致です。自然文仕様の意味的同値が必要な場合だけ既存`specGrounding`を使用します。

@@ -1,0 +1,1 @@
+gh repo view tt-asahara/aidlc-d-sandbox --json nameWithOwner\,visibility\,isArchived\,defaultBranchRef 
