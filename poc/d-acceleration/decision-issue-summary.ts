@@ -199,12 +199,14 @@ if (import.meta.main) {
     const projectDir = one("--project-dir"), intentDir = one("--intent-dir"), decisionsFile = one("--decisions-file");
     if (!isAbsolute(projectDir) || !isAbsolute(intentDir)) throw new Error("--project-dir and --intent-dir must be absolute");
     if (command !== "generate" && command !== "publish") throw new Error("mode must be generate or publish");
-    const executable = trustedExecutable("gh", projectDir);
     const resolvedConfig = resolveDDecisionIssueSummary(projectDir);
+    const executable = command === "publish" && resolvedConfig.send
+      ? pinnedExecutable(projectDir, process.env.AIDLC_GH_EXECUTABLE_PATH, process.env.AIDLC_GH_EXECUTABLE_SHA256)
+      : undefined;
     const result = await runDecisionIssueSummary({
       projectDir, intentDir, decisionsFile,
       config: command === "generate" ? { ...resolvedConfig, send: false } : resolvedConfig,
-      gh: { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } },
+      gh: executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(result.status === "stopped" ? 2 : 0);
@@ -214,25 +216,19 @@ if (import.meta.main) {
   }
 }
 
-function trustedExecutable(name: string, projectDir: string): string {
-  const candidates = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean);
-  for (const directory of candidates) {
-    const requested = resolve(directory, name);
-    if (!existsSync(requested)) continue;
-    const actual = realpathSync(requested);
-    const metadata = lstatSync(actual);
-    if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 || inside(realpathSync(projectDir), actual) || (metadata.uid !== process.getuid?.() && metadata.uid !== 0)) continue;
-    let parentPath = dirname(actual), safe = true;
-    while (true) {
-      const parent = lstatSync(parentPath);
-      const sticky = (parent.mode & 0o1000) !== 0;
-      if (!parent.isDirectory() || (parent.uid !== process.getuid?.() && parent.uid !== 0) || ((parent.mode & 0o022) !== 0 && !sticky)) { safe = false; break; }
-      const next = dirname(parentPath);
-      if (next === parentPath) break;
-      parentPath = next;
-    }
-    if (!safe) continue;
-    return actual;
-  }
-  throw new Error(`trusted ${name} executable was not found outside the project`);
+function pinnedExecutable(projectDir: string, requested: string | undefined, expectedSha256: string | undefined): string {
+  if (!requested || !expectedSha256) throw new Error("host-pinned gh executable path and sha256 are required");
+  const actual = realpathSync(requested);
+  const metadata = lstatSync(actual);
+  const bytes = readFileSync(actual);
+  if (!metadata.isFile() || inside(realpathSync(projectDir), actual)) throw new Error("host-pinned gh executable must be a file outside the project");
+  if (!isNativeExecutable(bytes)) throw new Error("host-pinned gh executable must be a native binary, not a script");
+  if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) throw new Error("host-pinned gh executable digest mismatch");
+  return actual;
+}
+
+function isNativeExecutable(bytes: Buffer): boolean {
+  if (bytes.length < 4) return false;
+  const magic = bytes.subarray(0, 4).toString("hex");
+  return magic === "7f454c46" || ["cffaedfe", "feedfacf", "cafebabe", "bebafeca"].includes(magic) || bytes.subarray(0, 2).toString("ascii") === "MZ";
 }

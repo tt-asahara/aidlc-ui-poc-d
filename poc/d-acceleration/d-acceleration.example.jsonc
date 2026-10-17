@@ -70,6 +70,7 @@
     // 対象: AI工程承認判定。役割: approveに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。
     "minConfidence": 0.9,
     "decisionRecordPath": "decisions/ai-approval-decisions.jsonl",
+    // stage-gates の実行CLIはproject設定ではなくhost process環境の AIDLC_CLAUDE_EXECUTABLE_PATH / AIDLC_CLAUDE_EXECUTABLE_SHA256 で固定する。
   },
   "decisionIssueSummary": {
     // 対象: IntentごとのAI判断要約。役割: リポジトリ内正本へのリンクを持つGitHub Issue要約を生成する。ON時: ローカルpayload/同期状態を生成、OFF時: GitHub処理なし。既定値: OFF。境界: 正本は常にリポジトリ内記録で、別Issueは自動作成しない。利用場面: チーム共有用のIntent単位要約。
@@ -78,5 +79,6 @@
     // 対象: GitHubへのIssue作成・更新。役割: 外部送信を別途許可する。ON時: 実行時の明示publish許可も必要、OFF時: payload生成のみ。既定値: OFF。利用場面: 投稿先repoと公開許可を利用者が明示した場合だけ。
     "send": false,
     "maxRetries": 2,
+    // send の実行CLIはproject設定ではなくhost process環境の AIDLC_GH_EXECUTABLE_PATH / AIDLC_GH_EXECUTABLE_SHA256 で固定する。
   },
 }

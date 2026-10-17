@@ -117,28 +117,21 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function trustedExecutable(projectRoot: string, requested: string): string {
-  const candidates = isAbsolute(requested)
-    ? [requested]
-    : (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean).map((directory) => resolve(directory, requested));
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    const actual = realpathSync(candidate);
-    const metadata = lstatSync(actual);
-    if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 || within(projectRoot, actual) || (metadata.uid !== process.getuid?.() && metadata.uid !== 0)) continue;
-    let directory = dirname(actual), safe = true;
-    while (true) {
-      const parent = lstatSync(directory);
-      const sticky = (parent.mode & 0o1000) !== 0;
-      if (!parent.isDirectory() || (parent.uid !== process.getuid?.() && parent.uid !== 0) || ((parent.mode & 0o022) !== 0 && !sticky)) { safe = false; break; }
-      const next = dirname(directory);
-      if (next === directory) break;
-      directory = next;
-    }
-    if (!safe) continue;
-    return actual;
-  }
-  throw new Error("trusted Claude executable was not found outside the project");
+function pinnedExecutable(projectRoot: string, requested: string | undefined, expectedSha256: string | undefined): string {
+  if (!requested || !expectedSha256) throw new Error("host-pinned Claude executable path and sha256 are required");
+  const actual = realpathSync(requested);
+  const metadata = lstatSync(actual);
+  const bytes = readFileSync(actual);
+  if (!metadata.isFile() || within(projectRoot, actual)) throw new Error("host-pinned Claude executable must be a file outside the project");
+  if (!isNativeExecutable(bytes)) throw new Error("host-pinned Claude executable must be a native binary, not a script");
+  if (sha256(bytes) !== expectedSha256) throw new Error("host-pinned Claude executable digest mismatch");
+  return actual;
+}
+
+function isNativeExecutable(bytes: Buffer): boolean {
+  if (bytes.length < 4) return false;
+  const magic = bytes.subarray(0, 4).toString("hex");
+  return magic === "7f454c46" || ["cffaedfe", "feedfacf", "cafebabe", "bebafeca"].includes(magic) || bytes.subarray(0, 2).toString("ascii") === "MZ";
 }
 
 function canonicalize(value: unknown): unknown {
@@ -541,7 +534,7 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
           // path never supplies one and resolves an absolute trusted binary.
           executable: options.claudeExecutable
             ? (existsSync(options.claudeExecutable) ? realpathSync(options.claudeExecutable) : resolve(options.claudeExecutable))
-            : trustedExecutable(projectRoot, "claude"),
+            : pinnedExecutable(projectRoot, process.env.AIDLC_CLAUDE_EXECUTABLE_PATH, process.env.AIDLC_CLAUDE_EXECUTABLE_SHA256),
           requestedModel: model,
           requestedEffort: "high",
           args: [

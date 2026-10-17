@@ -23,7 +23,7 @@ function run(project: string, args: string[], skipHumanPresence = true) {
 afterEach(() => { for (const project of projects.splice(0)) cleanupTestProject(project); });
 
 describe("delegated AI stage approval", () => {
-  test("publishes through the production adapter only after the payload-bound host receipt", () => {
+  test("rejects an interpreted publication adapter even after a payload-bound host receipt", () => {
     const project = createTestProject(); projects.push(project);
     seedStateFile(project, "state-mid-ideation.md");
     const record = seededRecordDir(project), decisions = join(record, "decisions"); mkdirSync(decisions, { recursive: true });
@@ -45,10 +45,10 @@ describe("delegated AI stage approval", () => {
     const fakeBin = mkdtempSync(join(tmpdir(), "aidlc-trusted-bin-")); projects.push(fakeBin);
     const fakeGh = join(fakeBin, "gh");
     writeFileSync(fakeGh, `#!/usr/bin/env bun\nimport {writeFileSync} from "node:fs"; writeFileSync("gh-argv.json",JSON.stringify(process.argv.slice(2))); console.log("https://github.com/owner/repo/issues/41");\n`); chmodSync(fakeGh, 0o755);
-    const published = spawnSync(process.execPath, [summaryTool, "publish", ...baseArgs], { cwd: project, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` } });
-    expect(published.status, `${published.stdout}${published.stderr}`).toBe(0);
-    expect(JSON.parse(published.stdout)).toMatchObject({ status: "published", operation: "created", issueNumber: 41 });
-    expect(JSON.parse(readFileSync(join(project, "gh-argv.json"), "utf8")).slice(0, 4)).toEqual(["issue", "create", "--repo", "owner/repo"]);
+    const published = spawnSync(process.execPath, [summaryTool, "publish", ...baseArgs], { cwd: project, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, AIDLC_GH_EXECUTABLE_PATH: fakeGh, AIDLC_GH_EXECUTABLE_SHA256: sha(readFileSync(fakeGh)) } });
+    expect(published.status).toBe(2);
+    expect(JSON.parse(published.stdout)).toMatchObject({ status: "stopped" });
+    expect(published.stdout).toContain("native binary");
   });
 
   test("verifies an exact host-recorded decision-summary publication receipt", () => {
@@ -69,13 +69,11 @@ describe("delegated AI stage approval", () => {
     expect(refused.status).not.toBe(0);
   });
 
-  test("uses a fresh hash-bound AI decision without minting a human reply", () => {
+  test("fails closed without a host-pinned native assessor and never mints a human reply", () => {
     const project = createTestProject(); projects.push(project);
     seedStateFile(project, "state-mid-ideation.md");
     mkdirSync(join(project, ".claude"), { recursive: true });
     writeFileSync(join(project, ".claude/d-acceleration.jsonc"), JSON.stringify({ aiApproval: { mode: "stage-gates", minConfidence: 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" } }));
-    const fakeBin = mkdtempSync(join(tmpdir(), "aidlc-trusted-bin-")); projects.push(fakeBin);
-    const fakeClaude = join(fakeBin, "claude"); writeFileSync(fakeClaude, `#!/usr/bin/env bun\nconsole.log(JSON.stringify({result:JSON.stringify({outcome:"approve",reason:"fresh reassessment passed",confidence:0.99,riskFlags:[],uncertainties:[]})}));\n`); chmodSync(fakeClaude, 0o755);
     // This fixture deliberately omits the stage question artifact that gate-start
     // validates; seed only the already-open gate so this test isolates approval
     // authority and the normal approve transition.
@@ -102,11 +100,11 @@ describe("delegated AI stage approval", () => {
     const decision = { schemaVersion: 1, decisionId: sha(canonical(binding)), actor: "ai", ledgerPath: relative(project, ledgerPath), outcome: "approve", stage: binding.stage, reason: "All declared evidence is verified and the bounded PoC has no external effects.", confidence: 0.98, directive: { path: relative(project, directivePath), sha256: binding.directiveSha256 }, directiveSha256: binding.directiveSha256, stateSha256: binding.stateSha256, delegation: { path: relative(project, grantPath), sha256: binding.delegationSha256, messageId: grant.messageId }, evidence: binding.evidence, riskFlags: [], uncertainties: [], createdAt: "2026-10-17T00:00:00Z" };
     writeFileSync(ledgerPath, `${JSON.stringify(decision)}\n`);
     const decisionPath = join(decisions, "decision.json"); writeFileSync(decisionPath, JSON.stringify(decision));
-    const approved = spawnSync(process.execPath, [stateTool, "approve", "feasibility", "--ai-decision-file", relative(project, decisionPath), "--project-dir", project], { cwd: project, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" } });
-    expect(approved.status).toBe(0);
+    const approved = spawnSync(process.execPath, [stateTool, "approve", "feasibility", "--ai-decision-file", relative(project, decisionPath), "--project-dir", project], { cwd: project, encoding: "utf8", env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" } });
+    expect(approved.status).not.toBe(0);
+    expect(`${approved.stdout}${approved.stderr}`).toContain("host-pinned Claude executable path and sha256 are required");
     const audit = readFileSync(seededAuditShard(project), "utf8");
-    expect(audit).toContain("**Decision Actor**: AI");
-    expect(audit).toContain("**Decision Authority**: explicit user delegation");
+    expect(audit).not.toContain("**Decision Actor**: AI");
     expect(audit).not.toContain("**User Input**:");
   });
 
