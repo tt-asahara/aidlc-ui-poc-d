@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveDAiApproval, resolveDDecisionIssueSummary } from "./d-config.ts";
 
 export type DecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
@@ -206,7 +206,7 @@ if (import.meta.main) {
     const result = await runDecisionIssueSummary({
       projectDir, intentDir, decisionsFile,
       config: command === "generate" ? { ...resolvedConfig, send: false } : resolvedConfig,
-      gh: executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined,
+      gh: executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(result.status === "stopped" ? 2 : 0);
@@ -222,6 +222,7 @@ function pinnedExecutable(projectDir: string, requested: string | undefined, exp
   const metadata = lstatSync(actual);
   const bytes = readFileSync(actual);
   if (!metadata.isFile() || inside(realpathSync(projectDir), actual)) throw new Error("host-pinned gh executable must be a file outside the project");
+  if (basename(actual) !== "gh") throw new Error("host-pinned gh executable must be named gh");
   if (!isNativeExecutable(bytes)) throw new Error("host-pinned gh executable must be a native binary, not a script");
   if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) throw new Error("host-pinned gh executable digest mismatch");
   return actual;

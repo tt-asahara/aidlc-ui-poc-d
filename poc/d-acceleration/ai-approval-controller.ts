@@ -123,6 +123,7 @@ function pinnedExecutable(projectRoot: string, requested: string | undefined, ex
   const metadata = lstatSync(actual);
   const bytes = readFileSync(actual);
   if (!metadata.isFile() || within(projectRoot, actual)) throw new Error("host-pinned Claude executable must be a file outside the project");
+  if (basename(actual) !== "claude") throw new Error("host-pinned Claude executable must be named claude");
   if (!isNativeExecutable(bytes)) throw new Error("host-pinned Claude executable must be a native binary, not a script");
   if (sha256(bytes) !== expectedSha256) throw new Error("host-pinned Claude executable digest mismatch");
   return actual;
@@ -537,6 +538,7 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
             : pinnedExecutable(projectRoot, process.env.AIDLC_CLAUDE_EXECUTABLE_PATH, process.env.AIDLC_CLAUDE_EXECUTABLE_SHA256),
           requestedModel: model,
           requestedEffort: "high",
+          environment: options.claudeExecutable ? undefined : { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
           args: [
             "--print", "--output-format", "json", "--no-session-persistence", "--restricted",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
