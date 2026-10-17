@@ -61,6 +61,8 @@ describe("ordinary UI application scope resolver", () => {
     const infer = resolver();
     expect(infer("Build a household budget web app with monthly planning transaction tracking category summaries and a responsive interface")).toBe("classic");
     expect(infer("家計管理のWebアプリを作りたい")).toBe("classic");
+    // The README's long example, verbatim: it gets the standard proposal.
+    expect(infer("Build a household budget web app with monthly planning, transaction tracking,\ncategory summaries, and a responsive user interface.")).toBe("classic");
     expect(infer("家計管理アプリの要件定義ループを回したい")).toBe("classic");
   });
   test("leaves non-UI and negated UI requests on the stock default", () => {
