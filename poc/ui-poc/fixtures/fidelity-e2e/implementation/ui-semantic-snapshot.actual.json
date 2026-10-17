@@ -1,0 +1,639 @@
+{
+  "schema": 1,
+  "kind": "ui-semantic-snapshot",
+  "source": {
+    "path": "http://127.0.0.1:63949/notes",
+    "sha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8"
+  },
+  "observation": {
+    "mode": "loopback-url",
+    "target": "http://127.0.0.1:63949/notes",
+    "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
+    "capturedAt": "2026-10-17T05:57:55.753Z"
+  },
+  "environment": {
+    "renderer": "Google Chrome",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "captures": [
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-LIST",
+      "elements": [
+        {
+          "key": "NOTE-TITLE-1",
+          "explicitId": true,
+          "kind": "text",
+          "text": "買い物リスト",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 34,
+            "scrollHeight": 34,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "MEMO-BODY",
+          "explicitId": true,
+          "kind": "region",
+          "text": "牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。",
+          "exactCopy": false,
+          "important": true,
+          "truncated": true,
+          "truncation": {
+            "mode": "required"
+          },
+          "metrics": {
+            "clientHeight": 21,
+            "scrollHeight": 63,
+            "clientWidth": 288,
+            "scrollWidth": 288,
+            "overflow": "hidden",
+            "textOverflow": "clip",
+            "lineClamp": "1"
+          }
+        },
+        {
+          "key": "EXPAND-MEMO",
+          "explicitId": true,
+          "kind": "control",
+          "text": "全文を表示",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "EXPAND",
+            "expectedState": "STATE-EXPANDED",
+            "target": "MEMO-BODY"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 79,
+            "scrollWidth": 79,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "SAVE-NOTE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "保存",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "SAVE",
+            "expectedState": "STATE-SAVED"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 39,
+            "scrollWidth": 39,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "DELETE-NOTE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "削除",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "DELETE",
+            "expectedState": "STATE-CONFIRM-DELETE"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 39,
+            "scrollWidth": 39,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    },
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-CONFIRM-DELETE",
+      "elements": [
+        {
+          "key": "DELETE-DIALOG",
+          "explicitId": true,
+          "kind": "region",
+          "text": "メモを削除しますか？「買い物リスト」（2026/10/01 更新）を削除します。この操作は取り消せません。削除するキャンセル",
+          "role": "alertdialog",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 190,
+            "scrollHeight": 190,
+            "clientWidth": 480,
+            "scrollWidth": 480,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "DELETE-CONFIRM-TITLE",
+          "explicitId": true,
+          "kind": "text",
+          "text": "メモを削除しますか？",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 34,
+            "scrollHeight": 34,
+            "clientWidth": 448,
+            "scrollWidth": 448,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "DELETE-CONFIRM-DETAIL",
+          "explicitId": true,
+          "kind": "text",
+          "text": "「買い物リスト」（2026/10/01 更新）を削除します。この操作は取り消せません。",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 448,
+            "scrollWidth": 448,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "CONFIRM-DELETE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "削除する",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "CONFIRM-DELETE",
+            "expectedState": "STATE-DELETED"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 65,
+            "scrollWidth": 65,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "CANCEL-DELETE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "キャンセル",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "CANCEL-DELETE",
+            "expectedState": "STATE-LIST"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 78,
+            "scrollWidth": 78,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    },
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-DELETED",
+      "elements": [
+        {
+          "key": "DELETE-COMPLETE",
+          "explicitId": true,
+          "kind": "region",
+          "text": "メモを削除しました",
+          "role": "status",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    },
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-SAVED",
+      "elements": [
+        {
+          "key": "SAVE-COMPLETE",
+          "explicitId": true,
+          "kind": "region",
+          "text": "✓ 保存しました",
+          "role": "status",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    },
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-STORAGE-ERROR",
+      "elements": [
+        {
+          "key": "STORAGE-READ-ERROR",
+          "explicitId": true,
+          "kind": "region",
+          "text": "保存データを読み込めませんでした。ブラウザのストレージ設定を確認してから、再読み込みしてください。",
+          "role": "alert",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "RETRY-LOAD",
+          "explicitId": true,
+          "kind": "control",
+          "text": "再読み込み",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 79,
+            "scrollWidth": 79,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    },
+    {
+      "rendered": true,
+      "screen": "SCREEN-NOTES",
+      "state": "STATE-PRIVATE-MODE",
+      "elements": [
+        {
+          "key": "PRIVATE-MODE-GUIDANCE",
+          "explicitId": true,
+          "kind": "region",
+          "text": "プライベートモードでは、メモはこのタブを閉じると消えます。残したいメモは通常モードで保存してください。",
+          "role": "note",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "NOTE-TITLE-1",
+          "explicitId": true,
+          "kind": "text",
+          "text": "買い物リスト",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 34,
+            "scrollHeight": 34,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        },
+        {
+          "key": "MEMO-BODY",
+          "explicitId": true,
+          "kind": "region",
+          "text": "牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。",
+          "exactCopy": false,
+          "important": true,
+          "truncated": true,
+          "truncation": {
+            "mode": "required"
+          },
+          "metrics": {
+            "clientHeight": 21,
+            "scrollHeight": 63,
+            "clientWidth": 288,
+            "scrollWidth": 288,
+            "overflow": "hidden",
+            "textOverflow": "clip",
+            "lineClamp": "1"
+          }
+        },
+        {
+          "key": "EXPAND-MEMO",
+          "explicitId": true,
+          "kind": "control",
+          "text": "全文を表示",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "EXPAND",
+            "expectedState": "STATE-EXPANDED",
+            "target": "MEMO-BODY"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 79,
+            "scrollWidth": 79,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "SAVE-NOTE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "保存",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "SAVE",
+            "expectedState": "STATE-SAVED"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 39,
+            "scrollWidth": 39,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "DELETE-NOTE",
+          "explicitId": true,
+          "kind": "control",
+          "text": "削除",
+          "role": "button",
+          "exactCopy": true,
+          "important": true,
+          "truncated": false,
+          "action": {
+            "id": "DELETE",
+            "expectedState": "STATE-CONFIRM-DELETE"
+          },
+          "metrics": {
+            "clientHeight": 23,
+            "scrollHeight": 23,
+            "clientWidth": 39,
+            "scrollWidth": 39,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          },
+          "actionVerified": true
+        },
+        {
+          "key": "AUTO-821a485e",
+          "explicitId": false,
+          "kind": "text",
+          "text": "メモ",
+          "exactCopy": false,
+          "important": false,
+          "truncated": false,
+          "metrics": {
+            "clientHeight": 45,
+            "scrollHeight": 45,
+            "clientWidth": 1216,
+            "scrollWidth": 1216,
+            "overflow": "visible",
+            "textOverflow": "clip",
+            "lineClamp": "none"
+          }
+        }
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "state": "SCREEN-NOTES/STATE-LIST",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes",
+      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
+      "capturedAt": "2026-10-17T05:57:55.753Z"
+    },
+    {
+      "state": "SCREEN-NOTES/STATE-CONFIRM-DELETE",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes",
+      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
+      "capturedAt": "2026-10-17T05:57:59.998Z"
+    },
+    {
+      "state": "SCREEN-NOTES/STATE-DELETED",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes",
+      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
+      "capturedAt": "2026-10-17T05:58:03.104Z"
+    },
+    {
+      "state": "SCREEN-NOTES/STATE-SAVED",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes",
+      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
+      "capturedAt": "2026-10-17T05:58:05.734Z"
+    },
+    {
+      "state": "SCREEN-NOTES/STATE-STORAGE-ERROR",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes?scenario=storage-error",
+      "targetSha256": "cf4e39ea92ff1cfaea7cea3dce5226ad950444a717925677db1c42abab63b956",
+      "capturedAt": "2026-10-17T05:58:07.671Z"
+    },
+    {
+      "state": "SCREEN-NOTES/STATE-PRIVATE-MODE",
+      "mode": "loopback-url",
+      "target": "http://127.0.0.1:63949/notes?scenario=private",
+      "targetSha256": "0bb9facc9f10f01de2ff5db2c630f66131f75e5a3225fcfdbd6f3cfa8611eb95",
+      "capturedAt": "2026-10-17T05:58:11.187Z"
+    }
+  ]
+}
