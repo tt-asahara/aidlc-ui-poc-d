@@ -117,6 +117,23 @@ the same pending refspec rather than creating another commit. Parallel workers
 do not run this coordinator; official swarm publish, land, and merge contracts
 remain authoritative.
 
+## Reviewer dispatch cleanup
+
+The official reviewer protocol leaves `.aidlc-engine/reviewer-dispatch.json`
+for the conductor to delete after a per-unit review; a leftover record keeps
+the official reviewer-scope hook refusing the next Unit's reviewer for up to
+six hours. The Claude projection adds a PostToolUse Bash hook,
+`reviewer-dispatch-cleanup-hook.ts`, that closes that window without changing
+the official engine:
+
+- a recorded verdict (`engine log review ... --verdict`, answered with
+  `reviewRecord`) removes the record for that same stage and Unit;
+- a new review request removes a record that names a different stage or Unit;
+- a re-request for the same review, a refused or failed call, and an
+  unreadable record leave the file alone.
+
+The hook never blocks and never writes anything else.
+
 ## Safety contract
 
 - Deterministic rules decide every tier, and routing makes no network call.

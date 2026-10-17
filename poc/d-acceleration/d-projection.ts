@@ -47,6 +47,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "read-only-fanout.ts",
   "requirement-ui-cross-validation.ts",
   "resume-ledger.ts",
+  "reviewer-dispatch-cleanup-hook.ts",
   "run.ts",
   "scheduler.ts",
   "stage-policy.json",

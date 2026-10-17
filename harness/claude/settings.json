@@ -166,6 +166,11 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/d-acceleration/d-persistence-hook.ts\" post",
             "timeout": 1800
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/d-acceleration/reviewer-dispatch-cleanup-hook.ts\"",
+            "timeout": 60
           }
         ]
       },
