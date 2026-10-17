@@ -63,11 +63,11 @@ if (command === "init") {
   process.exit(0);
 }
 
-if (["status", "checkpoint", "action-start", "action-finish"].includes(command)) {
+if (["status", "stop", "checkpoint", "action-start", "action-finish"].includes(command)) {
   const forwarded: string[] = [command, "--session-file", sessionFile];
   for (const flag of ["--directive-file", "--action-token"]) { const supplied = value(flag); if (supplied) forwarded.push(flag, supplied); }
   process.stdout.write(`${JSON.stringify(runJson(hostCli, forwarded), null, 2)}\n`);
   process.exit(0);
 }
 
-throw new Error("mode must be start, init, status, checkpoint, action-start, or action-finish");
+throw new Error("mode must be start, init, status, stop, checkpoint, action-start, or action-finish");

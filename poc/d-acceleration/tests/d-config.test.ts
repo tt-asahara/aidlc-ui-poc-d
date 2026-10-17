@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { effectivePngGeneration, parseDJsonc, resolveDAutomation, resolveDClef, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
+import { effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDClef, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -42,6 +42,8 @@ describe("D JSONC configuration", () => {
     expect(resolveDFeatureInputs(root)).toEqual({ requirementIdBridges: [], functionalDesignBudgets: { artifactBytes: 60000, unitBytes: 160000, metadataBytes: 30000 }, sourceRoots: [], specRoots: [] });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, maxSteps: 64, deadlineMs: 900000, labelAllowlist: [] });
+    expect(resolveDAiApproval(root)).toEqual({ mode: "human", minConfidence: 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" });
+    expect(resolveDDecisionIssueSummary(root)).toEqual({ enabled: false, repository: undefined, send: false, maxRetries: 2 });
   });
   test("merges by field and preserves explicit local false", () => {
     const root = project();
@@ -72,7 +74,7 @@ describe("D JSONC configuration", () => {
   test("documents every boolean switch in Japanese with timing and ON/OFF/default behavior", () => {
     const lines = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8").split("\n");
     const switches = lines.flatMap((line, index) => /"([^"]+)"\s*:\s*(true|false)/.test(line) ? [{ index }] : []);
-    expect(switches.length).toBe(14);
+    expect(switches.length).toBe(16);
     for (const entry of switches) {
       const comment = lines.slice(Math.max(0, entry.index - 2), entry.index).join(" ");
       expect(comment).toMatch(/[ぁ-んァ-ヶ一-龠]/);

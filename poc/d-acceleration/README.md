@@ -7,9 +7,10 @@ and downstream handoffs remain active when acceleration is disabled and must
 not be bypassed when it is enabled. See `../ui-poc/` for that baseline.
 
 This proof of concept accelerates routing decisions without weakening AI-DLC's
-approval, review, audit, or Testing Contract boundaries. It is deliberately
-outside `core/`: an install must opt in and call the planner before dispatching
-work through the existing engine directives.
+review, audit, or Testing Contract boundaries. Most of it remains outside
+`core/`; the delegated-AI stage-gate mode adds one explicit core settlement
+seam so AI decisions cannot masquerade as human replies. An install must opt in
+before dispatching work through the existing engine directives.
 
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
@@ -24,6 +25,16 @@ Claude ambiguity assessor lives in `issue-ambiguity-assessor.ts`; policy and
 lifecycle stops live in `issue-autopilot.ts`. It delegates every workflow transition,
 review, sensor, and approval to ordinary `/aidlc`. See `configuration.md` for
 JSONC settings. Setup never enables autopilot without an explicit user request.
+
+For a narrowly delegated PoC, `aiApproval.mode: "stage-gates"` can evaluate
+ordinary stage gates only after their existing review and sensor checks pass.
+Its versioned Intent-local JSONL is the decision source of truth and binds the
+AI actor, reason, delegation, official directive, workflow state, and artifact
+hashes. Scope/routing and Plan Approval remain human stops, as do failed or
+unverified checks and operation, credential, publishing, external, or
+destructive work. The optional GitHub seam generates one summary payload per
+Intent and is default-off; its real CLI publication remains fail-closed until a
+host-bound human permission receipt exists, and it never replaces the repository record.
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification

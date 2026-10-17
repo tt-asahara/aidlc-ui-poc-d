@@ -64,4 +64,19 @@
     // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue、OFFは安全契約違反のため現在も1件に強制。既定値: ON。利用場面: 常時ONを維持する。
     "oneIssuePerRun": true,
   },
+  "aiApproval": {
+    // 対象: 正式review/sensorがREADYになった通常stageの承認gate。役割: 明示的な事前委任を根拠にAIが成果物を判定し、主体・理由・hashを人間承認と区別して記録する。stage-gates時: 許可stageだけ判定、human時: 従来どおり人が承認。既定値: human。境界: scope/route/Plan Approval、summary/skeleton、sensor不合格、未検証、曖昧な危険操作、権限・認証・公開・外部送信・破壊操作は常に人間停止。利用場面: 事前委任された限定PoC。
+    "mode": "human",
+    // 対象: AI工程承認判定。役割: approveに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。
+    "minConfidence": 0.9,
+    "decisionRecordPath": "decisions/ai-approval-decisions.jsonl",
+  },
+  "decisionIssueSummary": {
+    // 対象: IntentごとのAI判断要約。役割: リポジトリ内正本へのリンクを持つGitHub Issue要約を生成する。ON時: ローカルpayload/同期状態を生成、OFF時: GitHub処理なし。既定値: OFF。境界: 正本は常にリポジトリ内記録で、別Issueは自動作成しない。利用場面: チーム共有用のIntent単位要約。
+    "enabled": false,
+    "repository": "owner/repository",
+    // 対象: GitHubへのIssue作成・更新。役割: 外部送信を別途許可する。ON時: 実行時の明示publish許可も必要、OFF時: payload生成のみ。既定値: OFF。利用場面: 投稿先repoと公開許可を利用者が明示した場合だけ。
+    "send": false,
+    "maxRetries": 2,
+  },
 }

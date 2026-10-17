@@ -82,4 +82,11 @@ describe("generic /aidlc --auto controller", () => {
     writeFileSync(join(root, "directive.json"), JSON.stringify({ kind: "run-stage", stage: "requirements-analysis", receipt: "work-2" }));
     expect(JSON.parse(run(root, ["checkpoint", "--directive-file", "directive.json"]).stdout)).toMatchObject({ action: "stop", reason: "max-steps-exceeded" });
   });
+
+  test("stop is wired through the generic controller and prevents resume", () => {
+    const root = fixture({ auto: { enabled: true, sessionOnly: false, maxSteps: 3, deadlineMs: 45000 } });
+    expect(run(root, ["init", "--active-stages", "requirements-analysis"]).status).toBe(0);
+    expect(JSON.parse(run(root, ["stop"]).stdout)).toMatchObject({ action: "stop", reason: "operator-stop", state: { terminalReason: "operator-stop" } });
+    expect(JSON.parse(run(root, ["status"]).stdout)).toMatchObject({ active: false, state: { terminalReason: "operator-stop" } });
+  });
 });

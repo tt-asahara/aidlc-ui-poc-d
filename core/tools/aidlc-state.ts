@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -6076,6 +6077,132 @@ function approvesTogetherFlag(args: string[], content: string, slug: string): st
   return listed;
 }
 
+type DelegatedAiDecision = { auditFields: Record<string, string> };
+function delegatedAiDeniedStage(slug: string): boolean {
+  return /(?:^|[-_])(operation|deployment|deploy|production|release|external|publish|auth|authentication|authorization|destructive)(?:$|[-_])/i.test(slug);
+}
+function explicitlyDelegatesAiApproval(words: string): boolean {
+  return /(?:\bai\b|人工知能)/i.test(words) &&
+    /(?:承認|approval)/i.test(words) &&
+    /(?:委任|任せ|delegate|delegation|decide)/i.test(words);
+}
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+  const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unexpected.length) error(`${label} has unexpected fields: ${unexpected.join(", ")}`);
+}
+function canonicalDecisionJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalDecisionJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().filter((key) => object[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalDecisionJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function confinedDecisionFile(pd: string, recordRoot: string, relativePath: string, label: string): { path: string; bytes: Buffer } {
+  if (!relativePath || isAbsolute(relativePath)) error(`${label} path must be relative to PRODUCT`);
+  const requested = resolvePath(pd, relativePath);
+  if (relative(pd, requested).startsWith(`..${sep}`) || relative(pd, requested) === "..") error(`${label} escapes PRODUCT`);
+  let metadata;
+  try { metadata = lstatSync(requested); } catch { error(`${label} does not exist`); }
+  if (!metadata!.isFile() || metadata!.isSymbolicLink()) error(`${label} must be a regular non-symlink file`);
+  const actual = realpathSync(requested);
+  if (relative(recordRoot, actual).startsWith(`..${sep}`) || relative(recordRoot, actual) === "..") error(`${label} must be inside the active Intent record`);
+  return { path: actual, bytes: readFileSync(actual) };
+}
+function readDelegatedAiDecision(
+  pd: string,
+  content: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+  decisionPath: string,
+): DelegatedAiDecision {
+  const intent = activeIntent(pd);
+  if (!intent) error("Delegated AI approval requires one active Intent");
+  const recordRoot = realpathSync(join(pd, "aidlc", "spaces", activeSpace(pd), "intents", intent));
+  const decisionFile = confinedDecisionFile(pd, recordRoot, decisionPath, "AI decision record");
+  if (decisionFile.bytes.length > 262_144) error("AI decision record exceeds 262144 bytes");
+  let raw: unknown;
+  try { raw = JSON.parse(decisionFile.bytes.toString("utf8")); } catch { error("AI decision record is not valid JSON"); }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) error("AI decision record must be an object");
+  const decision = raw as Record<string, unknown>;
+  exactKeys(decision, ["schemaVersion", "decisionId", "actor", "outcome", "stage", "reason", "confidence", "directiveSha256", "stateSha256", "delegation", "evidence", "riskFlags", "uncertainties", "createdAt"], "AI decision record");
+  if (decision.schemaVersion !== 1 || decision.actor !== "ai" || decision.outcome !== "approve" || decision.stage !== stage.slug) error("AI decision record does not authorize this stage approval");
+  for (const key of ["decisionId", "reason", "directiveSha256", "stateSha256", "createdAt"] as const) if (typeof decision[key] !== "string" || !String(decision[key]).trim()) error(`AI decision record requires ${key}`);
+  for (const key of ["decisionId", "directiveSha256", "stateSha256"] as const) if (!/^[0-9a-f]{64}$/.test(String(decision[key]))) error(`AI decision record ${key} must be sha256`);
+  if (decision.stateSha256 !== sha256(content)) error("AI decision record is stale for the current workflow state");
+  if (typeof decision.confidence !== "number" || !Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1) error("AI decision confidence is invalid");
+  if (!Array.isArray(decision.riskFlags) || decision.riskFlags.length || !Array.isArray(decision.uncertainties) || decision.uncertainties.length) error("AI decision approval must have no risk flags or unresolved uncertainties");
+  const delegation = decision.delegation;
+  if (!delegation || typeof delegation !== "object" || Array.isArray(delegation)) error("AI decision requires delegation evidence");
+  const delegationObject = delegation as Record<string, unknown>;
+  exactKeys(delegationObject, ["path", "sha256", "messageId"], "AI delegation binding");
+  if (typeof delegationObject.path !== "string" || typeof delegationObject.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(delegationObject.sha256) || typeof delegationObject.messageId !== "string" || !delegationObject.messageId.trim()) error("AI delegation binding is invalid");
+  const grantFile = confinedDecisionFile(pd, recordRoot, delegationObject.path, "AI delegation evidence");
+  if (createHash("sha256").update(grantFile.bytes).digest("hex") !== delegationObject.sha256) error("AI delegation evidence hash changed");
+  let grantRaw: unknown;
+  try { grantRaw = JSON.parse(grantFile.bytes.toString("utf8")); } catch { error("AI delegation evidence is not valid JSON"); }
+  if (!grantRaw || typeof grantRaw !== "object" || Array.isArray(grantRaw)) error("AI delegation evidence must be an object");
+  const grant = grantRaw as Record<string, unknown>;
+  exactKeys(grant, ["schemaVersion", "mode", "messageId", "userMessage", "userMessageSha256", "requestSha256", "scope", "through", "allowedStages", "minConfidence"], "AI delegation evidence");
+  if (grant.schemaVersion !== 1 || grant.mode !== "stage-gates" || grant.messageId !== delegationObject.messageId || typeof grant.userMessage !== "string" || !grant.userMessage.trim() || typeof grant.userMessageSha256 !== "string" || grant.userMessageSha256 !== sha256(grant.userMessage)) error("AI delegation evidence is invalid or self-inconsistent");
+  if (typeof grant.requestSha256 !== "string" || !/^[0-9a-f]{64}$/.test(grant.requestSha256) || typeof grant.scope !== "string" || grant.scope !== getField(content, "Scope") || (grant.through !== null && typeof grant.through !== "string") || !Array.isArray(grant.allowedStages) || !grant.allowedStages.every((value) => typeof value === "string") || !grant.allowedStages.includes(stage.slug) || typeof grant.minConfidence !== "number" || !Number.isFinite(grant.minConfidence) || grant.minConfidence < 0 || grant.minConfidence > 1 || Number(decision.confidence) < grant.minConfidence) error("AI delegation evidence does not cover this scope, stage, or confidence");
+  const expectedRequestSha = sha256(canonicalDecisionJson({
+    allowedStages: grant.allowedStages,
+    messageId: grant.messageId,
+    minConfidence: grant.minConfidence,
+    mode: grant.mode,
+    scope: grant.scope,
+    through: grant.through,
+    userMessage: grant.userMessage,
+    userMessageSha256: grant.userMessageSha256,
+  }));
+  if (grant.requestSha256 !== expectedRequestSha) error("AI delegation request hash does not bind the grant fields");
+  if (typeof grant.through === "string") {
+    const phases = ["initialization", "ideation", "inception", "construction", "operation"];
+    const boundaryStage = findStageBySlug(grant.through);
+    const boundaryPhase = boundaryStage?.phase ?? grant.through;
+    const currentIndex = phases.indexOf(stage.phase);
+    const boundaryIndex = phases.indexOf(boundaryPhase);
+    if (currentIndex < 0 || boundaryIndex < 0 || currentIndex > boundaryIndex) error("AI delegation through boundary does not cover this stage");
+  }
+  if (!humanPresenceGuardDisabled()) {
+    const latestTurn = latestPersonTurn(pd);
+    if (!latestTurn || latestTurn.words !== grant.userMessage || !explicitlyDelegatesAiApproval(grant.userMessage)) {
+      error("AI delegation is not an explicit approval delegation backed by the latest host-recorded human turn");
+    }
+  }
+  if (stage.phase === "operation" || delegatedAiDeniedStage(stage.slug)) {
+    error("Delegated AI approval cannot authorize operation, publish, authentication, external, or destructive stages");
+  }
+  if (!Array.isArray(decision.evidence) || decision.evidence.length === 0) error("AI decision requires hashed artifact evidence");
+  for (const row of decision.evidence) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) error("AI decision evidence row is invalid");
+    const evidence = row as Record<string, unknown>;
+    exactKeys(evidence, ["path", "sha256"], "AI decision evidence row");
+    if (typeof evidence.path !== "string" || typeof evidence.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(evidence.sha256)) error("AI decision evidence row is invalid");
+    const artifact = confinedDecisionFile(pd, recordRoot, evidence.path, "AI decision artifact evidence");
+    if (createHash("sha256").update(artifact.bytes).digest("hex") !== evidence.sha256) error(`AI decision artifact changed: ${evidence.path}`);
+  }
+  const expectedDecisionId = sha256(canonicalDecisionJson({
+    schemaVersion: 1,
+    directiveSha256: decision.directiveSha256,
+    stage: decision.stage,
+    stateSha256: decision.stateSha256,
+    delegationSha256: delegationObject.sha256,
+    evidence: decision.evidence,
+  }));
+  if (decision.decisionId !== expectedDecisionId) error("AI decision ID does not bind the decision inputs");
+  return { auditFields: {
+    "Decision Actor": "AI",
+    "Decision Authority": "explicit user delegation",
+    "Decision Record": relative(pd, decisionFile.path),
+    "Decision SHA256": createHash("sha256").update(decisionFile.bytes).digest("hex"),
+    "Decision ID": String(decision.decisionId),
+    "Delegation Evidence SHA256": String(delegationObject.sha256),
+    "Delegation Message ID": String(delegationObject.messageId),
+    "Decision Reason": String(decision.reason),
+  } };
+}
+
 // approve <slug> [--user-input <exact-choice>]
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
@@ -6091,9 +6218,10 @@ function verifyApprovalDecision(
   userInput?: string,
   forceHuman = false,
   unit?: string,
-): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string } | null } {
+  delegatedAiDecision?: DelegatedAiDecision,
+): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string } | null; delegatedAiDecision?: DelegatedAiDecision } {
   const autonomousDecision =
-    !forceHuman && isAutonomousConstructionGate(content, stage, pd);
+    !forceHuman && (delegatedAiDecision !== undefined || isAutonomousConstructionGate(content, stage, pd));
   let approvalInput = userInput?.trim();
   // A later stage the person's one approval listed stands on that reply.
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
@@ -6166,18 +6294,19 @@ function verifyApprovalDecision(
       { personDecided: true },
     );
   }
-  return { approvalInput, autonomousDecision, together };
+  return { approvalInput, autonomousDecision, together, ...(delegatedAiDecision ? { delegatedAiDecision } : {}) };
 }
 
 function handleApprove(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>]");
   const slug = args[0];
-  const { userInput } = parseApproveFlags(args.slice(1));
+  const { userInput, aiDecisionFile } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
   const preflightContent = readStateFile(pd);
   const preflightStage = findStageBySlug(slug);
   if (!preflightStage) error(`Unknown stage: ${slug}`);
+  const preflightAiDecision = aiDecisionFile ? readDelegatedAiDecision(pd, preflightContent, preflightStage, aiDecisionFile) : undefined;
   const preflightTeamGate = teamGateContext(
     preflightContent,
     preflightStage,
@@ -6193,6 +6322,7 @@ function handleApprove(args: string[]): void {
     userInput,
     preflightTeamGate !== null,
     preflightTeamGate?.unit,
+    preflightAiDecision,
   );
   if (preflightTeamGate) {
     admitStageAction(pd, preflightContent, preflightStage, {
@@ -6244,13 +6374,15 @@ function handleApprove(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, "awaiting-approval");
   }
-  const { approvalInput, autonomousDecision, together } = verifyApprovalDecision(
+  const lockedAiDecision = aiDecisionFile ? readDelegatedAiDecision(pd, content, stage, aiDecisionFile) : undefined;
+  const { approvalInput, autonomousDecision, together, delegatedAiDecision } = verifyApprovalDecision(
     pd,
     content,
     stage,
     userInput,
     teamGate !== null,
     teamGate?.unit,
+    lockedAiDecision,
   );
 
   if (teamGate) {
@@ -6467,6 +6599,7 @@ function handleApprove(args: string[]): void {
   // downstream advance/complete-workflow fails.
   try {
     const gateFields: Record<string, string> = { Stage: slug };
+    if (delegatedAiDecision) Object.assign(gateFields, delegatedAiDecision.auditFields);
     if (approvalInput) gateFields["User Input"] = approvalInput;
     if (together) {
       // The person's one reply at the first listed stage approves this one too.
@@ -6484,7 +6617,7 @@ function handleApprove(args: string[]): void {
     emitAudit(pd, "STAGE_COMPLETED", {
       Stage: slug,
       ...validationFields,
-      Details: `Stage ${stage.name} approved by gate`,
+      Details: delegatedAiDecision ? `Stage ${stage.name} approved by delegated AI gate` : `Stage ${stage.name} approved by gate`,
       ...usageFields,
     });
   } catch (e) {
@@ -6570,9 +6703,10 @@ function getFlagValues(args: string[], flag: string): string[] {
 }
 
 // Flag parser for approve — handles --user-input (value).
-function parseApproveFlags(args: string[]): { userInput?: string } {
+function parseApproveFlags(args: string[]): { userInput?: string; aiDecisionFile?: string } {
   return {
     userInput: getFlagValue(args, "--user-input"),
+    aiDecisionFile: getFlagValue(args, "--ai-decision-file"),
   };
 }
 

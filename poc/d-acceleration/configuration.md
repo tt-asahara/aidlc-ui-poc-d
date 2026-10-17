@@ -27,6 +27,18 @@ Issueと安定した一般知識だけから得た事実を台帳へ渡します
 必要な点は未解決のままです。モデル不可、timeout、余分なapproval fieldを含む不正schemaは
 intent作成前にfail-closedで停止し、approval recordを作成しません。
 
+`aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任を
+hash-bound grantとしてactive Intentへ保存した限定実行でだけ通常stage gateをAI判定します。
+判定正本は `decisionRecordPath` のversioned JSONLで、決定主体、理由、公式directive、
+workflow state、委任証拠、成果物のSHA-256を結合します。scope/route/Plan Approval、
+summary/skeleton、operation、sensor/reviewer不合格、未検証・不確実・外部/公開/認証/権限/
+破壊操作は委任対象外で停止します。AI判定は `HUMAN_TURN` や人間の `User Input` を作りません。
+
+`decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
+既定OFFの機能です。現在のCLIはローカルpayload生成だけを許可し、host由来の人間permission
+receiptが未実装のため外部送信をfail-closedで拒否します。fake adapterではpending receiptを検索・照合してから同じIssueを更新し、
+未解決事項の別Issueを自動作成しません。
+
 全boolean切替の直前には、日本語で対象stageまたは実行時点、役割、ON/OFF時の
 挙動、既定値、利用場面、親スイッチや別コマンド依存を記載しています。setupが
 配布する `.claude/tools/d-acceleration/d-acceleration.example.jsonc` はこのひな形と

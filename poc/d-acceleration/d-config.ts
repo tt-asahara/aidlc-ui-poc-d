@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 
 export type DModelTier = "fast" | "balanced" | "judgment";
@@ -10,12 +10,14 @@ export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesign
 export type DAmbiguityPolicy = "halt" | "assume" | "research";
 export type DAutomationConfig = { enabled: boolean; through?: string; sessionOnly: boolean; ambiguityPolicy: DAmbiguityPolicy; assumptionLedger: boolean; maxRetries: number; maxSteps: number; deadlineMs: number; labelAllowlist: string[] };
 export type DIssueAutopilotConfig = { enabled: boolean; oneIssuePerRun: boolean };
+export type DAiApprovalConfig = { mode: "human" | "stage-gates"; minConfidence: number; decisionRecordPath: string };
+export type DDecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type DFeatureInputs = { requirementIdBridges: Array<{ uiAc: string; officialId: string }>; functionalDesignBudgets: { artifactBytes: number; unitBytes: number; metadataBytes: number }; sourceRoots: string[]; specRoots: string[] };
-export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig };
+export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig };
 export const DEFAULT_D_MODEL = "opus";
 export const DEFAULT_CLEF_URL = "http://127.0.0.1:18742";
 
-type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig> };
+type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig> };
 
 /** Parse JSONC without changing comment-like text inside strings. */
 export function parseDJsonc(source: string, path = "D configuration"): unknown {
@@ -88,7 +90,19 @@ function readConfig(path: string): DFileConfig {
   if (auto) { for (const key of ["enabled", "sessionOnly", "assumptionLedger"] as const) bool(auto[key], `auto ${key}`, path); if (auto.through !== undefined && (typeof auto.through !== "string" || (!OFFICIAL_STAGES.has(auto.through) && !OFFICIAL_PHASES.has(auto.through)))) throw new Error(`invalid D auto through in ${path}`); if (auto.ambiguityPolicy !== undefined && !["halt", "assume", "research"].includes(String(auto.ambiguityPolicy))) throw new Error(`invalid D auto ambiguityPolicy in ${path}`); if (auto.maxRetries !== undefined && (!Number.isSafeInteger(auto.maxRetries) || Number(auto.maxRetries) < 0 || Number(auto.maxRetries) > 10)) throw new Error(`invalid D auto maxRetries in ${path}`); if (auto.maxSteps !== undefined && (!Number.isSafeInteger(auto.maxSteps) || Number(auto.maxSteps) < 1 || Number(auto.maxSteps) > 1000)) throw new Error(`invalid D auto maxSteps in ${path}`); if (auto.deadlineMs !== undefined && (!Number.isSafeInteger(auto.deadlineMs) || Number(auto.deadlineMs) < 1000 || Number(auto.deadlineMs) > 86_400_000)) throw new Error(`invalid D auto deadlineMs in ${path}`); strings(auto.labelAllowlist, "auto labelAllowlist", path); }
   const issueAutopilot = object(value.issueAutopilot, "issue autopilot", path);
   if (issueAutopilot) for (const key of ["enabled", "oneIssuePerRun"] as const) bool(issueAutopilot[key], `issue autopilot ${key}`, path);
-  return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig> };
+  const aiApproval = object(value.aiApproval, "AI approval", path);
+  if (aiApproval) {
+    if (aiApproval.mode !== undefined && !["human", "stage-gates"].includes(String(aiApproval.mode))) throw new Error(`invalid D AI approval mode in ${path}`);
+    if (aiApproval.minConfidence !== undefined && (typeof aiApproval.minConfidence !== "number" || !Number.isFinite(aiApproval.minConfidence) || aiApproval.minConfidence < 0 || aiApproval.minConfidence > 1)) throw new Error(`invalid D AI approval minConfidence in ${path}`);
+    if (aiApproval.decisionRecordPath !== undefined && (typeof aiApproval.decisionRecordPath !== "string" || !aiApproval.decisionRecordPath.trim() || isAbsolute(aiApproval.decisionRecordPath))) throw new Error(`invalid D AI approval decisionRecordPath in ${path}`);
+  }
+  const decisionIssueSummary = object(value.decisionIssueSummary, "decision Issue summary", path);
+  if (decisionIssueSummary) {
+    for (const key of ["enabled", "send"] as const) bool(decisionIssueSummary[key], `decision Issue summary ${key}`, path);
+    if (decisionIssueSummary.repository !== undefined && (typeof decisionIssueSummary.repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(decisionIssueSummary.repository))) throw new Error(`invalid D decision Issue summary repository in ${path}`);
+    if (decisionIssueSummary.maxRetries !== undefined && (!Number.isSafeInteger(decisionIssueSummary.maxRetries) || Number(decisionIssueSummary.maxRetries) < 0 || Number(decisionIssueSummary.maxRetries) > 5)) throw new Error(`invalid D decision Issue summary maxRetries in ${path}`);
+  }
+  return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig> };
 }
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
   const directory = join(projectDir, ".claude");
@@ -109,5 +123,7 @@ export function effectivePngGeneration(features: DFeatureFlags): boolean { retur
 export function resolveDFeatureInputs(projectDir: string): DFeatureInputs { const { project, local } = layers(projectDir), base = project.featureInputs ?? {}, override = local.featureInputs ?? {}, baseBudget = base.functionalDesignBudgets ?? {}, overrideBudget = override.functionalDesignBudgets ?? {}; return { requirementIdBridges: override.requirementIdBridges ?? base.requirementIdBridges ?? [], functionalDesignBudgets: { artifactBytes: overrideBudget.artifactBytes ?? baseBudget.artifactBytes ?? 60_000, unitBytes: overrideBudget.unitBytes ?? baseBudget.unitBytes ?? 160_000, metadataBytes: overrideBudget.metadataBytes ?? baseBudget.metadataBytes ?? 30_000 }, sourceRoots: override.sourceRoots ?? base.sourceRoots ?? [], specRoots: override.specRoots ?? base.specRoots ?? [] }; }
 export function resolveDAutomation(projectDir: string): DAutomationConfig { const { project, local } = layers(projectDir), base = project.auto ?? {}, override = local.auto ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, through: override.through?.trim() ?? base.through?.trim(), sessionOnly: override.sessionOnly ?? base.sessionOnly ?? true, ambiguityPolicy: override.ambiguityPolicy ?? base.ambiguityPolicy ?? "halt", assumptionLedger: override.assumptionLedger ?? base.assumptionLedger ?? true, maxRetries: override.maxRetries ?? base.maxRetries ?? 2, maxSteps: override.maxSteps ?? base.maxSteps ?? 64, deadlineMs: override.deadlineMs ?? base.deadlineMs ?? 900_000, labelAllowlist: override.labelAllowlist ?? base.labelAllowlist ?? [] }; }
 export function resolveDIssueAutopilot(projectDir: string): DIssueAutopilotConfig { const { project, local } = layers(projectDir), base = project.issueAutopilot ?? {}, override = local.issueAutopilot ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, oneIssuePerRun: override.oneIssuePerRun ?? base.oneIssuePerRun ?? true }; }
-export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir) }; }
+export function resolveDAiApproval(projectDir: string): DAiApprovalConfig { const { project, local } = layers(projectDir), base = project.aiApproval ?? {}, override = local.aiApproval ?? {}; return { mode: override.mode ?? base.mode ?? "human", minConfidence: override.minConfidence ?? base.minConfidence ?? 0.9, decisionRecordPath: (override.decisionRecordPath ?? base.decisionRecordPath ?? "decisions/ai-approval-decisions.jsonl").trim() }; }
+export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssueSummaryConfig { const { project, local } = layers(projectDir), base = project.decisionIssueSummary ?? {}, override = local.decisionIssueSummary ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, repository: override.repository?.trim() ?? base.repository?.trim(), send: override.send ?? base.send ?? false, maxRetries: override.maxRetries ?? base.maxRetries ?? 2 }; }
+export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir) }; }
 export function clefRunnerArgs(config: DClefConfig): string[] { return config.enabled ? ["--clef-url", config.url, ...(config.lowRiskUnits.length ? ["--clef-low-risk-units", config.lowRiskUnits.join(",")] : [])] : []; }

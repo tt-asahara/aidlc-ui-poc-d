@@ -87,6 +87,38 @@ status` and `/aidlc --auto stop` retain the shared status/stop route above. Thes
 controls bound host continuation; they never report a stage, approve a gate, or
 replace the official reviewer or sensors.
 
+When `aiApproval.mode` resolves to `stage-gates`, do not turn every `ask` into
+yes. Scope confirmation, composition/routing, intent selection, project type,
+Plan Approval, summary confirmation, walking skeleton, verification command,
+policy/autonomy, failure/recovery, and sensor override remain human stops. The
+only delegated seam is a fresh official `present-gate` for an ordinary stage.
+It is usable only after the person explicitly delegated stage decisions for
+this bounded request and the active Intent contains the grant produced by
+`ai-approval-controller.ts grant`; configuration alone is never authority.
+
+Save the person's exact delegation words to a fresh project-confined file and
+run the grant command with their message id, confirmed scope, configured
+through boundary, and the exact active non-operation stage slugs. Delete only
+that temporary words file after a successful grant. For each `present-gate`,
+save the exact directive JSON and invoke `ai-approval-controller.ts evaluate`
+with the grant plus every declared stage artifact and the fresh reviewer/sensor
+evidence. If any required path cannot be enumerated, stop. A `block` result is
+a human stop. An `approve` result carries fixed `generatedCommandArgs`; run
+those arguments through `{{INVOKE}} engine state` without adding `--user-input`,
+then resume official `orchestrate next`. The core rechecks the
+state, grant, scope, stage, confidence, and every artifact hash immediately
+before settlement. The audit records `Decision Actor: AI`; never create a
+`HUMAN_TURN`, quote the model as the person's words, or use a human-presence
+break-glass switch. Set `AIDLC_UNATTENDED=1` for the automated driver so hooks
+cannot mint authority from its own prompts.
+
+The versioned Intent-local decision JSONL is the source of truth. Optional
+`decision-issue-summary.ts generate` produces one Issue payload per Intent.
+Its CLI deliberately refuses `publish` until a host-bound human permission
+receipt exists. Use `generate` only; never bypass that refusal or infer GitHub
+publication from auto or AI-approval mode, and never create separate Issues for
+each unresolved item.
+
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
 ```

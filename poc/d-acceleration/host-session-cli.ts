@@ -161,6 +161,15 @@ if (mode === "status") {
   process.exit(0);
 }
 
+if (mode === "stop") {
+  if (!existsSync(path)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "no-session", state: null })}\n`); process.exit(0); }
+  mkdirSync(dirname(issueAutopilotRuntimePaths(projectDir).stop), { recursive: true });
+  writeFileSync(issueAutopilotRuntimePaths(projectDir).stop, "stop\n", { mode: 0o600 });
+  const recovery = await recoverLifecycle();
+  process.stdout.write(`${JSON.stringify({ action: "stop", reason: recovery.state?.terminalReason ?? recovery.recoveredReason ?? "operator-stop", state: recovery.state })}\n`);
+  process.exit(0);
+}
+
 if (mode === "heartbeat-worker") {
   const token = value("--action-token");
   if (!token) throw new Error("heartbeat-worker requires --action-token");
@@ -233,7 +242,7 @@ if (mode === "action-finish") {
   process.stdout.write(`${JSON.stringify(finished ?? { action: "stop", reason: "lifecycle-busy", state })}\n`); process.exit(0);
 }
 
-if (mode !== "checkpoint") throw new Error("mode must be init, status, checkpoint, action-start, or action-finish");
+if (mode !== "checkpoint") throw new Error("mode must be init, status, stop, checkpoint, action-start, or action-finish");
 const directiveFile = value("--directive-file");
 if (!directiveFile) throw new Error("checkpoint requires --directive-file");
 const directivePath = resolve(projectDir, directiveFile);

@@ -869,11 +869,13 @@ function buildTree(
     const accelerationRoot = join(REPO_ROOT, "poc", "d-acceleration");
     const accelerationRuntime = [
       "aidlc-acceleration-plan.ts",
+      "ai-approval-controller.ts",
       "conductor.ts",
       "d-config.ts",
       "d-acceleration.example.jsonc",
       "d-persistence-hook.ts",
       "d-persistence.ts",
+      "decision-issue-summary.ts",
       "fake-worker.ts",
       "functional-design-discipline.ts",
       "d-feature-checks.ts",
