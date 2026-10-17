@@ -911,6 +911,12 @@ function buildTree(
         throw new Error(`[claude] D acceleration runtime source is missing: ${file}`);
       }
       const destination = join(treeRoot, "tools", "d-acceleration", file);
+      // D lives only in its own tools/d-acceleration/ subtree; core/ stays
+      // byte-identical to upstream, so a D file may never land on a path the
+      // core projection already wrote.
+      if (existsSync(destination)) {
+        throw new Error(`[claude] D acceleration runtime would overwrite a projected core file: ${destination}`);
+      }
       mkdirSync(dirname(destination), { recursive: true });
       if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "ai-question-controller.ts" || file === "question-wait.ts") {
         const projected = readFileSync(source, "utf8")
