@@ -134,6 +134,20 @@ the official engine:
 
 The hook never blocks and never writes anything else.
 
+## Blocking sensor override guidance
+
+The official engine accepts a blocking-sensor override only when its exact
+decision row (`Blocking gate sensor failure`, options
+`Fix findings,Override blocking sensors`) is recorded before the person's reply
+and the answer after it. A decision or answer recorded after the reply is
+refused with "no fresh authorization receipt", and recording again cannot
+repair that reply. The Claude projection adds a PostToolUse Bash hook,
+`blocking-sensor-override-hook.ts`: when an engine command surfaces a blocking
+sensor failure or that refusal, it adds one context line with the exact ordered
+commands for that stage (decision, the two choices, the person's reply, answer,
+report with `--override-blocking-sensors`). It reads the wording from the
+official constants, records nothing, and decides nothing.
+
 ## Safety contract
 
 - Deterministic rules decide every tier, and routing makes no network call.

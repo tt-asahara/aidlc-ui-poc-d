@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
-const { check, contracts } = require('./ui-poc-evidence.cjs');
+const { check, contracts, engineFor } = require('./ui-poc-evidence.cjs');
 const { verify } = require('./ui-poc-c-routing.cjs');
 
 function args(argv) {
@@ -22,6 +22,12 @@ async function main(argv) {
     const parsed = args(argv), stage = parsed['--stage'], outputPath = parsed['--output-path'];
     if (!stage || !outputPath) throw Error('Invalid arguments');
     const root = dirname(resolve(outputPath));
+    // tools/ui-poc/scope-evidence.json can declare this sensor off for a scope.
+    const engine = engineFor(outputPath, stage);
+    if (engine.policy.sensor === 'off') {
+      console.log(JSON.stringify({pass:true,findings_count:0,findings:[],notApplicable:`UI evidence is off for scope ${engine.scope}`}));
+      return;
+    }
     if (Object.hasOwn(contracts, stage)) {
       let imageFeatures = {};
       const configModule = resolve(dirname(fileURLToPath(import.meta.url)), 'd-acceleration', 'd-config.ts');
@@ -32,7 +38,7 @@ async function main(argv) {
         // mockupPngGeneration/visualRegression as OFF.
         throw Error('D configuration is present but the D config resolver is not installed beside this sensor; PNG/visual settings cannot be resolved');
       }
-      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'});
+      const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures,engine,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'});
       findings.push(...evidence.findings);
     }
     const factsPath = resolve(root, 'ui-poc-routing-facts.json');

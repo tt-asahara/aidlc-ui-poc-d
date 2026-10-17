@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const fidelity = require('./ui-poc-fidelity.cjs');
 const matrix = require('./ui-poc-element-matrix.cjs');
+const {engineRecord} = require('./ui-poc-c-routing.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const contracts = {
   'rough-mockups': 'ui-poc-rough-contract.md',
@@ -20,12 +21,34 @@ function boundedFile(root, rel) {
   if (!resolved.startsWith(rootReal + path.sep) || !fs.statSync(resolved).isFile()) throw Error('Evidence escapes contract directory or is not a file');
   return fs.readFileSync(resolved);
 }
-function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false}, seen = new Set(), contractName = contracts[stage], depth = 0) {
+const policyPath = path.join(__dirname, 'ui-poc', 'scope-evidence.json');
+const POLICY_VALUES = {sensor:['on','off'], upstreamApproval:['ledger','engine-record']};
+/** The configured evidence policy for an engine scope; an unlisted scope gets the strict default. */
+function scopePolicy(scope) {
+  const strict = {sensor:'on', upstreamApproval:'ledger'};
+  if (!fs.existsSync(policyPath)) return strict;
+  const cfg = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+  const policy = scope && Object.hasOwn(cfg.scopes || {}, scope) ? cfg.scopes[scope] : cfg.default;
+  if (cfg.schema !== 1 || !policy || Object.entries(POLICY_VALUES).some(([key, values]) => !values.includes(policy[key]))) throw Error('Invalid UI evidence scope policy: ' + policyPath);
+  return {sensor:policy.sensor, upstreamApproval:policy.upstreamApproval};
+}
+/** Record facts for the dispatched output; outside an engine record the strict default applies. */
+function engineFor(outputPath, stage) {
+  let record = {recordRoot:null, unit:null, scope:null};
+  try { record = engineRecord(outputPath, stage); } catch {}
+  return {recordRoot:record.recordRoot, unit:record.unit, scope:record.scope, policy:scopePolicy(record.scope)};
+}
+function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false, engine}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
   try {
     if (!Object.hasOwn(contracts, stage)) throw Error('Unsupported stage');
     if (!outputPath || !fs.statSync(outputPath).isFile()) throw Error('Declared deliverable is missing');
     const root = path.dirname(path.resolve(outputPath));
+    engine ??= engineFor(outputPath, stage);
+    if (engine.policy.sensor === 'off') return {pass:true, findings_count:0, findings:[], notApplicable:`UI evidence is off for scope ${engine.scope}`};
+    // A Construction Unit carries the slice of the intent-level refined
+    // inventory that its unit owns; everything else stays an exact handoff.
+    const unitSlice = engine.unit !== null && ['functional-design','code-generation'].includes(stage);
     // Functional Design is per unit and the core marks frontend-components as
     // the UI-kind artifact. A unit with neither that artifact nor a UI contract
     // is a non-UI unit; any UI unit (or any contract) is fully checked, and
@@ -74,7 +97,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       if (wantsPng && (!approved.png || !assets.has(approved.png.path) || assets.get(approved.png.path).sha256 !== approved.png.sha256)) throw Error('Enabled PNG evidence is missing or not bound to the approved snapshot');
       const requiredStates = new Set(c.mappings.map(mapping => `${mapping.screen}/${mapping.state}`));
       const capturedStates = new Set(approved.captures.map(capture => `${capture.screen}/${capture.state}`));
-      if (requiredStates.size !== capturedStates.size || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
+      if ((!unitSlice && requiredStates.size !== capturedStates.size) || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
       const dispositions = c.fidelity.dispositions || [];
       if (!Array.isArray(dispositions)) throw Error('Fidelity dispositions must be an array');
       const readAsset = ref => JSON.parse(boundedFile(root, ref.path).toString('utf8'));
@@ -119,9 +142,9 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           if (fidelity.canonical(fd.fidelity?.dispositions || []) !== fidelity.canonical(dispositions)) throw Error('UI dispositions changed after Functional Design approval');
           if (JSON.stringify(fd.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Functional Design mapping inventory differs');
           const fdPath = fs.realpathSync(path.join(root, fdRef.path));
-          const inheritedFd = check({stage:'functional-design',outputPath:fdPath,approvalLedger,imageFeatures,allowLegacySchema1}, new Set(seen), path.basename(fdPath), depth + 1);
+          const inheritedFd = check({stage:'functional-design',outputPath:fdPath,approvalLedger,imageFeatures,allowLegacySchema1,engine}, new Set(seen), path.basename(fdPath), depth + 1);
           if (!inheritedFd.pass) throw Error('Invalid Functional Design evidence: ' + inheritedFd.findings.join('; '));
-          requireApproval(approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings});
+          requireUpstreamApproval(engine, approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings});
         }
         if (stage === 'build-and-test') {
           const testRef = boundAsset(c.fidelity.elementTestMatrix, 'element-level Build and Test matrix (fidelity.elementTestMatrix)');
@@ -154,21 +177,45 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       const upstreamBlocks = [...upstreamBytes.toString('utf8').matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
       if (upstreamBlocks.length !== 1) throw Error('Invalid upstream contract block');
       const parent = JSON.parse(upstreamBlocks[0][1]);
-      if (![1,2].includes(parent.schema) || parent.schema !== c.schema || parent.stage !== prior || parent.arm !== c.arm || JSON.stringify(parent.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Upstream contract identity or inventory differs');
+      if (![1,2].includes(parent.schema) || parent.schema !== c.schema || parent.stage !== prior || parent.arm !== c.arm || !Array.isArray(parent.requiredMappings)) throw Error('Upstream contract identity differs');
+      const inventoryMatches = unitSlice && prior === 'refined-mockups'
+        ? c.requiredMappings.every(key => parent.requiredMappings.includes(key))
+        : JSON.stringify(parent.requiredMappings) === JSON.stringify(c.requiredMappings);
+      if (!inventoryMatches) throw Error(unitSlice ? `Unit ${engine.unit} maps a screen/state/AC the upstream contract does not` : 'Upstream contract inventory differs');
       if (c.schema === 2) {
         if (parent.fidelity?.approvedSnapshot?.sha256 !== c.fidelity?.approvedSnapshot?.sha256) throw Error('Approved semantic snapshot changed across the handoff');
         if (stage === 'build-and-test' && fidelity.canonical(parent.fidelity?.dispositions || []) !== fidelity.canonical(c.fidelity?.dispositions || [])) throw Error('Approved UI dispositions changed after code-generation approval');
         if (stage === 'build-and-test' && parent.fidelity?.elementRuleMatrix?.sha256 !== c.fidelity?.elementRuleMatrix?.sha256) throw Error('Element rule matrix changed after code-generation approval');
       }
       const upstreamPath = fs.realpathSync(path.join(root, c.upstream.path));
-      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures,allowLegacySchema1}, new Set(seen), path.basename(upstreamPath), depth + 1);
+      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures,allowLegacySchema1,engine}, new Set(seen), path.basename(upstreamPath), depth + 1);
       if (!inherited.pass) throw Error('Invalid upstream evidence: ' + inherited.findings.join('; '));
-      requireApproval(approvalLedger, root, {sha256:c.upstream.sha256,stage:prior,arm:c.arm,requiredMappings:c.requiredMappings});
+      requireUpstreamApproval(engine, approvalLedger, root, {sha256:c.upstream.sha256,stage:prior,arm:c.arm,requiredMappings:parent.requiredMappings});
     }
   } catch (e) { findings.push(e.message); }
   return {pass: findings.length === 0, findings_count: findings.length, findings};
 }
 /** One owner for "this upstream contract carries the person's recorded approval". */
+function requireUpstreamApproval(engine, approvalLedger, root, approval) {
+  if (engine.policy.upstreamApproval === 'engine-record') requireEngineRecord(engine, approval);
+  else requireApproval(approvalLedger, root, approval);
+}
+/**
+ * In an engine-record scope the official stage gate owns approval, so the
+ * upstream copy must be byte-identical to the contract the engine record holds
+ * for that stage: refined mockups at the intent level, Construction stages in
+ * this Unit's directory.
+ */
+function requireEngineRecord(engine, {sha256, stage}) {
+  if (!engine.recordRoot) throw Error('Upstream approval needs an engine record, and the stage output is not inside one');
+  const name = contracts[stage];
+  const candidates = stage === 'refined-mockups'
+    ? fs.readdirSync(engine.recordRoot, {withFileTypes:true}).filter(entry => entry.isDirectory()).map(entry => path.join(engine.recordRoot, entry.name, stage, name))
+    : [path.join(engine.recordRoot, 'construction', ...(engine.unit === null ? [] : [engine.unit]), stage, name)];
+  const found = candidates.filter(file => fs.existsSync(file));
+  if (found.length !== 1) throw Error(`Engine record holds ${found.length ? 'more than one' : 'no'} approved ${stage} contract (${name})`);
+  if (hash(fs.readFileSync(found[0])) !== sha256) throw Error(`Upstream ${stage} contract copy differs from the engine record artifact ${path.relative(engine.recordRoot, found[0])}`);
+}
 function requireApproval(approvalLedger, root, {sha256, stage, arm, requiredMappings}) {
   if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
   const ledgerReal = fs.realpathSync(approvalLedger), rootReal = fs.realpathSync(root);
@@ -189,4 +236,4 @@ function main(argv) {
   console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {check, hash, contracts, main};
+module.exports = {check, hash, contracts, scopePolicy, engineFor, main};

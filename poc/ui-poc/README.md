@@ -83,7 +83,7 @@ start a new intent under `ui-poc-application`.
 
 Arm C's full 33-stage matrix is `docs/c-stage-skill-matrix.md`; routing is `tools/ui-poc-c-routing.cjs` over `tools/ui-poc/c-stage-routing.json`. The verifier binds routing evidence to engine state and pinned files. It cannot prove model cognition or distinguish different attempts whose official engine state bytes are identical.
 
-The source-contract check needs the inspected pinned source directory and corresponding Git tree JSON. You may set UI_POC_SOURCE_ROOT and UI_POC_UPSTREAM_TREE instead of its CLI flags. The sensor command is an invocation example, not a completed live check. Without valid evidence and an independently managed `UI_POC_APPROVAL_LEDGER`, the sensor fails closed. See docs/contract.md for the format and trust assumptions.
+The source-contract check needs the inspected pinned source directory and corresponding Git tree JSON. You may set UI_POC_SOURCE_ROOT and UI_POC_UPSTREAM_TREE instead of its CLI flags. The sensor command is an invocation example, not a completed live check. Without valid evidence, and without an independently managed `UI_POC_APPROVAL_LEDGER` in a ledger scope, the sensor fails closed; `tools/ui-poc/scope-evidence.json` sets per scope whether upstream approval comes from that ledger or from the official stage gate's engine record, and can declare the sensor off for a scope. See docs/contract.md for the format and trust assumptions.
 
 ## Treatment status
 
