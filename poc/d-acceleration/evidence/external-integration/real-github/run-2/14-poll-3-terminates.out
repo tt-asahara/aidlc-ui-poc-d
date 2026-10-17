@@ -1,0 +1,11 @@
+{
+  "status": "stopped",
+  "reason": "selection-cancelled",
+  "selection": {
+    "mode": "label-poll",
+    "strategy": "issue-number-ascending",
+    "reason": "first eligible unbound Issue in ascending issue-number order",
+    "eligibleIssueNumbers": [],
+    "selectedIssueNumber": null
+  }
+}

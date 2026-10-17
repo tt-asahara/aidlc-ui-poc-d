@@ -1,0 +1,1 @@
+gh run list --repo tt-asahara/aidlc-d-sandbox --branch aidlc-sandbox/20261017T065220Z --json name\,status\,conclusion\,headSha\,url 

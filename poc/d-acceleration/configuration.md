@@ -47,6 +47,17 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 `send: true` には同様にhost process環境の `AIDLC_GH_EXECUTABLE_PATH` と
 `AIDLC_GH_EXECUTABLE_SHA256` が必要です。
 これらは外部送信許可を代替せず、payload-boundな最新の人間permissionも引き続き必須です。
+`repository` は `owner/name`(github.com)または `HOST/owner/name`(例:
+`github.kddi.com/owner/name` のGitHub Enterprise)です。host省略時はgithub.comで、
+継承した `GH_HOST` は使わず対象hostへ固定します。
+
+GitHub CLI認証preflight: issue autopilot(`--repo` またはoriginのURLからhostを判定)と
+decision summary送信は、GitHubへ触れる前に固定argvの `gh auth status --hostname <host>`
+を実行します。そのhostにloginがなければ `gh-auth-required` で停止し、次の1手
+`gh auth login --hostname <host>` を返します。別host(例: GHEだけにlogin)の認証は
+満たしません。GitHub読み取り失敗は `github-read-failed` で停止し、claimやintentを残しません。
+ローカルsandbox検証(fake gh + bare remote)は `tests/external-sandbox.integration.test.ts`、
+実GitHub sandbox repoでの手順は `scripts/real-github-sandbox-runbook.sh`(既定dry-run)です。
 
 全boolean切替の直前には、日本語で対象stageまたは実行時点、役割、ON/OFF時の
 挙動、既定値、利用場面、親スイッチや別コマンド依存を記載しています。setupが

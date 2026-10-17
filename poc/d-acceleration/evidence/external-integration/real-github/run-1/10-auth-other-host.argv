@@ -1,0 +1,1 @@
+bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo unauthenticated.invalid/aidlc-d-sandbox 1 

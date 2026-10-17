@@ -1,0 +1,61 @@
+mode=dry-run repo=tt-asahara/aidlc-sandbox host=github.com product=/path/to/sandbox-product d_dir=/path/to/d-acceleration branch=aidlc-sandbox/<UTC> evidence=<cwd>/sandbox-evidence-<UTC>
+
+## 01 Preflight (read-only): exact-host gh auth, repo identity, origin host
+$ gh auth status --hostname github.com
+$ gh repo view tt-asahara/aidlc-sandbox --json nameWithOwner\,visibility\,isArchived\,defaultBranchRef
+$ git -C /path/to/sandbox-product config --get remote.origin.url
+
+## 02 Autopilot before any write (read-only): status while OFF; OFF run never reaches GitHub
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox status
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox aidlc-auto
+
+## 03 WRITE: label + disposable Issues (labelled x2, unlabelled x1)
+$ gh label create aidlc-auto --repo tt-asahara/aidlc-sandbox --description AI-DLC\ sandbox\ autopilot --force
+$ gh issue create --repo tt-asahara/aidlc-sandbox --title \[aidlc-sandbox\ <UTC>\]\ labelled\ task\ A --body Disposable\ sandbox\ task.\ Add\ a\ GET\ /hello\ endpoint\ that\ returns\ the\ plain\ text\ hello. --label aidlc-auto
+$ gh issue create --repo tt-asahara/aidlc-sandbox --title \[aidlc-sandbox\ <UTC>\]\ labelled\ task\ B --body Disposable\ sandbox\ task.\ Add\ a\ GET\ /health\ endpoint\ that\ returns\ HTTP\ 200\ with\ body\ ok. --label aidlc-auto
+$ gh issue create --repo tt-asahara/aidlc-sandbox --title \[aidlc-sandbox\ <UTC>\]\ unlabelled\ task --body Disposable\ sandbox\ task\ without\ the\ label.
+issues: labelled=<A>,<B> unlabelled=<U>
+>> HUMAN [enable-autopilot]: set auto.enabled=true, auto.sessionOnly=true, auto.labelAllowlist=["aidlc-auto"], issueAutopilot.enabled=true in /path/to/sandbox-product/.claude/d-acceleration.jsonc
+
+## 04 Exact-host auth: an unauthenticated host fails closed with the login command (no network)
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo unauthenticated.invalid/tt-asahara/aidlc-sandbox \<A\>
+
+## 05 from-issue: discovery list, label poll (continue, continue, terminate), explicit numbers, rerun
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox list
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox aidlc-auto
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox aidlc-auto
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox aidlc-auto
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox \<U\>
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox \<A\>
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox stop
+
+## 06 Decision summary: generate, publish without a host-recorded permission (must stop)
+>> HUMAN [summary-config]: set decisionIssueSummary {enabled:true, repository:"tt-asahara/aidlc-sandbox", send:true}; the active Intent must hold decisions/ai-approval-decisions.jsonl; AIDLC_GH_EXECUTABLE_PATH/AIDLC_GH_EXECUTABLE_SHA256 must name the native gh
+$ bun /path/to/d-acceleration/decision-issue-summary.ts generate --project-dir /path/to/sandbox-product --intent-dir /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\> --decisions-file /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\>/decisions/ai-approval-decisions.jsonl
+$ bun /path/to/d-acceleration/decision-issue-summary.ts publish --project-dir /path/to/sandbox-product --intent-dir /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\> --decisions-file /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\>/decisions/ai-approval-decisions.jsonl
+>> HUMAN [summary-permission]: ONLY the person types, in the host session: AI-DLC authorize-decision-summary --repository tt-asahara/aidlc-sandbox --intent <relative intent> --payload-sha256 <sha256 of the payload JSON from 18>. Skip to leave 20/21 fail-closed.
+$ bun /path/to/d-acceleration/decision-issue-summary.ts publish --project-dir /path/to/sandbox-product --intent-dir /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\> --decisions-file /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\>/decisions/ai-approval-decisions.jsonl
+$ bun /path/to/d-acceleration/decision-issue-summary.ts publish --project-dir /path/to/sandbox-product --intent-dir /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\> --decisions-file /path/to/sandbox-product/aidlc/spaces/default/intents/\<intent\>/decisions/ai-approval-decisions.jsonl
+$ gh issue list --repo tt-asahara/aidlc-sandbox --state all --search aidlc-decision-summary\ in:body --json number\,title\,url
+
+## 07 WRITE: git persistence to a disposable branch: commit+push, offline pending refspec retry, no force
+$ git -C /path/to/sandbox-product switch -c aidlc-sandbox/<UTC>
+>> HUMAN [persistence-config]: set gitPersistence {enabled:true, push:true, remote:"origin", branch:"aidlc-sandbox/<UTC>"}; write aidlc/sandbox-result.md (v1)
+$ bun -e $'const [, persistence, config, project, receipt] = process.argv; const { persistCrossing } = await import(persistence); const { resolveDGitPersistence } = await import(config);\nconsole.log(JSON.stringify(persistCrossing(project, resolveDGitPersistence(project), { receipt, events: [{ event: "STAGE_COMPLETED", stage: "intent-capture" }], manifest: ["aidlc/sandbox-result.md"] })));' /path/to/d-acceleration/d-persistence.ts /path/to/d-acceleration/d-config.ts /path/to/sandbox-product sandbox-receipt-1
+$ git -C /path/to/sandbox-product ls-remote origin refs/heads/aidlc-sandbox/<UTC>
+>> HUMAN [persistence-offline]: point origin at an unreachable URL and write aidlc/sandbox-result.md (v2)
+$ bun -e $'const [, persistence, config, project, receipt] = process.argv; const { persistCrossing } = await import(persistence); const { resolveDGitPersistence } = await import(config);\nconsole.log(JSON.stringify(persistCrossing(project, resolveDGitPersistence(project), { receipt, events: [{ event: "STAGE_COMPLETED", stage: "intent-capture" }], manifest: ["aidlc/sandbox-result.md"] })));' /path/to/d-acceleration/d-persistence.ts /path/to/d-acceleration/d-config.ts /path/to/sandbox-product sandbox-receipt-2
+$ cat /path/to/sandbox-product/.git/aidlc-d-persistence/pending-push.json
+>> HUMAN [persistence-online]: restore the origin URL
+$ bun -e $'const [, persistence, config, project, receipt] = process.argv; const { persistCrossing } = await import(persistence); const { resolveDGitPersistence } = await import(config);\nconsole.log(JSON.stringify(persistCrossing(project, resolveDGitPersistence(project), { receipt, events: [{ event: "STAGE_COMPLETED", stage: "intent-capture" }], manifest: ["aidlc/sandbox-result.md"] })));' /path/to/d-acceleration/d-persistence.ts /path/to/d-acceleration/d-config.ts /path/to/sandbox-product sandbox-receipt-3
+$ git -C /path/to/sandbox-product ls-remote origin refs/heads/aidlc-sandbox/<UTC>
+>> HUMAN [persistence-foreign]: push an unrelated commit to aidlc-sandbox/<UTC> from another clone; write aidlc/sandbox-result.md (v3)
+$ bun -e $'const [, persistence, config, project, receipt] = process.argv; const { persistCrossing } = await import(persistence); const { resolveDGitPersistence } = await import(config);\nconsole.log(JSON.stringify(persistCrossing(project, resolveDGitPersistence(project), { receipt, events: [{ event: "STAGE_COMPLETED", stage: "intent-capture" }], manifest: ["aidlc/sandbox-result.md"] })));' /path/to/d-acceleration/d-persistence.ts /path/to/d-acceleration/d-config.ts /path/to/sandbox-product sandbox-receipt-4
+$ git -C /path/to/sandbox-product ls-remote origin refs/heads/aidlc-sandbox/<UTC>
+$ git -C /path/to/sandbox-product ls-remote --heads origin
+
+## 08 CI evidence for the pushed branch (read-only)
+$ gh run list --repo tt-asahara/aidlc-sandbox --branch aidlc-sandbox/<UTC> --json name\,status\,conclusion\,headSha\,url
+$ gh issue list --repo tt-asahara/aidlc-sandbox --state all --json number\,title\,labels\,state\,url
+
+done (mode=dry-run). Evidence: <cwd>/sandbox-evidence-<UTC>
