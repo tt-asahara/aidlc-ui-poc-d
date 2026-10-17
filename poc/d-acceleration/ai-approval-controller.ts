@@ -128,7 +128,7 @@ function checkedClaudeExecutable(projectRoot: string, requested: string, expecte
   return actual;
 }
 
-function productionClaudeExecutable(projectRoot: string): string {
+export function productionClaudeExecutable(projectRoot: string): string {
   const requested = process.env.AIDLC_CLAUDE_EXECUTABLE_PATH;
   const expectedSha256 = process.env.AIDLC_CLAUDE_EXECUTABLE_SHA256;
   if (requested || expectedSha256) {

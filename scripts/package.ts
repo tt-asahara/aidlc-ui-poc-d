@@ -870,6 +870,7 @@ function buildTree(
     const accelerationRuntime = [
       "aidlc-acceleration-plan.ts",
       "ai-approval-controller.ts",
+      "ai-question-controller.ts",
       "conductor.ts",
       "d-config.ts",
       "d-acceleration.example.jsonc",

@@ -51,6 +51,7 @@ describe("ordinary /aidlc D integration", () => {
     const root = join(repo, "dist", "claude", ".claude", "tools", "d-acceleration");
     for (const file of [
       "aidlc-acceleration-plan.ts",
+      "ai-question-controller.ts",
       "conductor.ts",
       "d-config.ts",
       "d-persistence-hook.ts",
