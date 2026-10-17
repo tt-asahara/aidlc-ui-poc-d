@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConstructionDefaults, resolveDModels } from "../d-config.ts";
+import { clefRunnerArgs, resolveDClef, resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -162,6 +162,9 @@ describe("ordinary /aidlc D integration", () => {
     expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "stage-major", execution: "official" });
     writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ constructionDefaults: { iteration: "official", execution: "swarm" } }));
     expect(() => resolveDConstructionDefaults(project)).toThrow("requires constructionDefaults.iteration=stage-major");
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ parallel: { enabled: false }, constructionDefaults: { iteration: "stage-major", execution: "swarm" } }));
+    expect(resolveDParallel(project)).toEqual({ enabled: false });
+    expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "official", execution: "official" });
   });
 
   test("ordinary routing forwards only explicitly enabled loopback Clef and named low-risk Units", () => {

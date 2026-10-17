@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import policy from "./stage-policy.json";
 import { runWorker, type WorkerLaunch } from "./worker-adapters.ts";
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
+import { resolveDParallel } from "./d-config.ts";
 
 export type ResearchTask = { id: string; agent: string; objective: string; evidencePaths: string[] };
 type PolicyTier = "fast" | "balanced" | "judgment";
@@ -49,7 +50,7 @@ export function planReadOnlyFanout(input: FanoutInput, options: FanoutOptions) {
   const tier = stage.tier as PolicyTier; const effort = stage.effort as PolicyEffort;
   const model = input.modelCatalog?.[tier];
   if (!model?.trim()) throw new Error(`a caller-supplied ${tier} model request is required`);
-  const maxParallel = input.maxParallel ?? 3;
+  const maxParallel = resolveDParallel(options.projectDir).enabled ? (input.maxParallel ?? 3) : 1;
   if (!Number.isFinite(maxParallel) || !Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > MAX_PARALLEL) throw new Error(`maxParallel must be an integer from 1 through ${MAX_PARALLEL}`);
   const ids = new Set<string>();
   const launches = input.tasks.map((task) => {

@@ -155,6 +155,14 @@ a single Unit runs as the serial-equivalent case, while multiple Units still
 parallelize only where the official DAG and isolated-worktree checks allow it.
 Set either value to `official` to retain the AI-DLC default.
 
+`parallel.enabled` is D's single master switch and defaults to `true`. It does
+not relax dependencies: enabled mode still uses only policy-approved read-only
+fanout or the official independent-Unit DAG with disjoint writes and a wave
+barrier. `false` serializes read-only fanout and suppresses D's Construction
+swarm defaults for newly bootstrapped Intents. Generic-auto records the resolved
+value in its bootstrap journal, so changing the file does not alter a run
+already in progress.
+
 The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
 comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
 Clef. Design waves retain `balanced` as their minimum and failure fallback, so

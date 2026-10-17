@@ -33,6 +33,12 @@ describe("read-only within-stage fanout", () => {
     for (const maxParallel of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 5]) expect(() => planReadOnlyFanout({ directive, tasks, modelCatalog: catalog, maxParallel }, options)).toThrow("maxParallel");
     for (const maxParallel of [1, 4]) expect(planReadOnlyFanout({ directive, tasks, modelCatalog: catalog, maxParallel }, options).maxParallel).toBe(Math.min(maxParallel, tasks.length));
   });
+  test("the master parallel switch serializes otherwise eligible fanout", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-parallel-off-"));
+    mkdirSync(join(projectDir, ".claude"), { recursive: true }); mkdirSync(join(projectDir, "tests")); mkdirSync(join(projectDir, "core"));
+    writeFileSync(join(projectDir, "README.md"), "fixture"); writeFileSync(join(projectDir, ".claude", "d-acceleration.jsonc"), JSON.stringify({ parallel: { enabled: false } }));
+    expect(planReadOnlyFanout({ directive, tasks, modelCatalog: catalog }, { projectDir, frameworkDir: join(repo, "core") }).maxParallel).toBe(1);
+  });
   test("enforces a CLI tool allowlist, denies permission prompts, MCP, sessions, writes, shell, and web", () => {
     const launch = planReadOnlyFanout({ directive, tasks, modelCatalog: catalog }, options).launches[0]!.launch;
     const args = launch.args.join(" ");

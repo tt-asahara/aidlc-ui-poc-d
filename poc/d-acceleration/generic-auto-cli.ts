@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { resolveDAutomation, resolveDConstructionDefaults } from "./d-config.ts";
+import { resolveDAutomation, resolveDConstructionDefaults, resolveDParallel } from "./d-config.ts";
 
 type Json = Record<string, unknown>;
 const argv = process.argv.slice(2);
@@ -82,6 +82,7 @@ function confinedRegularFile(input: string): string {
 
 const auto = resolveDAutomation(product);
 const constructionDefaults = resolveDConstructionDefaults(product);
+const parallel = resolveDParallel(product);
 if (command === "start") {
   if (!auto.enabled) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
   if (auto.sessionOnly) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "session-only" })}\n`); process.exit(0); }
@@ -161,7 +162,7 @@ if (command === "bootstrap") {
     process.stdout.write(`${JSON.stringify({ action: status.active ? "continue" : "stop", reason: "already-bootstrapped", initialized: false, state: status.state ?? null }, null, 2)}\n`);
     process.exit(0);
   }
-  if (!journal) { journal = { version: 1, digest, request: argv[argv.indexOf("--request") + 1], preActive, phase: "pending-create" }; saveJson(journalPath, journal); }
+  if (!journal) { journal = { version: 1, digest, request: argv[argv.indexOf("--request") + 1], preActive, phase: "pending-create", parallel }; saveJson(journalPath, journal); }
   const activeNow = existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : null;
   if (journal.phase !== "created") {
     const candidateState = activeNow ? join(product, "aidlc", "spaces", space, "intents", activeNow, "aidlc-state.md") : "";
