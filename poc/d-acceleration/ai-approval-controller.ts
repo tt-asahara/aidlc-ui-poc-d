@@ -17,7 +17,7 @@ import {
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveDAiApproval, resolveDModels } from "./d-config.ts";
 import stagePolicy from "./stage-policy.json";
-import { runWorker, type WorkerLaunch } from "./worker-adapters.ts";
+import { runWorker, type ModelIdentity, type WorkerLaunch } from "./worker-adapters.ts";
 
 const MAX_INPUT_BYTES = 512 * 1024;
 const MAX_FILE_BYTES = 192 * 1024;
@@ -56,6 +56,25 @@ type DelegationGrant = {
   requestSha256: string;
 };
 
+/** The exact no-tool, no-MCP, non-persistent argv used by the delegated approval assessor. */
+export function approvalAssessorLaunch(request: { executable: string; environment?: Record<string, string | undefined>; model: string; prompt: string }): WorkerLaunch {
+  return {
+    kind: "claude",
+    executable: request.executable,
+    requestedModel: request.model,
+    requestedEffort: "high",
+    environment: request.environment,
+    args: [
+      "--print", "--output-format", "json", "--no-session-persistence", "--restricted",
+      "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
+      "--permission-mode", "dontAsk", "--permission-prompts", "none",
+      "--tools", "", "--allowed-tools", "",
+      "--disallowed-tools", "Bash,Edit,Write,NotebookEdit,Agent,Task,WebFetch,WebSearch",
+      "--model", request.model, "--effort", "high", request.prompt,
+    ],
+  };
+}
+
 export type AiApprovalDecision = {
   schemaVersion: 1;
   decisionId: string;
@@ -83,6 +102,12 @@ export type AiApprovalResult = {
   decisionFilePath?: string;
   generatedCommandArgs?: ["approve", string, "--ai-decision-file", string];
   reused?: boolean;
+  /**
+   * Requested-vs-runtime-reported identity of the judgment model for a fresh
+   * assessment. Kept outside the ledger record because core validates that
+   * record's exact keys; absent when no model ran (reuse, deterministic block).
+   */
+  modelIdentity?: ModelIdentity;
 };
 
 export type AiApprovalOptions = {
@@ -528,6 +553,8 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
 
     const deterministicRisks = dangerousFlags(directive);
     let assessment: ModelAssessment;
+    let modelIdentity: ModelIdentity | undefined;
+    const withIdentity = (result: AiApprovalResult): AiApprovalResult => modelIdentity ? { ...result, modelIdentity } : result;
     if (directive.kind !== "present-gate") {
       assessment = { outcome: "block", reason: "Only an official present-gate directive may be assessed", confidence: 1, riskFlags: [], uncertainties: ["directive kind is not present-gate"] };
     } else if (stateScope(state) !== grant.scope) {
@@ -544,31 +571,22 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
         assessment = { outcome: "block", reason: "Bound approval evidence exceeds the assessor input limit", confidence: 0, riskFlags: [], uncertainties: ["input-limit"] };
       } else {
         const model = resolveDModels(projectRoot).models.judgment;
-        const launch: WorkerLaunch = {
-          kind: "claude",
+        const launch = approvalAssessorLaunch({
           // Explicit adapters are a library/test seam. The production verify
           // path never supplies one and resolves an absolute trusted binary.
           executable: options.claudeExecutable
             ? (existsSync(options.claudeExecutable) ? realpathSync(options.claudeExecutable) : resolve(options.claudeExecutable))
             : productionClaudeExecutable(projectRoot),
-          requestedModel: model,
-          requestedEffort: "high",
           environment: options.claudeExecutable ? undefined : { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
-          args: [
-            "--print", "--output-format", "json", "--no-session-persistence", "--restricted",
-            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
-            "--permission-mode", "dontAsk", "--permission-prompts", "none",
-            "--tools", "", "--allowed-tools", "",
-            "--disallowed-tools", "Bash,Edit,Write,NotebookEdit,Agent,Task,WebFetch,WebSearch",
-            "--model", model, "--effort", "high", prompt,
-          ],
-        };
+          model, prompt,
+        });
         const worker = await runWorker(launch, {
           projectDir: projectRoot,
           timeoutMs: options.timeoutMs ?? TIMEOUT_MS,
           maxStdoutBytes: MAX_OUTPUT_BYTES,
           maxStderrBytes: MAX_STDERR_BYTES,
         });
+        modelIdentity = worker.modelIdentity;
         if (!worker.ok) {
           assessment = { outcome: "block", reason: `AI approval model failed closed (${worker.failure ?? "unknown"})`, confidence: 0, riskFlags: [], uncertainties: ["model-execution"] };
         } else {
@@ -603,14 +621,14 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
     };
     validateDecision(decision);
     if (options.forceAssessment && existing) {
-      if (decision.outcome !== "approve") return { status: "block", reason: decision.reason, decision };
-      return commandResult(existing, projectRoot, ledgerPath, true);
+      if (decision.outcome !== "approve") return withIdentity({ status: "block", reason: decision.reason, decision });
+      return withIdentity(commandResult(existing, projectRoot, ledgerPath, true));
     }
     const raced = records(ledgerPath).find((record) => record.decisionId === decisionId);
-    if (raced) return commandResult(raced, projectRoot, ledgerPath, true);
+    if (raced) return withIdentity(commandResult(raced, projectRoot, ledgerPath, true));
     const previous = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : "";
     atomicWrite(ledgerPath, `${previous}${JSON.stringify(decision)}\n`);
-    return commandResult(decision, projectRoot, ledgerPath, false);
+    return withIdentity(commandResult(decision, projectRoot, ledgerPath, false));
   } finally {
     if (lockFd !== undefined) closeSync(lockFd);
     if (existsSync(lockPath)) unlinkSync(lockPath);

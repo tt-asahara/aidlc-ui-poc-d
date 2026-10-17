@@ -69,6 +69,24 @@ function failure(issue: Readonly<Issue>, detail: string): InputAssessment {
   return { unresolved: [`Ambiguity assessment failed closed: ${detail}`], assumptions: [], researchedFacts: [], description: issue.body };
 }
 
+/** The exact no-tool, no-MCP, non-persistent argv used by the ambiguity assessor. */
+export function ambiguityAssessorLaunch(request: { model: string; effort: string; prompt: string; executable?: string }): WorkerLaunch {
+  return {
+    kind: "claude",
+    executable: request.executable ?? "claude",
+    requestedModel: request.model,
+    requestedEffort: request.effort,
+    args: [
+      "--print", "--output-format", "json", "--no-session-persistence", "--restricted",
+      "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
+      "--permission-mode", "dontAsk", "--permission-prompts", "none",
+      "--tools", "", "--allowed-tools", "",
+      "--disallowed-tools", "Bash,Edit,Write,NotebookEdit,Agent,Task,WebFetch,WebSearch",
+      "--model", request.model, "--effort", request.effort, request.prompt,
+    ],
+  };
+}
+
 /**
  * Runs a no-tool, no-MCP, non-persistent Claude assessment. It never creates
  * approvals or workflow state. Every execution or schema failure becomes an
@@ -85,31 +103,18 @@ export function createClaudeIssueAssessor(options: ClaudeIssueAssessorOptions): 
       if (!issue.title.trim() || !issue.body.trim()) return failure(issue, "Issue title and body are required");
       const prompt = promptFor(issue, mode);
       if (new TextEncoder().encode(prompt).byteLength > MAX_INPUT_BYTES) return failure(issue, "Issue input exceeds the bounded assessor limit");
-      const launch: WorkerLaunch = {
-        kind: "claude",
-        executable: options.executable ?? "claude",
-        requestedModel: options.model,
-        requestedEffort: effort,
-        args: [
-          "--print", "--output-format", "json", "--no-session-persistence", "--restricted",
-          "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands",
-          "--permission-mode", "dontAsk", "--permission-prompts", "none",
-          "--tools", "", "--allowed-tools", "",
-          "--disallowed-tools", "Bash,Edit,Write,NotebookEdit,Agent,Task,WebFetch,WebSearch",
-          "--model", options.model, "--effort", effort, prompt,
-        ],
-      };
+      const launch = ambiguityAssessorLaunch({ model: options.model, effort, prompt, executable: options.executable });
       const result = await runWorker(launch, {
         projectDir: options.projectDir,
         timeoutMs,
         maxStdoutBytes: MAX_OUTPUT_BYTES,
         maxStderrBytes: MAX_STDERR_BYTES,
       });
-      if (!result.ok) return failure(issue, `model execution ${result.failure ?? "failed"}`);
+      if (!result.ok) return { ...failure(issue, `model execution ${result.failure ?? "failed"}`), modelIdentity: result.modelIdentity };
       try {
-        return { ...parseAssessment(result.stdout, mode), description: issue.body };
+        return { ...parseAssessment(result.stdout, mode), description: issue.body, modelIdentity: result.modelIdentity };
       } catch {
-        return failure(issue, "model returned invalid structured output");
+        return { ...failure(issue, "model returned invalid structured output"), modelIdentity: result.modelIdentity };
       }
     },
   };

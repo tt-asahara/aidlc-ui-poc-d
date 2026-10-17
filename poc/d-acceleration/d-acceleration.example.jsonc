@@ -10,12 +10,6 @@
     "iteration": "stage-major",
     "execution": "swarm",
   },
-  "clef": {
-    // 対象: D対応の設計wave内で明示したlow-risk Unitのrouting時。役割: loopback Clefへtier判断を委譲する。ON時: urlへ問い合わせ、失敗・低信頼ならOpusへ安全にfallback。OFF時: Clefを呼ばない。既定値: OFF。利用場面: ローカルClefを別途起動済みの場合だけ。
-    "enabled": false,
-    "url": "http://127.0.0.1:18742",
-    "lowRiskUnits": [],
-  },
   "gitPersistence": {
     // 対象: 公式reportが承認境界を正常通過した直後。役割: 承認済みmanifestだけをcheckpoint commitする。ON時: 必須secret scan後にcommit、OFF時: Gitを変更しない。既定値: OFF。利用場面: PRODUCT側で明示的な承認履歴を残す場合。機能7の秘密検査自体にはOFFスイッチを設けない。
     "enabled": false,

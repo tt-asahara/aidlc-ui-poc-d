@@ -2,8 +2,8 @@
 
 This change implements only the explicitly selected D additions. Official
 AI-DLC lifecycle authority, the composed C UI contracts, approval ledger,
-reviewer and sensor protocols, D model routing, and optional Clef routing stay
-authoritative.
+reviewer and sensor protocols, and D model routing stay authoritative. Clef
+routing was declined and removed on 2026-10-17.
 
 ## Adopted features
 

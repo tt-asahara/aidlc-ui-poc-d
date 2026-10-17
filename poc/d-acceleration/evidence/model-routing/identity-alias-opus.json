@@ -1,0 +1,168 @@
+{
+  "meta": {
+    "cli": "2.1.302 (Claude Code)",
+    "recordedAt": "2026-10-17T05:55:02.375Z",
+    "observedParentSessionModel": "not-observable",
+    "parentEffortEnv": "medium"
+  },
+  "kind": "model-identity",
+  "rows": [
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "opus",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "opus",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "alias-resolved",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11304,
+        "cacheCreationInputTokens": 7400,
+        "costUSD": 0.0615488,
+        "costBasis": "list",
+        "durationMs": 1745,
+        "durationApiMs": 1306
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4160,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "read-only-fanout-worker",
+      "requestedModel": "opus",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "opus",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "alias-resolved",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 4221,
+        "cacheCreationInputTokens": 775,
+        "costUSD": 0.0071322,
+        "costBasis": "list",
+        "durationMs": 2086,
+        "durationApiMs": 1774
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3955,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "issue-ambiguity-assessor",
+      "requestedModel": "opus",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "opus",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "alias-resolved",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1588,
+        "cacheCreationInputTokens": 361,
+        "costUSD": 0.0032936,
+        "costBasis": "list",
+        "durationMs": 1341,
+        "durationApiMs": 1139
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3219,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-question-assessor",
+      "requestedModel": "opus",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "opus",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "alias-resolved",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1588,
+        "cacheCreationInputTokens": 361,
+        "costUSD": 0.0032936,
+        "costBasis": "list",
+        "durationMs": 1476,
+        "durationApiMs": 1178
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3501,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-approval-assessor",
+      "requestedModel": "opus",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "opus",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "alias-resolved",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1949,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.0004778,
+        "costBasis": "list",
+        "durationMs": 1418,
+        "durationApiMs": 1150
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3328,
+      "resultText": "OK",
+      "stderrHead": ""
+    }
+  ],
+  "mismatches": [],
+  "unverified": []
+}

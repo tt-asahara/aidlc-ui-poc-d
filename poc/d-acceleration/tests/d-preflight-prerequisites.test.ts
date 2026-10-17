@@ -20,7 +20,6 @@ function product(): string {
 const ALL_ON = (extra: { roots?: boolean; labels?: boolean; repository?: boolean } = {}) => JSON.stringify({
   parallel: { enabled: true },
   constructionDefaults: { iteration: "stage-major", execution: "swarm" },
-  clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: [] },
   gitPersistence: { enabled: true, push: true, remote: "origin", branch: "main" },
   features: { requirementIdValidation: true, functionalDesignDocumentDiscipline: true, sourceGrounding: true, specGrounding: true, mockupPngGeneration: true, visualRegression: true },
   featureInputs: { sourceRoots: extra.roots ? ["src"] : [], specRoots: extra.roots ? ["spec"] : [] },

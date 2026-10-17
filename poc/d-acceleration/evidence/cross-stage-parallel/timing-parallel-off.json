@@ -1,0 +1,39 @@
+{
+  "parallel": false,
+  "speculationAction": "speculation-disabled",
+  "gateOpenedAt": 3241.066708,
+  "gateApprovedAt": 3301.12925,
+  "intervals": [
+    {
+      "taskId": "integration-constraints",
+      "mode": "serial-fallback",
+      "startedAt": 3444.203458,
+      "endedAt": 3595.259
+    },
+    {
+      "taskId": "regulatory-scan",
+      "mode": "serial-fallback",
+      "startedAt": 3595.988333,
+      "endedAt": 3747.043875
+    },
+    {
+      "taskId": "build-vs-buy-risk",
+      "mode": "serial-fallback",
+      "startedAt": 3747.791333,
+      "endedAt": 3898.862875
+    }
+  ],
+  "consumedDrafts": [],
+  "serialFallback": [
+    "integration-constraints",
+    "regulatory-scan",
+    "build-vs-buy-risk"
+  ],
+  "calls": [
+    "integration-constraints",
+    "regulatory-scan",
+    "build-vs-buy-risk"
+  ],
+  "maxConcurrency": 1,
+  "duringGate": []
+}
