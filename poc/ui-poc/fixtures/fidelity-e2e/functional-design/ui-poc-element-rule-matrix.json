@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "kind": "ui-element-rule-matrix",
-  "snapshotSha256": "091d8fa3376b459ee254df6dfb1d452d9653880c9adb6adfc98b23ab5bc99041",
+  "snapshotSha256": "c1653953f29307c47f50e2a2b4c25b1367892e1abdba0391f4dea079224df153",
   "rows": [
     {
       "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e",

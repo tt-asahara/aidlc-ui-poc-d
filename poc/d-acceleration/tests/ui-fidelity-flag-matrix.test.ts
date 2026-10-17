@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, copyFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -68,7 +68,8 @@ describe("UI evidence sensor resolves image flags or fails closed", () => {
   function install(withResolver: boolean, features: Partial<Flags>) {
     const root = mkdtempSync(join(tmpdir(), "d-ui-sensor-"));
     const tools = join(root, ".claude", "tools"); mkdirSync(tools, { recursive: true });
-    for (const name of ["aidlc-sensor-ui-poc-evidence.ts", "ui-poc-evidence.cjs", "ui-poc-fidelity.cjs", "ui-poc-element-matrix.cjs", "ui-poc-c-routing.cjs"]) copyFileSync(join(UI, "tools", name), join(tools, name));
+    // Install every projected plugin tool, as compose does (fidelity depends on its sibling modules).
+    for (const name of readdirSync(join(UI, "tools")).filter((file) => /\.(cjs|ts)$/.test(file))) copyFileSync(join(UI, "tools", name), join(tools, name));
     cpSync(join(UI, "tools", "ui-poc"), join(tools, "ui-poc"), { recursive: true });
     if (withResolver) symlinkSync(D, join(tools, "d-acceleration"));
     writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ features }));

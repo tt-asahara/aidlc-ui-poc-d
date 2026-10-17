@@ -43,8 +43,11 @@ browser attestation; preserve the capture command/result as review evidence.
 Never regenerate the approved snapshot or PNG baseline from implementation.
 Run `bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs` for capture/compare; an
 unavailable renderer or unreproduced state is NOT-READY, never a pass. PNG
-generation and exact visual comparison remain independent default-off D flags;
-visual comparison implies baseline PNG generation.
+generation and thresholded visual comparison remain independent default-off D
+flags; visual comparison implies baseline PNG generation. `visual-compare`
+refuses (NOT-READY) when renderer/OS/viewport/scale/font/flag metadata or the
+approved visual policy differ; threshold, anti-aliasing tolerance and masks
+come only from the approved baseline policy (see docs/contract.md).
 
 Element kind is derived from the rendered DOM (field, control, business-value,
 region, text). States reached by an environment condition (storage failure,

@@ -2,20 +2,39 @@
   "schema": 1,
   "kind": "ui-semantic-snapshot",
   "source": {
-    "path": "http://127.0.0.1:63949/notes",
-    "sha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8"
+    "path": "http://127.0.0.1:53003/notes",
+    "sha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106"
   },
   "observation": {
     "mode": "loopback-url",
-    "target": "http://127.0.0.1:63949/notes",
-    "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
-    "capturedAt": "2026-10-17T05:57:55.753Z"
+    "target": "http://127.0.0.1:53003/notes",
+    "targetSha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106",
+    "capturedAt": "2026-10-17T06:28:01.382Z"
   },
   "environment": {
-    "renderer": "Google Chrome",
+    "renderer": {
+      "executable": "Google Chrome",
+      "product": "Chrome/155.0.8059.82",
+      "revision": "537.36 (@c56fe5daef8be123f68808a4bb705ff378cd2019)",
+      "protocolVersion": "1.3",
+      "jsVersion": "15.5.35.23"
+    },
+    "os": {
+      "platform": "darwin",
+      "release": "25.5.0",
+      "arch": "arm64"
+    },
     "viewport": {
       "width": 1280,
-      "height": 720
+      "height": 720,
+      "deviceScaleFactor": 1
+    },
+    "colorProfile": "srgb",
+    "animations": "frozen",
+    "flagsSha256": "26fc831a437c2fcd14a3911b8950b83776535e7253a289f60994012b2d15168c",
+    "fonts": {
+      "policy": "any",
+      "sha256": "9856f127467465f81b3a025d8599d08e354af0de463c961bf9a6041d0e3bdda5"
     }
   },
   "captures": [
@@ -154,7 +173,28 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": ".SF NS",
+            "postScriptName": ".SFNS-Regular",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "965d590b226306e8312bb540126b2f62592f57128ef1ab4eb6dce15d3e15c466"
+      }
     },
     {
       "rendered": true,
@@ -282,7 +322,28 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": ".SF NS",
+            "postScriptName": ".SFNS-Regular",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "965d590b226306e8312bb540126b2f62592f57128ef1ab4eb6dce15d3e15c466"
+      }
     },
     {
       "rendered": true,
@@ -326,7 +387,23 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "b4e5aacabc8e1e1fd980935447edb79b143b1bf30883f97be5aca0d250a8768f"
+      }
     },
     {
       "rendered": true,
@@ -370,7 +447,28 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": ".SF NS",
+            "postScriptName": ".SFNS-Regular",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "965d590b226306e8312bb540126b2f62592f57128ef1ab4eb6dce15d3e15c466"
+      }
     },
     {
       "rendered": true,
@@ -433,7 +531,23 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "b4e5aacabc8e1e1fd980935447edb79b143b1bf30883f97be5aca0d250a8768f"
+      }
     },
     {
       "rendered": true,
@@ -589,51 +703,72 @@
             "lineClamp": "none"
           }
         }
-      ]
+      ],
+      "fonts": {
+        "rendered": [
+          {
+            "familyName": ".SF NS",
+            "postScriptName": ".SFNS-Regular",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W3",
+            "isCustomFont": false
+          },
+          {
+            "familyName": "Hiragino Kaku Gothic ProN",
+            "postScriptName": "HiraKakuProN-W6",
+            "isCustomFont": false
+          }
+        ],
+        "bundled": [],
+        "sha256": "965d590b226306e8312bb540126b2f62592f57128ef1ab4eb6dce15d3e15c466"
+      }
     }
   ],
   "observations": [
     {
       "state": "SCREEN-NOTES/STATE-LIST",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes",
-      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
-      "capturedAt": "2026-10-17T05:57:55.753Z"
+      "target": "http://127.0.0.1:53003/notes",
+      "targetSha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106",
+      "capturedAt": "2026-10-17T06:28:01.382Z"
     },
     {
       "state": "SCREEN-NOTES/STATE-CONFIRM-DELETE",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes",
-      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
-      "capturedAt": "2026-10-17T05:57:59.998Z"
+      "target": "http://127.0.0.1:53003/notes",
+      "targetSha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106",
+      "capturedAt": "2026-10-17T06:28:02.528Z"
     },
     {
       "state": "SCREEN-NOTES/STATE-DELETED",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes",
-      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
-      "capturedAt": "2026-10-17T05:58:03.104Z"
+      "target": "http://127.0.0.1:53003/notes",
+      "targetSha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106",
+      "capturedAt": "2026-10-17T06:28:03.489Z"
     },
     {
       "state": "SCREEN-NOTES/STATE-SAVED",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes",
-      "targetSha256": "bd83e10e2b1fe1b092d4884a051c19de902588f033907969bb5384fbb54f98f8",
-      "capturedAt": "2026-10-17T05:58:05.734Z"
+      "target": "http://127.0.0.1:53003/notes",
+      "targetSha256": "238f0f3bd400b5a7625fa8ff48287df31001de6b2887320b33d1440889b8b106",
+      "capturedAt": "2026-10-17T06:28:04.426Z"
     },
     {
       "state": "SCREEN-NOTES/STATE-STORAGE-ERROR",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes?scenario=storage-error",
-      "targetSha256": "cf4e39ea92ff1cfaea7cea3dce5226ad950444a717925677db1c42abab63b956",
-      "capturedAt": "2026-10-17T05:58:07.671Z"
+      "target": "http://127.0.0.1:53003/notes?scenario=storage-error",
+      "targetSha256": "541acdf21ec6ba51440f1a7755f117f825dcaf81db0e64f83be133af215fa5c7",
+      "capturedAt": "2026-10-17T06:28:05.406Z"
     },
     {
       "state": "SCREEN-NOTES/STATE-PRIVATE-MODE",
       "mode": "loopback-url",
-      "target": "http://127.0.0.1:63949/notes?scenario=private",
-      "targetSha256": "0bb9facc9f10f01de2ff5db2c630f66131f75e5a3225fcfdbd6f3cfa8611eb95",
-      "capturedAt": "2026-10-17T05:58:11.187Z"
+      "target": "http://127.0.0.1:53003/notes?scenario=private",
+      "targetSha256": "43d4e3a487c6f471050442ccab0dc293f9241ea9eb2f2cbd73c70077dfdcaeec",
+      "capturedAt": "2026-10-17T06:28:06.517Z"
     }
   ]
 }

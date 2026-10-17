@@ -85,9 +85,11 @@ renderer and fails with `BROWSER_TOOL_UNAVAILABLE` or a render-state error; it
 never substitutes regex parsing or reports an unrendered state as passing.
 
 ```text
-bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --html <approved.html> [--query scenario=...] --out <snapshot.json> [--png <baseline.png>]
-bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --url <loopback-url> --out <actual.json> [--setup-click ELEMENT-ID@STATE-ID,...]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --html <approved.html> [--query scenario=...] --out <snapshot.json> [--png <baseline.png>] [--width N --height N --device-scale-factor 1|2|3] [--visual-policy <policy.json>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs capture --url <loopback-url> --out <actual.json> [--png <actual.png> ...same viewport/policy...] [--setup-click ELEMENT-ID@STATE-ID,...]
 bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs compare --approved <approved.json> --actual <actual.json> [--dispositions <json>] [--approval-ledger <json>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs visual-compare --baseline <baseline.png> --actual <actual.png> --baseline-snapshot <approved.json> --actual-snapshot <actual.json> [--diff-out <diff.png>]
+bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs visual-calibrate --a <one.png> --b <two.png> [--a-snapshot <one.json> --b-snapshot <two.json>]
 ```
 
 The HTML render root carries `data-ui-screen` and `data-ui-state`. Important
@@ -117,6 +119,71 @@ approval and bound to the approved HTML hash and rendering environment; it must
 not create or update a baseline during Build and Test. DOM semantic capture is
 mandatory for schema 2 and may still use the renderer when both image settings
 are off. The image settings govern only PNG capture and pixel comparison.
+
+### PNG capture and visual comparison
+
+Capture is deterministic by construction, not by hope. The tool launches the
+local Chrome/Edge with a fixed flag set (`--headless=new`, `--hide-scrollbars`,
+`--force-color-profile=srgb`, `--font-render-hinting=none`,
+`--disable-lcd-text`, ...), sets the viewport and device scale factor
+(default 1280x720 at 1x), emulates `prefers-reduced-motion: reduce` and a light
+colour scheme, then freezes CSS animations/transitions, caret blink and Web
+Animations before observing; a capture with an animation still running fails
+`ANIMATION_NOT_FROZEN`. It waits for `document.fonts.ready`, fails on any font
+load error or remote `@font-face` source, hashes every bundled font file, and
+records the platform fonts that actually rendered glyphs (from the renderer,
+not from CSS). With policy `fonts: "bundled-only"` any glyph rendered by an
+unpinned system font fails `FONT_NOT_PINNED`.
+
+Each PNG snapshot records `environment` = renderer (`/json/version` browser
+product, WebKit revision, protocol and V8 versions, executable name), OS
+(platform, release, arch), viewport (width, height, deviceScaleFactor), colour
+profile, animation mode, a hash of the renderer flags, and the font fingerprint;
+plus `visual` = the validated policy, its SHA-256, and the resolved mask
+rectangles. `visual-compare` **refuses** (status `NOT-READY`, no pixel result)
+when any of that metadata is missing or differs, when the actual capture used a
+different policy than the approved baseline, when a mask target is missing in
+either capture, or when masks would hide more than `maxMaskRatio`. A different
+image size is a `FAIL`; there is no "common area" comparison.
+
+The visual policy (JSON, all keys optional, unknown keys rejected):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `colorThreshold` | `0.1` | YIQ colour distance (0..1) below which a pixel is equal |
+| `antiAliasing` | `true` | ignore pixels classified as anti-aliased edges in either image |
+| `maxDiffPixels` | `16` | absolute budget for isolated noise |
+| `maxDiffRatio` | `0.0005` | relative budget (differing / compared pixels); both budgets must hold |
+| `maxMaskRatio` | `0.25` (max `0.5`) | masks can never hide more than this share |
+| `fonts` | `"any"` | `"bundled-only"` requires every glyph from a hashed web font |
+| `masks` | `[]` | `{id, selector, reason}` for dynamic regions (clock, random IDs) |
+
+The policy is chosen at Refined Mockups and approved with the baseline; Build
+and Test cannot loosen it. The pixel classifier re-implements the pixelmatch
+YIQ delta and anti-aliasing detector (ISC) without a dependency.
+
+False-positive handling, in order:
+
+1. `NOT-READY` (environment/policy/mask refusal): re-run the actual capture in
+   the recorded environment with the recorded viewport, scale factor and
+   policy. Never compare across renderers, OS releases, fonts or scale factors.
+2. `FAIL`: open the `--diff-out` image (red = differing, yellow = tolerated
+   anti-aliasing, blue = masked). Isolated specks and edge anti-aliasing within
+   the budget already pass.
+3. Dynamic content (time, generated IDs, live data): add a mask with a reason
+   (or make the state deterministic) at Refined Mockups and re-approve the
+   baseline through the ordinary gate. Masks are not added during Build and
+   Test.
+4. Renderer noise between two captures of the same build: run
+   `visual-calibrate`; it reports the observed noise and recommends 3x that
+   noise as a budget (never below the defaults). The recommendation is advice
+   for the person approving the policy, never applied automatically.
+5. A real but intended change: record an approved deviation or upstream
+   revision through the existing disposition receipts. A sub-pixel layout shift
+   of whole content re-rasterizes every glyph and is treated as a real change.
+
+Recorded real run (Chrome 155, macOS arm64): see
+`poc/d-acceleration/evidence/visual-regression/summary.json`.
 
 Paths are relative to this contract's stage directory. Absolute paths, parent traversal, backslashes, missing assets, non-files and symlink escapes are rejected. Declare every referenced HTML, CSS, JS, PNG/JPEG/SVG/WebP image and WOFF2 font in assets with its exact SHA-256. No remote dependencies are allowed. Browser-dependency completeness is a separate review obligation; this checker verifies declared assets and does not parse every possible dynamic import or network request. An independently approved inventory of screen/state/AC triples must cover loading, empty, success, error and interaction recovery states where applicable. A syntactically valid ID does not establish semantic completeness; reviewer comparison with requirements remains mandatory.
 

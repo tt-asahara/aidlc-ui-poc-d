@@ -21,7 +21,9 @@ test('approved mockup re-capture reproduces the recorded approved snapshot', opt
   const fresh = await h.captureStates({ html: path.join(h.FIXTURE, 'approved', 'notes.html') });
   const recorded = golden('approved/ui-semantic-snapshot.json');
   assert.equal(canonical(fresh.source), canonical(recorded.source));
-  assert.equal(canonical(fresh.captures), canonical(recorded.captures));
+  // Semantic fields only: layout metrics and font fingerprints legitimately vary with the renderer build.
+  const semantic = snapshot => snapshot.captures.map(c => ({ screen: c.screen, state: c.state, elements: c.elements.map(({ key, kind, text, role, exactCopy, important, truncation, truncated, action, actionVerified }) => ({ key, kind, text, role, exactCopy, important, truncation, truncated, action, actionVerified })) }));
+  assert.equal(canonical(semantic(fresh)), canonical(semantic(recorded)));
 });
 
 test('independent implementation passes, and dropping any reported semantic fails at Build and Test', opts, async () => {
