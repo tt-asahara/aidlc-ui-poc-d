@@ -6,6 +6,7 @@ import policy from "./stage-policy.json";
 import { runWorker, type WorkerLaunch } from "./worker-adapters.ts";
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
 import { resolveDParallel } from "./d-config.ts";
+import { currentDParallelEnabled } from "./parallel-guard.ts";
 
 export type ResearchTask = { id: string; agent: string; objective: string; evidencePaths: string[] };
 type PolicyTier = "fast" | "balanced" | "judgment";
@@ -89,12 +90,16 @@ export async function runReadOnlyFanout(input: FanoutInput, options: FanoutOptio
   if (help.status !== 0) throw new Error(`Claude CLI capability preflight failed: ${help.stderr || help.stdout}`);
   validateClaudeReadOnlyCapabilities(help.stdout);
   const results: any[] = [];
-  for (let offset = 0; offset < planned.launches.length; offset += planned.maxParallel) {
-    const batch = planned.launches.slice(offset, offset + planned.maxParallel);
+  // OFF wins immediately: each batch re-reads the switch, and ON never widens a
+  // fanout planned under OFF (planned.maxParallel is already 1 then).
+  let maxConcurrentWorkers = 0;
+  for (let offset = 0; offset < planned.launches.length;) {
+    const width = currentDParallelEnabled(options.projectDir) ? planned.maxParallel : 1;
+    const batch = planned.launches.slice(offset, offset + width); offset += batch.length; maxConcurrentWorkers = Math.max(maxConcurrentWorkers, batch.length);
     const settled = await Promise.allSettled(batch.map(async (item) => ({ id: item.id, agent: item.agent, result: await runWorker(item.launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 120_000, maxStdoutBytes: 256_000, maxStderrBytes: 64_000 }) })));
     results.push(...settled.map((item, index) => item.status === "fulfilled" ? item.value : { id: batch[index]!.id, agent: batch[index]!.agent, result: { ok: false, failure: "process-error", stderr: String(item.reason) } }));
   }
-  return { action: "lead-integration-required", stage: planned.stage, directive: verification.directive, results, routing: planned.routing, verifiedAgainstFreshNext: true, policy: { workerWrites: false, leadIsOnlyArtifactWriter: true, officialStageTransition: false } };
+  return { action: "lead-integration-required", stage: planned.stage, directive: verification.directive, results, routing: planned.routing, parallel: { plannedMaxParallel: planned.maxParallel, maxConcurrentWorkers }, verifiedAgainstFreshNext: true, policy: { workerWrites: false, leadIsOnlyArtifactWriter: true, officialStageTransition: false } };
 }
 
 if (import.meta.main) {

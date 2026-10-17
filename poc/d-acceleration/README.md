@@ -161,7 +161,8 @@ project memory, but no project setting that initializes those two Construction
 fields; memory remains guidance rather than a policy setter. D therefore calls
 the official setters once, immediately after creating a new Intent, and only
 when that scope contains both Units Generation and Code Generation. Existing
-Intents are never changed. A later explicit per-Intent setter wins because a
+Intents are never changed by these defaults (only `parallel.enabled=false`
+moves an existing swarm Intent to serial, see below). A later explicit per-Intent setter wins because a
 bootstrap replay never reapplies the defaults. `swarm` requires `stage-major`;
 a single Unit runs as the serial-equivalent case, while multiple Units still
 parallelize only where the official DAG and isolated-worktree checks allow it.
@@ -170,10 +171,39 @@ Set either value to `official` to retain the AI-DLC default.
 `parallel.enabled` is D's single master switch and defaults to `true`. It does
 not relax dependencies: enabled mode still uses only policy-approved read-only
 fanout or the official independent-Unit DAG with disjoint writes and a wave
-barrier. `false` serializes read-only fanout and suppresses D's Construction
-swarm defaults for newly bootstrapped Intents. Generic-auto records the resolved
-value in its bootstrap journal, so changing the file does not alter a run
-already in progress.
+barrier. `false` holds every D dispatch to one worker at a time and keeps work
+away from the official parallel swarm (`parallel-guard.ts` owns this rule):
+
+- D design-wave workers already issued by the official engine, their retries
+  and tier escalations, and read-only fanout workers run strictly one at a
+  time. The scheduler result reports `parallel.maxConcurrentWorkers`.
+- New generic-auto Intents get no D swarm default (`constructionDefaults` is
+  ignored while OFF).
+- An existing Intent whose official `Construction Execution` is `swarm` is
+  moved to `serial` only through the official
+  `aidlc-state.ts set-construction-execution serial` setter, at the next D
+  boundary (run.ts/conductor step, generic-auto or issue-autopilot checkpoint,
+  or the `invoke-swarm` guard). The setter's own guards stay authoritative:
+  before Construction it applies; inside Construction an unattended run is
+  refused and an interactive run needs the person to have asked. While it is
+  refused, D still runs its own work serially, returns the one-line `recovery`,
+  and refuses every official `invoke-swarm` hand-off
+  (`parallel-off-action-required` from run.ts/conductor, `stop` from the host
+  checkpoint and from `parallel-guard.ts`). After the setter succeeds the host
+  gets `refresh` and obtains a fresh official directive.
+- `AIDLC_USE_SWARM` and `flags.swarm` (env, then local, project, machine
+  settings) only choose the driver for an `invoke-swarm` the engine already
+  issued. They never re-enable a swarm while D is OFF.
+
+Timing: OFF applies immediately. Every D boundary re-reads the configuration,
+and the scheduler re-reads it before every worker launch, so switching to OFF
+during a wave serializes every later launch of that wave (workers already
+running finish). ON never widens work already in progress: a run or wave that
+started under OFF stays at one worker, and ON applies from the next D
+invocation. An unreadable configuration counts as OFF at those boundaries. D
+never moves an Intent back to `swarm` when ON returns; use the official setter.
+The generic-auto bootstrap journal keeps the value seen at bootstrap as
+evidence only.
 
 The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
 comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to

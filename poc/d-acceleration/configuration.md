@@ -53,6 +53,25 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 配布する `.claude/tools/d-acceleration/d-acceleration.example.jsonc` はこのひな形と
 byte-identicalです。機能7の永続化前secret scanは必須で、無効化スイッチはありません。
 
+## 並列実行の親スイッチ (`parallel.enabled`)
+
+既定はONです。OFFはD全体の同時worker数を1にします。対象は、公式engineが発行済みの
+設計wave（retry・tier昇格を含む）、read-only fanout、再起動・再開後の再発行waveです。
+既存Intentの公式 `Construction Execution` が `swarm` の場合は、次のD境界
+（run.ts / conductor、generic auto・Issue autopilotのcheckpoint、`invoke-swarm` 前の
+`parallel-guard.ts`）で公式setter `aidlc-state.ts set-construction-execution serial`
+だけを使って `serial` へ移します。state fileを直接編集しません。公式setterの判定が
+優先され、Construction前は適用、Construction中の無人実行は拒否、対話実行は本人の
+依頼が必要です。拒否中もD自身の処理は逐次で続け、公式swarmへのhand-offは
+`parallel-off-action-required` / `stop` と1行の `recovery` で止めます。
+
+反映時期: OFFは即時です。各D境界とworker起動ごとに設定を読み直すため、wave途中で
+OFFにすると以後の起動はすべて逐次になります（実行中workerは完了まで継続）。ONは
+進行中のrun/waveを広げず、次のD起動から有効です。読めない設定はOFF扱いです。
+ONへ戻してもDはIntentを `swarm` へ戻しません。`AIDLC_USE_SWARM` と `flags.swarm`
+（env > local > project > machine）は発行済み `invoke-swarm` の実行方式選択だけで、
+D OFF中にswarmを再有効化しません。
+
 ## UI fidelity image settings
 
 `features.mockupPngGeneration` と `features.visualRegression` は独立した既定OFFの
