@@ -91,8 +91,9 @@ person's scope choice returned on a later turn) names the run-then-continue
 says (fill only the `--label` the message leaves to you, change nothing else);
 then, instead of `next`, run
 `bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`.
-The controller never creates an Intent itself: it binds to the Intent the
-official command created since `start`, derives active stages from that
+The controller never creates an Intent itself: it binds only to an Intent the
+official command created since `start` (a switched-to or resumed Intent is
+refused in one line; relay it and stop), derives active stages from that
 Intent's official state, initializes the bounded session, obtains the first
 stage directive, and checkpoints it before returning. Never rebuild or alter
 the creation command, infer a stage list, or act on the first stage unless
