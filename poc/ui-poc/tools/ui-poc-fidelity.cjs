@@ -6,8 +6,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { pathToFileURL } = require('node:url');
+const { pathToFileURL, fileURLToPath } = require('node:url');
 const { spawn } = require('node:child_process');
+const visual = require('./ui-poc-visual.cjs');
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const canonical = value => {
@@ -93,15 +94,11 @@ function compareSnapshots(approved, actual, dispositions = [], ledger = {}) {
   return { pass: findings.length === 0, findings_count: findings.length, findings, checked: approvedElements.size, deviated };
 }
 
-function compareImages(baselinePng, actualPng, baselineSnapshot, actualSnapshot) {
-  const findings = [];
-  if (!baselineSnapshot?.png || !actualSnapshot?.png) findings.push('PNG metadata is missing');
-  if (canonical(baselineSnapshot?.environment) !== canonical(actualSnapshot?.environment)) findings.push('Visual rendering environment differs from approved baseline');
-  const baseline = fs.readFileSync(baselinePng), actual = fs.readFileSync(actualPng);
-  if (baselineSnapshot?.png?.sha256 !== sha256(baseline)) findings.push('Approved baseline PNG hash mismatch');
-  if (actualSnapshot?.png?.sha256 !== sha256(actual)) findings.push('Actual PNG hash mismatch');
-  if (sha256(baseline) !== sha256(actual)) findings.push('Rendered PNG differs from approved baseline');
-  return {pass:findings.length===0,findings_count:findings.length,findings};
+function compareImages(baselinePng, actualPng, baselineSnapshot, actualSnapshot, options = {}) {
+  const result = visual.compareVisual(fs.readFileSync(baselinePng), fs.readFileSync(actualPng), baselineSnapshot, actualSnapshot, { withDiffImage: Boolean(options.diffOut) });
+  if (options.diffOut && result.diffImage) { fs.writeFileSync(options.diffOut, visual.encodePng(result.diffImage)); result.diffPng = { path: path.basename(options.diffOut), sha256: sha256(fs.readFileSync(options.diffOut)) }; }
+  delete result.diffImage;
+  return result;
 }
 
 function browserExecutable(explicit) {
@@ -167,6 +164,73 @@ const extractionExpression = `(() => {
   return {rendered:true,screen,state,elements};
 })()`;
 
+// Fixed renderer flags; their hash is part of the recorded environment.
+const RENDER_FLAGS = Object.freeze(['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--hide-scrollbars','--force-color-profile=srgb','--font-render-hinting=none','--disable-lcd-text','--disable-extensions','--mute-audio']);
+const positiveInt = (value, name) => { const number = Number(value); if (!Number.isInteger(number) || number < 1 || number > 10000) throw new Error(`INVALID_VIEWPORT_${name.toUpperCase()}`); return number; };
+
+// Stop CSS animations/transitions, caret blink and smooth scroll, finish Web
+// Animations, then wait two frames. Returns how many animations still run.
+const freezeExpression = `(async () => {
+  const style = document.createElement('style'); style.id = 'ui-poc-freeze';
+  style.textContent = '*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;animation-iteration-count:1!important;transition:none!important;caret-color:transparent!important;scroll-behavior:auto!important}';
+  document.head.appendChild(style);
+  for (const animation of document.getAnimations()) { try { animation.finish(); } catch { animation.cancel(); } }
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return { running: document.getAnimations().filter(animation => animation.playState === 'running').length };
+})()`;
+
+const fontFaceExpression = `(async () => {
+  await document.fonts.ready;
+  const failed = Array.from(document.fonts).filter(face => face.status === 'error').map(face => face.family);
+  const sources = [];
+  const walk = (rules, base) => { for (const rule of Array.from(rules || [])) {
+    if (rule.constructor.name === 'CSSFontFaceRule') { const src = rule.style.getPropertyValue('src'); for (const match of src.matchAll(/url\\((['"]?)([^'")]+)\\1\\)/g)) sources.push({ family: rule.style.getPropertyValue('font-family').replace(/['"]/g,'').trim(), weight: rule.style.getPropertyValue('font-weight') || 'normal', style: rule.style.getPropertyValue('font-style') || 'normal', url: new URL(match[2], base).href }); }
+    else if (rule.cssRules) walk(rule.cssRules, base);
+  } };
+  for (const sheet of Array.from(document.styleSheets)) { try { walk(sheet.cssRules, sheet.href || document.baseURI); } catch { sources.push({ url: sheet.href, unreadable: true }); } }
+  return { failed, sources };
+})()`;
+
+/**
+ * Record which fonts actually rendered glyphs (platform font identity from the
+ * renderer) and hash every bundled @font-face file. Policy 'bundled-only'
+ * refuses any glyph drawn from an unpinned system font.
+ */
+async function collectFonts(cdp, policy) {
+  const declared = (await cdp.send('Runtime.evaluate', { expression:fontFaceExpression, returnByValue:true, awaitPromise:true })).result?.value;
+  if (!declared) throw new Error('FONT_INSPECTION_FAILED');
+  if (declared.failed.length) throw new Error(`FONT_LOAD_FAILED: ${[...new Set(declared.failed)].join(', ')}`);
+  const bundled = [];
+  for (const source of declared.sources) {
+    if (source.unreadable) throw new Error(`FONT_STYLESHEET_UNREADABLE: ${source.url}`);
+    let fileSha256 = null;
+    if (source.url.startsWith('data:')) fileSha256 = sha256(Buffer.from(source.url));
+    else if (source.url.startsWith('file:')) { const file = fileURLToPath(source.url); if (fs.existsSync(file)) fileSha256 = sha256(fs.readFileSync(file)); }
+    else if (!['127.0.0.1','localhost','[::1]'].includes(new URL(source.url).hostname)) throw new Error(`FONT_REMOTE_SOURCE: ${source.url}`);
+    else { const response = await fetch(source.url); if (!response.ok) throw new Error(`FONT_FETCH_FAILED: ${source.url}`); const bytes = Buffer.from(await response.arrayBuffer()); if (bytes.length > 50 * 1024 * 1024) throw new Error(`FONT_TOO_LARGE: ${source.url}`); fileSha256 = sha256(bytes); }
+    bundled.push({ family:source.family, weight:source.weight, style:source.style, file:source.url.startsWith('data:') ? 'data:' : path.basename(new URL(source.url).pathname), sha256:fileSha256 });
+  }
+  await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
+  const doc = await cdp.send('DOM.getDocument', { depth:0 });
+  const { nodeIds } = await cdp.send('DOM.querySelectorAll', { nodeId:doc.root.nodeId, selector:'body, body *' });
+  if (nodeIds.length > 5000) throw new Error('FONT_INSPECTION_TOO_MANY_NODES');
+  const faces = new Map();
+  for (const nodeId of nodeIds) {
+    const { fonts } = await cdp.send('CSS.getPlatformFontsForNode', { nodeId });
+    for (const font of fonts || []) { const face = { familyName:font.familyName, postScriptName:font.postScriptName || '', isCustomFont:Boolean(font.isCustomFont) }; faces.set(canonical(face), face); }
+  }
+  const rendered = [...faces.values()].sort((a, b) => canonical(a).localeCompare(canonical(b)));
+  bundled.sort((a, b) => canonical(a).localeCompare(canonical(b)));
+  if (!rendered.length) throw new Error('FONT_INSPECTION_NO_TEXT');
+  if (policy.fonts === 'bundled-only') {
+    const system = rendered.filter(face => !face.isCustomFont);
+    if (system.length) throw new Error(`FONT_NOT_PINNED: system fonts rendered glyphs: ${system.map(face => face.postScriptName || face.familyName).join(', ')}`);
+    const unhashed = bundled.filter(face => !face.sha256);
+    if (unhashed.length) throw new Error(`FONT_NOT_PINNED: bundled font file not hashable: ${unhashed.map(face => face.file).join(', ')}`);
+  }
+  return { rendered, bundled, sha256:hashJson({ rendered, bundled }) };
+}
+
 async function capture(options) {
   const executable = browserExecutable(options.browser);
   if (!executable) throw new Error('BROWSER_TOOL_UNAVAILABLE');
@@ -184,48 +248,80 @@ async function capture(options) {
     source = { path:target, sha256:sha256(Buffer.from(target)) };
     observation = { mode:'loopback-url', target, targetSha256:source.sha256, capturedAt:new Date().toISOString() };
   }
+  const viewport = { width:positiveInt(options.width ?? 1280, 'width'), height:positiveInt(options.height ?? 720, 'height'), deviceScaleFactor:Number(options['device-scale-factor'] ?? 1) };
+  if (![1,2,3].includes(viewport.deviceScaleFactor)) throw new Error('INVALID_DEVICE_SCALE_FACTOR: use 1, 2, or 3');
+  const checkedPolicy = visual.validatePolicy(options['visual-policy'] ? JSON.parse(fs.readFileSync(options['visual-policy'], 'utf8')) : {});
+  if (checkedPolicy.findings.length) throw new Error(`INVALID_VISUAL_POLICY: ${checkedPolicy.findings.join('; ')}`);
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-poc-browser-'));
-  const processHandle = spawn(executable, ['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--remote-debugging-port=0',`--user-data-dir=${temp}`,target], { stdio:'ignore' });
+  const processHandle = spawn(executable, [...RENDER_FLAGS,'--remote-debugging-port=0',`--user-data-dir=${temp}`,target], { stdio:'ignore' });
   let cdp;
   try {
     const active = path.join(temp, 'DevToolsActivePort'); await waitForFile(active);
     const [port] = fs.readFileSync(active, 'utf8').trim().split(/\r?\n/);
+    const version = await requestJson(`http://127.0.0.1:${port}/json/version`);
     const pages = await requestJson(`http://127.0.0.1:${port}/json`);
     const page = pages.find(item => item.type === 'page'); if (!page) throw new Error('BROWSER_PAGE_UNAVAILABLE');
     cdp = new Cdp(page.webSocketDebuggerUrl); await cdp.open(); await cdp.send('Runtime.enable'); await cdp.send('Page.enable');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: Number(options.width || 1280), height: Number(options.height || 720), deviceScaleFactor: 1, mobile: false });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width:viewport.width, height:viewport.height, deviceScaleFactor:viewport.deviceScaleFactor, mobile:false });
+    await cdp.send('Emulation.setEmulatedMedia', { media:'screen', features:[{name:'prefers-reduced-motion',value:'reduce'},{name:'prefers-color-scheme',value:'light'}] });
     await waitForExpression(cdp, `document.readyState==='complete' && Boolean(document.querySelector('[data-ui-screen][data-ui-state]'))`);
     const applySetup = async () => { for (const spec of String(options['setup-click'] || '').split(',').map(value => value.trim()).filter(Boolean)) { const separator=spec.lastIndexOf('@'), key=separator>0?spec.slice(0,separator):'', expectedState=separator>0?spec.slice(separator+1):''; if(!key||!id(expectedState,'STATE-'))throw new Error(`INVALID_SETUP_CLICK: ${spec}; expected ELEMENT-ID@STATE-ID`); const clicked = await cdp.send('Runtime.evaluate', { expression:`(()=>{const el=document.querySelector('[data-ui-id='+CSS.escape(${JSON.stringify(key)})+']');if(!el)return false;el.click();return true})()`, returnByValue:true }); if (clicked.result?.value !== true) throw new Error(`SETUP_CONTROL_NOT_FOUND: ${key}`); await waitForExpression(cdp, `(document.querySelector('[data-ui-screen]')||document.body).getAttribute('data-ui-state')===${JSON.stringify(expectedState)}`); } };
     await applySetup();
+    const frozen = await cdp.send('Runtime.evaluate', { expression:freezeExpression, returnByValue:true, awaitPromise:true });
+    if (frozen.result?.value?.running !== 0) throw new Error(`ANIMATION_NOT_FROZEN: ${JSON.stringify(frozen.result?.value ?? frozen.exceptionDetails?.text)}`);
+    const fonts = await collectFonts(cdp, checkedPolicy.policy);
     const result = await cdp.send('Runtime.evaluate', { expression: extractionExpression, returnByValue:true, awaitPromise:true });
     const captureResult = result.result?.value; if (!captureResult?.rendered) throw new Error(captureResult?.error || 'RENDER_CAPTURE_FAILED');
-    if (options.png) { const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false}), bytes=Buffer.from(shot.data,'base64'); fs.writeFileSync(options.png,bytes); captureResult.pngSha256=sha256(bytes); }
+    captureResult.fonts = fonts;
+    let visualRecord = null;
+    if (options.png) {
+      const scale = viewport.deviceScaleFactor, masks = [];
+      for (const mask of checkedPolicy.policy.masks) {
+        const rects = await cdp.send('Runtime.evaluate', { expression:`Array.from(document.querySelectorAll(${JSON.stringify(mask.selector)})).map(el=>el.getBoundingClientRect()).filter(r=>r.width>0&&r.height>0).map(r=>({x:r.left*${scale},y:r.top*${scale},w:r.width*${scale},h:r.height*${scale}}))`, returnByValue:true });
+        masks.push({ id:mask.id, rects:rects.result?.value || [] });
+      }
+      const shot=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true}), bytes=Buffer.from(shot.data,'base64');
+      fs.writeFileSync(options.png,bytes); captureResult.pngSha256=sha256(bytes);
+      visualRecord = { policy:checkedPolicy.policy, policySha256:checkedPolicy.policySha256, masks };
+    }
     for (const [index,element] of captureResult.elements.filter(value => value.action).entries()) {
       const action = JSON.stringify(element.action), key = JSON.stringify(element.key);
       const verification = await cdp.send('Runtime.evaluate', { expression:`(async()=>{const action=${action},el=document.querySelector('[data-ui-id='+CSS.escape(${key})+']');if(!el)return false;const target=action.target?document.querySelector('[data-ui-id='+CSS.escape(action.target)+']'):null,before=target?{clientHeight:target.clientHeight,scrollHeight:target.scrollHeight}:null;el.click();for(let attempt=0;attempt<100;attempt++){const root=document.querySelector('[data-ui-screen]')||document.body,stateOk=root.getAttribute('data-ui-state')===action.expectedState;if(stateOk&&!target)return true;if(stateOk&&target){const after={clientHeight:target.clientHeight,scrollHeight:target.scrollHeight};if(after.clientHeight>before.clientHeight||after.scrollHeight<=after.clientHeight+1)return true}await new Promise(r=>setTimeout(r,50))}return false})()`, returnByValue:true, awaitPromise:true });
       element.actionVerified = verification.result?.value === true;
       if(index<captureResult.elements.filter(value=>value.action).length-1){await cdp.send('Page.reload');await waitForExpression(cdp, `document.readyState==='complete' && Boolean(document.querySelector('[data-ui-screen][data-ui-state]'))`);await applySetup();}
     }
-    const snapshot = { schema:1, kind:'ui-semantic-snapshot', source, observation, environment:{renderer:path.basename(executable),viewport:{width:Number(options.width||1280),height:Number(options.height||720)}}, captures:[captureResult] };
+    const environment = {
+      renderer:{ executable:path.basename(executable), product:version.Browser, revision:version['WebKit-Version'], protocolVersion:version['Protocol-Version'], jsVersion:version['V8-Version'] },
+      os:{ platform:os.platform(), release:os.release(), arch:os.arch() },
+      viewport, colorProfile:'srgb', animations:'frozen', flagsSha256:sha256(Buffer.from(canonical([...RENDER_FLAGS].sort()))),
+      fonts:{ policy:checkedPolicy.policy.fonts, sha256:fonts.sha256 },
+    };
+    const snapshot = { schema:1, kind:'ui-semantic-snapshot', source, observation, environment, captures:[captureResult] };
     const validation = validateSnapshot(snapshot); if (validation.length) throw new Error(validation.join('; '));
-    if (options.png) snapshot.png={path:path.basename(options.png),sha256:captureResult.pngSha256};
+    if (options.png) { snapshot.png={path:path.basename(options.png),sha256:captureResult.pngSha256}; snapshot.visual=visualRecord; }
     return snapshot;
   } finally {
     if (cdp) cdp.close();
     processHandle.kill('SIGTERM');
-    await Promise.race([new Promise(resolve => processHandle.once('exit', resolve)),new Promise(resolve => setTimeout(resolve,1000))]);
+    const exited = await Promise.race([new Promise(resolve => processHandle.once('exit', () => resolve(true))),new Promise(resolve => setTimeout(() => resolve(false),1000))]);
+    if (!exited && processHandle.exitCode === null) { processHandle.kill('SIGKILL'); await Promise.race([new Promise(resolve => processHandle.once('exit', resolve)),new Promise(resolve => setTimeout(resolve,1000))]); }
     for(let attempt=0;attempt<3;attempt++){try{fs.rmSync(temp,{recursive:true,force:true});break;}catch(error){if(attempt===2)console.error(`Browser profile cleanup failed: ${error.message}`);else await new Promise(resolve=>setTimeout(resolve,100));}}
   }
 }
+
+const withoutFontHash = environment => environment?.fonts ? {...environment,fonts:{...environment.fonts,sha256:undefined}} : environment;
 
 function mergeSnapshots(snapshots) {
   if (!snapshots.length) throw new Error('NO_SNAPSHOTS_TO_MERGE');
   const [first] = snapshots;
   for (const snapshot of snapshots) {
     const findings=validateSnapshot(snapshot); if(findings.length) throw new Error(findings.join('; '));
-    if (canonical(snapshot.source)!==canonical(first.source) || canonical(snapshot.environment)!==canonical(first.environment)) throw new Error('SNAPSHOT_SOURCE_OR_ENVIRONMENT_DIFFERS');
+    if (canonical(snapshot.source)!==canonical(first.source) || canonical(withoutFontHash(snapshot.environment))!==canonical(withoutFontHash(first.environment))) throw new Error('SNAPSHOT_SOURCE_OR_ENVIRONMENT_DIFFERS');
   }
-  const merged={...first,captures:snapshots.flatMap(snapshot=>snapshot.captures)};
+  const captures=snapshots.flatMap(snapshot=>snapshot.captures);
+  const merged={...first,captures};
+  // Each state may render different glyphs; the merged font fingerprint binds every state's fonts in order.
+  if (first.environment?.fonts) merged.environment={...first.environment,fonts:{...first.environment.fonts,sha256:hashJson(captures.map(capture=>capture.fonts?.sha256??null))}};
   const findings=validateSnapshot(merged);if(findings.length)throw new Error(findings.join('; '));return merged;
 }
 
@@ -233,12 +329,13 @@ function parse(argv) { const result={_:[]}; for(let i=0;i<argv.length;i++){ if(!
 async function main(argv) {
   try {
     const args=parse(argv), command=args._[0];
-    if(command==='capture') { if((!args.html&&!args.url)||(args.html&&args.url)||!args.out) throw new Error('USAGE: capture (--html FILE | --url LOOPBACK_URL) --out FILE [--png FILE] [--setup-click ELEMENT-ID@STATE-ID,...]'); const snapshot=await capture(args); fs.writeFileSync(args.out,`${JSON.stringify(snapshot,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(snapshot),captures:snapshot.captures.length,png:Boolean(args.png)})); return; }
+    if(command==='capture') { if((!args.html&&!args.url)||(args.html&&args.url)||!args.out) throw new Error('USAGE: capture (--html FILE | --url LOOPBACK_URL) --out FILE [--png FILE] [--width N] [--height N] [--device-scale-factor 1|2|3] [--visual-policy JSON] [--setup-click ELEMENT-ID@STATE-ID,...]'); const snapshot=await capture(args); fs.writeFileSync(args.out,`${JSON.stringify(snapshot,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(snapshot),captures:snapshot.captures.length,png:Boolean(args.png)})); return; }
     if(command==='merge') { if(!args.input||!args.out) throw new Error('USAGE: merge --input ONE.json,TWO.json --out MERGED.json'); const merged=mergeSnapshots(String(args.input).split(',').map(file=>JSON.parse(fs.readFileSync(file.trim(),'utf8')))); fs.writeFileSync(args.out,`${JSON.stringify(merged,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(merged),captures:merged.captures.length})); return; }
     if(command==='compare') { if(!args.approved||!args.actual) throw new Error('USAGE: compare --approved FILE --actual FILE [--dispositions FILE] [--approval-ledger FILE]'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const result=compareSnapshots(read(args.approved),read(args.actual),args.dispositions?read(args.dispositions):[],args['approval-ledger']?read(args['approval-ledger']):{}); console.log(JSON.stringify(result)); process.exitCode=result.pass?0:1; return; }
-    if(command==='visual-compare') { if(!args.baseline||!args.actual||!args['baseline-snapshot']||!args['actual-snapshot']) throw new Error('USAGE: visual-compare --baseline PNG --actual PNG --baseline-snapshot JSON --actual-snapshot JSON'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const result=compareImages(args.baseline,args.actual,read(args['baseline-snapshot']),read(args['actual-snapshot'])); console.log(JSON.stringify(result)); process.exitCode=result.pass?0:1; return; }
-    throw new Error('USAGE: ui-poc-fidelity.cjs capture|compare');
+    if(command==='visual-compare') { if(!args.baseline||!args.actual||!args['baseline-snapshot']||!args['actual-snapshot']) throw new Error('USAGE: visual-compare --baseline PNG --actual PNG --baseline-snapshot JSON --actual-snapshot JSON [--diff-out PNG]'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const result=compareImages(args.baseline,args.actual,read(args['baseline-snapshot']),read(args['actual-snapshot']),{diffOut:args['diff-out']}); console.log(JSON.stringify(result)); process.exitCode=result.pass?0:1; return; }
+    if(command==='visual-calibrate') { if(!args.a||!args.b) throw new Error('USAGE: visual-calibrate --a PNG --b PNG [--a-snapshot JSON --b-snapshot JSON]  (two captures of the same build; snapshots supply policy and mask rects)'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const snaps=args['a-snapshot']&&args['b-snapshot']?[read(args['a-snapshot']),read(args['b-snapshot'])]:[]; const policy=snaps[0]?.visual?.policy||{}; const rects=snaps.flatMap(snap=>(snap.visual?.masks||[]).flatMap(mask=>mask.rects||[])); console.log(JSON.stringify({pass:true,...visual.calibrate(fs.readFileSync(args.a),fs.readFileSync(args.b),policy,rects)})); return; }
+    throw new Error('USAGE: ui-poc-fidelity.cjs capture|merge|compare|visual-compare|visual-calibrate');
   } catch(error) { console.log(JSON.stringify({pass:false,findings_count:1,findings:[error.message]})); process.exitCode=1; }
 }
 if(require.main===module) main(process.argv.slice(2));
-module.exports={canonical,hashJson,validateSnapshot,compareSnapshots,compareImages,dispositionReceipt,browserExecutable,capture,mergeSnapshots,main};
+module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,compareSnapshots,compareImages,dispositionReceipt,browserExecutable,capture,mergeSnapshots,main};

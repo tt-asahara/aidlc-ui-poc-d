@@ -63,5 +63,8 @@ PNG撮影と画像比較だけを切り替えます。
 
 画像比較ON時は同じviewport、renderer/font環境、承認済みbaseline hashが必要です。
 browser、baseline、状態再現、互換環境のいずれかがなければNOT-READYであり、passへ
-縮退しません。決定論laneが保証するのは観測可能なDOM事実とrendered PNG bytesの
-一致です。自然文仕様の意味的同値が必要な場合だけ既存`specGrounding`を使用します。
+縮退しません。renderer版・OS・viewport・deviceScaleFactor・font指紋・起動flag・
+visual policyのいずれかが基準と異なる場合、比較自体を拒否(NOT-READY)します。
+画素比較は承認済みpolicyの閾値・anti-alias許容・mask(理由必須)で行い、基準と
+policyはBuild and Testで生成・緩和できません。決定論laneが保証するのは観測可能な
+DOM事実と、記録済み環境・承認済みpolicy下のrendered PNG一致です。自然文仕様の意味的同値が必要な場合だけ既存`specGrounding`を使用します。
