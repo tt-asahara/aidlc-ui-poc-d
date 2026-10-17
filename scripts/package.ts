@@ -896,6 +896,7 @@ function buildTree(
       "issue-autopilot-cli.ts",
       "official-next-adapter.ts",
       "parallel-guard.ts",
+      "question-wait.ts",
       "read-only-fanout.ts",
       "requirement-ui-cross-validation.ts",
       "resume-ledger.ts",
@@ -911,7 +912,7 @@ function buildTree(
       }
       const destination = join(treeRoot, "tools", "d-acceleration", file);
       mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "ai-question-controller.ts") {
+      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "ai-question-controller.ts" || file === "question-wait.ts") {
         const projected = readFileSync(source, "utf8")
           .replace('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
           .replace('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"')
