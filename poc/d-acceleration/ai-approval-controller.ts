@@ -118,11 +118,11 @@ function sha256(value: string | Uint8Array): string {
 }
 
 function checkedClaudeExecutable(projectRoot: string, requested: string, expectedSha256?: string): string {
+  if (basename(requested) !== "claude") throw new Error("Claude executable entry must be named claude");
   const actual = realpathSync(requested);
   const metadata = lstatSync(actual);
   const bytes = readFileSync(actual);
   if (!metadata.isFile() || within(projectRoot, actual)) throw new Error("host-pinned Claude executable must be a file outside the project");
-  if (basename(actual) !== "claude") throw new Error("host-pinned Claude executable must be named claude");
   if (!isNativeExecutable(bytes)) throw new Error("host-pinned Claude executable must be a native binary, not a script");
   if (expectedSha256 && sha256(bytes) !== expectedSha256) throw new Error("host-pinned Claude executable digest mismatch");
   return actual;

@@ -218,11 +218,11 @@ if (import.meta.main) {
 
 function pinnedExecutable(projectDir: string, requested: string | undefined, expectedSha256: string | undefined): string {
   if (!requested || !expectedSha256) throw new Error("host-pinned gh executable path and sha256 are required");
+  if (basename(requested) !== "gh") throw new Error("host-pinned gh executable entry must be named gh");
   const actual = realpathSync(requested);
   const metadata = lstatSync(actual);
   const bytes = readFileSync(actual);
   if (!metadata.isFile() || inside(realpathSync(projectDir), actual)) throw new Error("host-pinned gh executable must be a file outside the project");
-  if (basename(actual) !== "gh") throw new Error("host-pinned gh executable must be named gh");
   if (!isNativeExecutable(bytes)) throw new Error("host-pinned gh executable must be a native binary, not a script");
   if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) throw new Error("host-pinned gh executable digest mismatch");
   return actual;
