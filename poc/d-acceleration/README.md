@@ -44,6 +44,18 @@ functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.
 
+## Design document (`/aidlc --doc`)
+
+Ported from the KDDI harness. `/aidlc --doc` merges a product-level design
+document spanning every intent into the space-level
+`aidlc/spaces/<space>/design-document/`; `/aidlc --doc --full` regenerates it
+after `design-document.ts doc-snapshot` keeps one previous generation under the
+already-ignored `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`. The LLM
+writes the document following `design-document-guide.md`; `design-document.ts
+doc-manifest --json` owns the deterministic input set. It is read-only with
+respect to workflow state. The KDDI critic loop (`docCriticLoop`, design-doc
+audit and reviewer agent) is not ported.
+
 ## Approved-transition Git persistence
 
 The Claude projection includes a host-only PostToolUse coordinator that runs
@@ -256,3 +268,8 @@ and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
 `model-routing-probe.ts` produces that evidence. The
 2026-10-17 results are in `evidence/model-routing/README.md`.
+
+The A/B/C/D lineage, the adopted-number ledger (items 7, 9–17, 21, 22, 27,
+28), stage-to-skill invocation evidence, and the pr-lens record are in
+[`audit/`](audit/README.md). Reproduce the lineage comparison with
+`bash poc/d-acceleration/audit/lineage.sh`.

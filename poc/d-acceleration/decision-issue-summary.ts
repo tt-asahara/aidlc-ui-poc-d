@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveDAiApproval, resolveDDecisionIssueSummary } from "./d-config.ts";
+import { ghAuthPreflight, githubHostFromRepository, type GhAuthResult } from "./gh-host.ts";
 
 export type DecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type GhResult = { status: number; stdout: string; stderr?: string };
@@ -15,6 +16,8 @@ export type DecisionIssueSummaryInput = {
   config: DecisionIssueSummaryConfig;
   gh?: GhAdapter;
   stateDir?: string;
+  /** gh login check for the repository's exact host; runs after permission, before any GitHub call. */
+  ghAuth?: (host: string) => Promise<GhAuthResult>;
 };
 
 type Decision = { schemaVersion: 1; decisionId: string; stage: string; outcome: "approve" | "block"; reason: string; evidence: Array<{ path: string; sha256: string }>; uncertainties: string[] };
@@ -117,7 +120,8 @@ async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput,
   if (intent !== activeIntent(project)) throw new Error("intent directory must be the active Intent");
   const repository = input.config.repository?.trim();
   if (!repository) return { status: "stopped", reason: "repository-required" };
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must be owner/name");
+  if (!/^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must be [HOST/]owner/name");
+  const host = githubHostFromRepository(repository);
   if (!Number.isSafeInteger(input.config.maxRetries) || input.config.maxRetries < 0 || input.config.maxRetries > 10) throw new Error("maxRetries must be an integer from 0 to 10");
 
   const intentRelative = relative(project, intent);
@@ -141,6 +145,10 @@ async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput,
   const permission = await permissionVerifier({ projectDir: project, repository, intent: intentRelative, payloadSha256 });
   if (!permission.authorized) return { status: "stopped", reason: permission.reason ?? "publish-authorization-required", payload };
   if (!input.gh) throw new Error("GitHub adapter is required when send is enabled");
+  if (input.ghAuth) {
+    const auth = await input.ghAuth(host);
+    if (!auth.ok) return { status: "stopped", reason: auth.reason, host: auth.host, nextStep: auth.nextStep, detail: auth.detail, payload };
+  }
 
   const stateRoot = resolve(project, input.stateDir ?? ".aidlc-engine/d-decision-issue-summary");
   if (!inside(project, stateRoot)) throw new Error("state directory escapes project");
@@ -203,10 +211,15 @@ if (import.meta.main) {
     const executable = command === "publish" && resolvedConfig.send
       ? pinnedExecutable(projectDir, process.env.AIDLC_GH_EXECUTABLE_PATH, process.env.AIDLC_GH_EXECUTABLE_SHA256)
       : undefined;
+    // GH_HOST is pinned to the repository host so a host-less owner/name can
+    // never be silently resolved against an inherited, different gh host.
+    const ghHost = resolvedConfig.repository ? githubHostFromRepository(resolvedConfig.repository) : undefined;
+    const ghAdapter: GhAdapter | undefined = executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...(ghHost ? { GH_HOST: ghHost } : {}) } }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined;
     const result = await runDecisionIssueSummary({
       projectDir, intentDir, decisionsFile,
       config: command === "generate" ? { ...resolvedConfig, send: false } : resolvedConfig,
-      gh: executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined,
+      gh: ghAdapter,
+      ghAuth: ghAdapter ? (host) => ghAuthPreflight(host, (args) => ghAdapter.run(args).then((r) => ({ status: r.status, stdout: r.stdout, stderr: r.stderr ?? "" }))) : undefined,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(result.status === "stopped" ? 2 : 0);

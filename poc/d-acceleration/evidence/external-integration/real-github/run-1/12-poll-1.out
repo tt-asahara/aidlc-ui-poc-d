@@ -1,0 +1,16 @@
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "label-poll",
+    "strategy": "issue-number-ascending",
+    "reason": "first eligible unbound Issue in ascending issue-number order",
+    "eligibleIssueNumbers": [
+      1,
+      2
+    ],
+    "selectedIssueNumber": 1
+  }
+}

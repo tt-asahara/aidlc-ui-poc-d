@@ -1,0 +1,1 @@
+git -C <sandbox>/product switch -c aidlc-sandbox/20261017T065220Z 

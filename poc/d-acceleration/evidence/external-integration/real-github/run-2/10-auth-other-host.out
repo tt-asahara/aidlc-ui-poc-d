@@ -1,0 +1,8 @@
+{
+  "status": "stopped",
+  "reason": "gh-auth-required",
+  "host": "unauthenticated.invalid",
+  "repository": "unauthenticated.invalid/tt-asahara/aidlc-d-sandbox",
+  "nextStep": "gh auth login --hostname unauthenticated.invalid",
+  "detail": "You are not logged into any accounts on unauthenticated.invalid"
+}

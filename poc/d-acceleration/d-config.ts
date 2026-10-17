@@ -91,7 +91,12 @@ function readConfig(path: string): DFileConfig {
   const auto = object(value.auto, "auto", path);
   if (auto) { for (const key of ["enabled", "sessionOnly", "assumptionLedger"] as const) bool(auto[key], `auto ${key}`, path); if (auto.through !== undefined && (typeof auto.through !== "string" || (!OFFICIAL_STAGES.has(auto.through) && !OFFICIAL_PHASES.has(auto.through)))) throw new Error(`invalid D auto through in ${path}`); if (auto.ambiguityPolicy !== undefined && !["halt", "assume", "research"].includes(String(auto.ambiguityPolicy))) throw new Error(`invalid D auto ambiguityPolicy in ${path}`); if (auto.maxRetries !== undefined && (!Number.isSafeInteger(auto.maxRetries) || Number(auto.maxRetries) < 0 || Number(auto.maxRetries) > 10)) throw new Error(`invalid D auto maxRetries in ${path}`); if (auto.maxSteps !== undefined && (!Number.isSafeInteger(auto.maxSteps) || Number(auto.maxSteps) < 1 || Number(auto.maxSteps) > 1000)) throw new Error(`invalid D auto maxSteps in ${path}`); if (auto.deadlineMs !== undefined && (!Number.isSafeInteger(auto.deadlineMs) || Number(auto.deadlineMs) < 1000 || Number(auto.deadlineMs) > 86_400_000)) throw new Error(`invalid D auto deadlineMs in ${path}`); strings(auto.labelAllowlist, "auto labelAllowlist", path); }
   const issueAutopilot = object(value.issueAutopilot, "issue autopilot", path);
-  if (issueAutopilot) for (const key of ["enabled", "oneIssuePerRun"] as const) bool(issueAutopilot[key], `issue autopilot ${key}`, path);
+  if (issueAutopilot) {
+    for (const key of ["enabled", "oneIssuePerRun"] as const) bool(issueAutopilot[key], `issue autopilot ${key}`, path);
+    // The one-Issue bound is a fixed safety contract, not a tunable: false used
+    // to be accepted and silently ignored. Refuse it so the setting cannot lie.
+    if (issueAutopilot.oneIssuePerRun === false) throw new Error(`issueAutopilot.oneIssuePerRun=false is not supported in ${path}: every run processes at most one Issue; repeat runs with /loop instead`);
+  }
   const aiApproval = object(value.aiApproval, "AI approval", path);
   if (aiApproval) {
     if (aiApproval.mode !== undefined && !["human", "stage-gates"].includes(String(aiApproval.mode))) throw new Error(`invalid D AI approval mode in ${path}`);
@@ -101,7 +106,7 @@ function readConfig(path: string): DFileConfig {
   const decisionIssueSummary = object(value.decisionIssueSummary, "decision Issue summary", path);
   if (decisionIssueSummary) {
     for (const key of ["enabled", "send"] as const) bool(decisionIssueSummary[key], `decision Issue summary ${key}`, path);
-    if (decisionIssueSummary.repository !== undefined && (typeof decisionIssueSummary.repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(decisionIssueSummary.repository))) throw new Error(`invalid D decision Issue summary repository in ${path}`);
+    if (decisionIssueSummary.repository !== undefined && (typeof decisionIssueSummary.repository !== "string" || !/^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(decisionIssueSummary.repository))) throw new Error(`invalid D decision Issue summary repository in ${path}`);
     if (decisionIssueSummary.maxRetries !== undefined && (!Number.isSafeInteger(decisionIssueSummary.maxRetries) || Number(decisionIssueSummary.maxRetries) < 0 || Number(decisionIssueSummary.maxRetries) > 5)) throw new Error(`invalid D decision Issue summary maxRetries in ${path}`);
   }
   const constructionDefaults = object(value.constructionDefaults, "construction defaults", path);
