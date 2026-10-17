@@ -1,6 +1,11 @@
 {
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
+  "constructionDefaults": {
+    // 対象: D generic auto が新規Intentを作成した直後（既存Intentには遡及しない）。役割: 公式state setterでConstructionの歩行順と実行方式を初期設定する。既定値: stage-major + swarm。Intent作成後に利用者が公式setterで明示変更した値が以後優先する。Construction非対応scopeでは適用せず、単一Unitではswarmは実質serial、複数Unitでも公式DAGが独立かつisolated worktreeを許可したwaveだけ並列化する。`official`へ変更するとAI-DLC本体既定値を維持する。
+    "iteration": "stage-major",
+    "execution": "swarm",
+  },
   "clef": {
     // 対象: D対応の設計wave内で明示したlow-risk Unitのrouting時。役割: loopback Clefへtier判断を委譲する。ON時: urlへ問い合わせ、失敗・低信頼ならOpusへ安全にfallback。OFF時: Clefを呼ばない。既定値: OFF。利用場面: ローカルClefを別途起動済みの場合だけ。
     "enabled": false,

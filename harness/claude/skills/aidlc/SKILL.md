@@ -64,11 +64,15 @@ Never pass the literal `--auto` to official `orchestrate next`, interpolate the
 description into shell text, or infer its scope. Act on the returned official
 directive exactly as below. An official `ask`, including scope confirmation,
 approval, or sensor recovery, is a human gate and ends the turn; auto mode never
-answers it. After the returned official `print` has instructed and successfully
-completed `intent-create`, obtain the exact active stage slugs from the official
-scope graph and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts init --project-dir "$PWD" --active-stages <comma-separated-slugs>`.
-Do not initialize from a proposed scope or guessed stage list.
+answers it. When the returned official `print` carries the typed
+`machine_action.kind: "intent-create"`, save that exact directive JSON to a
+project-confined temporary file and run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir "$PWD" --directive-file <directive-json>`.
+The controller executes only that fixed-argv action, derives active stages from
+the created Intent's official state, initializes the bounded session, obtains
+the first stage directive, and checkpoints it before returning. Never parse or
+execute the print's prose command, infer a stage list, or act on the first stage
+unless `bootstrap` returns `continue`.
 
 For an active generic auto session, save every fresh official directive JSON to
 a project-confined temporary file and run

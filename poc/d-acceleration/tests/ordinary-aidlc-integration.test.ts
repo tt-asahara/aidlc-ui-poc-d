@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDModels } from "../d-config.ts";
+import { clefRunnerArgs, resolveDClef, resolveDConstructionDefaults, resolveDModels } from "../d-config.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -15,6 +15,38 @@ beforeAll(() => {
 }, 30_000);
 
 describe("ordinary /aidlc D integration", () => {
+  test("real official scope confirmation emits typed creation and bootstraps the first stage", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-generic-auto-real-"));
+    cpSync(join(repo, "dist", "claude", ".claude"), join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude", "settings.local.json"), JSON.stringify({ disableAllHooks: false }));
+    const health = join(root, "aidlc", "spaces", "default", "intents", ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "human-turn.last"), `${new Date().toISOString()}\n`);
+    writeFileSync(join(root, ".claude", "d-acceleration.jsonc"), JSON.stringify({ auto: { enabled: true, sessionOnly: false, through: "ideation", maxSteps: 8, deadlineMs: 60000 } }));
+    mkdirSync(join(root, ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(root, ".aidlc-engine", "request.txt"), "Build a tiny local TypeScript notes app with synthetic data only.");
+    const installed = join(root, ".claude", "tools", "d-acceleration", "generic-auto-cli.ts");
+    const invoke = (args: string[]) => spawnSync(process.execPath, [installed, ...args, "--project-dir", root], { cwd: root, encoding: "utf8" });
+
+    const started = invoke(["start", "--description-file", ".aidlc-engine/request.txt"]);
+    expect(started.status, started.stderr).toBe(0);
+    const ask = JSON.parse(started.stdout).directive;
+    expect(ask).toMatchObject({ kind: "ask" });
+    const selectedCommand = ask.ask_type === "scope-confirm" ? ask.confirm_command : ask.scope_commands.find((entry: { scope: string }) => entry.scope === "poc")?.command;
+    const scope = /--scope ([A-Za-z0-9._-]+)/.exec(selectedCommand)?.[1];
+    const request = /--request ([A-Fa-f0-9]{8})/.exec(selectedCommand)?.[1];
+    expect(scope).toBeString(); expect(request).toBeString();
+    const confirmed = spawnSync(process.execPath, [join(root, ".claude", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--scope", scope!, "--request", request!, "--project-dir", root], { cwd: root, encoding: "utf8" });
+    expect(confirmed.status, confirmed.stderr).toBe(0);
+    const creation = JSON.parse(confirmed.stdout);
+    expect(creation).toMatchObject({ kind: "print", machine_action: { kind: "intent-create" } });
+    writeFileSync(join(root, ".aidlc-engine", "creation.json"), JSON.stringify(creation));
+    const bootstrapped = invoke(["bootstrap", "--directive-file", ".aidlc-engine/creation.json"]);
+    expect(bootstrapped.status, bootstrapped.stderr).toBe(0);
+    expect(JSON.parse(bootstrapped.stdout)).toMatchObject({ action: "continue", initialized: true, directive: { kind: "load-steering", stage: "intent-capture" }, state: { steps: 1 } });
+    expect(existsSync(join(root, ".aidlc-engine", "d-autopilot-session.json"))).toBeTrue();
+  }, 30_000);
+
   test("Claude projection carries the self-contained acceleration runtime", () => {
     const root = join(repo, "dist", "claude", ".claude", "tools", "d-acceleration");
     for (const file of [
@@ -63,7 +95,8 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir \"$PWD\" --worker claude");
     expect(skill).toContain("generic-auto-cli.ts start --project-dir \"$PWD\" --description-file");
     expect(skill).toContain("d-auto-request-<random>.txt");
-    expect(skill).toContain("generic-auto-cli.ts init --project-dir \"$PWD\" --active-stages");
+    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir \"$PWD\" --directive-file");
+    expect(skill).toContain("machine_action.kind: \"intent-create\"");
     expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir \"$PWD\" --directive-file");
     expect(skill).toContain("generic-auto-cli.ts action-start --project-dir \"$PWD\"");
     expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir \"$PWD\" --action-token");
@@ -117,6 +150,17 @@ describe("ordinary /aidlc D integration", () => {
       sources: { fast: "project", balanced: "local", judgment: "default" },
     });
     expect(resolveDModels(project, { fast: "cli-fast" }).models).toEqual({ fast: "cli-fast", balanced: "local-balanced", judgment: "opus" });
+  });
+
+  test("construction defaults use local over project and otherwise preserve official behavior", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-d-construction-defaults-"));
+    mkdirSync(join(project, ".claude"), { recursive: true });
+    expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "official", execution: "official" });
+    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ constructionDefaults: { iteration: "stage-major", execution: "swarm" } }));
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ constructionDefaults: { execution: "official" } }));
+    expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "stage-major", execution: "official" });
+    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ constructionDefaults: { iteration: "official", execution: "swarm" } }));
+    expect(() => resolveDConstructionDefaults(project)).toThrow("requires constructionDefaults.iteration=stage-major");
   });
 
   test("ordinary routing forwards only explicitly enabled loopback Clef and named low-risk Units", () => {

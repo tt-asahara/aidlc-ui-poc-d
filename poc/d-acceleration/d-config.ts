@@ -12,12 +12,13 @@ export type DAutomationConfig = { enabled: boolean; through?: string; sessionOnl
 export type DIssueAutopilotConfig = { enabled: boolean; oneIssuePerRun: boolean };
 export type DAiApprovalConfig = { mode: "human" | "stage-gates"; minConfidence: number; decisionRecordPath: string };
 export type DDecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
+export type DConstructionDefaults = { iteration: "official" | "stage-major"; execution: "official" | "swarm" };
 export type DFeatureInputs = { requirementIdBridges: Array<{ uiAc: string; officialId: string }>; functionalDesignBudgets: { artifactBytes: number; unitBytes: number; metadataBytes: number }; sourceRoots: string[]; specRoots: string[] };
-export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig };
+export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; constructionDefaults: DConstructionDefaults };
 export const DEFAULT_D_MODEL = "opus";
 export const DEFAULT_CLEF_URL = "http://127.0.0.1:18742";
 
-type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig> };
+type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; constructionDefaults?: Partial<DConstructionDefaults> };
 
 /** Parse JSONC without changing comment-like text inside strings. */
 export function parseDJsonc(source: string, path = "D configuration"): unknown {
@@ -102,7 +103,13 @@ function readConfig(path: string): DFileConfig {
     if (decisionIssueSummary.repository !== undefined && (typeof decisionIssueSummary.repository !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(decisionIssueSummary.repository))) throw new Error(`invalid D decision Issue summary repository in ${path}`);
     if (decisionIssueSummary.maxRetries !== undefined && (!Number.isSafeInteger(decisionIssueSummary.maxRetries) || Number(decisionIssueSummary.maxRetries) < 0 || Number(decisionIssueSummary.maxRetries) > 5)) throw new Error(`invalid D decision Issue summary maxRetries in ${path}`);
   }
-  return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig> };
+  const constructionDefaults = object(value.constructionDefaults, "construction defaults", path);
+  if (constructionDefaults) {
+    for (const key of Object.keys(constructionDefaults)) if (!["iteration", "execution"].includes(key)) throw new Error(`unknown D construction default ${key} in ${path}`);
+    if (constructionDefaults.iteration !== undefined && !["official", "stage-major"].includes(String(constructionDefaults.iteration))) throw new Error(`invalid D construction default iteration in ${path}`);
+    if (constructionDefaults.execution !== undefined && !["official", "swarm"].includes(String(constructionDefaults.execution))) throw new Error(`invalid D construction default execution in ${path}`);
+  }
+  return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults> };
 }
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
   const directory = join(projectDir, ".claude");
@@ -125,7 +132,8 @@ export function resolveDAutomation(projectDir: string): DAutomationConfig { cons
 export function resolveDIssueAutopilot(projectDir: string): DIssueAutopilotConfig { const { project, local } = layers(projectDir), base = project.issueAutopilot ?? {}, override = local.issueAutopilot ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, oneIssuePerRun: override.oneIssuePerRun ?? base.oneIssuePerRun ?? true }; }
 export function resolveDAiApproval(projectDir: string): DAiApprovalConfig { const { project, local } = layers(projectDir), base = project.aiApproval ?? {}, override = local.aiApproval ?? {}; return { mode: override.mode ?? base.mode ?? "human", minConfidence: override.minConfidence ?? base.minConfidence ?? 0.9, decisionRecordPath: (override.decisionRecordPath ?? base.decisionRecordPath ?? "decisions/ai-approval-decisions.jsonl").trim() }; }
 export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssueSummaryConfig { const { project, local } = layers(projectDir), base = project.decisionIssueSummary ?? {}, override = local.decisionIssueSummary ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, repository: override.repository?.trim() ?? base.repository?.trim(), send: override.send ?? base.send ?? false, maxRetries: override.maxRetries ?? base.maxRetries ?? 2 }; }
-export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir) }; }
+export function resolveDConstructionDefaults(projectDir: string): DConstructionDefaults { const { project, local } = layers(projectDir), base = project.constructionDefaults ?? {}, override = local.constructionDefaults ?? {}; const resolved: DConstructionDefaults = { iteration: override.iteration ?? base.iteration ?? "official", execution: override.execution ?? base.execution ?? "official" }; if (resolved.execution === "swarm" && resolved.iteration !== "stage-major") throw new Error("D constructionDefaults.execution=swarm requires constructionDefaults.iteration=stage-major"); return resolved; }
+export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir) }; }
 export function clefRunnerArgs(config: DClefConfig): string[] { return config.enabled ? ["--clef-url", config.url, ...(config.lowRiskUnits.length ? ["--clef-low-risk-units", config.lowRiskUnits.join(",")] : [])] : []; }
 
 if (import.meta.main) {

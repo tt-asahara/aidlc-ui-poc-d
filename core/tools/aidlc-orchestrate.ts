@@ -4246,6 +4246,18 @@ function createPrintDirective(
   const directive = printDirective(
     `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
   );
+  const machineArgv = ["intent", "create", "--scope", scope];
+  if (requestId) machineArgv.push("--request", requestId);
+  if (flags.depth) machineArgv.push("--depth", flags.depth);
+  if (flags.testStrategy) machineArgv.push("--test-strategy", flags.testStrategy);
+  if (flags.projectType) machineArgv.push("--project-type", flags.projectType);
+  if (flags.review) machineArgv.push("--review", flags.review);
+  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags))) machineArgv.push("--guard-policy", flags.changeControl);
+  for (const key of CEREMONY_KEYS) if (flags.ceremony?.[key]) machineArgv.push(CEREMONY_FLAGS[key], flags.ceremony[key]);
+  if (flags.planChanges?.skip.length) machineArgv.push("--skip", flags.planChanges.skip.join(","));
+  if (flags.planChanges?.add.length) machineArgv.push("--add", flags.planChanges.add.join(","));
+  if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) machineArgv.push("--plan-name", flags.planName);
+  directive.machine_action = { kind: "intent-create", argv: machineArgv };
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
   // counts the compiled grid already gave us.

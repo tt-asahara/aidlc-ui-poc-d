@@ -133,6 +133,28 @@ claims; the result records the requested and runtime-reported identities.
 Synthetic artifact writing requires the explicit `--disposable-test-mode` and
 must only be used with a throwaway fixture project.
 
+`run.ts --preflight` reports parent-session and D-worker model identity
+separately. D can request Opus for its own workers, but it cannot silently
+change an already-running parent Claude session; when the parent model is not
+observable, preflight gives the exact session action instead of claiming the
+worker request applies to inline stages. It likewise reports that safe
+Construction parallelism remains `stage-major/swarm` only after the official
+Unit DAG proves independent ready Units with disjoint writes and the person's
+recorded request authorizes the policy change.
+
+Project-wide defaults for newly bootstrapped generic-auto Intents live only in
+`.claude/d-acceleration.jsonc` under `constructionDefaults` (a local file wins
+over the project file). AI-DLC 2.11.0 has official per-Intent state setters and
+project memory, but no project setting that initializes those two Construction
+fields; memory remains guidance rather than a policy setter. D therefore calls
+the official setters once, immediately after creating a new Intent, and only
+when that scope contains both Units Generation and Code Generation. Existing
+Intents are never changed. A later explicit per-Intent setter wins because a
+bootstrap replay never reapplies the defaults. `swarm` requires `stage-major`;
+a single Unit runs as the serial-equivalent case, while multiple Units still
+parallelize only where the official DAG and isolated-worktree checks allow it.
+Set either value to `official` to retain the AI-DLC default.
+
 The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
 comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
 Clef. Design waves retain `balanced` as their minimum and failure fallback, so

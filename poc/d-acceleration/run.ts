@@ -11,7 +11,13 @@ const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.m
 const missing = required.filter((path) => !existsSync(path));
 const clef = resolveDClef(projectDir);
 const optional = resolveDConfig(projectDir);
-const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
+const requestedModels = resolveDModels(projectDir);
+const observedParentModel = process.env.AIDLC_PARENT_MODEL?.trim() || null;
+const parentMatches = observedParentModel?.toLowerCase().includes("opus") === true;
+const parentSession = observedParentModel
+  ? { status: parentMatches ? "caller-reported-match" : "caller-reported-mismatch", source: "unverified-caller-report", model: observedParentModel, ...(parentMatches ? {} : { requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." }) }
+  : { status: "not-observable", source: "none", model: null, requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." };
+const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: { parentSession, dWorkers: { requested: requestedModels.models, runtimeIdentity: "reported-per-worker-result" } }, constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");
