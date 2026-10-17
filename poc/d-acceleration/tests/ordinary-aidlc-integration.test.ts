@@ -75,6 +75,8 @@ describe("ordinary /aidlc D integration", () => {
     ]) expect(existsSync(join(root, file))).toBe(true);
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
     expect(readFileSync(join(root, "host-stage-boundary.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
+    expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
+    expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(true);
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');
