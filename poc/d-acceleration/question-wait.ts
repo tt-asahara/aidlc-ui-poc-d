@@ -3,7 +3,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { resolveDAiApproval } from "./d-config.ts";
 import { AI_QUESTION_BLOCKS, delegatedQuestionPrecheck, type AiQuestionBlockRecord } from "./ai-question-controller.ts";
-import { answerValues, PER_UNIT_QUESTION_STAGES, resolveAiQuestionTarget, stateValue } from "../../core/tools/aidlc-ai-answers.ts";
+import { answerValues, PER_UNIT_QUESTION_STAGES, resolveAiQuestionTarget, stateValue } from "./ai-question-answers.ts";
 
 /** The recorded fact a stage-question wait is bound to. */
 export type QuestionWaitEvidence = { path: string; sha256: string; blankSlots: number; reason: "no-delegation" | "not-delegable" | "delegated-path-blocked" };

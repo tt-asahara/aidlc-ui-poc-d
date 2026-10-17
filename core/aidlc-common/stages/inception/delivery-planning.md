@@ -193,17 +193,6 @@ its own per-stage or unit-end `unit_gate` policy. Plan Approval, summary
 confirmation, and verification command selection remain human decisions under
 either order and autonomy choice.
 
-**D UI application default proposal.** When the resolved scope is
-`ui-poc-application`, no explicit Construction order has been requested, and
-the official Unit dependency DAG contains at least two ready Units with
-disjoint write sets, propose stage-major Construction and official Code
-Generation swarm alongside the Delivery Planning choices. This is a proposal,
-not a state change: wait for the person's answer at the official gate before
-running either typed setter. If dependencies or writes conflict, propose the
-safe serial order instead. An explicit scope, serial/unit-major request, or
-non-UI scope always wins. The four D design waves, model defaults, and routing
-evidence are runtime behavior and never depend on the person restating them.
-
 **Construction verification command.** For checkpoint-enabled work, preserve an
 existing human-authorized command. Otherwise propose a real project check from
 the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)

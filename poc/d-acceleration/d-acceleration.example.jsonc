@@ -70,9 +70,9 @@
     "oneIssuePerRun": true,
   },
   "aiApproval": {
-    // 対象: 正式review/sensorがREADYになった通常stageの承認gate。役割: 明示的な事前委任を根拠にAIが成果物を判定し、主体・理由・hashを人間承認と区別して記録する。stage-gates時: 許可stageだけ判定、human時: 従来どおり人が承認。既定値: human。境界: scope/route/Plan Approval、summary/skeleton、sensor不合格、未検証、曖昧な危険操作、権限・認証・公開・外部送信・破壊操作は常に人間停止。利用場面: 事前委任された限定PoC。
+    // 対象: 通常stageの低risk質問（[AI-Autonomy]: low-risk-reversible 付き）。役割: 利用者の完全一致の事前委任grantを根拠にAIが回答し、D台帳 decisions/ai-question-answers.jsonl に人間回答と区別して記録する。stage-gates時: grantの許可stageだけ回答、human時: 従来どおり人が回答。既定値: human。境界: stage gateのAI承認は廃止（core/を上流と同一に保つため、承認は常に人）。checkpoint、承認、権限・認証・公開・外部送信・破壊操作は常に人間停止。利用場面: 事前委任された限定PoC。
     "mode": "human",
-    // 対象: AI工程承認判定。役割: approveに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。
+    // 対象: AI質問回答。役割: answerに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。decisionRecordPathはdecision summaryが読む台帳path（AI承認廃止により新規行は書かれない）。
     "minConfidence": 0.9,
     "decisionRecordPath": "decisions/ai-approval-decisions.jsonl",
     // 通常は親PATH上のproject外native claudeを安全に解決する。厳格固定が必要な場合だけhost process環境の AIDLC_CLAUDE_EXECUTABLE_PATH / AIDLC_CLAUDE_EXECUTABLE_SHA256 を両方指定する。

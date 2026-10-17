@@ -44,21 +44,6 @@ function activeStagesFromOfficialState(space: string): string[] {
   return stages;
 }
 
-const CREATE_VALUE_FLAGS = new Set(["--scope", "--request", "--depth", "--test-strategy", "--project-type", "--review", "--guard-policy", "--sensors", "--learnings", "--summary-confirmation", "--plan-approval", "--collaborators", "--skip", "--add", "--plan-name"]);
-function validateCreateArgv(raw: unknown): string[] {
-  if (!Array.isArray(raw) || !raw.every((entry) => typeof entry === "string")) throw new Error("typed intent-create argv must be strings");
-  const argv = raw as string[];
-  if (argv[0] !== "intent" || argv[1] !== "create") throw new Error("invalid typed intent-create argv");
-  const seen = new Set<string>();
-  for (let index = 2; index < argv.length; index += 2) {
-    const flag = argv[index], supplied = argv[index + 1];
-    if (!CREATE_VALUE_FLAGS.has(flag) || supplied === undefined || supplied.includes("\0") || seen.has(flag)) throw new Error("invalid typed intent-create argv");
-    seen.add(flag);
-  }
-  if (!seen.has("--scope") || !seen.has("--request")) throw new Error("typed intent-create argv must bind scope and request");
-  return argv;
-}
-
 function saveJson(path: string, value: unknown): void {
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error("bootstrap journal must not be a symlink");
   const parent = join(path, "..");
@@ -87,6 +72,7 @@ const parallel = resolveDParallel(product);
 // the controller removes it once read, so the host needs no separate `rm`
 // (which Claude Code cannot pre-approve safely). Any other caller-supplied
 // project file is read but never deleted.
+const START_JOURNAL = join(product, ".aidlc-engine", "d-auto-start.json");
 const REQUEST_HANDOFF = /^\.aidlc-engine\/d-auto-request-[A-Za-z0-9_-]{1,64}\.txt$/;
 if (command === "start") {
   const descriptionFile = value("--description-file");
@@ -97,6 +83,12 @@ if (command === "start") {
   if (!auto.enabled) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
   if (auto.sessionOnly) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "session-only" })}\n`); process.exit(0); }
   if (!description.trim()) throw new Error("description must not be empty");
+  // Remember which Intent was active before official routing so `bootstrap`
+  // can bind to the Intent the official print's intent-create makes. D never
+  // runs that creation itself: the host follows the official print exactly.
+  const space = activeSpace();
+  const pointer = join(product, "aidlc", "spaces", space, "intents", "active-intent");
+  saveJson(START_JOURNAL, { version: 1, space, preActive: existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : null, descriptionSha256: createHash("sha256").update(description).digest("hex"), startedAt: new Date().toISOString() });
   // The user's text is one argv value, never shell source. The official router
   // owns scope selection and intent creation; --auto is deliberately absent.
   const directive = runJson(join(runtime, "aidlc-orchestrate.ts"), ["next", description]);
@@ -142,20 +134,17 @@ if (command === "resume") {
 if (command === "bootstrap") {
   if (!auto.enabled) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "disabled" })}\n`); process.exit(0); }
   if (auto.sessionOnly) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "session-only" })}\n`); process.exit(0); }
-  const directiveFile = value("--directive-file");
-  if (!directiveFile) throw new Error("bootstrap requires --directive-file");
-  const directivePath = confinedRegularFile(directiveFile);
-  const directive = JSON.parse(readFileSync(directivePath, "utf8")) as Json;
-  const action = directive.machine_action as Json | undefined;
-  if (directive.kind !== "print" || action?.kind !== "intent-create") {
-    throw new Error("bootstrap requires an official typed intent-create directive");
-  }
-  const argv = validateCreateArgv(action.argv);
-  const digest = createHash("sha256").update(JSON.stringify({ kind: directive.kind, machine_action: action })).digest("hex");
+  // core/ is upstream AI-DLC: the official print names its intent-create
+  // command in prose only. The host runs that command exactly as the ordinary
+  // print rule says; bootstrap then binds to the Intent it created.
+  if (value("--directive-file")) throw new Error("bootstrap takes no directive: run the official print's intent-create command exactly as given, then run bootstrap");
+  if (!existsSync(START_JOURNAL) || lstatSync(START_JOURNAL).isSymbolicLink()) throw new Error("bootstrap requires a generic auto start in this project");
+  const start = JSON.parse(readFileSync(START_JOURNAL, "utf8")) as Json;
+  const digest = createHash("sha256").update(JSON.stringify(start)).digest("hex");
   const journalPath = join(product, ".aidlc-engine", "d-auto-bootstrap.json");
   const space = activeSpace();
+  if (start.space !== space) throw new Error("active space changed since generic auto start");
   const pointer = join(product, "aidlc", "spaces", space, "intents", "active-intent");
-  const preActive = existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : null;
   let journal = existsSync(journalPath) ? JSON.parse(readFileSync(journalPath, "utf8")) as Json : null;
   if (journal && journal.digest !== digest) {
     const status = runJson(hostCli, ["status", "--session-file", sessionFile]);
@@ -168,17 +157,12 @@ if (command === "bootstrap") {
     process.stdout.write(`${JSON.stringify({ action: status.active ? "continue" : "stop", reason: "already-bootstrapped", initialized: false, state: status.state ?? null }, null, 2)}\n`);
     process.exit(0);
   }
-  if (!journal) { journal = { version: 1, digest, request: argv[argv.indexOf("--request") + 1], preActive, phase: "pending-create", parallel }; saveJson(journalPath, journal); }
-  const activeNow = existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : null;
-  if (journal.phase !== "created") {
-    const candidateState = activeNow ? join(product, "aidlc", "spaces", space, "intents", activeNow, "aidlc-state.md") : "";
-    const recovered = activeNow && activeNow !== journal.preActive && existsSync(candidateState) && readFileSync(candidateState, "utf8").includes(`- **Question Id**: ${journal.request}`);
-    if (!recovered) {
-      const created = spawnSync(process.execPath, [join(runtime, "aidlc.ts"), "engine", ...argv, "--project-dir", product], { cwd: product, encoding: "utf8", env: { ...process.env, AIDLC_UNATTENDED: "1" } });
-      if (created.status !== 0) throw new Error((created.stderr || created.stdout || created.error?.message || "intent-create failed").trim());
-    }
-    const createdIntent = readFileSync(pointer, "utf8").trim();
-    journal = { ...journal, phase: "created", intent: createdIntent };
+  if (!journal) { journal = { version: 2, digest, preActive: start.preActive ?? null, phase: "pending-create", parallel }; saveJson(journalPath, journal); }
+  if (journal.phase === "pending-create") {
+    const activeNow = existsSync(pointer) ? readFileSync(pointer, "utf8").trim() : null;
+    const created = activeNow && /^[A-Za-z0-9._-]+$/.test(activeNow) && activeNow !== journal.preActive && existsSync(join(product, "aidlc", "spaces", space, "intents", activeNow, "aidlc-state.md"));
+    if (!created) throw new Error("no new official Intent since generic auto start: run the official print's intent-create command exactly as given, then run bootstrap");
+    journal = { ...journal, phase: "created", intent: activeNow };
     saveJson(journalPath, journal);
   }
   if (readFileSync(pointer, "utf8").trim() !== journal.intent) throw new Error("active Intent changed during generic auto bootstrap");

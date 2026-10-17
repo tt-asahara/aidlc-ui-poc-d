@@ -85,15 +85,18 @@ Never pass the literal `--auto` to official `orchestrate next`, interpolate the
 description into shell text, or infer its scope. Act on the returned official
 directive exactly as below. An official `ask`, including scope confirmation,
 approval, or sensor recovery, is a human gate and ends the turn; auto mode never
-answers it. When the returned official `print` carries the typed
-`machine_action.kind: "intent-create"`, save that exact directive JSON to a
-project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file <directive-json>`.
-The controller executes only that fixed-argv action, derives active stages from
-the created Intent's official state, initializes the bounded session, obtains
-the first stage directive, and checkpoints it before returning. Never parse or
-execute the print's prose command, infer a stage list, or act on the first stage
-unless `bootstrap` returns `continue`.
+answers it. When an official `print` (the one `start` returned, or the one the
+person's scope choice returned on a later turn) names the run-then-continue
+`intent-create` mutation, run that named command as the ordinary `print` rule
+says (fill only the `--label` the message leaves to you, change nothing else);
+then, instead of `next`, run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`.
+The controller never creates an Intent itself: it binds to the Intent the
+official command created since `start`, derives active stages from that
+Intent's official state, initializes the bounded session, obtains the first
+stage directive, and checkpoints it before returning. Never rebuild or alter
+the creation command, infer a stage list, or act on the first stage unless
+`bootstrap` returns `continue`.
 
 On every `/aidlc` entry when the installed generic controller exists (a new
 session, a restart after a crash, or a reply in a resumed one), first run
@@ -118,32 +121,25 @@ status` and `/aidlc --auto stop` retain the shared status/stop route above. Thes
 controls bound host continuation; they never report a stage, approve a gate, or
 replace the official reviewer or sensors.
 
-When `aiApproval.mode` resolves to `stage-gates`, do not turn every `ask` into
-yes. Scope confirmation, composition/routing, intent selection, project type,
-Plan Approval, summary confirmation, walking skeleton, verification command,
-policy/autonomy, failure/recovery, and sensor override remain human stops. The
-only delegated seam is a fresh official `present-gate` for an ordinary stage.
-It is usable only after the person explicitly delegated stage decisions for
-this bounded request and the active Intent contains the grant produced by
-`ai-approval-controller.ts grant`; configuration alone is never authority.
+Every stage gate, `ask`, and approval stays the person's. Delegated AI
+stage-gate approval is not available: the upstream engine accepts a stage
+approval only from the person, so `ai-approval-controller.ts` has no `evaluate`
+path and never yields approval arguments. Scope confirmation,
+composition/routing, intent selection, project type, Plan Approval, summary
+confirmation, walking skeleton, verification command, policy/autonomy,
+failure/recovery, and sensor override are human stops too.
 
-Ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
-run the grant command with their message id and the same scope, through boundary,
+When `aiApproval.mode` resolves to `stage-gates`, the person may delegate
+ordinary low-risk stage questions (never gates) for named stages. Configuration
+alone is never authority: ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
+run `ai-approval-controller.ts grant` with their message id and the same scope, through boundary,
 and stage slugs. Any mismatch is a stop. Delete only
-that temporary words file after a successful grant. For each `present-gate`,
-save the exact directive JSON and invoke `ai-approval-controller.ts evaluate`
-with the grant plus every declared stage artifact and the fresh reviewer/sensor
-evidence. If any required path cannot be enumerated, stop. A `block` result is
-a human stop. An `approve` result carries fixed `generatedCommandArgs`; run
-those arguments through `{{INVOKE}} engine state` without adding `--user-input`,
-then resume official `orchestrate next`. The core rechecks the
-state, grant, scope, stage, confidence, and every artifact hash immediately
-before settlement. The audit records `Decision Actor: AI`; never create a
+that temporary words file after a successful grant. Never create a
 `HUMAN_TURN`, quote the model as the person's words, or use a human-presence
 break-glass switch. Set `AIDLC_UNATTENDED=1` for the automated driver so hooks
 cannot mint authority from its own prompts.
 
-The same grant may answer ordinary low-risk stage questions for an allowed
+The grant may answer ordinary low-risk stage questions for an allowed
 stage, but never a checkpoint, approval, material product choice, external
 send, credential/permission/authentication change, production/deployment,
 destructive action, legal/payment choice, security exception, failed check, or
@@ -163,13 +159,16 @@ its per-question `classification`. On
 slot and directly below it add `[Answer Source]: <receipt source>` and
 `[AI Decision ID]: <receipt decisionId>`. These are AI provenance, never a
 person's answers; do not change any other question-file bytes. Then run
-`{{HARNESS_DIR}}/tools/aidlc-ai-answers.ts --project-dir <PRODUCT> --stage <stage>
-[--unit <unit>] --ai-decision-file <receipt>`. Continue only when it emits
-`AI_QUESTION_ANSWERED`. This is a separate AI-authored receipt bound to the
-Intent state, delegation, question-template hash, answers, provenance and
-evidence; never pass `--on-instruction`, emit `QUESTION_ANSWERED`, or write a
-human answer on this path. A `researched-fact` must cite bound evidence; a
-`delegated-ai-assumption` must remain explicit, conservative, and reversible.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/ai-question-answers.ts --project-dir <PRODUCT>`
+followed by the receipt's `generatedCommandArgs` (`--stage <stage> [--unit <unit>] --ai-decision-file <receipt>`).
+Continue only when it returns `recorded: "d-ai-question-ledger"`. It rechecks
+the Intent state, delegation, question-template hash, answers, provenance and
+evidence, then appends to the Intent's D-owned
+`decisions/ai-question-answers.jsonl`, which is not the official audit; never
+run `{{INVOKE}} engine log answer`, pass `--on-instruction`, emit any audit
+event, or write a human answer on this path. A `researched-fact` must cite bound
+evidence; a `delegated-ai-assumption` must remain explicit, conservative, and
+reversible.
 
 The versioned Intent-local decision JSONL is the source of truth. Optional
 `decision-issue-summary.ts generate` produces one Issue payload per Intent.

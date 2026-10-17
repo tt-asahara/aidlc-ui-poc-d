@@ -36,12 +36,17 @@ Issueと安定した一般知識だけから得た事実を台帳へ渡します
 必要な点は未解決のままです。モデル不可、timeout、余分なapproval fieldを含む不正schemaは
 intent作成前にfail-closedで停止し、approval recordを作成しません。
 
-`aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任を
-hash-bound grantとしてactive Intentへ保存した限定実行でだけ通常stage gateをAI判定します。
-判定正本は `decisionRecordPath` のversioned JSONLで、決定主体、理由、公式directive、
-workflow state、委任証拠、成果物のSHA-256を結合します。scope/route/Plan Approval、
-summary/skeleton、operation、sensor/reviewer不合格、未検証・不確実・外部/公開/認証/権限/
-破壊操作は委任対象外で停止します。AI判定は `HUMAN_TURN` や人間の `User Input` を作りません。
+`aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任
+（`AI-DLC delegate-ai-approvals ...` の完全一致文）をhash-bound grantとしてactive Intentへ
+保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
+回答できるようにします。stage gateのAI承認は廃止しました: core/ を上流AI-DLC v2.11.0
+（`6a378b53`）と同一に保つため、承認は常に人が公式gateで行います（`ai-approval-controller.ts`
+は `grant` のみ、`evaluate`/`verify` は1行のblockを返して停止）。AI回答は
+`decisions/ai-question-answers.jsonl`（Dの台帳。公式auditではない）と質問ファイルの
+`[Answer Source]`/`[AI Decision ID]` にだけ記録され、`HUMAN_TURN`・`QUESTION_ANSWERED`・
+人間の `User Input` を作りません。`minConfidence` は質問回答の最低confidenceです。
+`decisionRecordPath` はdecision summaryが読む台帳のpathとしてだけ残ります（AI承認が廃止
+されたため、新しい行は書かれません）。
 `stage-gates` の実モデル実行は通常、親processの `PATH` から絶対directoryだけを調べ、
 realpath化したproject外のnative `claude` だけを使用します。相対/CWD、project内実体、
 script、別名dispatcherは拒否します。より厳格な固定が必要な環境だけ、host process環境の
@@ -51,7 +56,8 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 
 `decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
 既定OFFの機能です。外部送信にはrepository・active Intent・生成payload hashを完全一致で
-指定した最新のhost記録済み人間permissionが必要です。許可後もpending receiptを検索・照合してから同じIssueを更新し、
+指定した最新のhost記録済み人間permissionが必要です（D側で、engine自身の読み取り専用
+`latestPersonTurn` を使って照合します）。許可後もpending receiptを検索・照合してから同じIssueを更新し、
 未解決事項の別Issueを自動作成しません。
 `send: true` には同様にhost process環境の `AIDLC_GH_EXECUTABLE_PATH` と
 `AIDLC_GH_EXECUTABLE_SHA256` が必要です。

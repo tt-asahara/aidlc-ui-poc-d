@@ -20,6 +20,11 @@ const bunJson = (script: string, args: string[], env: Record<string, string> = {
   if (result.status !== 0) throw new Error(`${script} ${args.join(" ")}: ${result.stderr || result.stdout}`);
   return JSON.parse(result.stdout) as Record<string, any>;
 };
+const bunJsonOrText = (script: string, args: string[]) => {
+  const result = spawnSync(process.execPath, [script, ...args], { cwd: product, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: product } });
+  if (result.status !== 0) throw new Error(`${script} ${args.join(" ")}: ${result.stderr || result.stdout}`);
+  return result.stdout;
+};
 const auto = (...args: string[]) => bunJson(join(tools(), "d-acceleration", "generic-auto-cli.ts"), [...args, "--project-dir", product]);
 const hook = (name: string, payload: object) => {
   const result = spawnSync(process.execPath, [join(tools(), "aidlc.ts"), "engine", "hook", name], { cwd: product, input: JSON.stringify({ session_id: "lifecycle", cwd: product, ...payload }), encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: product } });
@@ -43,7 +48,6 @@ beforeAll(async () => {
 afterAll(() => { if (product) rmSync(product, { recursive: true, force: true }); });
 
 describe("generic auto lifecycle on an installed clean target", () => {
-  let creation = "";
   test("waits at official scope selection, then bootstraps exactly one Intent", () => {
     hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "/aidlc --auto Build a tiny todo CLI in TypeScript" });
     mkdirSync(join(product, ".aidlc-engine"), { recursive: true });
@@ -60,21 +64,29 @@ describe("generic auto lifecycle on an installed clean target", () => {
     const choice = (routed.directive.scope_commands as { scope: string; command: string }[]).find((entry) => entry.scope === "poc")!;
     const argv = choice.command.split(" ").slice(2);
     const print = bunJson(join(tools(), "aidlc-orchestrate.ts"), [...argv, "--project-dir", product]);
-    expect(print.machine_action.kind).toBe("intent-create");
-    creation = directive("creation.json", print);
-    const boot = auto("bootstrap", "--directive-file", creation);
+    // Upstream core names the creation command in the print's prose only; the
+    // host runs it exactly as given (the ordinary run-then-continue print).
+    expect(print.kind).toBe("print");
+    const named = /^Run `bun \.claude\/tools\/aidlc\.ts (engine intent create [^`]+)`/.exec(print.message)?.[1];
+    expect(named).toBeString();
+    // The print leaves `--label "<2-3 word kebab essence>"` for the host to
+    // fill from the request (LLM knowledge); everything else runs verbatim.
+    expect(named).toMatch(/--label "<[^"]+>"/);
+    const filled = named!.replace(/--label "<[^"]+>"/, "--label todo-cli");
+    bunJsonOrText(join(tools(), "aidlc.ts"), [...filled.split(" "), "--project-dir", product]);
+    const boot = auto("bootstrap");
     expect(boot).toMatchObject({ action: "continue", initialized: true, state: { steps: 1, through: "requirements-analysis" } });
     expect(intents()).toHaveLength(1);
   }, TIMEOUT);
 
   test("replayed and crash-interrupted bootstrap never creates a duplicate Intent", () => {
-    expect(auto("bootstrap", "--directive-file", creation)).toMatchObject({ reason: "already-bootstrapped" });
+    expect(auto("bootstrap")).toMatchObject({ reason: "already-bootstrapped" });
     // Crash after the official create but before the journal recorded it.
     const journalPath = join(product, ".aidlc-engine", "d-auto-bootstrap.json");
     const journal = JSON.parse(readFileSync(journalPath, "utf8"));
-    writeFileSync(journalPath, JSON.stringify({ version: 1, digest: journal.digest, request: journal.request, preActive: journal.preActive, phase: "pending-create", parallel: journal.parallel }));
+    writeFileSync(journalPath, JSON.stringify({ version: 2, digest: journal.digest, preActive: journal.preActive, phase: "pending-create", parallel: journal.parallel }));
     rmSync(join(product, ".aidlc-engine", "d-autopilot-session.json"));
-    const recovered = auto("bootstrap", "--directive-file", creation);
+    const recovered = auto("bootstrap");
     expect(recovered.action).toBe("continue");
     expect(intents()).toHaveLength(1);
   }, TIMEOUT);

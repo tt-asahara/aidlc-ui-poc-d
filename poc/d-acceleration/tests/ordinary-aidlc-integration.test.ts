@@ -15,7 +15,7 @@ beforeAll(() => {
 }, 30_000);
 
 describe("ordinary /aidlc D integration", () => {
-  test("real official scope confirmation emits typed creation and bootstraps the first stage", () => {
+  test("real official scope confirmation, host-run official intent-create, then bootstrap reaches the first stage", () => {
     const root = mkdtempSync(join(tmpdir(), "d-generic-auto-real-"));
     cpSync(join(repo, "dist", "claude", ".claude"), join(root, ".claude"), { recursive: true });
     writeFileSync(join(root, ".claude", "settings.local.json"), JSON.stringify({ disableAllHooks: false }));
@@ -39,9 +39,16 @@ describe("ordinary /aidlc D integration", () => {
     const confirmed = spawnSync(process.execPath, [join(root, ".claude", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--scope", scope!, "--request", request!, "--project-dir", root], { cwd: root, encoding: "utf8" });
     expect(confirmed.status, confirmed.stderr).toBe(0);
     const creation = JSON.parse(confirmed.stdout);
-    expect(creation).toMatchObject({ kind: "print", machine_action: { kind: "intent-create" } });
-    writeFileSync(join(root, ".aidlc-engine", "creation.json"), JSON.stringify(creation));
-    const bootstrapped = invoke(["bootstrap", "--directive-file", ".aidlc-engine/creation.json"]);
+    // Upstream core names the creation in the print's prose only (no typed
+    // machine action). The host, like any ordinary /aidlc run, executes that
+    // official command exactly; this test plays the host with the same argv.
+    expect(creation.kind).toBe("print");
+    expect(creation.machine_action).toBeUndefined();
+    expect(creation.message).toContain(`intent create --scope ${scope}`);
+    expect(invoke(["bootstrap"]).status).not.toBe(0);
+    const created = spawnSync(process.execPath, [join(root, ".claude", "tools", "aidlc.ts"), "engine", "intent", "create", "--scope", scope!, "--request", request!, "--project-dir", root], { cwd: root, encoding: "utf8" });
+    expect(created.status, created.stderr).toBe(0);
+    const bootstrapped = invoke(["bootstrap"]);
     expect(bootstrapped.status, bootstrapped.stderr).toBe(0);
     expect(JSON.parse(bootstrapped.stdout)).toMatchObject({ action: "continue", initialized: true, directive: { kind: "load-steering", stage: "intent-capture" }, state: { steps: 1 } });
     expect(existsSync(join(root, ".aidlc-engine", "d-autopilot-session.json"))).toBeTrue();
@@ -68,6 +75,7 @@ describe("ordinary /aidlc D integration", () => {
       "official-next-adapter.ts",
       "parallel-guard.ts",
       "question-wait.ts",
+      "ai-question-answers.ts",
       "read-only-fanout.ts",
       "run.ts",
       "scheduler.ts",
@@ -76,9 +84,11 @@ describe("ordinary /aidlc D integration", () => {
     ]) expect(existsSync(join(root, file))).toBe(true);
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
     expect(readFileSync(join(root, "host-stage-boundary.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
-    expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
-    expect(readFileSync(join(root, "question-wait.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
-    expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(true);
+    // The delegated-question grammar and settler are D-owned; no D file lands on a core path.
+    expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "./ai-question-answers.ts"');
+    expect(readFileSync(join(root, "question-wait.ts"), "utf8")).toContain('from "./ai-question-answers.ts"');
+    expect(existsSync(join(root, "ai-question-answers.ts"))).toBe(true);
+    expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(false);
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');
@@ -102,8 +112,9 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude");
     expect(skill).toContain("generic-auto-cli.ts start --project-dir <PRODUCT> --description-file");
     expect(skill).toContain("d-auto-request-<random>.txt");
-    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file");
-    expect(skill).toContain("machine_action.kind: \"intent-create\"");
+    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`");
+    expect(skill).not.toContain("machine_action");
+    expect(skill).toContain("The controller never creates an Intent itself");
     expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir <PRODUCT> --directive-file");
     expect(skill).toContain("generic-auto-cli.ts action-start --project-dir <PRODUCT>");
     expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token");

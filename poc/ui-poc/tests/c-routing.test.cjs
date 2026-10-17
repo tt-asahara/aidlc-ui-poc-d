@@ -87,8 +87,13 @@ test('ordinary UI routing is distinct, reproducible, and preserves explicit choi
   assert.match(scope,/name: ui-poc-application/);
   for(const keyword of ['web app','dashboard','website','frontend','user interface','mobile app']) assert.ok(scope.includes(`  - ${keyword}`));
   assert.match(scope,/Explicit user scope and execution choices always win/);
-  const delivery=fs.readFileSync(path.join(root,'core/aidlc-common/stages/inception/delivery-planning.md'),'utf8');
-  assert.match(delivery,/ready Units with\s+disjoint write sets/);
+  // The proposal is a ui-poc contribution fragment spliced at compose time;
+  // core/ stays byte-identical to upstream.
+  const delivery=fs.readFileSync(path.join(root,'poc/ui-poc/contributions/inception/delivery-planning.md'),'utf8');
+  assert.match(delivery,/^fragments:\n  - anchor: after-step:6$/m);
+  assert.match(delivery,/^## fragment: after-step:6$/m);
+  assert.match(delivery,/dependency-independent and have disjoint\s+writes/);
+  assert.doesNotMatch(fs.readFileSync(path.join(root,'core/aidlc-common/stages/inception/delivery-planning.md'),'utf8'),/ui-poc-application/);
   assert.match(delivery,/wait for the person's answer at the official gate/);
   const readme=fs.readFileSync(path.join(root,'poc/ui-poc/README.md'),'utf8');
   assert.match(readme,/\/aidlc\nBuild a household budget web app/);

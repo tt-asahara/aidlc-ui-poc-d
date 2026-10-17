@@ -1,9 +1,17 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { appendAuditEntries } from "./aidlc-audit.ts";
-import { resolveProjectDir } from "./aidlc-lib.ts";
+import { randomUUID } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+// D-owned delegated-question grammar, target resolver, and settler.
+//
+// core/ is byte-identical to upstream AI-DLC v2.11.0, so this file lives in
+// the D layer and never writes the official audit or engine state. A settled
+// AI answer is recorded only in the Intent's D-owned ledger
+// `decisions/ai-question-answers.jsonl` (see AI_QUESTION_ANSWER_LEDGER) and in
+// the questions file's own `[Answer Source]` / `[AI Decision ID]` provenance
+// lines. It is never a HUMAN_TURN or QUESTION_ANSWERED row.
 
 const SHA = /^[a-f0-9]{64}$/;
 const UNIT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -11,8 +19,8 @@ const hash = (value: string | Uint8Array) => createHash("sha256").update(value).
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, child) => child && typeof child === "object" && !Array.isArray(child) ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
 const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// The one owner of the delegated-question file grammar. The PoC controller and
-// this settler both import it, so the eligibility parser and the settlement
+// The one owner of the delegated-question file grammar. The controller,
+// question-wait, and this settler all import it, so the eligibility parser and the settlement
 // parser can never drift apart.
 //
 // Accepted grammar, deliberately ASCII and exact (no `\b`, whose ASCII word
@@ -98,8 +106,22 @@ function readBound(root: string, input: unknown, expected: unknown, label: strin
 }
 function activeIntent(root: string) { const spaceFile = join(root, "aidlc", "active-space"), space = existsSync(spaceFile) ? readFileSync(spaceFile, "utf8").trim() : "default", intents = join(root, "aidlc", "spaces", space, "intents"), intent = readFileSync(join(intents, "active-intent"), "utf8").trim(), dir = realpathSync(join(intents, intent)); if (!inside(root, dir)) throw new Error("active Intent escapes project"); return { space, intent, dir }; }
 
+/** Intent-relative D ledger of settled delegated AI answers. Not the official AI-DLC audit. */
+export const AI_QUESTION_ANSWER_LEDGER = join("decisions", "ai-question-answers.jsonl");
+export type AiQuestionAnswerLedgerRow = { schemaVersion: 1; kind: "d-delegated-question-answer"; ledger: "d-acceleration (not the official AI-DLC audit)"; actor: "ai"; decisionId: string; stage: string; unit: string | null; questionId: string; answer: string; answerSource: string; reason: string; questionsFile: string; questionsTemplateSha256: string; delegationSha256: string; confidence: number; requestedModel: string; runtimeReportedModel: string; settledAt: string };
+
+function appendLedger(path: string, rows: AiQuestionAnswerLedgerRow[]): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error("AI question answer ledger must not be a symlink");
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const fd = openSync(temporary, "wx", 0o600);
+  try { writeFileSync(fd, `${existsSync(path) ? readFileSync(path, "utf8") : ""}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(temporary, path);
+}
+
 export function settleAiAnswers(projectDir: string, stage: string, decisionFile: string, unit: string | null = null) {
-  const root = realpathSync(resolveProjectDir(projectDir)), active = activeIntent(root); if (!stage) throw new Error("stage is required");
+  if (!isAbsolute(projectDir)) throw new Error("--project-dir must be absolute");
+  const root = realpathSync(projectDir), active = activeIntent(root); if (!stage) throw new Error("stage is required");
   const decisionBinding = resolve(root, decisionFile); if (!inside(active.dir, decisionBinding) || !existsSync(decisionBinding) || lstatSync(decisionBinding).isSymbolicLink()) throw new Error("AI decision file must be inside active Intent");
   const decision: any = JSON.parse(readFileSync(realpathSync(decisionBinding), "utf8"));
   if (decision.schemaVersion !== 1 || decision.kind !== "delegated-stage-question" || decision.actor !== "ai" || decision.outcome !== "answer" || decision.stage !== stage || !SHA.test(decision.decisionId) || !Array.isArray(decision.answers) || decision.answers.length === 0 || decision.riskFlags?.length || decision.uncertainties?.length) throw new Error("invalid AI question decision");
@@ -131,10 +153,12 @@ export function settleAiAnswers(projectDir: string, stage: string, decisionFile:
   if (typeof decision.requiredConfidence !== "number" || decision.confidence < decision.requiredConfidence || typeof decision.reason !== "string" || !decision.reason.trim() || typeof decision.model?.requested !== "string") throw new Error("invalid confidence or model binding");
   const { decisionId: _id, createdAt: _created, ...payload } = decision;
   if (hash(canonical(payload)) !== decision.decisionId) throw new Error("AI decision ID does not bind its inputs");
-  const auditDir = join(active.dir, "audit"), replayed = existsSync(auditDir) && readdirSync(auditDir).some((name) => readFileSync(join(auditDir, name), "utf8").includes(`**AI Decision ID**: ${decision.decisionId}`));
-  const result = { emitted: "AI_QUESTION_ANSWERED", stage, ...(unit === null ? {} : { unit }), count: decision.answers.length, decisionId: decision.decisionId };
+  const ledgerPath = join(active.dir, AI_QUESTION_ANSWER_LEDGER);
+  const replayed = existsSync(ledgerPath) && readFileSync(ledgerPath, "utf8").split(/\r?\n/).some((line) => { if (!line.trim()) return false; try { return JSON.parse(line).decisionId === decision.decisionId; } catch { return false; } });
+  const result = { recorded: "d-ai-question-ledger", ledger: relative(root, ledgerPath).split(sep).join("/"), stage, ...(unit === null ? {} : { unit }), count: decision.answers.length, decisionId: decision.decisionId };
   if (replayed) return { ...result, reused: true };
-  appendAuditEntries(decision.answers.map((answer: any) => ({ eventType: "AI_QUESTION_ANSWERED", fields: { Stage: stage, ...(unit === null ? {} : { Unit: unit }), Question: answer.questionId, Details: answer.answer, "Answer Source": answer.source, Reason: answer.reason, "AI Decision ID": decision.decisionId, "Questions File": decision.questions.path, "Questions Template SHA-256": decision.questions.templateSha256, "Delegation SHA-256": decision.delegation.sha256, Confidence: String(decision.confidence), "Requested Model": decision.model.requested, "Runtime Reported Model": decision.model.runtimeReported ?? "unreported" } })), root, active.intent, active.space);
+  const settledAt = new Date().toISOString();
+  appendLedger(ledgerPath, decision.answers.map((answer: any) => ({ schemaVersion: 1, kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId: decision.decisionId, stage, unit, questionId: answer.questionId, answer: answer.answer, answerSource: answer.source, reason: answer.reason, questionsFile: decision.questions.path, questionsTemplateSha256: decision.questions.templateSha256, delegationSha256: decision.delegation.sha256, confidence: decision.confidence, requestedModel: decision.model.requested, runtimeReportedModel: decision.model.runtimeReported ?? "unreported", settledAt })));
   return result;
 }
 

@@ -3,14 +3,24 @@
 `ai-question-controller.ts` lets a judgment model answer ordinary stage
 questions after the person explicitly delegated the stage
 (`AI-DLC delegate-ai-approvals ...` → `ai-approval-controller.ts grant`). The
-core settler `core/tools/aidlc-ai-answers.ts` rechecks every binding and emits
-`AI_QUESTION_ANSWERED`, never `QUESTION_ANSWERED` or `HUMAN_TURN`. The answer is
-AI provenance and is never treated as the person's answer.
+D settler `ai-question-answers.ts` rechecks every binding and appends the
+answers to the Intent's D-owned ledger `decisions/ai-question-answers.jsonl`
+(each row says `ledger: "d-acceleration (not the official AI-DLC audit)"`). It
+never writes the official audit or engine state and never emits
+`QUESTION_ANSWERED` or `HUMAN_TURN`. The answer is AI provenance and is never
+treated as the person's answer.
+
+Before the core restore this settler lived in `core/tools/aidlc-ai-answers.ts`
+and emitted a D-added `AI_QUESTION_ANSWERED` audit event. `core/` is now
+byte-identical to upstream AI-DLC v2.11.0, which knows no such event, so the
+record moved to the D ledger. The engine never needed that event: answered
+questions files advance through the ordinary stage protocol either way.
 
 ## One owner for the file grammar and the target
 
-`core/tools/aidlc-ai-answers.ts` owns three things. The PoC controller imports
-them, and the package projection rewrites that import to `../aidlc-ai-answers.ts`.
+`ai-question-answers.ts` (D-owned, projected to
+`.claude/tools/d-acceleration/`) owns three things. The controller and
+`question-wait.ts` import them.
 
 - `questionSections` / `sectionEligibility`: the question-file grammar.
 - `resolveAiQuestionTarget`: which questions file may be AI-answered now.
@@ -158,8 +168,14 @@ The receipt binds `model.identityStatus` (`verified-match`, `alias-resolved`,
 `mismatch` or `unverified`), and block and answer results carry
 `telemetry.modelIdentity` and `telemetry.usage`.
 
-The evidence files were recorded before the merge. In them the telemetry still
-uses the earlier field names (`runtimeReportedModel`, `totalCostUsd`, `usage`).
+The evidence files were recorded before the merge and before the core
+restore. In them the telemetry still uses the earlier field names
+(`runtimeReportedModel`, `totalCostUsd`, `usage`), the flow used the removed
+typed intent-create, and settlement used the removed core settler, so the
+`AI_QUESTION_ANSWERED` rows below are historical. Today the same settlement
+appends the equivalent rows to `decisions/ai-question-answers.jsonl`
+(re-verified offline by `tests/ai-question-controller.test.ts`; not re-run with
+a real model).
 
 - `e2e-installed/` (`run-e2e.ts`): a fresh synthetic project using the
   generated Claude package.
@@ -189,11 +205,13 @@ uses the earlier field names (`runtimeReportedModel`, `totalCostUsd`, `usage`).
 
 ## Known gaps (not closed here)
 
-- The ordinary engine never issues a `present-gate` directive. See
-  `aidlc-orchestrate.ts`: "present-gate ... arrive in later waves". As a
-  result, `ai-approval-controller.ts` has no official directive to bind to in
-  a real installed flow, and the E2E gate was approved by the person. This
-  belongs to the AI stage-approval work, not to question answering.
+- Delegated AI stage-gate approval was dropped with the core restore: the
+  upstream engine accepts a stage approval only from the person, so every gate
+  (including the E2E gate above) is approved by the person.
+- The grant records the words the host saved to a file; the controller does
+  not re-read the host-recorded human turn to prove they were the person's
+  latest message (the removed core approval path did). Binding the grant to
+  `latestPersonTurn` is a possible D-only hardening.
 - Summary confirmation, the advisory reviewer, and learnings were switched off
   by the synthetic person's own recorded requests (the official `config set`
   setters refuse without a human turn). With summary confirmation on, the

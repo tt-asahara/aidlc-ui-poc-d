@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { classifyQuestions, evaluateAiQuestions, modelResult } from "../ai-question-controller.ts";
 import { createAiApprovalGrant } from "../ai-approval-controller.ts";
-import { questionSections, settleAiAnswers } from "../../../core/tools/aidlc-ai-answers.ts";
+import { AI_QUESTION_ANSWER_LEDGER, questionSections, settleAiAnswers } from "../ai-question-answers.ts";
 
 const T = 30_000;
 const IDEATION_STATE = "- **Scope**: greenfield\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: intent-capture\n- [-] intent-capture — EXECUTE\n";
@@ -26,7 +26,9 @@ function model(root: string, payload: object, envelope: Record<string, unknown> 
 function applyDecision(root: string, questions: string, result: any) { const path = join(root, questions); let body = readFileSync(path, "utf8"); for (const answer of result.decision.answers) body = body.replace(/^\[Answer\]:[ \t]*_*[ \t]*$/m, `[Answer]: ${answer.answer}\n[Answer Source]: ${answer.source}\n[AI Decision ID]: ${result.decision.decisionId}`); writeFileSync(path, body); }
 const answers = (n: number, prefix = "A") => Array.from({ length: n }, (_, i) => ({ answer: `${prefix}. option ${i + 1}`, source: "delegated-ai-assumption", reason: "可逆な表示上の既定値", evidencePaths: [] }));
 const ok = (n: number, extra: object = {}) => ({ outcome: "answer", reason: "全問とも可逆な表示上の詳細", confidence: 0.95, riskFlags: [], uncertainties: [], answers: answers(n), ...extra });
-const auditText = (intent: string) => readdirSync(join(intent, "audit")).map((name) => readFileSync(join(intent, "audit", name), "utf8")).join("\n");
+// Settled AI answers land only in the D-owned ledger, never in the official audit.
+const ledgerRows = (intent: string) => readFileSync(join(intent, AI_QUESTION_ANSWER_LEDGER), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+const officialAudit = (intent: string) => existsSync(join(intent, "audit")) ? readdirSync(join(intent, "audit")).map((name) => readFileSync(join(intent, "audit", name), "utf8")).join("\n") : "";
 const evaluate = (f: Fixture, executable: string, extra: { stage?: string; unit?: string | null; questionsFile?: string; evidenceFiles?: string[] } = {}) => evaluateAiQuestions({ projectDir: f.root, stage: extra.stage ?? "intent-capture", unit: extra.unit ?? null, questionsFile: extra.questionsFile ?? f.questions, delegationFile: f.grant, evidenceFiles: extra.evidenceFiles ?? [], claudeExecutable: executable });
 
 // Realistic Japanese question file: six official `## Q<n>` sections with A-E + X
@@ -144,8 +146,9 @@ describe("delegated AI stage questions", () => {
     expect(result.status).toBe("answer");
     expect(result.decision!.unit).toBeNull();
     applyDecision(f.root, f.questions, result);
-    expect(settleAiAnswers(f.root, "intent-capture", result.decisionFilePath!)).toMatchObject({ emitted: "AI_QUESTION_ANSWERED", count: 1 });
-    const audit = auditText(f.intent); expect(audit).toContain("**Event**: AI_QUESTION_ANSWERED"); expect(audit).toContain("**Answer Source**: researched-fact"); expect(audit).toContain("**Question**: Q1"); expect(audit).not.toContain("**Event**: HUMAN_TURN"); expect(audit).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(settleAiAnswers(f.root, "intent-capture", result.decisionFilePath!)).toMatchObject({ recorded: "d-ai-question-ledger", count: 1 });
+    const rows = ledgerRows(f.intent); expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", questionId: "Q1", answerSource: "researched-fact" });
+    const audit = officialAudit(f.intent); expect(audit).not.toContain("HUMAN_TURN"); expect(audit).not.toContain("QUESTION_ANSWERED");
   }, T);
 
   test("records requested vs runtime-reported model from the Claude JSON envelope", async () => {
@@ -223,11 +226,11 @@ describe("Japanese and realistic multi-question files", () => {
     expect(result.classification!.map((entry) => `${entry.questionId}:${entry.eligibility}`)).toEqual(["Q1:eligible", "Q2:eligible", "Q3:eligible", "Q4:eligible", "Q5:eligible", "Q6:eligible"]);
     expect(result.decision!.answers.map((answer) => answer.questionId)).toEqual(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]);
     applyDecision(f.root, f.questions, result);
-    expect(settleAiAnswers(f.root, "requirements-analysis", result.decisionFilePath!)).toMatchObject({ emitted: "AI_QUESTION_ANSWERED", count: 6 });
-    const audit = auditText(f.intent);
-    expect(audit.match(/\*\*Event\*\*: AI_QUESTION_ANSWERED/g)).toHaveLength(6);
-    expect(audit).toContain("**Details**: A. 1行で末尾を「…」で省略");
-    expect(audit).not.toContain("HUMAN_TURN");
+    expect(settleAiAnswers(f.root, "requirements-analysis", result.decisionFilePath!)).toMatchObject({ recorded: "d-ai-question-ledger", count: 6 });
+    const rows = ledgerRows(f.intent);
+    expect(rows).toHaveLength(6);
+    expect(rows.map((row) => row.answer)).toContain("A. 1行で末尾を「…」で省略");
+    expect(officialAudit(f.intent)).not.toContain("HUMAN_TURN");
     // Reordering answers between slots is refused even though the set is unchanged.
     const body = readFileSync(join(f.root, f.questions), "utf8").replace("[Answer]: A. YYYY-MM-DD", "[Answer]: TMP").replace("[Answer]: B. 50件", "[Answer]: A. YYYY-MM-DD").replace("[Answer]: TMP", "[Answer]: B. 50件");
     writeFileSync(join(f.root, f.questions), body);
@@ -295,12 +298,12 @@ describe("per-Unit Construction questions", () => {
     expect(result.status, result.reason).toBe("answer");
     expect(result.decision!.unit).toBe("notes-core");
     expect(result.decision!.questions.path).toBe("aidlc/spaces/default/intents/example/construction/notes-core/nfr-requirements/nfr-requirements-questions.md");
-    expect(result.generatedCommandArgs).toEqual(["ai-answers", "--stage", "nfr-requirements", "--unit", "notes-core", "--ai-decision-file", result.decisionFilePath!]);
+    expect(result.generatedCommandArgs).toEqual(["--stage", "nfr-requirements", "--unit", "notes-core", "--ai-decision-file", result.decisionFilePath!]);
     applyDecision(f.root, f.questions, result);
     expect(() => settleAiAnswers(f.root, "nfr-requirements", result.decisionFilePath!)).toThrow("Unit does not match");
     expect(() => settleAiAnswers(f.root, "nfr-requirements", result.decisionFilePath!, "notes-ui")).toThrow("Unit does not match");
-    expect(settleAiAnswers(f.root, "nfr-requirements", result.decisionFilePath!, "notes-core")).toMatchObject({ emitted: "AI_QUESTION_ANSWERED", unit: "notes-core", count: 2 });
-    const audit = auditText(f.intent); expect(audit.match(/\*\*Unit\*\*: notes-core/g)).toHaveLength(2); expect(audit).not.toContain("HUMAN_TURN");
+    expect(settleAiAnswers(f.root, "nfr-requirements", result.decisionFilePath!, "notes-core")).toMatchObject({ recorded: "d-ai-question-ledger", unit: "notes-core", count: 2 });
+    const rows = ledgerRows(f.intent); expect(rows.filter((row) => row.unit === "notes-core")).toHaveLength(2); expect(officialAudit(f.intent)).not.toContain("HUMAN_TURN");
   }, T);
 
   test("stage-major: the Unit must be active on the current stage", async () => {

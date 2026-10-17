@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { effortForTier, plan, type Input, type Tier } from "./aidlc-acceleration-plan.ts";
-import { approvalAssessorLaunch, productionClaudeExecutable } from "./ai-approval-controller.ts";
+import { productionClaudeExecutable } from "./ai-approval-controller.ts";
 import { questionAssessorLaunch } from "./ai-question-controller.ts";
 import { ambiguityAssessorLaunch } from "./issue-ambiguity-assessor.ts";
 import { planReadOnlyFanout } from "./read-only-fanout.ts";
@@ -70,7 +70,6 @@ export function identityLaunches(model: string, projectDir: string, trustedExecu
     { workerType: "read-only-fanout-worker", launch: fanout.launches[0]!.launch },
     { workerType: "issue-ambiguity-assessor", launch: ambiguityAssessorLaunch({ model, effort: "low", prompt: IDENTITY_PROMPT }) },
     { workerType: "delegated-question-assessor", launch: questionAssessorLaunch({ executable: trusted, model, prompt: IDENTITY_PROMPT }) },
-    { workerType: "delegated-approval-assessor", launch: approvalAssessorLaunch({ executable: trusted, environment: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" }, model, prompt: IDENTITY_PROMPT }) },
   ];
 }
 
