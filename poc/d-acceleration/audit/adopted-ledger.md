@@ -108,3 +108,15 @@ errors under load. Re-running the failing files one at a time with
 
 UI-PoC suites: `node --test poc/ui-poc/tests/*.cjs` 79/0;
 `bun test poc/ui-poc/tests/` 83/0.
+
+## Later change: core restore (branch `d/core-restore`, 2026-10-17)
+
+`core/` was restored to upstream `6a378b53` and is guarded by
+`poc/d-acceleration/tests/core-pristine.test.ts`. For the items above this
+changes only items 12–14: generic `/aidlc --auto` bootstrap no longer executes
+a typed `machine_action`; the host runs the official print's `intent-create`
+command and `generic-auto-cli.ts bootstrap` binds to the Intent created since
+`start`. Outside this ledger, delegated AI stage-gate approval was dropped and
+delegated low-risk question answers now record to the D ledger
+`decisions/ai-question-answers.jsonl` instead of an audit event. See the "Core
+restore" table in `../README.md`.

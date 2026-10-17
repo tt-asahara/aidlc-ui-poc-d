@@ -7,7 +7,7 @@ import { runWorker, type ModelIdentity, type ModelIdentityStatus, type WorkerLau
 import { productionClaudeExecutable } from "./ai-approval-controller.ts";
 import stagePolicy from "./stage-policy.json";
 
-import { questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility } from "../../core/tools/aidlc-ai-answers.ts";
+import { questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility } from "./ai-question-answers.ts";
 
 const SHA = /^[a-f0-9]{64}$/;
 const HUMAN_ONLY = /(approve|approval|deploy|deployment|production|publish|external send|credential|permission|authorization|authentication|delete|destructive|payment|legal|security exception|release|pricing|personal data|target user|承認|本番|公開|外部送信|認証|権限|削除|破壊|支払|法務|セキュリティ|対象利用者|成功基準|決定権|対象ユーザ|ターゲット|価格|料金|課金|個人情報|契約|リリース|デプロイ)/i;
@@ -150,7 +150,7 @@ async function evaluateAiQuestionsOnce(options: AiQuestionOptions): Promise<AiQu
   const directory = join(intent, "decisions", "ai-question-decisions"), decisionPath = join(directory, `${decision.decisionId}.json`), ledger = join(intent, "decisions", "ai-question-decisions.jsonl");
   atomic(decisionPath, `${JSON.stringify(decision, null, 2)}\n`); atomic(ledger, `${existsSync(ledger) ? readFileSync(ledger, "utf8") : ""}${JSON.stringify(decision)}\n`);
   const relativeDecision = relative(root, decisionPath).split(sep).join("/");
-  return { status: "answer", reason: decision.reason, decision, decisionFilePath: relativeDecision, generatedCommandArgs: ["ai-answers", "--stage", options.stage, ...(unit === null ? [] : ["--unit", unit]), "--ai-decision-file", relativeDecision], classification, telemetry };
+  return { status: "answer", reason: decision.reason, decision, decisionFilePath: relativeDecision, generatedCommandArgs: ["--stage", options.stage, ...(unit === null ? [] : ["--unit", unit]), "--ai-decision-file", relativeDecision], classification, telemetry };
 }
 
 if (import.meta.main) {

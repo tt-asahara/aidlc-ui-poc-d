@@ -11,6 +11,7 @@
       "Bash(bun .claude/tools/d-acceleration/run.ts *)",
       "Bash(bun .claude/tools/d-acceleration/host-stage-boundary.ts *)",
       "Bash(bun .claude/tools/d-acceleration/ai-question-controller.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-question-answers.ts *)",
       "Bash(bun .claude/tools/d-acceleration/ai-approval-controller.ts *)",
       "Task",
       "WebSearch"

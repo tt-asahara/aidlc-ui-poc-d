@@ -7,10 +7,13 @@ and downstream handoffs remain active when acceleration is disabled and must
 not be bypassed when it is enabled. See `../ui-poc/` for that baseline.
 
 This proof of concept accelerates routing decisions without weakening AI-DLC's
-review, audit, or Testing Contract boundaries. Most of it remains outside
-`core/`; the delegated-AI stage-gate mode adds one explicit core settlement
-seam so AI decisions cannot masquerade as human replies. An install must opt in
-before dispatching work through the existing engine directives.
+review, audit, or Testing Contract boundaries. It lives entirely outside
+`core/`, which stays byte-identical to upstream AI-DLC v2.11.0 (`6a378b53`;
+guarded by `tests/core-pristine.test.ts`). D extends AI-DLC only through the
+Claude harness projection, the ui-poc plugin, and D-owned tools and ledgers; it
+never writes engine state or the official audit itself. An install must opt in
+before dispatching work through the existing engine directives. What the core
+restore re-homed and what it dropped is listed under "Core restore" below.
 
 A separate clean target (install, receipt-proven update, package parity,
 headless real-host turns, and an evidence manifest) follows
@@ -29,20 +32,36 @@ lifecycle stops live in `issue-autopilot.ts`. It delegates every workflow transi
 review, sensor, and approval to ordinary `/aidlc`. See `configuration.md` for
 JSONC settings. Setup never enables autopilot without an explicit user request.
 
-For a narrowly delegated PoC, `aiApproval.mode: "stage-gates"` can evaluate
-ordinary stage gates only after their existing review and sensor checks pass.
-Its versioned Intent-local JSONL is the decision source of truth and binds the
-AI actor, reason, delegation, official directive, workflow state, and artifact
-hashes. Scope/routing and Plan Approval remain human stops, as do failed or
-unverified checks and operation, credential, publishing, external, or
-destructive work. The optional GitHub seam generates one summary payload per
-Intent and is default-off; publication requires a fresh host-recorded permission
-binding repository, Intent, and payload hash, and it never replaces the repository record.
-The same grant may answer explicitly marked low-risk stage questions, including
-per-Unit Construction design questions (`--unit`), through
-`ai-question-controller.ts` and the core settler `aidlc-ai-answers.ts`; the file
-grammar, per-Unit binding, marker decision, and real-model evidence are in
-`delegated-questions.md`.
+Every stage gate stays the person's: delegated AI stage-gate approval was
+dropped (see "Core restore"). With `aiApproval.mode: "stage-gates"` and the
+person's exact `AI-DLC delegate-ai-approvals ...` grant, D may answer
+explicitly marked low-risk stage questions, including per-Unit Construction
+design questions (`--unit`), through `ai-question-controller.ts` and the D
+settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /
+`[AI Decision ID]` provenance in the questions file and are recorded in the
+Intent's D-owned `decisions/ai-question-answers.jsonl`, which is not the
+official audit. The file grammar, per-Unit binding, marker decision, and
+real-model evidence are in `delegated-questions.md`. The optional GitHub seam
+generates one summary payload per Intent from the configured
+`aiApproval.decisionRecordPath` ledger and is default-off; publication requires
+the person's exact permission words as the latest host-recorded human turn
+(read through the engine's own read-only `latestPersonTurn`), binding
+repository, Intent, and payload hash, and it never replaces the repository record.
+
+## Core restore (re-homed and dropped)
+
+The repository owner requires `core/` to equal upstream `6a378b53`. Every
+earlier D/C core change was reverted and re-implemented only through supported
+extension surfaces:
+
+| Feature | Outcome |
+| --- | --- |
+| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `after-step:6` spliced by compose. |
+| UI scope routing | Partly re-homed: plugin scope keywords route short ASCII requests. UI-specific high-specificity keywords, CJK keyword boundaries, and Japanese negation needed core and were dropped; long or Japanese prose gets the stock proposal and the person picks `ui-poc-application` at the official scope confirmation. |
+| Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds to the Intent created since `start`. The typed `machine_action` field was core-only and is gone. |
+| Delegated low-risk question answers | Re-homed: D-owned grammar/settler `ai-question-answers.ts` and the D ledger `decisions/ai-question-answers.jsonl`; the `AI_QUESTION_ANSWERED` audit event was core-only and is gone. |
+| Decision summary permission and `HOST/owner/name` check | Re-homed into `decision-issue-summary.ts` (the `aidlc-state.ts verify-decision-summary-permission` verb was core-only). |
+| Delegated AI stage-gate approval | Dropped: the upstream engine accepts a stage approval only from the person, and an extension cannot add an approval authority or authenticated `present-gate` receipt. `ai-approval-controller.ts` keeps only `grant`; `evaluate`/`verify` fail closed with one line. |
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification
@@ -132,7 +151,7 @@ person, in two cases:
 - `stage-question`: `action-finish` found that the current stage's canonical
   `<stage>-questions.md` (or the active Unit's per-Unit file) has a blank
   `[Answer]:` slot that the delegated AI path cannot answer
-  (`question-wait.ts`). That holds when there is no `stage-gates` grant for the
+  (`question-wait.ts`). That holds when there is no `stage-gates` question grant for the
   stage, when the deterministic precheck shared with `ai-question-controller.ts`
   refuses the set, or when the Intent's `decisions/ai-question-blocks.jsonl`
   records a delegated-path stop on those exact bytes. A set the delegated path

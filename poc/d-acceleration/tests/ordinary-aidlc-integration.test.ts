@@ -75,6 +75,7 @@ describe("ordinary /aidlc D integration", () => {
       "official-next-adapter.ts",
       "parallel-guard.ts",
       "question-wait.ts",
+      "ai-question-answers.ts",
       "read-only-fanout.ts",
       "run.ts",
       "scheduler.ts",
@@ -83,9 +84,11 @@ describe("ordinary /aidlc D integration", () => {
     ]) expect(existsSync(join(root, file))).toBe(true);
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
     expect(readFileSync(join(root, "host-stage-boundary.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
-    expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
-    expect(readFileSync(join(root, "question-wait.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
-    expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(true);
+    // The delegated-question grammar and settler are D-owned; no D file lands on a core path.
+    expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "./ai-question-answers.ts"');
+    expect(readFileSync(join(root, "question-wait.ts"), "utf8")).toContain('from "./ai-question-answers.ts"');
+    expect(existsSync(join(root, "ai-question-answers.ts"))).toBe(true);
+    expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(false);
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');
