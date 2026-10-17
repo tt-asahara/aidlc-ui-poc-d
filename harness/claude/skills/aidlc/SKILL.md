@@ -85,15 +85,18 @@ Never pass the literal `--auto` to official `orchestrate next`, interpolate the
 description into shell text, or infer its scope. Act on the returned official
 directive exactly as below. An official `ask`, including scope confirmation,
 approval, or sensor recovery, is a human gate and ends the turn; auto mode never
-answers it. When the returned official `print` carries the typed
-`machine_action.kind: "intent-create"`, save that exact directive JSON to a
-project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file <directive-json>`.
-The controller executes only that fixed-argv action, derives active stages from
-the created Intent's official state, initializes the bounded session, obtains
-the first stage directive, and checkpoints it before returning. Never parse or
-execute the print's prose command, infer a stage list, or act on the first stage
-unless `bootstrap` returns `continue`.
+answers it. When an official `print` (the one `start` returned, or the one the
+person's scope choice returned on a later turn) names the run-then-continue
+`intent-create` mutation, run that named command as the ordinary `print` rule
+says (fill only the `--label` the message leaves to you, change nothing else);
+then, instead of `next`, run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`.
+The controller never creates an Intent itself: it binds to the Intent the
+official command created since `start`, derives active stages from that
+Intent's official state, initializes the bounded session, obtains the first
+stage directive, and checkpoints it before returning. Never rebuild or alter
+the creation command, infer a stage list, or act on the first stage unless
+`bootstrap` returns `continue`.
 
 On every `/aidlc` entry when the installed generic controller exists (a new
 session, a restart after a crash, or a reply in a resumed one), first run

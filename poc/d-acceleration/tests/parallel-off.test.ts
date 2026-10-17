@@ -201,8 +201,13 @@ mkdirSync(join(intents, "i1"), { recursive: true }); writeFileSync(join(intents,
 writeFileSync(join(intents, "i1", "aidlc-state.md"), "- [ ] intent-capture — EXECUTE\\n- [ ] units-generation — EXECUTE\\n- [ ] code-generation — EXECUTE\\n");\n`);
     writeFileSync(join(dir, ".claude", "tools", "aidlc-orchestrate.ts"), `process.stdout.write(JSON.stringify({ kind: "run-stage", stage: "intent-capture", receipt: "first" }));\n`);
     writeFileSync(join(dir, ".claude", "tools", "aidlc-state.ts"), `import { appendFileSync } from "node:fs"; const args = process.argv.slice(2); appendFileSync(args[args.indexOf("--project-dir") + 1] + "/policy-calls", args.join(" ") + "\\n"); process.stdout.write("serial\\n");\n`);
-    writeFileSync(join(dir, "creation.json"), JSON.stringify({ kind: "print", message: "x", machine_action: { kind: "intent-create", argv: ["intent", "create", "--scope", "feature", "--request", "abcd1234"] } }));
-    const run = spawnSync(process.execPath, [join(D, "generic-auto-cli.ts"), "bootstrap", "--directive-file", "creation.json", "--project-dir", dir], { cwd: dir, env: cleanEnv(), encoding: "utf8" });
+    writeFileSync(join(dir, "request.txt"), "Build a feature");
+    const started = spawnSync(process.execPath, [join(D, "generic-auto-cli.ts"), "start", "--description-file", "request.txt", "--project-dir", dir], { cwd: dir, env: cleanEnv(), encoding: "utf8" });
+    expect(started.status, started.stderr).toBe(0);
+    // The host runs the official print's intent-create itself (simulated by the fake dispatcher).
+    const created = spawnSync(process.execPath, [join(dir, ".claude", "tools", "aidlc.ts"), "engine", "intent", "create", "--scope", "feature", "--request", "abcd1234", "--project-dir", dir], { cwd: dir, env: cleanEnv(), encoding: "utf8" });
+    expect(created.status, created.stderr).toBe(0);
+    const run = spawnSync(process.execPath, [join(D, "generic-auto-cli.ts"), "bootstrap", "--project-dir", dir], { cwd: dir, env: cleanEnv(), encoding: "utf8" });
     expect(run.status, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ action: "continue", initialized: true });
     const calls = existsSync(join(dir, "policy-calls")) ? readFileSync(join(dir, "policy-calls"), "utf8") : "";
