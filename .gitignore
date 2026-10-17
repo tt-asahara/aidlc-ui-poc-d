@@ -12,6 +12,8 @@ node_modules/
 # Generated AI-DLC projections (materialized locally by scripts/package.ts)
 /dist/
 /dist-release/
+# Generated plugin build output (aidlc-plugin-build.ts poc/ui-poc claude)
+/poc/ui-poc/dist/
 build/
 
 # Zensical documentation-site build output and env (`uv run zensical build`;

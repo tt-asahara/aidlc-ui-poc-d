@@ -2,7 +2,7 @@
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
   "parallel": {
-    // D並列処理の親スイッチ。既定値: ON。ONでも公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化する。OFFはread-only fanoutを逐次化し、新規IntentへのConstruction swarm既定適用も抑止する。run開始時にsnapshotされ、途中変更は次runから有効。
+    // 対象: D並列処理全体（read-only fanoutと新規IntentへのConstruction swarm既定適用）。役割: D並列処理の親スイッチ。ON時: 公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化する。OFF時: read-only fanoutを逐次化し、新規IntentへのConstruction swarm既定適用も抑止する。既定値: ON。run開始時にsnapshotされ、途中変更は次runから有効。利用場面: 通常はON、逐次実行で切り分けたい場合だけOFF。
     "enabled": true,
   },
   "constructionDefaults": {

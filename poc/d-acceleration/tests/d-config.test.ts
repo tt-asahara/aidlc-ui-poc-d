@@ -74,7 +74,7 @@ describe("D JSONC configuration", () => {
   test("documents every boolean switch in Japanese with timing and ON/OFF/default behavior", () => {
     const lines = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8").split("\n");
     const switches = lines.flatMap((line, index) => /"([^"]+)"\s*:\s*(true|false)/.test(line) ? [{ index }] : []);
-    expect(switches.length).toBe(16);
+    expect(switches.length).toBe(17);
     for (const entry of switches) {
       const comment = lines.slice(Math.max(0, entry.index - 2), entry.index).join(" ");
       expect(comment).toMatch(/[ぁ-んァ-ヶ一-龠]/);

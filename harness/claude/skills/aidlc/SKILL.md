@@ -43,8 +43,10 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 ## The Forwarding Loop
 
 Before the ordinary forwarding loop, route D Issue arguments when the installed
-controller exists. `/aidlc --next-intent --from-issue <number>` runs
-`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir "$PWD" <number>`.
+controller exists. In every D command below, `<PRODUCT>` is the absolute project directory written out literally (the
+session's working directory); never `$PWD` or any other shell expansion, which
+Claude Code's permission check cannot pre-approve. `/aidlc --next-intent --from-issue <number>` runs
+`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir <PRODUCT> <number>`.
 `/aidlc --auto status` and `/aidlc --auto stop` pass `status` or `stop`;
 `/aidlc --auto --through <stage> --from-issue <number>` first requires the same
 official stage value in D configuration and then runs that Issue. Never treat an
@@ -57,9 +59,10 @@ When the request is `/aidlc --auto <description>` and the installed generic
 controller exists, remove only the leading `--auto`, write the complete remaining
 description with the file tool to a fresh project-confined
 `.aidlc-engine/d-auto-request-<random>.txt`, and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts start --project-dir "$PWD" --description-file <that-file>`.
-Delete only that freshly created request file after the controller returns; the
-controller deliberately never deletes a caller-supplied project file.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts start --project-dir <PRODUCT> --description-file <that-file>`.
+The controller reads and then removes a request file with exactly that
+`.aidlc-engine/d-auto-request-<random>.txt` name, so never run `rm` for it; it
+never deletes any other caller-supplied project file.
 Never pass the literal `--auto` to official `orchestrate next`, interpolate the
 description into shell text, or infer its scope. Act on the returned official
 directive exactly as below. An official `ask`, including scope confirmation,
@@ -67,25 +70,30 @@ approval, or sensor recovery, is a human gate and ends the turn; auto mode never
 answers it. When the returned official `print` carries the typed
 `machine_action.kind: "intent-create"`, save that exact directive JSON to a
 project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir "$PWD" --directive-file <directive-json>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file <directive-json>`.
 The controller executes only that fixed-argv action, derives active stages from
 the created Intent's official state, initializes the bounded session, obtains
 the first stage directive, and checkpoints it before returning. Never parse or
 execute the print's prose command, infer a stage list, or act on the first stage
 unless `bootstrap` returns `continue`.
 
+On every `/aidlc` entry when the installed generic controller exists (a new
+session, a restart after a crash, or a reply in a resumed one), first run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts status --project-dir <PRODUCT>`;
+when it returns `active: true`, the session below applies to every directive of
+this turn, including the first `next --resume`.
 For an active generic auto session, save every fresh official directive JSON to
 a project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts checkpoint --project-dir "$PWD" --directive-file <directive-json>`
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts checkpoint --project-dir <PRODUCT> --directive-file <directive-json>`
 before acting on it. Stop when it returns `stop`; `human-gate` preserves the
 session for the person's next invocation, while boundary, deadline, step limit,
 no-progress, and completion are terminal. Any official directive that asks for
 approval or recovery is already a human gate and is never answered by auto. Immediately
 before each host action run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir "$PWD"`;
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir <PRODUCT>`;
 act only when it returns `continue`, retain its token, and immediately after the
 real action run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir "$PWD" --action-token <token>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token <token>`.
 On re-entry, `init` resumes a session waiting at a human gate. `/aidlc --auto
 status` and `/aidlc --auto stop` retain the shared status/stop route above. These
 controls bound host continuation; they never report a stage, approve a gate, or
@@ -129,7 +137,7 @@ file, grant, and every evidence file. On `block`, stop for the person. On
 slot and directly below it add `[Answer Source]: <receipt source>` and
 `[AI Decision ID]: <receipt decisionId>`. These are AI provenance, never a
 person's answers; do not change any other question-file bytes. Then run
-`{{HARNESS_DIR}}/tools/aidlc-ai-answers.ts --project-dir "$PWD" --stage <stage>
+`{{HARNESS_DIR}}/tools/aidlc-ai-answers.ts --project-dir <PRODUCT> --stage <stage>
 --ai-decision-file <receipt>`. Continue only when it emits
 `AI_QUESTION_ANSWERED`. This is a separate AI-authored receipt bound to the
 Intent state, delegation, question-template hash, answers, provenance and
@@ -297,7 +305,7 @@ more genuinely independent evidence questions exist, write a bounded fanout JSON
 containing the exact current `directive`, `tasks` with unique `id`, official
 `agent`, focused `objective`, and project-confined existing `evidencePaths`, plus
 optional `maxParallel` from 1 through 4. Then run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir "$PWD" --worker claude --fanout-input <fanout-json>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude --fanout-input <fanout-json>`.
 The runner resolves configured D models itself, obtains a fresh official `next`,
 and refuses a stale, gated, non-inline, or topology-owned directive. If fewer
 than two independent tasks or trustworthy evidence paths exist, skip fanout and
@@ -310,9 +318,9 @@ worker failure, surface the uncertainty in lead synthesis rather than claiming
 success. Workers never write files, transition state, approve, review, or answer
 questions.
 
-**Per-unit batch waves (optional).** On a selected stage-major walk, `directive.wave` is the engine-owned parallel surface for functional-design, nfr-requirements, nfr-design, and infrastructure-design. Branch on it before the ordinary per-unit/gate path; parent Unit fields are only a projection of the first entry. **When `{{HARNESS_DIR}}/tools/d-acceleration/run.ts` exists, this is the ordinary D path: immediately run `bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir "$PWD" --worker claude`. Do not ask the person to run a separate runner.** D model routing is separate from official per-agent `config models` policy: explicit D CLI overrides win, then `.claude/d-acceleration.local.jsonc`, then `.claude/d-acceleration.jsonc`, and an unspecified tier defaults to the confirmed `opus` CLI alias. Legacy `.json` names remain readable, while both names in one layer are rejected as ambiguous. The D conductor obtains and validates the current official directive, gives each worker the complete official builder brief, restricts writes to the product, and leaves approvals, reviews, sensors, and state transitions with the official host. If it returns `official-host-action-required`, continue below with the returned directive. If it returns `worker-action-required` or fails, stop and surface its reason; never mark a Unit complete from worker exit alone. If the installed runtime is absent, use the host path below. Give every builder the parent `ceremony` and `protocol_modules`, `stage_file`, every `inline_context_paths` file, `context_warnings`, and the complete steering bundle verbatim, plus its entry paths, including `entry.unit_memory_path`. Process entries concurrently with independent workers where possible, or serially as the fallback. Builders do not call serial `unit start/pause/resume`; a blocked builder returns its question and withholds a path from `entry.required_produces`. After build work, run or resume the review named by `review_state`: `outstanding` uses `review_iteration`, `retry-required` repeats that request with `--retry-pending`, `repair-required` runs lead repair then the next iteration, and `recovery-required` runs the one stale-receipt recovery at `review_iteration`. `escalation-required` means recovery was already spent: do not request another review or complete the Unit; halt for a human Request Changes decision. Serialize reviews wherever the single reviewer-scope record is enforced; only an enforcement-free path may run foreground reviews in parallel. When build and review are settled and `completion_required` is true, run `aidlc-state.ts unit complete --wave --stage "<directive.stage>" --unit "<entry.unit>"`; that tool verifies the live entry, deduplicates its Unit diary into the parent diary, and emits `UNIT_COMPLETED`. Then re-run `next` without report-approve. Code Generation and unit-major iteration never carry a wave.
+**Per-unit batch waves (optional).** On a selected stage-major walk, `directive.wave` is the engine-owned parallel surface for functional-design, nfr-requirements, nfr-design, and infrastructure-design. Branch on it before the ordinary per-unit/gate path; parent Unit fields are only a projection of the first entry. **When `{{HARNESS_DIR}}/tools/d-acceleration/run.ts` exists, this is the ordinary D path: immediately run `bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude`. Do not ask the person to run a separate runner.** D model routing is separate from official per-agent `config models` policy: explicit D CLI overrides win, then `.claude/d-acceleration.local.jsonc`, then `.claude/d-acceleration.jsonc`, and an unspecified tier defaults to the confirmed `opus` CLI alias. Legacy `.json` names remain readable, while both names in one layer are rejected as ambiguous. The D conductor obtains and validates the current official directive, gives each worker the complete official builder brief, restricts writes to the product, and leaves approvals, reviews, sensors, and state transitions with the official host. If it returns `official-host-action-required`, continue below with the returned directive. If it returns `worker-action-required` or fails, stop and surface its reason; never mark a Unit complete from worker exit alone. If the installed runtime is absent, use the host path below. Give every builder the parent `ceremony` and `protocol_modules`, `stage_file`, every `inline_context_paths` file, `context_warnings`, and the complete steering bundle verbatim, plus its entry paths, including `entry.unit_memory_path`. Process entries concurrently with independent workers where possible, or serially as the fallback. Builders do not call serial `unit start/pause/resume`; a blocked builder returns its question and withholds a path from `entry.required_produces`. After build work, run or resume the review named by `review_state`: `outstanding` uses `review_iteration`, `retry-required` repeats that request with `--retry-pending`, `repair-required` runs lead repair then the next iteration, and `recovery-required` runs the one stale-receipt recovery at `review_iteration`. `escalation-required` means recovery was already spent: do not request another review or complete the Unit; halt for a human Request Changes decision. Serialize reviews wherever the single reviewer-scope record is enforced; only an enforcement-free path may run foreground reviews in parallel. When build and review are settled and `completion_required` is true, run `aidlc-state.ts unit complete --wave --stage "<directive.stage>" --unit "<entry.unit>"`; that tool verifies the live entry, deduplicates its Unit diary into the parent diary, and emits `UNIT_COMPLETED`. Then re-run `next` without report-approve. Code Generation and unit-major iteration never carry a wave.
 
-**Optional D checks (default off).** Resolve `features` and `featureInputs` once from the same project/local D configuration immediately after stage work and before the existing reviewer, sensors, and approval gate. Do not import, read inputs for, or dispatch a worker for a disabled feature. When enabled, write a bounded input manifest naming the current stage, Unit, exact artifact paths, official traceability, C UI contract, and configured roots; save the exact executed official directive; then run `bun {{HARNESS_DIR}}/tools/d-acceleration/host-stage-boundary.ts --project-dir "$PWD" --directive-file <directive-json> --manifest <manifest>`. This executable obtains a fresh official `next`, requires an exact matching valid `run-stage` whose gate is resolved to boolean `false` or `true`, and invokes the installed feature checks; it rejects `gate: "unresolved"`, asks, and invented or stale directives. Run requirement/UI cross-validation at the refined-mockups handoff and functional-design handoff; run document discipline only on functional-design; run source grounding after domain-design; and run specification grounding after domain-design and per Unit after functional-design and code-generation. A NOT-READY exit stops advancement for correction. Pass the returned `evidencePath` to the already-required official reviewer as additional evidence; it is never a review receipt or approval. Grounding evidence is pre-collected from configured roots with symlinks rejected and strict file/byte bounds, then sent to a semantic worker with no filesystem tools. Missing or unverifiable grounding is uncertainty/NOT-READY, never success. These checks never replace, waive, or reorder the C HTML evidence sensor, official traceability sensor, reviewer, report, or human approval.
+**Optional D checks (default off).** Resolve `features` and `featureInputs` once from the same project/local D configuration immediately after stage work and before the existing reviewer, sensors, and approval gate. Do not import, read inputs for, or dispatch a worker for a disabled feature. When enabled, write a bounded input manifest naming the current stage, Unit, exact artifact paths, official traceability, C UI contract, and configured roots; save the exact executed official directive; then run `bun {{HARNESS_DIR}}/tools/d-acceleration/host-stage-boundary.ts --project-dir <PRODUCT> --directive-file <directive-json> --manifest <manifest>`. This executable obtains a fresh official `next`, requires an exact matching valid `run-stage` whose gate is resolved to boolean `false` or `true`, and invokes the installed feature checks; it rejects `gate: "unresolved"`, asks, and invented or stale directives. Run requirement/UI cross-validation at the refined-mockups handoff and functional-design handoff; run document discipline only on functional-design; run source grounding after domain-design; and run specification grounding after domain-design and per Unit after functional-design and code-generation. A NOT-READY exit stops advancement for correction. Pass the returned `evidencePath` to the already-required official reviewer as additional evidence; it is never a review receipt or approval. Grounding evidence is pre-collected from configured roots with symlinks rejected and strict file/byte bounds, then sent to a semantic worker with no filesystem tools. Missing or unverifiable grounding is uncertainty/NOT-READY, never success. These checks never replace, waive, or reorder the C HTML evidence sensor, official traceability sensor, reviewer, report, or human approval.
 
 `directive.mode` selects the communication topology. Load `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md` when the engine lists `ensemble` in `directive.protocol_modules` (or, as a fallback, when mode is `subagent`, `pipeline`, or `mob`, or support agents are present), then follow only this harness's topology subsection.
 
