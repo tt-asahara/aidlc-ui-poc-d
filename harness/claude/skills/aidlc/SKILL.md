@@ -122,15 +122,22 @@ send, credential/permission/authentication change, production/deployment,
 destructive action, legal/payment choice, security exception, failed check, or
 low-confidence result. Only questions explicitly classified with one
 `[AI-Autonomy]: low-risk-reversible` marker per blank answer are eligible;
-unmarked, mixed human/AI, and partially answered sets stop. After creating the canonical blank
-`<stage>-questions.md`, run `ai-question-controller.ts` with the exact questions
-file, grant, and every evidence file. On `block`, stop for the person. On
+unmarked, mixed human/AI, and partially answered sets stop. Write that marker
+only while a grant covers the stage, only on a `## Q<n>` question every option
+of which is reversible and none of the excluded kinds above, on its own line
+directly above that question's `[Answer]:`; never on a checkpoint or summary
+entry. After creating the canonical blank
+`<stage>-questions.md` (per-Unit Construction design stages:
+`<record>/construction/<unit>/<stage>/<stage>-questions.md`, and pass
+`--unit <unit>` to both commands below), run `ai-question-controller.ts` with the exact questions
+file, grant, and every evidence file. On `block`, stop for the person and show
+its per-question `classification`. On
 `answer`, copy each receipt answer into its corresponding blank `[Answer]:`
 slot and directly below it add `[Answer Source]: <receipt source>` and
 `[AI Decision ID]: <receipt decisionId>`. These are AI provenance, never a
 person's answers; do not change any other question-file bytes. Then run
 `{{HARNESS_DIR}}/tools/aidlc-ai-answers.ts --project-dir "$PWD" --stage <stage>
---ai-decision-file <receipt>`. Continue only when it emits
+[--unit <unit>] --ai-decision-file <receipt>`. Continue only when it emits
 `AI_QUESTION_ANSWERED`. This is a separate AI-authored receipt bound to the
 Intent state, delegation, question-template hash, answers, provenance and
 evidence; never pass `--on-instruction`, emit `QUESTION_ANSWERED`, or write a

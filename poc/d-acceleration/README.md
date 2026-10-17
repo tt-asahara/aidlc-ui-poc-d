@@ -35,6 +35,11 @@ unverified checks and operation, credential, publishing, external, or
 destructive work. The optional GitHub seam generates one summary payload per
 Intent and is default-off; publication requires a fresh host-recorded permission
 binding repository, Intent, and payload hash, and it never replaces the repository record.
+The same grant may answer explicitly marked low-risk stage questions, including
+per-Unit Construction design questions (`--unit`), through
+`ai-question-controller.ts` and the core settler `aidlc-ai-answers.ts`; the file
+grammar, per-Unit binding, marker decision, and real-model evidence are in
+`delegated-questions.md`.
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification

@@ -109,7 +109,12 @@ function reportedModel(kind: WorkerKind, stdout: string): string | null {
     const parsed = JSON.parse(stdout);
     if (kind === "fake") return typeof parsed.runtimeReportedModel === "string" ? parsed.runtimeReportedModel : null;
     const model = parsed?.model ?? parsed?.model_id ?? parsed?.result?.model;
-    return typeof model === "string" ? model : null;
+    if (typeof model === "string") return model;
+    // Claude Code's `--output-format json` envelope reports the runtime model
+    // only as the key of `modelUsage`. One key is an unambiguous report; several
+    // (e.g. a helper model also ran) are not, so they stay unreported.
+    const usage = parsed?.modelUsage && typeof parsed.modelUsage === "object" && !Array.isArray(parsed.modelUsage) ? Object.keys(parsed.modelUsage) : [];
+    return usage.length === 1 ? usage[0] : null;
   } catch { return null; }
 }
 
