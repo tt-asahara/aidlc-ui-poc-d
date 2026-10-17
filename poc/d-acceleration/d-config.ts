@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
@@ -19,11 +20,13 @@ export type DAiApprovalConfig = { mode: "human" | "stage-gates"; minConfidence: 
 export type DDecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type DConstructionDefaults = { iteration: "official" | "stage-major"; execution: "official" | "swarm" };
 export type DParallelConfig = { enabled: boolean };
+/** null = the routing config's default design skill (the pinned Arm C component). */
+export type DUiDesignConfig = { refinedMockupSkill: string | null };
 export type DFeatureInputs = { requirementIdBridges: Array<{ uiAc: string; officialId: string }>; functionalDesignBudgets: { artifactBytes: number; unitBytes: number; metadataBytes: number }; sourceRoots: string[]; specRoots: string[]; groundingLimits: GroundingLimits };
-export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; parallel: DParallelConfig; constructionDefaults: DConstructionDefaults };
+export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; parallel: DParallelConfig; constructionDefaults: DConstructionDefaults; uiDesign: DUiDesignConfig };
 export const DEFAULT_D_MODEL = "opus";
 
-type DFileConfig = { models: Partial<DModelCatalog>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults> };
+type DFileConfig = { models: Partial<DModelCatalog>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults>; uiDesign?: { refinedMockupSkill?: string } };
 
 /** Parse JSONC without changing comment-like text inside strings. */
 export function parseDJsonc(source: string, path = "D configuration"): unknown {
@@ -126,7 +129,13 @@ function readConfig(path: string): DFileConfig {
   }
   const parallel = object(value.parallel, "parallel", path);
   if (parallel) { for (const key of Object.keys(parallel)) if (key !== "enabled") throw new Error(`unknown D parallel key ${key} in ${path}`); bool(parallel.enabled, "parallel enabled", path); }
-  return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults> };
+  // The choice set lives in the composed C routing config; here only the shape is checked.
+  const uiDesign = object(value.uiDesign, "uiDesign", path);
+  if (uiDesign) {
+    for (const key of Object.keys(uiDesign)) if (key !== "refinedMockupSkill") throw new Error(`unknown D uiDesign key ${key} in ${path}`);
+    if (uiDesign.refinedMockupSkill !== undefined && (typeof uiDesign.refinedMockupSkill !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(uiDesign.refinedMockupSkill))) throw new Error(`invalid D uiDesign refinedMockupSkill in ${path}`);
+  }
+  return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults>, uiDesign: uiDesign as { refinedMockupSkill?: string } };
 }
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
   const directory = join(projectDir, ".claude");
@@ -150,7 +159,8 @@ export function resolveDAiApproval(projectDir: string): DAiApprovalConfig { cons
 export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssueSummaryConfig { const { project, local } = layers(projectDir), base = project.decisionIssueSummary ?? {}, override = local.decisionIssueSummary ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, repository: override.repository?.trim() ?? base.repository?.trim(), send: override.send ?? base.send ?? false, maxRetries: override.maxRetries ?? base.maxRetries ?? 2 }; }
 export function resolveDParallel(projectDir: string): DParallelConfig { const { project, local } = layers(projectDir); return { enabled: local.parallel?.enabled ?? project.parallel?.enabled ?? true }; }
 export function resolveDConstructionDefaults(projectDir: string): DConstructionDefaults { const { project, local } = layers(projectDir), base = project.constructionDefaults ?? {}, override = local.constructionDefaults ?? {}; const resolved: DConstructionDefaults = { iteration: override.iteration ?? base.iteration ?? "official", execution: override.execution ?? base.execution ?? "official" }; if (resolved.execution === "swarm" && resolved.iteration !== "stage-major") throw new Error("D constructionDefaults.execution=swarm requires constructionDefaults.iteration=stage-major"); return resolveDParallel(projectDir).enabled ? resolved : { iteration: "official", execution: "official" }; }
-export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir) }; }
+export function resolveDUiDesign(projectDir: string): DUiDesignConfig { const { project, local } = layers(projectDir); return { refinedMockupSkill: local.uiDesign?.refinedMockupSkill ?? project.uiDesign?.refinedMockupSkill ?? null }; }
+export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir), uiDesign: resolveDUiDesign(projectDir) }; }
 
 export type DPrerequisite = { setting: string; requires: string; satisfied: boolean };
 /**
@@ -177,6 +187,12 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
     const composed = checkPrLensPluginComposed(projectDir);
     need("features.prLensReview", `pr-lens-review plugin composed into Build and Test${composed.ok ? "" : `: ${composed.detail}`}`, composed.ok);
   }
+  if (config.uiDesign.refinedMockupSkill !== null) {
+    // The composed C routing tool owns the choice set, the pins, and the install check.
+    const routing = join(projectDir, ".claude", "tools", "ui-poc-c-routing.cjs");
+    const status = existsSync(routing) ? createRequire(import.meta.url)(routing).designSkillStatus(config.uiDesign.refinedMockupSkill, projectDir) as { ok: boolean; detail?: string } : { ok: false, detail: "composed C UI contract (.claude/tools/ui-poc-c-routing.cjs) is missing" };
+    need("uiDesign.refinedMockupSkill", `"${config.uiDesign.refinedMockupSkill}" is a design-skill choice of the composed C routing and its pinned files and licences are installed${status.ok ? "" : `: ${status.detail}`}`, status.ok);
+  }
   if (config.issueAutopilot.enabled) {
     need("issueAutopilot.enabled", "auto.enabled is true", config.auto.enabled);
     need("issueAutopilot.enabled", "auto.labelAllowlist is non-empty", config.auto.labelAllowlist.length > 0);
@@ -199,11 +215,16 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
 
 if (import.meta.main) {
   const [command, projectDir] = process.argv.slice(2);
-  if (command !== "print-ai-approval" || !projectDir || !isAbsolute(projectDir)) {
-    process.stderr.write("usage: d-config.ts print-ai-approval ABS_PROJECT_DIR\n");
+  if (!["print-ai-approval", "print-ui-design"].includes(command ?? "") || !projectDir || !isAbsolute(projectDir)) {
+    process.stderr.write("usage: d-config.ts print-ai-approval|print-ui-design ABS_PROJECT_DIR\n");
     process.exit(2);
   }
-  process.stdout.write(`${JSON.stringify(resolveDAiApproval(projectDir))}\n`);
+  try {
+    process.stdout.write(`${JSON.stringify(command === "print-ui-design" ? resolveDUiDesign(projectDir) : resolveDAiApproval(projectDir))}\n`);
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`);
+    process.exit(2);
+  }
 }
 
 /**

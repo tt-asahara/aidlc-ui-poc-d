@@ -1,0 +1,122 @@
+# Real smoke of the optional refined-mockups design skills. Network fetch of the
+# real pinned commits; disposable PRODUCT holding the built ui-poc tools and the
+# projected D runtime under .claude/tools (installed layout) but NOT the Arm C
+# .agents payload, so the impeccable-historical row is expected to be unmet here
+# (D's fresh-install places that payload). Paths are redacted to $PRODUCT.
+# Not evidence of a live model-backed refined-mockups run.
+## smoke: real pinned fetch of both optional design skills into a disposable PRODUCT (installed-tools layout)
+date: 2026-10-17T14:20:26Z
+src: 489c4679 + working tree
+
+### dry-run impeccable
+{
+  "mode": "dry-run",
+  "product": "$PRODUCT",
+  "skill": "impeccable",
+  "repository": "https://github.com/pbakaus/impeccable.git",
+  "commit": "08d5b470495d242ca0470f4aeae1956c3a074f83",
+  "license": "Apache-2.0",
+  "from": ".claude/skills/impeccable",
+  "to": ".agents/skills/impeccable",
+  "licenses": [
+    ".agents/skills/LICENSES/impeccable-latest/LICENSE",
+    ".agents/skills/LICENSES/impeccable-latest/NOTICE.md"
+  ],
+  "alreadyInstalled": false,
+  "switch": "uiDesign.refinedMockupSkill is unchanged; set it to \"impeccable\" in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)"
+}
+### apply impeccable
+{
+  "mode": "apply",
+  "product": "$PRODUCT",
+  "skill": "impeccable",
+  "repository": "https://github.com/pbakaus/impeccable.git",
+  "commit": "08d5b470495d242ca0470f4aeae1956c3a074f83",
+  "license": "Apache-2.0",
+  "from": ".claude/skills/impeccable",
+  "to": ".agents/skills/impeccable",
+  "licenses": [
+    ".agents/skills/LICENSES/impeccable-latest/LICENSE",
+    ".agents/skills/LICENSES/impeccable-latest/NOTICE.md"
+  ],
+  "files": 57,
+  "ready": true,
+  "switch": "uiDesign.refinedMockupSkill is unchanged; set it to \"impeccable\" in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)"
+}
+exit 0
+### rerun impeccable (idempotent)
+  "mode": "apply",
+  "ready": true,
+
+### dry-run ui-ux-pro-max
+{
+  "mode": "dry-run",
+  "product": "$PRODUCT",
+  "skill": "ui-ux-pro-max",
+  "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill.git",
+  "commit": "56ea9cf174ed86786187daa9de0e6247cb0747e4",
+  "license": "MIT",
+  "from": ".claude/skills/ui-ux-pro-max",
+  "to": ".agents/skills/ui-ux-pro-max",
+  "licenses": [
+    ".agents/skills/LICENSES/ui-ux-pro-max/LICENSE"
+  ],
+  "alreadyInstalled": false,
+  "switch": "uiDesign.refinedMockupSkill is unchanged; set it to \"ui-ux-pro-max\" in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)"
+}
+### apply ui-ux-pro-max
+{
+  "mode": "apply",
+  "product": "$PRODUCT",
+  "skill": "ui-ux-pro-max",
+  "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill.git",
+  "commit": "56ea9cf174ed86786187daa9de0e6247cb0747e4",
+  "license": "MIT",
+  "from": ".claude/skills/ui-ux-pro-max",
+  "to": ".agents/skills/ui-ux-pro-max",
+  "licenses": [
+    ".agents/skills/LICENSES/ui-ux-pro-max/LICENSE"
+  ],
+  "files": 73,
+  "ready": true,
+  "switch": "uiDesign.refinedMockupSkill is unchanged; set it to \"ui-ux-pro-max\" in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)"
+}
+exit 0
+### rerun ui-ux-pro-max (idempotent)
+  "mode": "apply",
+  "ready": true,
+
+### installed trees
+impeccable: 57 files
+ui-ux-pro-max: 73 files
+.agents/skills/LICENSES/impeccable-latest/LICENSE
+.agents/skills/LICENSES/impeccable-latest/NOTICE.md
+.agents/skills/LICENSES/ui-ux-pro-max/LICENSE
+
+### routing install check + plan per configured choice
+impeccable {"ok":true,"id":"impeccable","skill":"impeccable","repository":"pbakaus/impeccable","commit":"08d5b470495d242ca0470f4aeae1956c3a074f83"} resolved= impeccable
+[{"setting":"uiDesign.refinedMockupSkill","requires":"\"impeccable\" is a design-skill choice of the composed C routing and its pinned files and licences are installed","satisfied":true}]
+ui-ux-pro-max {"ok":true,"id":"ui-ux-pro-max","skill":"ui-ux-pro-max","repository":"nextlevelbuilder/ui-ux-pro-max-skill","commit":"56ea9cf174ed86786187daa9de0e6247cb0747e4"} resolved= ui-ux-pro-max
+[{"setting":"uiDesign.refinedMockupSkill","requires":"\"ui-ux-pro-max\" is a design-skill choice of the composed C routing and its pinned files and licences are installed","satisfied":true}]
+impeccable-historical {"ok":false,"detail":"Installed entrypoint is missing: .agents/skills/frontend-design/SKILL.md"} resolved= impeccable-historical
+[{"setting":"uiDesign.refinedMockupSkill","requires":"\"impeccable-historical\" is a design-skill choice of the composed C routing and its pinned files and licences are installed: Installed entrypoint is missing: .agents/skills/frontend-design/SKILL.md","satisfied":false}]
+
+### CLI plan (resolves the configured choice through the installed D resolver)
+{"pass":true,"designSkill":"impeccable","design":[{"skill":"impeccable","commit":"08d5b470495d242ca0470f4aeae1956c3a074f83","outputs":["refined-html","ui-poc-refined-contract"],"entrypoints":7}]}
+### same choice in ui-poc-comparison
+{
+  "pass": false,
+  "findings_count": 1,
+  "findings": [
+    "Scope ui-poc-comparison compares the pinned Arm C treatment; uiDesign.refinedMockupSkill=impeccable applies only outside ui-poc-comparison"
+  ]
+
+### UI/UX Pro Max local search runs offline from the installed copy
+## UI Pro Max Search Results
+**Domain:** style | **Query:** personal finance budget calm
+**Source:** styles.csv | **Found:** 3 results
+
+### Result 1
+- **Style ID:** fluent-2
+- **Style Category:** Fluent 2
+- **Aliases:** Fluent UI|Microsoft Fluent 2

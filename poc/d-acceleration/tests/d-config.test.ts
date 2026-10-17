@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DECISION_RECORD_PATH_REMOVED, effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
+import { spawnSync } from "node:child_process";
+import { DECISION_RECORD_PATH_REMOVED, effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels, resolveDUiDesign } from "../d-config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -83,6 +84,41 @@ describe("D JSONC configuration", () => {
       write(root, "d-acceleration.local.jsonc", `{ "features": { "prLensReview": ${value} } }`);
       expect(() => resolveDFeatureFlags(root)).toThrow(/^invalid D feature prLensReview in .*d-acceleration\.local\.jsonc$/);
     }
+  });
+  test("uiDesign.refinedMockupSkill defaults to the routing default, local overrides project, and malformed values fail closed", () => {
+    const root = project();
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: null });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": "impeccable" } }`);
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: "impeccable" });
+    write(root, "d-acceleration.local.jsonc", `{ // try the search-driven system\n "uiDesign": { "refinedMockupSkill": "ui-ux-pro-max", }, }`);
+    expect(resolveDUiDesign(root)).toEqual({ refinedMockupSkill: "ui-ux-pro-max" });
+    for (const value of ['""', '"Impeccable"', '"a b"', "true", "null"]) {
+      write(root, "d-acceleration.local.jsonc", `{ "uiDesign": { "refinedMockupSkill": ${value} } }`);
+      expect(() => resolveDUiDesign(root)).toThrow(/^invalid D uiDesign refinedMockupSkill in .*d-acceleration\.local\.jsonc$/);
+    }
+    write(root, "d-acceleration.local.jsonc", `{ "uiDesign": { "roughMockupSkill": "impeccable" } }`);
+    expect(() => resolveDUiDesign(root)).toThrow(/^unknown D uiDesign key roughMockupSkill in /);
+  });
+  test("print-ui-design prints the resolved choice and exits 2 on invalid configuration", () => {
+    const root = project();
+    const cli = () => spawnSync(process.execPath, [join(import.meta.dir, "..", "d-config.ts"), "print-ui-design", root], { encoding: "utf8" });
+    expect(JSON.parse(cli().stdout)).toEqual({ refinedMockupSkill: null });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": "impeccable" } }`);
+    expect(JSON.parse(cli().stdout)).toEqual({ refinedMockupSkill: "impeccable" });
+    write(root, "d-acceleration.jsonc", `{ "uiDesign": { "refinedMockupSkill": 1 } }`);
+    const failed = cli();
+    expect(failed.status).toBe(2);
+    expect(failed.stderr).toMatch(/invalid D uiDesign refinedMockupSkill/);
+  });
+  test("the example JSONC lists exactly the routing config's design-skill choices, with the default first", () => {
+    const example = readFileSync(join(import.meta.dir, "..", "d-acceleration.example.jsonc"), "utf8");
+    const routing = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "ui-poc", "tools", "ui-poc", "c-stage-routing.json"), "utf8"));
+    const listed = [...example.matchAll(/^\s*\/\/\s+"([a-z0-9-]+)"\s+…/gm)].map((match) => match[1]);
+    expect(listed).toEqual(Object.keys(routing.designSkillChoices));
+    expect(listed[0]).toBe(routing.defaultDesignSkill);
+    expect(example).toContain(`"refinedMockupSkill": "${routing.defaultDesignSkill}",`);
+    const parsed = parseDJsonc(example) as { uiDesign: { refinedMockupSkill: string } };
+    expect(parsed.uiDesign.refinedMockupSkill).toBe(routing.defaultDesignSkill);
   });
   test("a leftover clef key fails closed with a one-line removal notice", () => {
     for (const layer of ["d-acceleration.jsonc", "d-acceleration.local.jsonc"]) {

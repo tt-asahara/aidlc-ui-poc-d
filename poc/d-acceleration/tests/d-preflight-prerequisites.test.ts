@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -74,6 +74,23 @@ describe("D preflight prerequisites and effective values", () => {
       "gitPersistence.push: Git remote \"origin\" exists",
       "issueAutopilot.enabled: auto.labelAllowlist is non-empty",
     ]);
+  });
+
+  test("a non-default uiDesign.refinedMockupSkill requires the composed routing tool and the pinned install", () => {
+    const root = product();
+    writeFileSync(join(root, ".claude", "d-acceleration.jsonc"), JSON.stringify({ uiDesign: { refinedMockupSkill: "impeccable" } }));
+    const row = () => checkDPrerequisites(root, {}).filter((r) => r.setting === "uiDesign.refinedMockupSkill");
+    expect(row()).toEqual([{ setting: "uiDesign.refinedMockupSkill", requires: expect.stringContaining("composed C UI contract (.claude/tools/ui-poc-c-routing.cjs) is missing"), satisfied: false }]);
+    const tools = join(import.meta.dir, "..", "..", "ui-poc", "tools");
+    cpSync(join(tools, "ui-poc-c-routing.cjs"), join(root, ".claude/tools/ui-poc-c-routing.cjs"));
+    cpSync(join(tools, "ui-poc"), join(root, ".claude/tools/ui-poc"), { recursive: true });
+    expect(row()[0]!.satisfied).toBe(false);
+    expect(row()[0]!.requires).toContain("Installed entrypoint is missing: .agents/skills/impeccable/SKILL.md; run: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill impeccable");
+    writeFileSync(join(root, ".claude", "d-acceleration.jsonc"), JSON.stringify({ uiDesign: { refinedMockupSkill: "taste-skill" } }));
+    expect(row()[0]!.requires).toContain("Unknown uiDesign.refinedMockupSkill: taste-skill (choices: impeccable-historical, impeccable, ui-ux-pro-max)");
+    const { status, json } = preflight(root);
+    expect(status).toBe(3);
+    expect(json.optional.uiDesign).toEqual({ refinedMockupSkill: "taste-skill" });
   });
 
   test("all-ON with every prerequisite satisfied passes and reports each checked row", () => {
