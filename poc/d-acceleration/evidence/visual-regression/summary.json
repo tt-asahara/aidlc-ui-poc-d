@@ -1,0 +1,416 @@
+{
+  "generatedAt": "2026-10-17T05:48:08.550Z",
+  "tool": "poc/ui-poc/tools/ui-poc-fidelity.cjs",
+  "toolSha256": "cb1290a923c3f551f9e44bf23bff62a591388402571c62a190b233db7566f9a3",
+  "visualModuleSha256": "487011d04195cb763127e1bb4050d63ea43ff7f445a01b91dc7c74d73bcebaee",
+  "node": "v24.18.0",
+  "font": {
+    "source": "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "sha256": "876af2cd4854644e7f3e7feb2f688997fdb3343c6df6693611209c9dfb47ccec",
+    "note": "copied into the scratch work dir only; not committed"
+  },
+  "environment": {
+    "renderer": {
+      "executable": "Google Chrome",
+      "product": "Chrome/155.0.8059.82",
+      "revision": "537.36 (@c56fe5daef8be123f68808a4bb705ff378cd2019)",
+      "protocolVersion": "1.3",
+      "jsVersion": "15.5.35.23"
+    },
+    "os": {
+      "platform": "darwin",
+      "release": "25.5.0",
+      "arch": "arm64"
+    },
+    "viewport": {
+      "width": 800,
+      "height": 600,
+      "deviceScaleFactor": 1
+    },
+    "colorProfile": "srgb",
+    "animations": "frozen",
+    "flagsSha256": "26fc831a437c2fcd14a3911b8950b83776535e7253a289f60994012b2d15168c",
+    "fonts": {
+      "policy": "any",
+      "sha256": "f4efaca7864ef874a80aca381f8f3d7b3d19f2b8343fa3fd575165c835ad2902"
+    }
+  },
+  "renderedFonts": {
+    "rendered": [
+      {
+        "familyName": "Arial Unicode MS",
+        "postScriptName": "ArialUnicodeMS",
+        "isCustomFont": true
+      }
+    ],
+    "bundled": [
+      {
+        "family": "Pinned",
+        "weight": "normal",
+        "style": "normal",
+        "file": "pinned.ttf",
+        "sha256": "876af2cd4854644e7f3e7feb2f688997fdb3343c6df6693611209c9dfb47ccec"
+      }
+    ],
+    "sha256": "f4efaca7864ef874a80aca381f8f3d7b3d19f2b8343fa3fd575165c835ad2902"
+  },
+  "visualPolicy": {
+    "policy": {
+      "colorThreshold": 0.1,
+      "antiAliasing": true,
+      "maxDiffPixels": 16,
+      "maxDiffRatio": 0.0005,
+      "maxMaskRatio": 0.25,
+      "fonts": "any",
+      "masks": [
+        {
+          "id": "CLOCK",
+          "selector": "[data-ui-id=\"CLOCK\"]",
+          "reason": "Timestamp text changes on every render"
+        }
+      ]
+    },
+    "policySha256": "7f73253b226637ff7d16736f0fc535933a6031726939260b6dc5cf26ec20ab23",
+    "masks": [
+      {
+        "id": "CLOCK",
+        "rects": [
+          {
+            "x": 105.9375,
+            "y": 193.140625,
+            "w": 194.8125,
+            "h": 21
+          }
+        ]
+      }
+    ]
+  },
+  "captures": {
+    "baseline": {
+      "exitCode": 0,
+      "ms": 2144,
+      "pass": true,
+      "snapshotSha256": "a8a277b32fbef1e8f5ad8d855075e6232909ac3919fe43e401d254731ba93399",
+      "captures": 1,
+      "png": true
+    },
+    "recapture": {
+      "exitCode": 0,
+      "ms": 1940,
+      "pass": true,
+      "snapshotSha256": "ecc1d4c2eb3f06d6e91856a0cca97ae71212a0d4b4020a446469f796a8deb5bd",
+      "captures": 1,
+      "png": true
+    },
+    "loopback": {
+      "exitCode": 0,
+      "ms": 2035,
+      "pass": true,
+      "snapshotSha256": "8e4d852261fb7f7a53b07dc9a3a0f4515220fa5c5b2237f252655f82eb831dfd",
+      "captures": 1,
+      "png": true
+    },
+    "elementChange": {
+      "exitCode": 0,
+      "ms": 1975,
+      "pass": true,
+      "snapshotSha256": "5a9e7a23765a5a593ee894af99ebaacd3056327bcef19fea74718bae0ff83386",
+      "captures": 1,
+      "png": true
+    },
+    "noise1px": {
+      "exitCode": 0,
+      "ms": 3224,
+      "pass": true,
+      "snapshotSha256": "0d146784f5433f8bb47999124913e0f31c6481ef39eb13871097fb34fb945669",
+      "captures": 1,
+      "png": true
+    },
+    "subpixel": {
+      "exitCode": 0,
+      "ms": 2029,
+      "pass": true,
+      "snapshotSha256": "11e28e4d4e2a1a3efe8209f6013f1f2083b0c9cd96f8f7e49e7cff8622f12471",
+      "captures": 1,
+      "png": true
+    },
+    "aaRadius": {
+      "exitCode": 0,
+      "ms": 2281,
+      "pass": true,
+      "snapshotSha256": "92dc44bdf42c5e4b9bbe697923018b1479f2a80b681e6f2aaa317f9a304b0cd2",
+      "captures": 1,
+      "png": true
+    },
+    "aaLine": {
+      "exitCode": 0,
+      "ms": 1863,
+      "pass": true,
+      "snapshotSha256": "075a64b33aa82eb06b014f9a10114b088ec231ec8cee4a11ca24a0c34c25ae90",
+      "captures": 1,
+      "png": true
+    },
+    "dsf2": {
+      "exitCode": 0,
+      "ms": 1954,
+      "pass": true,
+      "snapshotSha256": "69e11382262e43e37d29ccd8412b0120dbbfa54aa608884aabce3a1a3dff02ec",
+      "captures": 1,
+      "png": true
+    },
+    "unmaskedBaseline": {
+      "exitCode": 0,
+      "ms": 1795,
+      "pass": true,
+      "snapshotSha256": "b07cfeb8c2f2b051ee5e86fe0703cc1f28c8f54a0f7362efdc296b39d923f2e2",
+      "captures": 1,
+      "png": true
+    },
+    "unmaskedRecapture": {
+      "exitCode": 0,
+      "ms": 1699,
+      "pass": true,
+      "snapshotSha256": "21d57564fb007a20ef81f714948bf34f4771565793a1ed95b8fb12c1f6ef4c69",
+      "captures": 1,
+      "png": true
+    },
+    "bundledOnlyPinned": {
+      "exitCode": 0,
+      "ms": 1742,
+      "pass": true,
+      "snapshotSha256": "789ea0846d9263b43d6d990c0d93f7553cdc9dcfd9e7244f1dc16839187ef17c",
+      "captures": 1,
+      "png": true
+    },
+    "bundledOnlySystemFont": {
+      "exitCode": 1,
+      "ms": 1820,
+      "pass": false,
+      "findings_count": 1,
+      "findings": [
+        "FONT_NOT_PINNED: system fonts rendered glyphs: HiraKakuProN-W3"
+      ]
+    },
+    "calibration": {
+      "exitCode": 0,
+      "ms": 109,
+      "pass": true,
+      "noiseDiffPixels": 0,
+      "noiseAntiAliasPixels": 0,
+      "maskedPixels": 4312,
+      "noiseRatio": 0,
+      "recommendedMaxDiffPixels": 16,
+      "recommendedMaxDiffRatio": 0.0005
+    }
+  },
+  "pngSha256": {
+    "baseline": "c554601faecce67db61292831868c355fb485afd44fd58b471da39b43af5f0ed",
+    "recapture": "1eb917dc9eac8f0d1dd8467fbb23c0d277c299716d6ad60b16428c06c1553acd",
+    "loopback": "05cd7b7681cd09dc826c123e1434dee8f16e5fc50c58b2fe8529702e497940fd",
+    "element-change": "003e6b6166fd18cf8350b0545e10d05f8b5804daf443c54a86814f357414adfb",
+    "noise-1px": "825f1a12f2c203dd7a2773bec345cbf093b8887987f4b36905cd2e1398dec89a",
+    "aa-radius": "f8a4fa9d0ef6a9db04a6dfba396bd66a9664ce53af16679a6b3b587432103485",
+    "aa-line": "aa0878c6a0e9d14591fab29f0780f869a8279cfd0b50251b3753bdf933c08b79",
+    "subpixel": "16c1aa4163af7544f5ea48e3b3843d91855fa591f96f3c5a091b5360fa1c03d5",
+    "dsf2": "7b28c8092b983d71dca2ff2a76ebf28f97783b7fdc8fc2576048ef039f39f61d"
+  },
+  "cases": [
+    {
+      "name": "same build recaptured (masked clock)",
+      "expected": "PASS",
+      "observed": "PASS",
+      "ok": true,
+      "findings": [],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 0,
+        "diffPixels": 0,
+        "diffRatio": 0,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": null
+      }
+    },
+    {
+      "name": "loopback implementation observation, same page",
+      "expected": "PASS",
+      "observed": "PASS",
+      "ok": true,
+      "findings": [],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 0,
+        "diffPixels": 0,
+        "diffRatio": 0,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": null
+      }
+    },
+    {
+      "name": "deliberate 1px dot noise",
+      "expected": "PASS",
+      "observed": "PASS",
+      "ok": true,
+      "findings": [],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 0,
+        "diffPixels": 1,
+        "diffRatio": 0.0000021022182607087,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": {
+          "x": 700,
+          "y": 500,
+          "w": 1,
+          "h": 1
+        }
+      }
+    },
+    {
+      "name": "anti-alias noise: card corner radius 8px -> 8.4px",
+      "expected": "PASS",
+      "observed": "PASS",
+      "ok": true,
+      "findings": [],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 0,
+        "diffPixels": 0,
+        "diffRatio": 0,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": null
+      }
+    },
+    {
+      "name": "anti-alias noise: chart polyline vertex moved 0.3px",
+      "expected": "PASS",
+      "observed": "PASS",
+      "ok": true,
+      "findings": [],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 118,
+        "diffPixels": 2,
+        "diffRatio": 0.0000042044365214174,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": {
+          "x": 452,
+          "y": 293,
+          "w": 6,
+          "h": 2
+        }
+      }
+    },
+    {
+      "name": "0.25px sub-pixel layout shift of all content",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "ok": true,
+      "findings": [
+        "Rendered PNG differs from approved baseline: 617 pixels exceed maxDiffPixels 16",
+        "Rendered PNG differs from approved baseline: ratio 0.001297 exceeds maxDiffRatio 0.0005",
+        "Differing region bounds x=43 y=116 w=291 h=148"
+      ],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 1425,
+        "diffPixels": 617,
+        "diffRatio": 0.0012970686668572677,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": {
+          "x": 43,
+          "y": 116,
+          "w": 291,
+          "h": 148
+        }
+      }
+    },
+    {
+      "name": "real element change: button label",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "ok": true,
+      "findings": [
+        "Rendered PNG differs from approved baseline: 183 pixels exceed maxDiffPixels 16",
+        "Differing region bounds x=275 y=250 w=30 h=14"
+      ],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 475688,
+        "maskedPixels": 4312,
+        "antiAliasPixels": 85,
+        "diffPixels": 183,
+        "diffRatio": 0.00038470594170969205,
+        "maskRatio": 0.008983333333333333,
+        "diffBounds": {
+          "x": 275,
+          "y": 250,
+          "w": 30,
+          "h": 14
+        }
+      }
+    },
+    {
+      "name": "renderer metadata differs: deviceScaleFactor 2",
+      "expected": "NOT-READY",
+      "observed": "NOT-READY",
+      "ok": true,
+      "findings": [
+        "Visual rendering environment differs from approved baseline: viewport.deviceScaleFactor 1 != 2"
+      ]
+    },
+    {
+      "name": "false positive without mask: dynamic clock",
+      "expected": "FAIL",
+      "observed": "FAIL",
+      "ok": true,
+      "findings": [
+        "Rendered PNG differs from approved baseline: 154 pixels exceed maxDiffPixels 16",
+        "Differing region bounds x=251 y=199 w=39 h=11"
+      ],
+      "metrics": {
+        "identicalBytes": false,
+        "width": 800,
+        "height": 600,
+        "comparedPixels": 480000,
+        "maskedPixels": 0,
+        "antiAliasPixels": 112,
+        "diffPixels": 154,
+        "diffRatio": 0.00032083333333333334,
+        "maskRatio": 0,
+        "diffBounds": {
+          "x": 251,
+          "y": 199,
+          "w": 39,
+          "h": 11
+        }
+      }
+    }
+  ],
+  "allExpected": true
+}

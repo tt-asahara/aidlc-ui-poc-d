@@ -19,6 +19,9 @@ Pinned commit: 6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a.
 - Contributions use implemented adds.scopes/produces/consumes/sensors and before-step/after-step anchors. They do not rely on deferred adds.requires_stage or non-enforced adds.required_sections.
 - Scope guard_policy uses the supported strict value (also used by pinned core enterprise scope), not a boolean on value. Draft producers do not gain extra approval gates; consumers verify prior ordinary approvals.
 
+- `node --test tests/visual.test.cjs` (2026-10-17): 24 tests passed. Synthetic PNGs cover renderer-metadata refusal (browser version, scale factor, viewport, OS, fonts hash, flags, incomplete legacy metadata), policy binding, size drift, deliberate 1px and anti-aliasing noise passing, real element changes failing, masks (including missing targets and maxMaskRatio), calibration, and diff-image output.
+- Real headless capture (2026-10-17, local Chrome 155 on macOS arm64, `node ../d-acceleration/evidence/visual-regression/run-real-capture.mjs <scratch>`): all 9 expected outcomes met. Re-capturing the same build with a masked clock gave 0 differing pixels; the loopback observation passed; the 1px dot (1 pixel) and anti-aliasing noise (118 anti-aliased pixels tolerated) passed; the button label change (183 pixels), the whole-content 0.25px shift, and the unmasked clock (a demonstrated false positive) failed; scale factor 2 against 1 was refused NOT-READY; `bundled-only` fonts passed with a pinned web font and refused a system font (`FONT_NOT_PINNED: HiraKakuProN-W3`). Evidence: `../d-acceleration/evidence/visual-regression/summary.json` plus diff PNGs.
+
 ## Not run / remaining blockers
 
 - Official plugin validation, Claude projection build, disposable compose integration, generated graph inspection, zero-drop check, and idempotent second compose: PASS on 2026-10-16 in this checkout. This is deterministic harness evidence, not a live model run or human approval.
