@@ -56,7 +56,7 @@
     "sessionOnly": true,
     // 不明点: halt=停止、assume=仮定台帳へ記録、research=調査後も不明なら停止。既定値: halt。
     "ambiguityPolicy": "halt",
-    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
+    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: ambiguityPolicyに関係なくhaltとして扱い、自動仮定・調査事実を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
     "assumptionLedger": true,
     // 明示的な一時失敗時の指数backoff付きbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとにprovider/repository/Issue番号の構造化keyで公式状態を再照合できる場合だけ再試行し、曖昧・認証・入力失敗や照合不能時は停止する。
     "maxRetries": 2,
@@ -70,7 +70,7 @@
   "issueAutopilot": {
     // 機能17 / 対象: /aidlc-issue-autopilot、/aidlc --from-issue、およびClaude標準 /loopからの同コマンド起動。役割: GitHub Issue intakeを許可する子スイッチ。ON時: auto.enabledもONかつlabel完全一致時だけ処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: Issue駆動運用。
     "enabled": false,
-    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue、OFFは安全契約違反のため現在も1件に強制。既定値: ON。利用場面: 常時ONを維持する。
+    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue。OFF時: 安全契約違反のため設定エラーで停止し、黙って無視しない。既定値: ON。利用場面: 常時ON。複数Issueは /loop で繰り返し起動する。
     "oneIssuePerRun": true,
   },
   "aiApproval": {

@@ -45,6 +45,13 @@ describe("D JSONC configuration", () => {
     expect(resolveDAiApproval(root)).toEqual({ mode: "human", minConfidence: 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" });
     expect(resolveDDecisionIssueSummary(root)).toEqual({ enabled: false, repository: undefined, send: false, maxRetries: 2 });
   });
+  test("refuses issueAutopilot.oneIssuePerRun=false instead of silently ignoring it", () => {
+    const root = project();
+    write(root, "d-acceleration.json", '{ "issueAutopilot": { "enabled": true, "oneIssuePerRun": false } }');
+    expect(() => resolveDIssueAutopilot(root)).toThrow("oneIssuePerRun=false is not supported");
+    write(root, "d-acceleration.json", '{ "issueAutopilot": { "enabled": true, "oneIssuePerRun": true } }');
+    expect(resolveDIssueAutopilot(root)).toEqual({ enabled: true, oneIssuePerRun: true });
+  });
   test("merges by field and preserves explicit local false", () => {
     const root = project();
     write(root, "d-acceleration.jsonc", `{ "features": { "requirementIdValidation": true, "sourceGrounding": true }, "auto": { "enabled": true, "through": "code-generation", "ambiguityPolicy": "research", "maxRetries": 4, "labelAllowlist": ["aidlc"] }, "issueAutopilot": { "enabled": true }, "clef": { "enabled": true, "lowRiskUnits": ["web"] }, }`);

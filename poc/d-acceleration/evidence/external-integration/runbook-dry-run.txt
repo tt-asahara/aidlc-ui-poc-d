@@ -1,0 +1,52 @@
+mode=dry-run repo=tt-asahara/aidlc-sandbox host=github.com product=/path/to/sandbox-product branch=aidlc-sandbox/<UTC> evidence=<cwd>/sandbox-evidence-<UTC>
+
+## 01 Preflight (read-only): exact-host gh auth, repo identity, origin host
+$ gh auth status --hostname github.com
+$ gh repo view tt-asahara/aidlc-sandbox --json nameWithOwner\,visibility\,isArchived\,defaultBranchRef
+$ git -C /path/to/sandbox-product config --get remote.origin.url
+
+## 02 Autopilot status before any write (read-only; expect disabled while config is OFF)
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox status
+
+## 03 WRITE: label + two disposable Issues (one labelled, one not)
+$ gh label create aidlc-auto --repo tt-asahara/aidlc-sandbox --description AI-DLC\ sandbox\ autopilot --force
+$ gh issue create --repo tt-asahara/aidlc-sandbox --title \[aidlc-sandbox\ <UTC>\]\ labelled\ task --body Disposable\ sandbox\ task.\ Build\ a\ hello\ endpoint. --label aidlc-auto
+$ gh issue create --repo tt-asahara/aidlc-sandbox --title \[aidlc-sandbox\ <UTC>\]\ unlabelled\ task --body Disposable\ sandbox\ task\ without\ the\ label.
+>> HUMAN: set auto.enabled=true, issueAutopilot.enabled=true, auto.labelAllowlist=["aidlc-auto"] in /path/to/sandbox-product/.claude/d-acceleration.jsonc
+
+## 04 from-issue: discovery list, label poll, explicit numbers (labelled / unlabelled), rerun idempotency
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox list
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox aidlc-auto
+>> HUMAN: Issue number printed by step 06 (labelled)
+>> HUMAN: Issue number printed by step 07 (unlabelled)
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox \<N_UNLABELLED\>
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox \<N_LABELLED\>
+$ bun /path/to/d-acceleration/issue-autopilot-cli.ts --project-dir /path/to/sandbox-product --repo tt-asahara/aidlc-sandbox stop
+
+## 05 Decision summary: generate locally, then the human authorizes the exact payload hash
+>> HUMAN: set decisionIssueSummary {enabled:true, repository:"tt-asahara/aidlc-sandbox", send:true}; AIDLC_GH_EXECUTABLE_PATH (realpath of the native gh) and AIDLC_GH_EXECUTABLE_SHA256 must be exported before starting this script
+>> HUMAN: absolute path of the active Intent directory
+$ bun /path/to/d-acceleration/decision-issue-summary.ts generate --project-dir /path/to/sandbox-product --intent-dir \<INTENT_DIR\> --decisions-file \<INTENT_DIR\>/decisions/ai-approval-decisions.jsonl
+>> HUMAN: compute sha256 of the JSON payload from 13 and type in the host session exactly: AI-DLC authorize-decision-summary --repository tt-asahara/aidlc-sandbox --intent <relative intent> --payload-sha256 <hash>
+
+## 06 WRITE: publish, publish again (must update the same Issue), verify exactly one marker Issue
+$ bun /path/to/d-acceleration/decision-issue-summary.ts publish --project-dir /path/to/sandbox-product --intent-dir \<INTENT_DIR\> --decisions-file \<INTENT_DIR\>/decisions/ai-approval-decisions.jsonl
+$ bun /path/to/d-acceleration/decision-issue-summary.ts publish --project-dir /path/to/sandbox-product --intent-dir \<INTENT_DIR\> --decisions-file \<INTENT_DIR\>/decisions/ai-approval-decisions.jsonl
+$ gh issue list --repo tt-asahara/aidlc-sandbox --state all --search aidlc-decision-summary\ in:body --json number\,title\,url
+
+## 07 WRITE: git persistence push to a disposable branch (opt-in, fixed refspec, never forced)
+$ git -C /path/to/sandbox-product switch -c aidlc-sandbox/<UTC>
+>> HUMAN: set gitPersistence {enabled:true, push:true, remote:"origin", branch:"aidlc-sandbox/<UTC>"}; approve one stage in the host session so the PostToolUse hook persists the crossing
+$ cat /path/to/sandbox-product/.git/aidlc-d-persistence/pending-push.json
+$ git -C /path/to/sandbox-product ls-remote origin refs/heads/aidlc-sandbox/<UTC>
+
+## 08 CI evidence for the pushed branch (read-only)
+$ gh run list --repo tt-asahara/aidlc-sandbox --branch aidlc-sandbox/<UTC> --json name\,status\,conclusion\,headSha\,url
+
+## 09 Cleanup (WRITE, separately confirmed): close disposable Issues, delete the branch
+>> HUMAN: confirm cleanup
+$ gh issue close \<N_LABELLED\> --repo tt-asahara/aidlc-sandbox --comment aidlc\ sandbox\ run\ <UTC>\ finished
+$ gh issue close \<N_UNLABELLED\> --repo tt-asahara/aidlc-sandbox --comment aidlc\ sandbox\ run\ <UTC>\ finished
+$ git -C /path/to/sandbox-product push origin --delete aidlc-sandbox/<UTC>
+
+done (mode=dry-run). Evidence: <cwd>/sandbox-evidence-<UTC>
