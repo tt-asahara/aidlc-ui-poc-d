@@ -36,8 +36,8 @@ function fixture(options: { mode?: "human" | "stage-gates"; stage?: string; dire
     ...options.directive,
   };
   writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
-  const message = "I explicitly delegate this domain-design stage-gate evidence decision to AI.";
   const grantedStage = options.stage ?? "domain-design";
+  const message = `AI-DLC delegate-ai-approvals --scope feature --through ${grantedStage} --stages ${grantedStage}`;
   const request = { messageId: "user-message-17", userMessage: message, userMessageSha256: hash(message), mode: "stage-gates", scope: "feature", through: grantedStage, allowedStages: [grantedStage], minConfidence: 0.92 };
   writeFileSync(join(intent, "delegation.json"), JSON.stringify({ schemaVersion: 1, ...request, requestSha256: requestHash(request) }));
   writeFileSync(join(intent, "evidence.md"), "# Domain design review\nAll required checks passed with no open findings.\n");
@@ -193,7 +193,7 @@ console.log(JSON.stringify({model:"fixture-judgment",result:JSON.stringify({outc
 
   test("creates a canonical explicit grant through the CLI inside the active intent", () => {
     const { root } = fixture();
-    const userMessage = "I explicitly delegate the domain-design stage approval decision to AI.\n";
+    const userMessage = "AI-DLC delegate-ai-approvals --scope feature --through domain-design --stages domain-design\n";
     writeFileSync(join(root, "user-message.txt"), userMessage);
     const controller = join(import.meta.dir, "..", "ai-approval-controller.ts");
     const run = Bun.spawnSync([
@@ -218,12 +218,16 @@ console.log(JSON.stringify({model:"fixture-judgment",result:JSON.stringify({outc
     expect(() => createAiApprovalGrant({ projectDir: human.root, userMessageFile: "message.txt", messageId: "m1", scope: "feature", allowedStages: ["domain-design"] })).toThrow("mode=stage-gates");
 
     const operation = fixture();
-    writeFileSync(join(operation.root, "message.txt"), "I explicitly delegate approval decisions to AI for operation.\n");
-    expect(() => createAiApprovalGrant({ projectDir: operation.root, userMessageFile: "message.txt", messageId: "m2", scope: "feature", allowedStages: ["environment-provisioning"] })).toThrow("human-only stage");
+    writeFileSync(join(operation.root, "message.txt"), "AI-DLC delegate-ai-approvals --scope feature --through environment-provisioning --stages environment-provisioning\n");
+    expect(() => createAiApprovalGrant({ projectDir: operation.root, userMessageFile: "message.txt", messageId: "m2", scope: "feature", through: "environment-provisioning", allowedStages: ["environment-provisioning"] })).toThrow("human-only stage");
 
     const unrelated = fixture();
     writeFileSync(join(unrelated.root, "message.txt"), "Show me the current status.\n");
-    expect(() => createAiApprovalGrant({ projectDir: unrelated.root, userMessageFile: "message.txt", messageId: "m-unrelated", scope: "feature", allowedStages: ["domain-design"] })).toThrow("explicitly delegate approval decisions");
+    expect(() => createAiApprovalGrant({ projectDir: unrelated.root, userMessageFile: "message.txt", messageId: "m-unrelated", scope: "feature", through: "domain-design", allowedStages: ["domain-design"] })).toThrow("exact structured");
+
+    const overBoundary = fixture();
+    writeFileSync(join(overBoundary.root, "message.txt"), "AI-DLC delegate-ai-approvals --scope feature --through requirements-analysis --stages delivery-planning\n");
+    expect(() => createAiApprovalGrant({ projectDir: overBoundary.root, userMessageFile: "message.txt", messageId: "m-boundary", scope: "feature", through: "requirements-analysis", allowedStages: ["delivery-planning"] })).toThrow("exceeds AI approval through boundary");
 
     const empty = fixture();
     writeFileSync(join(empty.root, "message.txt"), "\n");

@@ -33,6 +33,7 @@ const DENIED_STAGE_TOKEN = /(^|[-_])(operations?|deployment|deploy|production|re
 const OPERATION_STAGES = new Set(stagePolicy.stages.filter((entry) => entry.phase === "operation").map((entry) => entry.stage));
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 const DEFAULT_GRANT_PATH = "decisions/ai-approval-delegation.json";
+const DELEGATION_COMMAND = /^AI-DLC delegate-ai-approvals --scope ([A-Za-z0-9._-]+) --through ([A-Za-z0-9._-]+) --stages ([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*)$/;
 
 type ModelAssessment = {
   outcome: "approve" | "block";
@@ -59,10 +60,12 @@ export type AiApprovalDecision = {
   schemaVersion: 1;
   decisionId: string;
   actor: "ai";
+  ledgerPath: string;
   outcome: "approve" | "block";
   stage: string;
   reason: string;
   confidence: number;
+  directive: { path: string; sha256: string };
   directiveSha256: string;
   stateSha256: string;
   delegation: { path: string; sha256: string; messageId: string };
@@ -89,6 +92,7 @@ export type AiApprovalOptions = {
   evidenceFiles: string[];
   claudeExecutable?: string;
   timeoutMs?: number;
+  forceAssessment?: boolean;
 };
 
 export type AiApprovalGrantOptions = {
@@ -113,6 +117,30 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function trustedExecutable(projectRoot: string, requested: string): string {
+  const candidates = isAbsolute(requested)
+    ? [requested]
+    : (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean).map((directory) => resolve(directory, requested));
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    const actual = realpathSync(candidate);
+    const metadata = lstatSync(actual);
+    if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 || within(projectRoot, actual) || (metadata.uid !== process.getuid?.() && metadata.uid !== 0)) continue;
+    let directory = dirname(actual), safe = true;
+    while (true) {
+      const parent = lstatSync(directory);
+      const sticky = (parent.mode & 0o1000) !== 0;
+      if (!parent.isDirectory() || (parent.uid !== process.getuid?.() && parent.uid !== 0) || ((parent.mode & 0o022) !== 0 && !sticky)) { safe = false; break; }
+      const next = dirname(directory);
+      if (next === directory) break;
+      directory = next;
+    }
+    if (!safe) continue;
+    return actual;
+  }
+  throw new Error("trusted Claude executable was not found outside the project");
+}
+
 function canonicalize(value: unknown): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -133,6 +161,14 @@ function canonicalize(value: unknown): unknown {
 
 function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalize(value));
+}
+
+function parseDelegationCommand(message: string): { scope: string; through: string; allowedStages: string[] } {
+  const match = message.trim().match(DELEGATION_COMMAND);
+  if (!match) throw new Error("user message must be the exact structured AI-DLC delegate-ai-approvals command");
+  const allowedStages = match[3].split(",");
+  if (new Set(allowedStages).size !== allowedStages.length) throw new Error("delegated stages must be unique");
+  return { scope: match[1], through: match[2], allowedStages };
 }
 
 function within(root: string, candidate: string): boolean {
@@ -356,10 +392,16 @@ function intentOutputPath(intentDir: string, relativePath: string, label: string
 function validateDecision(value: unknown): AiApprovalDecision {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("decision record is not an object");
   const record = value as Record<string, unknown>;
-  exactKeys(record, ["schemaVersion", "decisionId", "actor", "outcome", "stage", "reason", "confidence", "directiveSha256", "stateSha256", "delegation", "evidence", "riskFlags", "uncertainties", "createdAt"], "decision record");
+  exactKeys(record, ["schemaVersion", "decisionId", "actor", "ledgerPath", "outcome", "stage", "reason", "confidence", "directive", "directiveSha256", "stateSha256", "delegation", "evidence", "riskFlags", "uncertainties", "createdAt"], "decision record");
   if (record.schemaVersion !== 1 || record.actor !== "ai" || (record.outcome !== "approve" && record.outcome !== "block")) throw new Error("decision record identity is invalid");
   for (const field of ["decisionId", "directiveSha256", "stateSha256"] as const) if (typeof record[field] !== "string" || !SHA256.test(record[field] as string)) throw new Error(`decision record ${field} is invalid`);
+  if (!record.directive || typeof record.directive !== "object" || Array.isArray(record.directive)) throw new Error("decision directive binding is invalid");
+  const directive = record.directive as Record<string, unknown>;
+  exactKeys(directive, ["path", "sha256"], "decision directive binding");
+  normalizedRelative(boundedString(directive.path, "decision directive path"), "decision directive path");
+  if (directive.sha256 !== record.directiveSha256) throw new Error("decision directive hashes disagree");
   boundedString(record.stage, "decision stage"); boundedString(record.reason, "decision reason");
+  normalizedRelative(boundedString(record.ledgerPath, "decision ledger path"), "decision ledger path");
   if (typeof record.confidence !== "number" || !Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) throw new Error("decision confidence is invalid");
   if (!record.delegation || typeof record.delegation !== "object" || Array.isArray(record.delegation)) throw new Error("decision delegation is invalid");
   const delegation = record.delegation as Record<string, unknown>;
@@ -473,7 +515,7 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
   }
   try {
     const existing = records(ledgerPath).find((record) => record.decisionId === decisionId);
-    if (existing) return commandResult(existing, projectRoot, ledgerPath, true);
+    if (existing && !options.forceAssessment) return commandResult(existing, projectRoot, ledgerPath, true);
 
     const deterministicRisks = dangerousFlags(directive);
     let assessment: ModelAssessment;
@@ -495,7 +537,11 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
         const model = resolveDModels(projectRoot).models.judgment;
         const launch: WorkerLaunch = {
           kind: "claude",
-          executable: options.claudeExecutable ?? "claude",
+          // Explicit adapters are a library/test seam. The production verify
+          // path never supplies one and resolves an absolute trusted binary.
+          executable: options.claudeExecutable
+            ? (existsSync(options.claudeExecutable) ? realpathSync(options.claudeExecutable) : resolve(options.claudeExecutable))
+            : trustedExecutable(projectRoot, "claude"),
           requestedModel: model,
           requestedEffort: "high",
           args: [
@@ -531,10 +577,12 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
       schemaVersion: 1,
       decisionId,
       actor: "ai",
+      ledgerPath: relative(projectRoot, ledgerPath).split(sep).join("/"),
       outcome: assessment.outcome,
       stage,
       reason: assessment.reason,
       confidence: assessment.confidence,
+      directive: { path: directiveFile.path, sha256: directiveFile.sha256 },
       directiveSha256: directiveFile.sha256,
       stateSha256: state.sha256,
       delegation: { path: delegationFile.path, sha256: delegationFile.sha256, messageId: grant.messageId },
@@ -544,6 +592,10 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
       createdAt: new Date().toISOString(),
     };
     validateDecision(decision);
+    if (options.forceAssessment && existing) {
+      if (decision.outcome !== "approve") return { status: "block", reason: decision.reason, decision };
+      return commandResult(existing, projectRoot, ledgerPath, true);
+    }
     const raced = records(ledgerPath).find((record) => record.decisionId === decisionId);
     if (raced) return commandResult(raced, projectRoot, ledgerPath, true);
     const previous = existsSync(ledgerPath) ? readFileSync(ledgerPath, "utf8") : "";
@@ -563,24 +615,26 @@ export function createAiApprovalGrant(options: AiApprovalGrantOptions): AiApprov
   if (config.mode !== "stage-gates") throw new Error("AI approval grant creation requires aiApproval.mode=stage-gates");
   const messageFile = snapshot(projectRoot, options.userMessageFile, "user message file");
   const userMessage = boundedString(messageFile.bytes.toString("utf8"), "user message");
-  if (!/(?:\bai\b|人工知能)/i.test(userMessage) || !/(?:承認|approval)/i.test(userMessage) || !/(?:委任|任せ|delegate|delegation|decide)/i.test(userMessage)) {
-    throw new Error("user message must explicitly delegate approval decisions to AI");
-  }
+  const delegated = parseDelegationCommand(userMessage);
   const messageId = boundedString(options.messageId, "message ID");
   const scope = boundedString(options.scope, "scope");
   const through = options.through === undefined || options.through === null ? null : boundedString(options.through, "through");
   const allowedStages = boundedStrings(options.allowedStages, "allowed stages");
+  if (scope !== delegated.scope || through !== delegated.through || canonicalJson(allowedStages) !== canonicalJson(delegated.allowedStages)) {
+    throw new Error("grant flags must exactly match the structured human delegation command");
+  }
   if (allowedStages.length === 0 || allowedStages.length !== options.allowedStages.length) throw new Error("allowed stages must contain unique non-empty stages");
   const humanOnly = allowedStages.find((stage) => OPERATION_STAGES.has(stage) || DENIED_STAGE_TOKEN.test(stage));
   if (humanOnly) throw new Error(`AI approval cannot be delegated for human-only stage: ${humanOnly}`);
   if (through && (through.toLowerCase() === "operation" || OPERATION_STAGES.has(through) || DENIED_STAGE_TOKEN.test(through))) throw new Error("AI approval through boundary cannot include operation or other human-only work");
   if (through) {
-    const boundaryPhase = stagePolicy.stages.find((entry) => entry.stage === through)?.phase ?? through;
-    const boundaryIndex = PHASES.indexOf(boundaryPhase as (typeof PHASES)[number]);
+    const exactBoundaryIndex = stagePolicy.stages.findIndex((entry) => entry.stage === through);
+    const phaseIndex = PHASES.indexOf(through as (typeof PHASES)[number]);
+    const boundaryIndex = exactBoundaryIndex >= 0 ? exactBoundaryIndex : phaseIndex >= 0 ? stagePolicy.stages.findLastIndex((entry) => entry.phase === through) : -1;
     if (boundaryIndex < 0) throw new Error("AI approval through boundary must name an official phase or stage");
     for (const allowed of allowedStages) {
-      const allowedPhase = stagePolicy.stages.find((entry) => entry.stage === allowed)?.phase;
-      if (!allowedPhase || PHASES.indexOf(allowedPhase as (typeof PHASES)[number]) > boundaryIndex) throw new Error(`allowed stage exceeds AI approval through boundary: ${allowed}`);
+      const allowedIndex = stagePolicy.stages.findIndex((entry) => entry.stage === allowed);
+      if (allowedIndex < 0 || allowedIndex > boundaryIndex) throw new Error(`allowed stage exceeds AI approval through boundary: ${allowed}`);
     }
   }
   const intentDir = activeIntentDir(projectRoot);
@@ -653,11 +707,28 @@ function grantCliOptions(argv: string[]): AiApprovalGrantOptions {
   return { projectDir, userMessageFile, messageId, scope, through: one("--through", false) ?? null, allowedStages: stages.split(",").map((stage) => stage.trim()) };
 }
 
+function verifyCliOptions(argv: string[]): { options: AiApprovalOptions; decisionId: string } {
+  if (argv[0] !== "verify") throw new Error("usage: ai-approval-controller.ts verify --project-dir ABS --decision-file REL");
+  const { one } = cliValues(argv, new Set(["--project-dir", "--decision-file"]));
+  const projectDir = one("--project-dir"), decisionFile = one("--decision-file");
+  if (!projectDir || !decisionFile || !isAbsolute(projectDir)) throw new Error("verify requires an absolute project and decision file");
+  const projectRoot = realpathSync(projectDir);
+  const saved = validateDecision(parseObject(snapshot(projectRoot, decisionFile, "decision file").bytes, "decision file"));
+  return { decisionId: saved.decisionId, options: { projectDir, directiveFile: saved.directive.path, delegationFile: saved.delegation.path, evidenceFiles: saved.evidence.map((entry) => entry.path), forceAssessment: true } };
+}
+
 if (import.meta.main) {
   try {
     const argv = process.argv.slice(2);
     if (argv[0] === "grant") {
       process.stdout.write(`${JSON.stringify(createAiApprovalGrant(grantCliOptions(argv)), null, 2)}\n`);
+      process.exit(0);
+    }
+    if (argv[0] === "verify") {
+      const request = verifyCliOptions(argv);
+      const result = await evaluateAiApproval(request.options);
+      if (result.status !== "approve" || result.decision?.decisionId !== request.decisionId) throw new Error("fresh AI reassessment did not approve the bound decision");
+      process.stdout.write(`${JSON.stringify({ verified: true, decisionId: request.decisionId })}\n`);
       process.exit(0);
     }
     const result = await evaluateAiApproval(evaluateCliOptions(argv));

@@ -127,3 +127,12 @@ export function resolveDAiApproval(projectDir: string): DAiApprovalConfig { cons
 export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssueSummaryConfig { const { project, local } = layers(projectDir), base = project.decisionIssueSummary ?? {}, override = local.decisionIssueSummary ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, repository: override.repository?.trim() ?? base.repository?.trim(), send: override.send ?? base.send ?? false, maxRetries: override.maxRetries ?? base.maxRetries ?? 2 }; }
 export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir) }; }
 export function clefRunnerArgs(config: DClefConfig): string[] { return config.enabled ? ["--clef-url", config.url, ...(config.lowRiskUnits.length ? ["--clef-low-risk-units", config.lowRiskUnits.join(",")] : [])] : []; }
+
+if (import.meta.main) {
+  const [command, projectDir] = process.argv.slice(2);
+  if (command !== "print-ai-approval" || !projectDir || !isAbsolute(projectDir)) {
+    process.stderr.write("usage: d-config.ts print-ai-approval ABS_PROJECT_DIR\n");
+    process.exit(2);
+  }
+  process.stdout.write(`${JSON.stringify(resolveDAiApproval(projectDir))}\n`);
+}

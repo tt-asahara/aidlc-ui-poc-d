@@ -35,8 +35,8 @@ summary/skeleton、operation、sensor/reviewer不合格、未検証・不確実�
 破壊操作は委任対象外で停止します。AI判定は `HUMAN_TURN` や人間の `User Input` を作りません。
 
 `decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
-既定OFFの機能です。現在のCLIはローカルpayload生成だけを許可し、host由来の人間permission
-receiptが未実装のため外部送信をfail-closedで拒否します。fake adapterではpending receiptを検索・照合してから同じIssueを更新し、
+既定OFFの機能です。外部送信にはrepository・active Intent・生成payload hashを完全一致で
+指定した最新のhost記録済み人間permissionが必要です。許可後もpending receiptを検索・照合してから同じIssueを更新し、
 未解決事項の別Issueを自動作成しません。
 
 全boolean切替の直前には、日本語で対象stageまたは実行時点、役割、ON/OFF時の

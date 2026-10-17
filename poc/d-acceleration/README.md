@@ -33,8 +33,8 @@ AI actor, reason, delegation, official directive, workflow state, and artifact
 hashes. Scope/routing and Plan Approval remain human stops, as do failed or
 unverified checks and operation, credential, publishing, external, or
 destructive work. The optional GitHub seam generates one summary payload per
-Intent and is default-off; its real CLI publication remains fail-closed until a
-host-bound human permission receipt exists, and it never replaces the repository record.
+Intent and is default-off; publication requires a fresh host-recorded permission
+binding repository, Intent, and payload hash, and it never replaces the repository record.
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification

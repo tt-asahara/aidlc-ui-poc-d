@@ -150,10 +150,13 @@ import {
   effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
+  readActiveDirectiveMarker,
   readApplicableTeamUnitScopeStamp,
   readAuditShardEvents,
   readStateFile,
   ROUTE_CHECK_ENV,
+  steeringPayloadAuthenticAt,
+  steeringTokenKeyPathFor,
   readUnitMergeTransaction,
   readUnitGateRhythm,
   readUnitScopeStamp,
@@ -969,6 +972,9 @@ export function main(argv: string[]): void {
         break;
       case "approve":
         handleApprove(args.slice(1));
+        break;
+      case "verify-decision-summary-permission":
+        handleVerifyDecisionSummaryPermission(args.slice(1));
         break;
       case "reject":
         handleReject(args.slice(1));
@@ -6078,13 +6084,32 @@ function approvesTogetherFlag(args: string[], content: string, slug: string): st
 }
 
 type DelegatedAiDecision = { auditFields: Record<string, string> };
+function handleVerifyDecisionSummaryPermission(args: string[]): void {
+  const repository = getFlagValue(args, "--repository");
+  const intentPath = getFlagValue(args, "--intent");
+  const payloadSha256 = getFlagValue(args, "--payload-sha256");
+  if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !intentPath || !payloadSha256 || !/^[0-9a-f]{64}$/.test(payloadSha256)) {
+    error("Usage: aidlc-state.ts verify-decision-summary-permission --repository owner/name --intent RELATIVE_ACTIVE_INTENT --payload-sha256 SHA256");
+  }
+  const pd = resolveProjectDir(projectDir);
+  const intent = activeIntent(pd);
+  if (!intent) error("Decision summary publication requires one active Intent");
+  const expectedIntent = relative(pd, realpathSync(join(pd, "aidlc", "spaces", activeSpace(pd), "intents", intent))).split(sep).join("/");
+  if (intentPath !== expectedIntent) error("Decision summary permission does not target the active Intent");
+  const expectedWords = `AI-DLC authorize-decision-summary --repository ${repository} --intent ${intentPath} --payload-sha256 ${payloadSha256}`;
+  const latestTurn = latestPersonTurn(pd);
+  if (!latestTurn || latestTurn.words !== expectedWords) error("Decision summary publication lacks an exact latest host-recorded human permission");
+  console.log(JSON.stringify({ authorized: true, schemaVersion: 1, repository, intent: intentPath, payloadSha256, humanTurnAt: latestTurn.at, userMessageSha256: sha256(expectedWords) }));
+}
 function delegatedAiDeniedStage(slug: string): boolean {
   return /(?:^|[-_])(operation|deployment|deploy|production|release|external|publish|auth|authentication|authorization|destructive)(?:$|[-_])/i.test(slug);
 }
-function explicitlyDelegatesAiApproval(words: string): boolean {
-  return /(?:\bai\b|人工知能)/i.test(words) &&
-    /(?:承認|approval)/i.test(words) &&
-    /(?:委任|任せ|delegate|delegation|decide)/i.test(words);
+function structuredAiApprovalDelegation(words: string): { scope: string; through: string; allowedStages: string[] } | null {
+  const match = words.trim().match(/^AI-DLC delegate-ai-approvals --scope ([A-Za-z0-9._-]+) --through ([A-Za-z0-9._-]+) --stages ([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*)$/);
+  if (!match) return null;
+  const allowedStages = match[3].split(",");
+  if (new Set(allowedStages).size !== allowedStages.length) return null;
+  return { scope: match[1], through: match[2], allowedStages };
 }
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -6109,11 +6134,23 @@ function confinedDecisionFile(pd: string, recordRoot: string, relativePath: stri
   if (relative(recordRoot, actual).startsWith(`..${sep}`) || relative(recordRoot, actual) === "..") error(`${label} must be inside the active Intent record`);
   return { path: actual, bytes: readFileSync(actual) };
 }
+function dAccelerationTool(name: string): string {
+  const toolsDir = dirname(fileURLToPath(import.meta.url));
+  const installed = join(toolsDir, "d-acceleration", name);
+  if (existsSync(installed)) return installed;
+  return join(toolsDir, "..", "..", "poc", "d-acceleration", name);
+}
+function resolvedAiApprovalConfig(pd: string): { mode: string; minConfidence: number; decisionRecordPath: string } {
+  const result = spawnSync(process.execPath, [dAccelerationTool("d-config.ts"), "print-ai-approval", pd], { cwd: pd, encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 });
+  if (result.status !== 0) error(`Unable to resolve AI approval configuration: ${diagnosticSnippet(result.stderr || result.stdout)}`);
+  try { return JSON.parse(result.stdout) as { mode: string; minConfidence: number; decisionRecordPath: string }; } catch { error("AI approval configuration returned invalid JSON"); }
+}
 function readDelegatedAiDecision(
   pd: string,
   content: string,
   stage: NonNullable<ReturnType<typeof findStageBySlug>>,
   decisionPath: string,
+  verifyAssessment = false,
 ): DelegatedAiDecision {
   const intent = activeIntent(pd);
   if (!intent) error("Delegated AI approval requires one active Intent");
@@ -6124,12 +6161,32 @@ function readDelegatedAiDecision(
   try { raw = JSON.parse(decisionFile.bytes.toString("utf8")); } catch { error("AI decision record is not valid JSON"); }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) error("AI decision record must be an object");
   const decision = raw as Record<string, unknown>;
-  exactKeys(decision, ["schemaVersion", "decisionId", "actor", "outcome", "stage", "reason", "confidence", "directiveSha256", "stateSha256", "delegation", "evidence", "riskFlags", "uncertainties", "createdAt"], "AI decision record");
+  const approvalConfig = resolvedAiApprovalConfig(pd);
+  if (approvalConfig.mode !== "stage-gates") error("Delegated AI approval is disabled by configuration");
+  exactKeys(decision, ["schemaVersion", "decisionId", "actor", "ledgerPath", "outcome", "stage", "reason", "confidence", "directive", "directiveSha256", "stateSha256", "delegation", "evidence", "riskFlags", "uncertainties", "createdAt"], "AI decision record");
   if (decision.schemaVersion !== 1 || decision.actor !== "ai" || decision.outcome !== "approve" || decision.stage !== stage.slug) error("AI decision record does not authorize this stage approval");
   for (const key of ["decisionId", "reason", "directiveSha256", "stateSha256", "createdAt"] as const) if (typeof decision[key] !== "string" || !String(decision[key]).trim()) error(`AI decision record requires ${key}`);
+  if (typeof decision.ledgerPath !== "string") error("AI decision record requires ledgerPath");
   for (const key of ["decisionId", "directiveSha256", "stateSha256"] as const) if (!/^[0-9a-f]{64}$/.test(String(decision[key]))) error(`AI decision record ${key} must be sha256`);
   if (decision.stateSha256 !== sha256(content)) error("AI decision record is stale for the current workflow state");
   if (typeof decision.confidence !== "number" || !Number.isFinite(decision.confidence) || decision.confidence < 0 || decision.confidence > 1) error("AI decision confidence is invalid");
+  if (!decision.directive || typeof decision.directive !== "object" || Array.isArray(decision.directive)) error("AI decision requires an official directive binding");
+  const directiveBinding = decision.directive as Record<string, unknown>;
+  exactKeys(directiveBinding, ["path", "sha256"], "AI directive binding");
+  if (typeof directiveBinding.path !== "string" || directiveBinding.sha256 !== decision.directiveSha256) error("AI directive binding is invalid");
+  const directiveFile = confinedDecisionFile(pd, realpathSync(pd), directiveBinding.path, "AI official directive");
+  if (createHash("sha256").update(directiveFile.bytes).digest("hex") !== directiveBinding.sha256) error("AI official directive hash changed");
+  let directive: unknown;
+  try { directive = JSON.parse(directiveFile.bytes.toString("utf8")); } catch { error("AI official directive is not valid JSON"); }
+  if (!directive || typeof directive !== "object" || Array.isArray(directive)) error("AI decision is not bound to an official present-gate directive");
+  const directiveObject = directive as Record<string, unknown>;
+  if (directiveObject.kind !== "present-gate" || directiveObject.stage !== stage.slug || directiveObject.phase !== stage.phase || typeof directiveObject.memory_path !== "string" || !directiveObject.memory_path.trim()) error("AI decision is not bound to this complete official present-gate directive");
+  const directiveMemory = resolvePath(pd, directiveObject.memory_path);
+  if (!pathIsWithin(recordRoot, directiveMemory) || !existsSync(directiveMemory)) error("AI present-gate directive memory_path is not current active-Intent evidence");
+  const issued = readActiveDirectiveMarker(pd, content);
+  const issuedPayload = issued?.steering_payload;
+  const issuedReceipt = issued?.steering_payload_receipt;
+  if (issued?.kind !== "present-gate" || issued.stage !== stage.slug || issued.directive_sha256 !== decision.directiveSha256 || !issuedPayload || issuedPayload.d !== decision.directiveSha256 || typeof issuedReceipt !== "string" || !steeringPayloadAuthenticAt(steeringTokenKeyPathFor(pd, join(recordRoot, "aidlc-state.md")), issuedPayload, issuedReceipt)) error("AI decision directive lacks a current engine-issued authenticated gate receipt");
   if (!Array.isArray(decision.riskFlags) || decision.riskFlags.length || !Array.isArray(decision.uncertainties) || decision.uncertainties.length) error("AI decision approval must have no risk flags or unresolved uncertainties");
   const delegation = decision.delegation;
   if (!delegation || typeof delegation !== "object" || Array.isArray(delegation)) error("AI decision requires delegation evidence");
@@ -6159,21 +6216,28 @@ function readDelegatedAiDecision(
   if (typeof grant.through === "string") {
     const phases = ["initialization", "ideation", "inception", "construction", "operation"];
     const boundaryStage = findStageBySlug(grant.through);
-    const boundaryPhase = boundaryStage?.phase ?? grant.through;
-    const currentIndex = phases.indexOf(stage.phase);
-    const boundaryIndex = phases.indexOf(boundaryPhase);
-    if (currentIndex < 0 || boundaryIndex < 0 || currentIndex > boundaryIndex) error("AI delegation through boundary does not cover this stage");
-  }
-  if (!humanPresenceGuardDisabled()) {
-    const latestTurn = latestPersonTurn(pd);
-    if (!latestTurn || latestTurn.words !== grant.userMessage || !explicitlyDelegatesAiApproval(grant.userMessage)) {
-      error("AI delegation is not an explicit approval delegation backed by the latest host-recorded human turn");
+    if (boundaryStage) {
+      const ordered = [...content.matchAll(/^- \[[^\]]\] ([a-z0-9-]+)\s+/gm)].map((match) => match[1]);
+      const currentIndex = ordered.indexOf(stage.slug), boundaryIndex = ordered.indexOf(boundaryStage.slug);
+      if (currentIndex < 0 || boundaryIndex < 0 || currentIndex > boundaryIndex) error("AI delegation through stage boundary does not cover this stage");
+    } else {
+      const currentIndex = phases.indexOf(stage.phase), boundaryIndex = phases.indexOf(grant.through);
+      if (currentIndex < 0 || boundaryIndex < 0 || currentIndex > boundaryIndex) error("AI delegation through phase boundary does not cover this stage");
     }
+  }
+  const structured = structuredAiApprovalDelegation(String(grant.userMessage));
+  if (!structured || structured.scope !== grant.scope || structured.through !== grant.through || canonicalDecisionJson(structured.allowedStages) !== canonicalDecisionJson(grant.allowedStages)) {
+    error("AI delegation grant does not match an exact structured scope/stage delegation command");
+  }
+  const latestTurn = latestPersonTurn(pd);
+  if (!latestTurn || latestTurn.words !== grant.userMessage) {
+    error("AI delegation is not an exact structured scope/stage delegation backed by the latest host-recorded human turn");
   }
   if (stage.phase === "operation" || delegatedAiDeniedStage(stage.slug)) {
     error("Delegated AI approval cannot authorize operation, publish, authentication, external, or destructive stages");
   }
   if (!Array.isArray(decision.evidence) || decision.evidence.length === 0) error("AI decision requires hashed artifact evidence");
+  const evidenceFiles = new Set<string>();
   for (const row of decision.evidence) {
     if (!row || typeof row !== "object" || Array.isArray(row)) error("AI decision evidence row is invalid");
     const evidence = row as Record<string, unknown>;
@@ -6181,7 +6245,10 @@ function readDelegatedAiDecision(
     if (typeof evidence.path !== "string" || typeof evidence.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(evidence.sha256)) error("AI decision evidence row is invalid");
     const artifact = confinedDecisionFile(pd, recordRoot, evidence.path, "AI decision artifact evidence");
     if (createHash("sha256").update(artifact.bytes).digest("hex") !== evidence.sha256) error(`AI decision artifact changed: ${evidence.path}`);
+    evidenceFiles.add(artifact.path);
   }
+  const declaredArtifacts = existingDeclaredArtifactPaths(pd, stage);
+  if (declaredArtifacts.some((path) => !evidenceFiles.has(path))) error("AI decision evidence omits one or more declared stage artifacts");
   const expectedDecisionId = sha256(canonicalDecisionJson({
     schemaVersion: 1,
     directiveSha256: decision.directiveSha256,
@@ -6191,6 +6258,22 @@ function readDelegatedAiDecision(
     evidence: decision.evidence,
   }));
   if (decision.decisionId !== expectedDecisionId) error("AI decision ID does not bind the decision inputs");
+  const configuredLedger = resolvePath(recordRoot, approvalConfig.decisionRecordPath);
+  if (!pathIsWithin(recordRoot, configuredLedger) || resolvePath(pd, String(decision.ledgerPath)) !== configuredLedger) error("AI decision ledger is not the configured canonical Intent ledger");
+  const ledgerFile = confinedDecisionFile(pd, recordRoot, decision.ledgerPath, "AI decision ledger");
+  const ledgerMatch = ledgerFile.bytes.toString("utf8").split(/\r?\n/).filter((line) => line.trim()).some((line) => {
+    try { return canonicalDecisionJson(JSON.parse(line)) === canonicalDecisionJson(decision); } catch { return false; }
+  });
+  if (!ledgerMatch) error("AI decision is not present in its canonical Intent ledger");
+  if (verifyAssessment) {
+    const verified = spawnSync(process.execPath, [dAccelerationTool("ai-approval-controller.ts"), "verify", "--project-dir", pd, "--decision-file", relative(pd, decisionFile.path)], { cwd: pd, encoding: "utf8", timeout: 65_000, maxBuffer: 256 * 1024 });
+    if (verified.status !== 0) error(`Fresh delegated AI assessment failed: ${diagnosticSnippet(verified.stdout || verified.stderr)}`);
+    // The model call creates a mutation window for every bound input. Re-read
+    // the complete decision contract before returning authority to approve.
+    const refreshed = readDelegatedAiDecision(pd, readStateFile(pd), stage, decisionPath, false);
+    if (refreshed.auditFields["Decision SHA256"] !== createHash("sha256").update(decisionFile.bytes).digest("hex")) error("AI decision inputs changed during fresh assessment");
+    return refreshed;
+  }
   return { auditFields: {
     "Decision Actor": "AI",
     "Decision Authority": "explicit user delegation",
@@ -6374,7 +6457,7 @@ function handleApprove(args: string[]): void {
   if (!teamGate) {
     validateSlugInState(content, slug, "awaiting-approval");
   }
-  const lockedAiDecision = aiDecisionFile ? readDelegatedAiDecision(pd, content, stage, aiDecisionFile) : undefined;
+  const lockedAiDecision = aiDecisionFile ? readDelegatedAiDecision(pd, content, stage, aiDecisionFile, true) : undefined;
   const { approvalInput, autonomousDecision, together, delegatedAiDecision } = verifyApprovalDecision(
     pd,
     content,

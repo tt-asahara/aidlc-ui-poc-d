@@ -1,18 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { resolveDDecisionIssueSummary } from "./d-config.ts";
+import { resolveDAiApproval, resolveDDecisionIssueSummary } from "./d-config.ts";
 
 export type DecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type GhResult = { status: number; stdout: string; stderr?: string };
 export type GhAdapter = { run(args: readonly string[]): Promise<GhResult> };
+export type PublicationPermissionVerifier = { verify(input: { projectDir: string; repository: string; intent: string; payloadSha256: string }): Promise<{ authorized: boolean; receipt?: Record<string, unknown>; reason?: string }> };
 export type DecisionIssueSummaryInput = {
   projectDir: string;
   intentDir: string;
   decisionsFile: string;
   config: DecisionIssueSummaryConfig;
-  publishAuthorized?: boolean;
   gh?: GhAdapter;
   stateDir?: string;
 };
@@ -34,6 +34,27 @@ function confinedFile(project: string, input: string): string {
   if (!inside(project, actual)) throw new Error("decisions file must exist inside project");
   if (stat.size > 1_048_576) throw new Error("decisions file exceeds 1048576 bytes");
   return actual;
+}
+
+function activeIntent(project: string): string {
+  const aidlc = join(project, "aidlc");
+  const space = existsSync(join(aidlc, "active-space")) ? readFileSync(join(aidlc, "active-space"), "utf8").trim() : "default";
+  if (!/^[A-Za-z0-9._-]+$/.test(space)) throw new Error("active-space is invalid");
+  const intents = join(aidlc, "spaces", space, "intents");
+  if (!existsSync(join(intents, "active-intent"))) throw new Error("active-intent pointer is required");
+  const name = readFileSync(join(intents, "active-intent"), "utf8").trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error("active-intent is invalid");
+  const resolved = realpathSync(join(intents, name));
+  if (!inside(project, resolved) || !existsSync(join(resolved, "aidlc-state.md"))) throw new Error("active Intent is invalid");
+  return resolved;
+}
+
+async function verifyPublicationPermission(input: { projectDir: string; repository: string; intent: string; payloadSha256: string }): Promise<{ authorized: boolean; receipt?: Record<string, unknown>; reason?: string }> {
+  const installed = join(import.meta.dir, "..", "aidlc-state.ts");
+  const stateTool = existsSync(installed) ? installed : join(import.meta.dir, "..", "..", "core", "tools", "aidlc-state.ts");
+  const child = spawnSync(process.execPath, [stateTool, "verify-decision-summary-permission", "--repository", input.repository, "--intent", input.intent, "--payload-sha256", input.payloadSha256, "--project-dir", input.projectDir], { cwd: input.projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 });
+  if (child.status !== 0) return { authorized: false, reason: child.stderr || child.stdout || "host-permission-verification-failed" };
+  try { const receipt = JSON.parse(child.stdout) as Record<string, unknown>; return { authorized: receipt.authorized === true, receipt }; } catch { return { authorized: false, reason: "invalid-host-permission-receipt" }; }
 }
 
 function decisions(path: string, project: string): Decision[] {
@@ -75,6 +96,10 @@ function parseIssueNumber(stdout: string): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+function issueHasMarker(stdout: string, marker: string): boolean {
+  try { return String((JSON.parse(stdout) as Record<string, unknown>).body ?? "").includes(`<!-- ${marker} -->`); } catch { return false; }
+}
+
 async function retry(adapter: GhAdapter, args: readonly string[], maxRetries: number): Promise<GhResult> {
   let result: GhResult = { status: 1, stdout: "", stderr: "not attempted" };
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -84,11 +109,12 @@ async function retry(adapter: GhAdapter, args: readonly string[], maxRetries: nu
   return result;
 }
 
-export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput): Promise<Record<string, unknown>> {
+async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput, permissionVerifier: typeof verifyPublicationPermission): Promise<Record<string, unknown>> {
   if (!input.config.enabled) return { status: "stopped", reason: "disabled" };
   const project = realpathSync(resolve(input.projectDir));
   const intent = realpathSync(resolve(input.intentDir));
   if (!inside(project, intent)) throw new Error("intent directory escapes project");
+  if (intent !== activeIntent(project)) throw new Error("intent directory must be the active Intent");
   const repository = input.config.repository?.trim();
   if (!repository) return { status: "stopped", reason: "repository-required" };
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must be owner/name");
@@ -97,7 +123,10 @@ export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput):
   const intentRelative = relative(project, intent);
   const key = createHash("sha256").update(`decision-issue-summary\0${repository}\0${intentRelative}`).digest("hex");
   const marker = `aidlc-decision-summary:${key}`;
-  const selected = decisions(confinedFile(project, input.decisionsFile), project);
+  const decisionFile = confinedFile(project, input.decisionsFile);
+  const canonicalDecisionFile = resolve(intent, resolveDAiApproval(project).decisionRecordPath);
+  if (decisionFile !== canonicalDecisionFile) throw new Error("decisions file must be the configured canonical Intent ledger");
+  const selected = decisions(decisionFile, project);
   const lines = selected.map((row) => {
     const link = row.evidence[0]?.path ? ` ([source](${encodeURI(row.evidence[0].path)}))` : "";
     const unresolved = row.outcome === "block" || row.uncertainties.length > 0;
@@ -107,12 +136,20 @@ export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput):
   const body = [`<!-- ${marker} -->`, `# Decision summary`, "", ...(!lines.length ? ["No important decisions recorded."] : lines), "", "Unresolved items above remain in this one intent summary; no separate Issues are created."].join("\n");
   rejectSecrets(`${title}\n${body}`);
   const payload = { key, repository, intent: intentRelative, title, body };
+  const payloadSha256 = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
   if (!input.config.send) return { status: "generated", published: false, payload };
-  if (!input.publishAuthorized) return { status: "stopped", reason: "publish-authorization-required", payload };
+  const permission = await permissionVerifier({ projectDir: project, repository, intent: intentRelative, payloadSha256 });
+  if (!permission.authorized) return { status: "stopped", reason: permission.reason ?? "publish-authorization-required", payload };
   if (!input.gh) throw new Error("GitHub adapter is required when send is enabled");
 
   const stateRoot = resolve(project, input.stateDir ?? ".aidlc-engine/d-decision-issue-summary");
   if (!inside(project, stateRoot)) throw new Error("state directory escapes project");
+  mkdirSync(stateRoot, { recursive: true, mode: 0o700 });
+  if (lstatSync(stateRoot).isSymbolicLink() || !inside(project, realpathSync(stateRoot))) throw new Error("state directory must be a real directory inside project");
+  const lockPath = join(stateRoot, `${key}.lock`);
+  let lock: number;
+  try { lock = openSync(lockPath, "wx", 0o600); } catch { return { status: "stopped", reason: "publish-busy", payload }; }
+  try {
   const bindingPath = join(stateRoot, `${key}.json`);
   let binding: Binding | undefined;
   if (existsSync(bindingPath)) {
@@ -130,6 +167,8 @@ export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput):
   }
 
   if (binding?.state === "bound" && binding.issueNumber) {
+    const viewed = await retry(input.gh, ["issue", "view", String(binding.issueNumber), "--repo", repository, "--json", "body"], input.config.maxRetries);
+    if (viewed.status !== 0 || !issueHasMarker(viewed.stdout, marker)) return { status: "stopped", reason: "bound-issue-marker-mismatch", issueNumber: binding.issueNumber, payload };
     const edited = await retry(input.gh, ["issue", "edit", String(binding.issueNumber), "--repo", repository, "--title", title, "--body", body], input.config.maxRetries);
     return edited.status === 0 ? { status: "published", operation: "updated", issueNumber: binding.issueNumber, payload } : { status: "stopped", reason: "update-failed", issueNumber: binding.issueNumber, payload };
   }
@@ -142,8 +181,17 @@ export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput):
   if (!issueNumber) return { status: "stopped", reason: "create-result-ambiguous", payload };
   atomicJson(bindingPath, { ...binding, state: "bound", issueNumber });
   return { status: "published", operation: "created", issueNumber, payload };
+  } finally {
+    closeSync(lock);
+    if (existsSync(lockPath)) unlinkSync(lockPath);
+  }
 }
 
+export async function runDecisionIssueSummary(input: DecisionIssueSummaryInput): Promise<Record<string, unknown>> {
+  return runDecisionIssueSummaryInternal(input, verifyPublicationPermission);
+}
+
+/** Test seam kept out of the production input contract and CLI path. */
 if (import.meta.main) {
   try {
     const argv = process.argv.slice(2), command = argv[0];
@@ -151,12 +199,11 @@ if (import.meta.main) {
     const projectDir = one("--project-dir"), intentDir = one("--intent-dir"), decisionsFile = one("--decisions-file");
     if (!isAbsolute(projectDir) || !isAbsolute(intentDir)) throw new Error("--project-dir and --intent-dir must be absolute");
     if (command !== "generate" && command !== "publish") throw new Error("mode must be generate or publish");
-    if (command === "publish") throw new Error("CLI publication is disabled until a host-bound human permission receipt is implemented");
-    const executable = argv.includes("--gh-executable") ? one("--gh-executable") : "gh";
+    const executable = trustedExecutable("gh", projectDir);
+    const resolvedConfig = resolveDDecisionIssueSummary(projectDir);
     const result = await runDecisionIssueSummary({
       projectDir, intentDir, decisionsFile,
-      config: resolveDDecisionIssueSummary(projectDir),
-      publishAuthorized: false,
+      config: command === "generate" ? { ...resolvedConfig, send: false } : resolvedConfig,
       gh: { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } },
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -165,4 +212,27 @@ if (import.meta.main) {
     process.stdout.write(`${JSON.stringify({ status: "stopped", reason: error instanceof Error ? error.message : String(error) }, null, 2)}\n`);
     process.exit(2);
   }
+}
+
+function trustedExecutable(name: string, projectDir: string): string {
+  const candidates = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter(Boolean);
+  for (const directory of candidates) {
+    const requested = resolve(directory, name);
+    if (!existsSync(requested)) continue;
+    const actual = realpathSync(requested);
+    const metadata = lstatSync(actual);
+    if (!metadata.isFile() || (metadata.mode & 0o022) !== 0 || inside(realpathSync(projectDir), actual) || (metadata.uid !== process.getuid?.() && metadata.uid !== 0)) continue;
+    let parentPath = dirname(actual), safe = true;
+    while (true) {
+      const parent = lstatSync(parentPath);
+      const sticky = (parent.mode & 0o1000) !== 0;
+      if (!parent.isDirectory() || (parent.uid !== process.getuid?.() && parent.uid !== 0) || ((parent.mode & 0o022) !== 0 && !sticky)) { safe = false; break; }
+      const next = dirname(parentPath);
+      if (next === parentPath) break;
+      parentPath = next;
+    }
+    if (!safe) continue;
+    return actual;
+  }
+  throw new Error(`trusted ${name} executable was not found outside the project`);
 }
