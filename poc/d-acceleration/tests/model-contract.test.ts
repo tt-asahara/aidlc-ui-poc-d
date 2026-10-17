@@ -38,7 +38,7 @@ describe("parent-session vs D-worker model contract", () => {
     const project = mkdtempSync(join(tmpdir(), "d-model-contract-"));
     writeFileSync(join(project, "evidence.md"), "synthetic\n");
     const launches = identityLaunches("claude-opus-5-5", project, "/fixture/bin/claude");
-    expect(launches.map((entry) => entry.workerType)).toEqual(["design-wave-worker", "read-only-fanout-worker", "issue-ambiguity-assessor", "delegated-question-assessor", "delegated-approval-assessor"]);
+    expect(launches.map((entry) => entry.workerType)).toEqual(["design-wave-worker", "read-only-fanout-worker", "issue-ambiguity-assessor", "delegated-question-assessor"]);
     for (const { launch } of launches) {
       expect(launch.requestedModel).toBe("claude-opus-5-5");
       expect(launch.args[launch.args.indexOf("--model") + 1]).toBe("claude-opus-5-5");
