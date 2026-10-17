@@ -204,8 +204,9 @@ function summaryProduct(name: string, decision: Record<string, unknown>) {
   mkdirSync(join(intent, "decisions"), { recursive: true }); mkdirSync(join(root, ".claude"), { recursive: true });
   writeFileSync(join(root, "aidlc/spaces/default/intents/active-intent"), "budget\n");
   writeFileSync(join(intent, "aidlc-state.md"), "- **Scope**: feature\n");
-  const ledger = join(intent, "decisions/ai-approval-decisions.jsonl");
-  const row = (id: string, reason: string) => JSON.stringify({ schemaVersion: 1, decisionId: id.repeat(64), stage: "requirements-analysis", outcome: "approve", reason, evidence: [{ path: "aidlc/spaces/default/intents/budget/requirements.md", sha256: "a".repeat(64) }], uncertainties: [] });
+  const ledger = join(intent, "decisions/ai-question-answers.jsonl");
+  // The D question-answer ledger row shape settled by ai-question-answers.ts.
+  const row = (id: string, reason: string) => JSON.stringify({ schemaVersion: 1, kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId: id.repeat(64), stage: "requirements-analysis", unit: null, questionId: `Q${id}`, answer: "A. count-only", answerSource: "delegated-ai-assumption", reason, questionsFile: "aidlc/spaces/default/intents/budget/inception/requirements-analysis/requirements-analysis-questions.md", questionsTemplateSha256: "a".repeat(64), delegationSha256: "b".repeat(64), confidence: 0.95, requestedModel: "fixture-judgment", runtimeReportedModel: "fixture-judgment", settledAt: "2026-10-17T00:00:00.000Z" });
   writeFileSync(ledger, row("1", "Keep deletion confirmation count-only"));
   const configure = (value: Record<string, unknown>) => writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ decisionIssueSummary: { ...decision, ...value } }));
   configure({});

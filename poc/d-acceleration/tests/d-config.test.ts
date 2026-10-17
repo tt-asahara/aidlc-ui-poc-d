@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
+import { DECISION_RECORD_PATH_REMOVED, effectivePngGeneration, parseDJsonc, resolveDAiApproval, resolveDAutomation, resolveDDecisionIssueSummary, resolveDFeatureFlags, resolveDFeatureInputs, resolveDIssueAutopilot, resolveDModels } from "../d-config.ts";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -42,8 +42,16 @@ describe("D JSONC configuration", () => {
     expect(resolveDFeatureInputs(root)).toEqual({ requirementIdBridges: [], functionalDesignBudgets: { artifactBytes: 60000, unitBytes: 160000, metadataBytes: 30000 }, sourceRoots: [], specRoots: [], groundingLimits: { maxEvidenceFiles: 200, maxInputBytes: 1000000 } });
     expect(resolveDIssueAutopilot(root)).toEqual({ enabled: false, oneIssuePerRun: true });
     expect(resolveDAutomation(root)).toEqual({ enabled: false, through: undefined, sessionOnly: true, ambiguityPolicy: "halt", assumptionLedger: true, maxRetries: 2, maxSteps: 64, deadlineMs: 900000, labelAllowlist: [] });
-    expect(resolveDAiApproval(root)).toEqual({ mode: "human", minConfidence: 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" });
+    expect(resolveDAiApproval(root)).toEqual({ mode: "human", minConfidence: 0.9 });
     expect(resolveDDecisionIssueSummary(root)).toEqual({ enabled: false, repository: undefined, send: false, maxRetries: 2 });
+  });
+  test("refuses the removed aiApproval.decisionRecordPath with a one-line removal message", () => {
+    for (const file of ["d-acceleration.jsonc", "d-acceleration.local.json"]) {
+      const root = project();
+      write(root, file, '{ "aiApproval": { "mode": "stage-gates", "decisionRecordPath": "decisions/ai-approval-decisions.jsonl" } }');
+      expect(() => resolveDAiApproval(root)).toThrow(DECISION_RECORD_PATH_REMOVED);
+      expect(() => resolveDAiApproval(root)).toThrow(`delete "aiApproval.decisionRecordPath" from`);
+    }
   });
   test("refuses issueAutopilot.oneIssuePerRun=false instead of silently ignoring it", () => {
     const root = project();

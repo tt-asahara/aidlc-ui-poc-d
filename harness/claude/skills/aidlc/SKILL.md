@@ -91,8 +91,9 @@ person's scope choice returned on a later turn) names the run-then-continue
 says (fill only the `--label` the message leaves to you, change nothing else);
 then, instead of `next`, run
 `bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`.
-The controller never creates an Intent itself: it binds to the Intent the
-official command created since `start`, derives active stages from that
+The controller never creates an Intent itself: it binds only to an Intent the
+official command created since `start` (a switched-to or resumed Intent is
+refused in one line; relay it and stop), derives active stages from that
 Intent's official state, initializes the bounded session, obtains the first
 stage directive, and checkpoints it before returning. Never rebuild or alter
 the creation command, infer a stage list, or act on the first stage unless
@@ -133,7 +134,9 @@ When `aiApproval.mode` resolves to `stage-gates`, the person may delegate
 ordinary low-risk stage questions (never gates) for named stages. Configuration
 alone is never authority: ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
 run `ai-approval-controller.ts grant` with their message id and the same scope, through boundary,
-and stage slugs. Any mismatch is a stop. Delete only
+and stage slugs, immediately after that turn: `grant` refuses unless the words are
+the person's latest host-recorded turn, so on that refusal ask them to type the
+command again and rerun. Any mismatch is a stop. Delete only
 that temporary words file after a successful grant. Never create a
 `HUMAN_TURN`, quote the model as the person's words, or use a human-presence
 break-glass switch. Set `AIDLC_UNATTENDED=1` for the automated driver so hooks
@@ -170,8 +173,10 @@ event, or write a human answer on this path. A `researched-fact` must cite bound
 evidence; a `delegated-ai-assumption` must remain explicit, conservative, and
 reversible.
 
-The versioned Intent-local decision JSONL is the source of truth. Optional
-`decision-issue-summary.ts generate` produces one Issue payload per Intent.
+The Intent's D question-answer ledger `decisions/ai-question-answers.jsonl` is
+the source of truth. Optional `decision-issue-summary.ts generate` produces one
+Issue payload per Intent from it; a missing or empty ledger returns
+`nothing-to-publish`, so tell the person there is nothing to publish.
 Before `publish`, show the exact repository, Intent, and generated payload hash,
 then require the person's latest host-recorded words to equal `AI-DLC authorize-decision-summary --repository <owner/repo> --intent <relative-intent> --payload-sha256 <sha256>`. Never infer publication from auto or AI-approval mode, and never create separate Issues for each unresolved item.
 

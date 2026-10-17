@@ -18,7 +18,17 @@ node tools/ui-poc-evidence.cjs --stage refined-mockups --output-path /actual/sta
 ## Ordinary D dogfooding start
 
 Start the same way as any normal project; describe the application, not the
-internal workflow:
+internal workflow. A short ASCII request (five words or fewer) that names a UI
+keyword (`web app`, `dashboard`, `website`, `frontend`, `user interface`,
+`mobile app`) is proposed `ui-poc-application` automatically:
+
+```text
+/aidlc
+Build a budget web app
+```
+
+A long or Japanese request gets the standard scope proposal instead, for
+example:
 
 ```text
 /aidlc
@@ -26,21 +36,30 @@ Build a household budget web app with monthly planning, transaction tracking,
 category summaries, and a responsive user interface.
 ```
 
-Scope inference is the unmodified upstream resolver (core/ is byte-identical
-to AI-DLC v2.11.0). The plugin's UI keywords (`web app`, `dashboard`,
-`frontend`, ...) propose `ui-poc-application` only for short requests of five
-words or fewer, such as `Build a budget web app`. Longer prose like the example
-above, and Japanese text such as `家計管理のWebアプリを作りたい`, get the stock
-proposal or compose offer: pick `ui-poc-application` among the plans offered
-at the official scope confirmation (or name it explicitly). Teaching the core
-resolver plugin-declared high-specificity or CJK keywords would need a core
-change and is out of scope. `ui-poc-application` retains the C rough/refined
-HTML evidence handoff. Explicit scopes,
-explicit serial execution, and non-UI requests keep their normal meaning.
-Delivery Planning evaluates the actual Unit DAG and write conflicts before it
-proposes stage-major execution and official Code Generation swarm; the person
-still decides at the official gate. Opus defaults, routing evidence, and D's
-four automatic design waves do not depend on wording them into this prompt.
+```text
+/aidlc
+家計管理のWebアプリを作りたい
+```
+
+Both show the stock proposal (or the compose offer) at the official scope
+confirmation. Select `ui-poc-application` there, or name it up front with
+`/aidlc --scope ui-poc-application`; either way the rest of the run is the same.
+
+Why: scope inference is the unmodified upstream resolver, because core/ stays
+byte-identical to AI-DLC v2.11.0 (`6a378b53`). For requests longer than five
+words that resolver accepts only its own built-in high-specificity keywords,
+which a plugin scope cannot extend, and its keyword match uses ASCII word
+boundaries, so `Webアプリ` and other Japanese text never match a plugin keyword.
+Changing either would be a core change, which this PoC does not make.
+
+`ui-poc-application` retains the C rough/refined HTML evidence handoff.
+Explicit scopes, explicit serial execution, and non-UI requests keep their
+normal meaning. Delivery Planning evaluates the actual Unit DAG and write
+conflicts before it proposes stage-major execution and official Code
+Generation swarm (the proposal is spliced in just before the official
+Construction iteration choice); the person still decides at the official gate.
+Opus defaults, routing evidence, and D's four automatic design waves do not
+depend on wording them into this prompt.
 
 ## Requirements-only loop
 

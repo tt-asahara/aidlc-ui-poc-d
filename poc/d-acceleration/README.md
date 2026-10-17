@@ -34,7 +34,8 @@ JSONC settings. Setup never enables autopilot without an explicit user request.
 
 Every stage gate stays the person's: delegated AI stage-gate approval was
 dropped (see "Core restore"). With `aiApproval.mode: "stage-gates"` and the
-person's exact `AI-DLC delegate-ai-approvals ...` grant, D may answer
+person's exact `AI-DLC delegate-ai-approvals ...` grant (minted only when those
+words are the person's latest host-recorded turn), D may answer
 explicitly marked low-risk stage questions, including per-Unit Construction
 design questions (`--unit`), through `ai-question-controller.ts` and the D
 settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /
@@ -42,8 +43,9 @@ settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /
 Intent's D-owned `decisions/ai-question-answers.jsonl`, which is not the
 official audit. The file grammar, per-Unit binding, marker decision, and
 real-model evidence are in `delegated-questions.md`. The optional GitHub seam
-generates one summary payload per Intent from the configured
-`aiApproval.decisionRecordPath` ledger and is default-off; publication requires
+generates one summary payload per Intent from the D question-answer ledger
+`decisions/ai-question-answers.jsonl` (missing or empty → `nothing-to-publish`)
+and is default-off; publication requires
 the person's exact permission words as the latest host-recorded human turn
 (read through the engine's own read-only `latestPersonTurn`), binding
 repository, Intent, and payload hash, and it never replaces the repository record.
@@ -56,9 +58,9 @@ extension surfaces:
 
 | Feature | Outcome |
 | --- | --- |
-| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `after-step:6` spliced by compose. |
+| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `before-step:6` spliced by compose, so it precedes Step 6's Construction iteration choice. |
 | UI scope routing | Partly re-homed: plugin scope keywords route short ASCII requests. UI-specific high-specificity keywords, CJK keyword boundaries, and Japanese negation needed core and were dropped; long or Japanese prose gets the stock proposal and the person picks `ui-poc-application` at the official scope confirmation. |
-| Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds to the Intent created since `start`. The typed `machine_action` field was core-only and is gone. |
+| Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds only to an Intent proven created since `start` (absent from the Intent inventory `start` recorded, with its own `WORKFLOW_STARTED` audit row at or after `startedAt`); a switched-to or resumed Intent is refused in one line and its Construction policy is never touched. The typed `machine_action` field was core-only and is gone. |
 | Delegated low-risk question answers | Re-homed: D-owned grammar/settler `ai-question-answers.ts` and the D ledger `decisions/ai-question-answers.jsonl`; the `AI_QUESTION_ANSWERED` audit event was core-only and is gone. |
 | Decision summary permission and `HOST/owner/name` check | Re-homed into `decision-issue-summary.ts` (the `aidlc-state.ts verify-decision-summary-permission` verb was core-only). |
 | Delegated AI stage-gate approval | Dropped: the upstream engine accepts a stage approval only from the person, and an extension cannot add an approval authority or authenticated `present-gate` receipt. `ai-approval-controller.ts` keeps only `grant`; `evaluate`/`verify` fail closed with one line. |
@@ -244,7 +246,9 @@ project memory, but no project setting that initializes those two Construction
 fields; memory remains guidance rather than a policy setter. D therefore calls
 the official setters once, immediately after creating a new Intent, and only
 when that scope contains both Units Generation and Code Generation. Existing
-Intents are never changed by these defaults (only `parallel.enabled=false`
+Intents are never changed by these defaults: bootstrap refuses an active
+Intent that was in `start`'s Intent inventory or whose `WORKFLOW_STARTED` row
+predates `start` (only `parallel.enabled=false`
 moves an existing swarm Intent to serial, see below). A later explicit per-Intent setter wins because a
 bootstrap replay never reapplies the defaults. `swarm` requires `stage-major`;
 a single Unit runs as the serial-equivalent case, while multiple Units still

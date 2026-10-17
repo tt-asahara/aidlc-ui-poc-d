@@ -6,11 +6,11 @@ adds:
     - ui-poc-comparison
     - ui-poc-application
 fragments:
-  - anchor: after-step:6
+  - anchor: before-step:6
     order: 100
 ---
 
-## fragment: after-step:6
+## fragment: before-step:6
 
 ### UI application execution proposal (ui-poc)
 

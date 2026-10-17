@@ -102,6 +102,7 @@ import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-chan
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
+import { projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -865,70 +866,9 @@ function buildTree(
   // the experiment stays separable from the framework core.  A Claude
   // projection nevertheless has to carry the runtime it tells /aidlc to run:
   // installed projects cannot reach back into this source checkout.
+  // The collision guard and the file list live in poc/d-acceleration/d-projection.ts.
   if (m.name === "claude") {
-    const accelerationRoot = join(REPO_ROOT, "poc", "d-acceleration");
-    const accelerationRuntime = [
-      "aidlc-acceleration-plan.ts",
-      "ai-approval-controller.ts",
-      "ai-question-answers.ts",
-      "ai-question-controller.ts",
-      "conductor.ts",
-      "cross-stage-speculation.ts",
-      "d-config.ts",
-      "d-acceleration.example.jsonc",
-      "d-persistence-hook.ts",
-      "d-persistence.ts",
-      "decision-issue-summary.ts",
-      "design-document.ts",
-      "design-document-guide.md",
-      "fake-worker.ts",
-      "functional-design-discipline.ts",
-      "gh-host.ts",
-      "d-feature-checks.ts",
-      "grounding.ts",
-      "grounding-runtime.ts",
-      "generic-auto-cli.ts",
-      "host-session.ts",
-      "host-session-cli.ts",
-      "host-stage-boundary.ts",
-      "issue-autopilot.ts",
-      "issue-autopilot-runtime.ts",
-      "issue-ambiguity-assessor.ts",
-      "issue-autopilot-cli.ts",
-      "official-next-adapter.ts",
-      "parallel-guard.ts",
-      "question-wait.ts",
-      "read-only-fanout.ts",
-      "requirement-ui-cross-validation.ts",
-      "resume-ledger.ts",
-      "reviewer-dispatch-cleanup-hook.ts",
-      "run.ts",
-      "scheduler.ts",
-      "stage-policy.json",
-      "worker-adapters.ts",
-    ];
-    for (const file of accelerationRuntime) {
-      const source = join(accelerationRoot, file);
-      if (!existsSync(source) || !lstatSync(source).isFile()) {
-        throw new Error(`[claude] D acceleration runtime source is missing: ${file}`);
-      }
-      const destination = join(treeRoot, "tools", "d-acceleration", file);
-      // D lives only in its own tools/d-acceleration/ subtree; core/ stays
-      // byte-identical to upstream, so a D file may never land on a path the
-      // core projection already wrote.
-      if (existsSync(destination)) {
-        throw new Error(`[claude] D acceleration runtime would overwrite a projected core file: ${destination}`);
-      }
-      mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "decision-issue-summary.ts" || file === "reviewer-dispatch-cleanup-hook.ts") {
-        const projected = readFileSync(source, "utf8")
-          .replace('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
-          .replace('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
-        writeFileSync(destination, projected);
-      } else {
-        cpSync(source, destination);
-      }
-    }
+    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"));
   }
   const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
   if (fmMissed.length > 0) {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { resolveDAiApproval } from "./d-config.ts";
-import { AI_QUESTION_BLOCKS, delegatedQuestionPrecheck, type AiQuestionBlockRecord } from "./ai-question-controller.ts";
+import { AI_QUESTION_BLOCKS, DELEGATION_NOT_AUTHORIZED, delegatedQuestionPrecheck, type AiQuestionBlockRecord } from "./ai-question-controller.ts";
 import { answerValues, PER_UNIT_QUESTION_STAGES, resolveAiQuestionTarget, stateValue } from "./ai-question-answers.ts";
 
 /** The recorded fact a stage-question wait is bound to. */
@@ -63,7 +63,7 @@ export function pendingHumanQuestion(projectDir: string, stage: string | undefin
     let grant: unknown = null;
     try { grant = JSON.parse(readFileSync(grantPath, "utf8")); } catch { return { ...evidence, reason: "no-delegation" }; }
     const precheck = delegatedQuestionPrecheck({ root, intentDir, stateBody, stage, unit, grant, questionsPath: target.canonicalPath, questionsBody: body });
-    if (!precheck.ok) return { ...evidence, reason: precheck.reason === "delegation does not authorize this stage" ? "no-delegation" : "not-delegable" };
+    if (!precheck.ok) return { ...evidence, reason: precheck.reason.startsWith(DELEGATION_NOT_AUTHORIZED) ? "no-delegation" : "not-delegable" };
     const ledger = join(intentDir, AI_QUESTION_BLOCKS);
     if (existsSync(ledger)) {
       const blocked = readFileSync(ledger, "utf8").split(/\r?\n/).some((line) => {

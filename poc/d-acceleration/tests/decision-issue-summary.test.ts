@@ -5,17 +5,20 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDecisionIssueSummary, type GhAdapter, type GhResult } from "../decision-issue-summary.ts";
+import { AI_QUESTION_ANSWER_LEDGER, type AiQuestionAnswerLedgerRow } from "../ai-question-answers.ts";
 
-function fixture() {
+// Rows in the exact shape ai-question-answers.ts settles (AiQuestionAnswerLedgerRow).
+const ledgerRow = (id: string, extra: Partial<AiQuestionAnswerLedgerRow> = {}): AiQuestionAnswerLedgerRow => ({ schemaVersion: 1, kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId: id.repeat(64), stage: "requirements-analysis", unit: null, questionId: "Q1", answer: "A. YYYY-MM-DD", answerSource: "delegated-ai-assumption", reason: "Reversible display default", questionsFile: "aidlc/spaces/default/intents/budget/inception/requirements-analysis/requirements-analysis-questions.md", questionsTemplateSha256: "a".repeat(64), delegationSha256: "b".repeat(64), confidence: 0.95, requestedModel: "fixture-judgment", runtimeReportedModel: "fixture-judgment", settledAt: "2026-10-17T00:00:00.000Z", ...extra });
+function fixture(options: { ledger?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "decision-issue-summary-"));
   const intent = join(root, "aidlc/spaces/default/intents/budget");
   mkdirSync(join(intent, "decisions"), { recursive: true });
   writeFileSync(join(root, "aidlc/spaces/default/intents/active-intent"), "budget\n");
   writeFileSync(join(intent, "aidlc-state.md"), "- **Scope**: feature\n");
-  const log = join(intent, "decisions/ai-approval-decisions.jsonl");
-  writeFileSync(log, [
-    JSON.stringify({ schemaVersion: 1, decisionId: "1".repeat(64), stage: "requirements-analysis", outcome: "approve", reason: "Keep deletion confirmation count-only", evidence: [{ path: "aidlc/spaces/default/intents/budget/requirements.md", sha256: "a".repeat(64) }], uncertainties: [] }),
-    JSON.stringify({ schemaVersion: 1, decisionId: "2".repeat(64), stage: "functional-design", outcome: "block", reason: "CSV delimiter is undecided", evidence: [{ path: "aidlc/spaces/default/intents/budget/functional-design.md", sha256: "b".repeat(64) }], uncertainties: ["delimiter"] }),
+  const log = join(intent, AI_QUESTION_ANSWER_LEDGER);
+  if (options.ledger !== false) writeFileSync(log, [
+    JSON.stringify(ledgerRow("1", { reason: "Keep deletion confirmation count-only" })),
+    JSON.stringify(ledgerRow("2", { stage: "functional-design", unit: "notes-core", questionId: "Q2", answer: "B. comma", answerSource: "researched-fact", reason: "CSV delimiter follows the export brief" })),
   ].join("\n"));
   return { root, intent, log };
 }
@@ -59,7 +62,7 @@ describe("decision Issue summary", () => {
     const other = join(root, "aidlc/spaces/default/intents/other"); mkdirSync(other, { recursive: true }); writeFileSync(join(other, "aidlc-state.md"), "- **Scope**: feature\n");
     await expect(runDecisionIssueSummary({ projectDir: root, intentDir: other, decisionsFile: log, config })).rejects.toThrow("active Intent");
     const alternate = join(intent, "other.jsonl"); writeFileSync(alternate, readFileSync(log));
-    await expect(runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: alternate, config })).rejects.toThrow("canonical Intent ledger");
+    await expect(runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: alternate, config })).rejects.toThrow("D question-answer ledger");
     const preview = await runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config });
     const key = (preview.payload as { key: string }).key;
     const state = join(root, ".aidlc-engine/d-decision-issue-summary"); mkdirSync(state, { recursive: true }); writeFileSync(join(state, `${key}.lock`), "busy");
@@ -69,11 +72,27 @@ describe("decision Issue summary", () => {
     expect(gh.calls).toEqual([]);
   });
 
-  test("rejects unversioned rows and possible secrets before publication", async () => {
-    for (const row of [{ decisionId: "1".repeat(64), stage: "test", outcome: "approve", reason: "missing version", evidence: [], uncertainties: [] }, { schemaVersion: 1, decisionId: "1".repeat(64), stage: "test", outcome: "approve", reason: "token=ghp_abcdefghijklmnopqrstuvwxyz", evidence: [], uncertainties: [] }]) {
+  test("rejects unversioned or foreign rows and possible secrets before publication", async () => {
+    const legacyApproval = { schemaVersion: 1, decisionId: "1".repeat(64), stage: "test", outcome: "approve", reason: "old AI approval row", evidence: [], uncertainties: [] };
+    for (const [row, error] of [[{ ...ledgerRow("1"), schemaVersion: undefined }, "versioned D question-answer"], [legacyApproval, "versioned D question-answer"], [ledgerRow("1", { reason: "token=ghp_abcdefghijklmnopqrstuvwxyz" }), "possible secret"]] as const) {
       const { root, intent, log } = fixture(); writeFileSync(log, `${JSON.stringify(row)}\n`);
-      await expect(runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config })).rejects.toThrow(row.schemaVersion ? "possible secret" : "versioned decision");
+      await expect(runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config })).rejects.toThrow(error);
     }
+  });
+
+  test("summarizes the D question-answer ledger and reports nothing to publish when it is missing or empty", async () => {
+    const { root, intent } = fixture();
+    const result = await runDecisionIssueSummary({ projectDir: root, intentDir: intent, config });
+    const body = (result.payload as { body: string }).body;
+    expect(result).toMatchObject({ status: "generated", published: false });
+    expect(body).toContain("requirements-analysis · Q1: A. YYYY-MM-DD");
+    expect(body).toContain("functional-design / notes-core · Q2: B. comma");
+    expect(body).toContain("not the official AI-DLC audit");
+    const missing = fixture({ ledger: false }); const gh = new FakeGh([]);
+    for (const send of [false, true]) expect(await runDecisionIssueSummary({ projectDir: missing.root, intentDir: missing.intent, config: { ...config, send }, gh })).toMatchObject({ status: "nothing-to-publish", published: false });
+    writeFileSync(missing.log, "\n");
+    expect(await runDecisionIssueSummary({ projectDir: missing.root, intentDir: missing.intent, decisionsFile: missing.log, config })).toMatchObject({ status: "nothing-to-publish" });
+    expect(gh.calls).toEqual([]);
   });
 
   test("uses fixed argv, one stable binding per intent, and updates the same Issue", async () => {

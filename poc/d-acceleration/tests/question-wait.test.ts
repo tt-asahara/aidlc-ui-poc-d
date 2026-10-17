@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { evaluateAiQuestions } from "../ai-question-controller.ts";
 import { createAiApprovalGrant } from "../ai-approval-controller.ts";
+import { recordHumanTurn } from "./human-turn.ts";
 import { pendingHumanQuestion } from "../question-wait.ts";
 import type { HostSessionState } from "../host-session.ts";
 
@@ -26,6 +27,7 @@ function project(opts: { delegate?: boolean } = {}) {
   if (opts.delegate) {
     writeFileSync(join(root, ".claude/d-acceleration.jsonc"), JSON.stringify({ aiApproval: { mode: "stage-gates", minConfidence: 0.9 } }));
     writeFileSync(join(root, "delegation.txt"), "AI-DLC delegate-ai-approvals --scope greenfield --through construction --stages intent-capture");
+    recordHumanTurn(root, "AI-DLC delegate-ai-approvals --scope greenfield --through construction --stages intent-capture");
     createAiApprovalGrant({ projectDir: root, userMessageFile: "delegation.txt", messageId: "msg-1", scope: "greenfield", through: "construction", allowedStages: ["intent-capture"] });
   }
   return { root, intent, grant: "aidlc/spaces/default/intents/example/decisions/ai-approval-delegation.json" };

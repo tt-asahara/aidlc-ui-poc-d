@@ -37,16 +37,18 @@ Issueと安定した一般知識だけから得た事実を台帳へ渡します
 intent作成前にfail-closedで停止し、approval recordを作成しません。
 
 `aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任
-（`AI-DLC delegate-ai-approvals ...` の完全一致文）をhash-bound grantとしてactive Intentへ
-保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
+（`AI-DLC delegate-ai-approvals ...` の完全一致文。host記録の最新human turn
+（`latestPersonTurn`）と一致する場合のみ `grant` が作成され、そのturnのTimestamp/Sessionを
+grantに束縛し、controllerとsettlerの双方が公式auditの `HUMAN_TURN` 行を再確認します）を
+hash-bound grantとしてactive Intentへ保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
 回答できるようにします。stage gateのAI承認は廃止しました: core/ を上流AI-DLC v2.11.0
 （`6a378b53`）と同一に保つため、承認は常に人が公式gateで行います（`ai-approval-controller.ts`
 は `grant` のみ、`evaluate`/`verify` は1行のblockを返して停止）。AI回答は
 `decisions/ai-question-answers.jsonl`（Dの台帳。公式auditではない）と質問ファイルの
 `[Answer Source]`/`[AI Decision ID]` にだけ記録され、`HUMAN_TURN`・`QUESTION_ANSWERED`・
 人間の `User Input` を作りません。`minConfidence` は質問回答の最低confidenceです。
-`decisionRecordPath` はdecision summaryが読む台帳のpathとしてだけ残ります（AI承認が廃止
-されたため、新しい行は書かれません）。
+旧 `aiApproval.decisionRecordPath` は削除しました（AI承認の廃止で書き手がなくなったため）。
+設定に残っていると1行の削除案内を出して設定エラーで停止します。
 `stage-gates` の実モデル実行は通常、親processの `PATH` から絶対directoryだけを調べ、
 realpath化したproject外のnative `claude` だけを使用します。相対/CWD、project内実体、
 script、別名dispatcherは拒否します。より厳格な固定が必要な環境だけ、host process環境の
@@ -54,8 +56,9 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 片方だけ、またはdigest不一致はfail-closedです。通常起動で実体自身からdigestを再計算して
 信頼扱いすることはしません。
 
-`decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
-既定OFFの機能です。外部送信にはrepository・active Intent・生成payload hashを完全一致で
+`decisionIssueSummary.enabled` は、active IntentのD台帳 `decisions/ai-question-answers.jsonl`
+（委任された低risk質問へのAI回答。公式auditではない）からIntent単位のGitHub Issue要約payloadを
+生成する既定OFFの機能です。台帳がない・空の場合は `nothing-to-publish` を返して何も送信しません。外部送信にはrepository・active Intent・生成payload hashを完全一致で
 指定した最新のhost記録済み人間permissionが必要です（D側で、engine自身の読み取り専用
 `latestPersonTurn` を使って照合します）。許可後もpending receiptを検索・照合してから同じIssueを更新し、
 未解決事項の別Issueを自動作成しません。

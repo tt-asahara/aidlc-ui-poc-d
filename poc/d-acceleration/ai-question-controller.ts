@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveDAiApproval, resolveDModels } from "./d-config.ts";
 import { runWorker, type ModelIdentity, type ModelIdentityStatus, type WorkerLaunch, type WorkerUsage } from "./worker-adapters.ts";
-import { productionClaudeExecutable } from "./ai-approval-controller.ts";
+import { grantHumanTurnRefusal, productionClaudeExecutable } from "./ai-approval-controller.ts";
 import stagePolicy from "./stage-policy.json";
 
-import { questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility } from "./ai-question-answers.ts";
+import { appendJsonl, questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility, withLedgerLock } from "./ai-question-answers.ts";
 
 const SHA = /^[a-f0-9]{64}$/;
 const HUMAN_ONLY = /(approve|approval|deploy|deployment|production|publish|external send|credential|permission|authorization|authentication|delete|destructive|payment|legal|security exception|release|pricing|personal data|target user|承認|本番|公開|外部送信|認証|権限|削除|破壊|支払|法務|セキュリティ|対象利用者|成功基準|決定権|対象ユーザ|ターゲット|価格|料金|課金|個人情報|契約|リリース|デプロイ)/i;
@@ -70,6 +70,8 @@ export function questionAssessorLaunch(request: { executable: string; model: str
   return { kind: "claude", executable: request.executable, requestedModel: request.model, requestedEffort: "high", args: ["--print", "--output-format", "json", "--no-session-persistence", "--restricted", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--permission-mode", "dontAsk", "--tools", "", "--allowed-tools", "", "--disallowed-tools", "Bash,Edit,Write,Agent,Task,WebFetch,WebSearch", "--model", request.model, "--effort", "high", request.prompt] };
 }
 
+/** Prefix of every precheck refusal that means "no usable delegation for this stage". */
+export const DELEGATION_NOT_AUTHORIZED = "delegation does not authorize this stage";
 type Classification = NonNullable<AiQuestionResult["classification"]>;
 /**
  * The deterministic gates in front of the judgment model, shared by
@@ -79,7 +81,9 @@ type Classification = NonNullable<AiQuestionResult["classification"]>;
  */
 export function delegatedQuestionPrecheck(input: { root: string; intentDir: string; stateBody: string; stage: string; unit: string | null; grant: any; questionsPath: string; questionsBody: string }): { ok: true; sections: Array<{ id: string; body: string }>; classification: Classification; slots: number } | { ok: false; reason: string; classification?: Classification } {
   const { grant, stage } = input;
-  if (!grant || grant.schemaVersion !== 1 || grant.mode !== "stage-gates" || !Array.isArray(grant.allowedStages) || !grant.allowedStages.includes(stage) || !SHA.test(grant.requestSha256) || typeof grant.messageId !== "string") return { ok: false, reason: "delegation does not authorize this stage" };
+  const unbound = grantHumanTurnRefusal(input.intentDir, grant);
+  if (unbound) return { ok: false, reason: `${DELEGATION_NOT_AUTHORIZED}: ${unbound}` };
+  if (grant.mode !== "stage-gates" || !Array.isArray(grant.allowedStages) || !grant.allowedStages.includes(stage) || !SHA.test(grant.requestSha256) || typeof grant.messageId !== "string") return { ok: false, reason: DELEGATION_NOT_AUTHORIZED };
   const target = resolveAiQuestionTarget(input.root, input.intentDir, input.stateBody, stage, input.unit);
   if (!target.ok) return { ok: false, reason: target.reason };
   if (input.questionsPath !== target.canonicalPath) return { ok: false, reason: "questions file is not canonical for the current stage" };
@@ -108,7 +112,7 @@ function recordQuestionBlock(options: AiQuestionOptions, reason: string): void {
     if (!inside(intent, questions.absolute)) return;
     const record: AiQuestionBlockRecord = { schemaVersion: 1, kind: "delegated-stage-question-block", stage: options.stage, unit: options.unit ?? null, questions: { path: questions.path, sha256: questions.sha256 }, reason, createdAt: new Date().toISOString() };
     const ledger = join(intent, AI_QUESTION_BLOCKS);
-    atomic(ledger, `${existsSync(ledger) ? readFileSync(ledger, "utf8") : ""}${JSON.stringify(record)}\n`);
+    withLedgerLock(ledger, () => appendJsonl(ledger, [record]));
   } catch { /* the clock keeps running; never mask the block itself */ }
 }
 
@@ -148,7 +152,7 @@ async function evaluateAiQuestionsOnce(options: AiQuestionOptions): Promise<AiQu
   const decision: AiQuestionDecision = { ...payload, decisionId: hash(canonical(payload)), createdAt: new Date().toISOString() };
   for (const item of [questions, delegation, state, ...configs, ...evidence]) if (hash(readFileSync(item.absolute)) !== item.sha256) throw new Error(`bound input changed: ${item.path}`);
   const directory = join(intent, "decisions", "ai-question-decisions"), decisionPath = join(directory, `${decision.decisionId}.json`), ledger = join(intent, "decisions", "ai-question-decisions.jsonl");
-  atomic(decisionPath, `${JSON.stringify(decision, null, 2)}\n`); atomic(ledger, `${existsSync(ledger) ? readFileSync(ledger, "utf8") : ""}${JSON.stringify(decision)}\n`);
+  atomic(decisionPath, `${JSON.stringify(decision, null, 2)}\n`); withLedgerLock(ledger, () => appendJsonl(ledger, [decision]));
   const relativeDecision = relative(root, decisionPath).split(sep).join("/");
   return { status: "answer", reason: decision.reason, decision, decisionFilePath: relativeDecision, generatedCommandArgs: ["--stage", options.stage, ...(unit === null ? [] : ["--unit", unit]), "--ai-decision-file", relativeDecision], classification, telemetry };
 }
