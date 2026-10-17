@@ -18,6 +18,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "ai-approval-controller.ts",
   "ai-question-answers.ts",
   "ai-question-controller.ts",
+  "blocking-sensor-override-hook.ts",
   "conductor.ts",
   "cross-stage-speculation.ts",
   "d-config.ts",

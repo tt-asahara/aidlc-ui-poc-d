@@ -48,7 +48,10 @@ function stateField(content, name) {
   return content.match(new RegExp(`^(?:[-*]\\s+)?\\*\\*${escaped}\\*\\*:\\s*(.+?)\\s*$`, 'm'))?.[1] ?? null;
 }
 
-function deriveEngineContext(outputPath, stage, cfg = load()) {
+// The engine record a dispatched stage output belongs to: the nearest
+// aidlc-state.md inside the project, its recorded Scope, and the Construction
+// Unit named by the output path.
+function engineRecord(outputPath, stage) {
   let output;
   try { output = fs.realpathSync(outputPath); } catch (e) { throw Error(`Cannot resolve stage output: ${e.message}`); }
   const projectRoot = fs.realpathSync(process.cwd());
@@ -65,7 +68,11 @@ function deriveEngineContext(outputPath, stage, cfg = load()) {
   const unit = rel[0] === 'construction' && stageIndex === 2 ? rel[1] : null;
   if (rel[0] === 'construction' && stageIndex !== 2) throw Error('Construction output path has no unambiguous Unit');
   const stateBytes = fs.readFileSync(path.join(recordRoot, 'aidlc-state.md'));
-  const scope = stateField(stateBytes.toString('utf8'), 'Scope');
+  return {recordRoot,unit,stateBytes,scope:stateField(stateBytes.toString('utf8'), 'Scope')};
+}
+
+function deriveEngineContext(outputPath, stage, cfg = load()) {
+  const {recordRoot,unit,stateBytes,scope} = engineRecord(outputPath, stage);
   runtimeProfile(cfg, scope);
   return {stage,scope,recordId:path.basename(recordRoot),unit,engineStateSha256:hash(stateBytes)};
 }
@@ -209,4 +216,4 @@ function main(argv) {
   } catch (e) { console.log(JSON.stringify(fail(e.message), null, 2)); process.exitCode = 1; }
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {plan, verify, load, lockedEntrypoint, deriveEngineContext, runtimeProfile};
+module.exports = {plan, verify, load, lockedEntrypoint, engineRecord, deriveEngineContext, runtimeProfile};

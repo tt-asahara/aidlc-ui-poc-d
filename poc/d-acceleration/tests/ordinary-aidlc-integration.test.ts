@@ -78,6 +78,7 @@ describe("ordinary /aidlc D integration", () => {
       "ai-question-answers.ts",
       "read-only-fanout.ts",
       "reviewer-dispatch-cleanup-hook.ts",
+      "blocking-sensor-override-hook.ts",
       "run.ts",
       "scheduler.ts",
       "stage-policy.json",
@@ -91,6 +92,7 @@ describe("ordinary /aidlc D integration", () => {
     expect(existsSync(join(root, "ai-question-answers.ts"))).toBe(true);
     expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(false);
     expect(readFileSync(join(root, "reviewer-dispatch-cleanup-hook.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
+    expect(readFileSync(join(root, "blocking-sensor-override-hook.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');
@@ -108,6 +110,7 @@ describe("ordinary /aidlc D integration", () => {
     expect(rebuild).toBeGreaterThanOrEqual(0);
     expect(persistence).toBe(rebuild + 1);
     expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/reviewer-dispatch-cleanup-hook.ts"');
+    expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/blocking-sensor-override-hook.ts"');
   });
 
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {
