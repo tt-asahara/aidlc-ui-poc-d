@@ -42,7 +42,8 @@ Verified from primary records:
    `inception/practices-discovery/evidence.md` line 70 says whether it is used
    as a pre-merge gate is 未確認, and `memory.md` line 17 matches.
 
-Conclusion from evidence: pr-lens was **installed and composed** into
+Conclusion from evidence at that time (superseded in part by "Later
+observation" below): pr-lens was **installed and composed** into
 dogfood-2, its renderer was **smoke-run on a synthetic sample**, and it was
 **never invoked on dogfood application changes**. It was absent from the
 other dogfoods, from D, and from KDDI-ref.
@@ -64,4 +65,51 @@ The tools do not decide this. Options:
 | decline | Keep pr-lens a product-local choice, outside D. |
 | defer | Wait until a Build and Test run actually exercises it on application changes and shows value. |
 
-Decision: **未決定 (pending human judgement).**
+Decision: **accepted, default OFF** (owner decision recorded on issue #10). The
+review run takes time, so it is an optional plugin switched by JSONC.
+
+- Toggle key: `features.prLensReview` in `.claude/d-acceleration.jsonc`. The
+  local `.claude/d-acceleration.local.jsonc` overrides it. Default `false`.
+- Plugin: `poc/pr-lens-review/` (see its README for why it lives under `poc/`).
+- Pin: a pinned, verified fetch by `poc/pr-lens-review/scripts/setup-pr-lens.ts`
+  of `coldteadotai/pr-lens@7a9115c8202da4db030be5954ada8862e6135dce` (MIT). D
+  does not use a submodule: a submodule of the D repo is not part of the
+  installed runtime, and a PRODUCT submodule would rewrite the PRODUCT's
+  `.gitmodules`.
+- Behaviour:
+  - OFF: `skipped-by-config`, recorded only in D's evidence.
+  - ON without the pinned install: fails closed with a one-line next step.
+  - In all cases the review is a supplement only and never decides a gate.
+- Smoke evidence: `../evidence/pr-lens/`. It covers the real pinned fetch, the
+  build, the receipt, compose, a render of a synthetic sample, and verify.
+- Tests: `poc/pr-lens-review/tests/pr-lens-review.test.ts` and
+  `poc/d-acceleration/tests/d-config.test.ts`.
+
+## Later observation (2026-10-17 22:18–22:20 JST, read-only)
+
+After the observation above, dogfood-2 **did** run the PR Lens review on its
+application at Build and Test. This supersedes item 1 of "Was it invoked?" from
+that time onward.
+
+- Files:
+  `aidlc/spaces/default/intents/261016-budget-manager-app/construction/build-and-test/pr-lens-review.md`
+  (sha256 `3952e076834c917ea91a7cb1162dc8f5f494371370e52c76cf56d76856920251`) and
+  `pr-lens-review.json`
+  (sha256 `9174c7abfe55296a09b0ae2d1714a35764d9f10ba75e209a579e50387b45679f`).
+  The audit shard records `ARTIFACT_CREATED` for the `.md`.
+- Coverage: 123 application files under `app/src` and `app/tests`, base
+  `627c0d4d…` and head `6a8f2f68…`. The render is
+  `.pr-lens/budget-app-csv-exchange-and-local-storage/` (5 SVGs). Findings were
+  high 0, medium 0, low 3, info 1. Tests were not re-run; the review cites
+  `build-and-test-summary.md`.
+- Problems the run reported, and the D port's response:
+  1. The first `verify-report` failed because the framework appended
+     `ARTIFACT_CREATED` to the audit shard after the review `.md` was written.
+     The shard was part of the frozen supporting evidence.
+     D now excludes append-only `audit/`, `aidlc-state.md`, and `.aidlc-engine/`
+     paths from that snapshot (test "ON with the pinned install runs …").
+  2. `prepare --base main` stored the ref name, so the graph provenance check
+     (a SHA) failed. D's `prepare` now resolves the base to its commit SHA once.
+
+The renders are still not a value judgement on PR Lens. Whether the findings
+were acted on is **未確認**.

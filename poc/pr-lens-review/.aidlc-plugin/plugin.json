@@ -1,0 +1,7 @@
+{
+  "name": "pr-lens-review",
+  "version": "0.2.0",
+  "description": "Optional, default-OFF supplemental Build and Test review with a pinned PR Lens diagram (coldteadotai/pr-lens@7a9115c8, MIT); never replaces official review, sensors, or approval",
+  "dependencies": ["core"],
+  "aidlc": {"contributes": {"overlays": "contributions/", "tools": "tools/"}}
+}

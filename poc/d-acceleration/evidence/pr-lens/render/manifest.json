@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "0.2.0",
+  "kind": "render-manifest",
+  "graph": {
+    "headSha": "6ad124a47b672fcb3d18d698f8ba0c6859d71490",
+    "contentHash": "17ea1a4cdeaafd114b4b084f3c948edc"
+  },
+  "renderer": {
+    "name": "@coldtea/pr-lens-renderer",
+    "version": "0.3.2"
+  },
+  "assets": [
+    {
+      "id": "overview-light",
+      "lens": "architecture",
+      "theme": "light",
+      "view": "overview",
+      "mediaType": "image/svg+xml",
+      "contentHash": "33505536ac61aeded70b3e9190eed045",
+      "bytes": 5382,
+      "width": 860,
+      "height": 304,
+      "animated": false,
+      "path": "overview-light-33505536ac61aeded70b3e9190eed045.svg"
+    }
+  ]
+}

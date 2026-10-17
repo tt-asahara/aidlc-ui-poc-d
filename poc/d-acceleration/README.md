@@ -148,6 +148,35 @@ commands for that stage (decision, the two choices, the person's reply, answer,
 report with `--override-blocking-sensors`). It reads the wording from the
 official constants, records nothing, and decides nothing.
 
+## PR Lens supplemental review (optional, default OFF)
+
+The optional plugin [`../pr-lens-review/`](../pr-lens-review/README.md) can add
+a pinned [PR Lens](https://github.com/coldteadotai/pr-lens) diagram and an
+evidence-backed review to Build and Test. It runs only when application code
+exists. The pin is `coldteadotai/pr-lens@7a9115c8`, MIT. One run takes minutes
+and extra model use, so the switch `features.prLensReview` defaults to `false`.
+The local `.claude/d-acceleration.local.jsonc` overrides the project
+`.claude/d-acceleration.jsonc`.
+
+Its composed fragment first runs `pr-lens-gate.ts`, which works as follows:
+
+- **OFF:** returns `skipped-by-config`. Nothing PR Lens related runs and no
+  review file is written. The skip is recorded only in D's evidence,
+  `aidlc/.aidlc-engine/d-evidence/build-and-test-pr-lens-review.json`.
+- **ON, but the pinned install, the setup receipt, or the composed fragment is
+  missing or different:** exits 2 with a one-line next step (run
+  `poc/pr-lens-review/scripts/setup-pr-lens.ts`, or switch OFF). It never
+  passes silently.
+
+The review is supplemental. It never changes reviews, sensors, test verdicts,
+approvals, or gates, and it never decides a gate.
+
+`run.ts --preflight` shows the effective value
+(`optional.features.prLensReview`) and the gate status
+(`supplementalReview.prLensReview`). When the switch is ON, it adds two
+`features.prLensReview` prerequisite rows: the pinned install and the composed
+plugin.
+
 ## Safety contract
 
 - Deterministic rules decide every tier, and routing makes no network call.

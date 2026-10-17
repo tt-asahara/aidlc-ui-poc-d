@@ -44,6 +44,8 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "issue-autopilot-cli.ts",
   "official-next-adapter.ts",
   "parallel-guard.ts",
+  "pr-lens-gate.ts",
+  "pr-lens-pin.ts",
   "question-wait.ts",
   "read-only-fanout.ts",
   "requirement-ui-cross-validation.ts",

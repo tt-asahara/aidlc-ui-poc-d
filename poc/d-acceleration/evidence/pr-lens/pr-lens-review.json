@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "prLensSha": "7a9115c8202da4db030be5954ada8862e6135dce",
+  "context": {
+    "path": ".pr-lens/review-context.json",
+    "sha256": "sha256:c6592420e3724a477be643c67023caa89075e6a9d69ca6ac5346338cc46d9d9e",
+    "preparedWorktreeHash": "sha256:cfbea92c240aa7733f6374c39e8c6cfafbc4d85c92657116fddbbbbb0dd154a0"
+  },
+  "reviewedPaths": [
+    "app/src/greet.ts",
+    "app/tests/greet.test.ts"
+  ],
+  "graph": {
+    "path": ".pr-lens/graph.json",
+    "sha256": "sha256:2215bf0b800e601556473517ff9c060255556aeebc0102b67fb5f1acdf9bfcd6"
+  },
+  "renderManifest": {
+    "path": ".pr-lens/render/manifest.json",
+    "sha256": "sha256:fcd9d5b2ddb23759341ce2f3c1993e3b61c56de419adb50be28f8919f2648eff"
+  },
+  "testEvidence": [
+    {
+      "path": "aidlc/spaces/default/intents/smoke/construction/build-and-test/test-run.txt",
+      "sha256": "sha256:3f113b6589ee1564bd8efce2f9652af6db263a12a888688e61aeea5f045ac9d7"
+    }
+  ],
+  "semanticCrossCheck": {
+    "performedBy": "ai-reviewer",
+    "disclaimer": "semantic source/requirements/test comparison is an AI judgment, not a machine guarantee"
+  }
+}
