@@ -247,7 +247,7 @@ README.md 末尾には、テーブルを画面幅いっぱいに表示するた�
 |---|---|---|---|
 | `feature` / `mvp` / `enterprise` / `workshop` / `classic` | あり | アプリ系 | A |
 | `feature` / `mvp` / `enterprise` / `workshop` / `classic` | なし | API・バックエンド系 | C |
-| `ui-poc-application` / `ui-poc-comparison` | — | アプリ系 | A |
+| `ui-poc-application` / `ui-poc-comparison` / `ui-poc-requirements` | — | アプリ系 | A |
 | `infra` | — | インフラ系 | B |
 | `poc` / `bugfix` / `refactor` / `security-patch` / `express` / `test-pro-validation` | — | 小規模・部分系 | D |
 
@@ -257,6 +257,9 @@ README.md 末尾には、テーブルを画面幅いっぱいに表示するた�
 - UI の有無は `interaction-spec.md` / refined-mockups の有無・画面定義の有無で判定。判別不能なら UI ありとみなす。
   ただし **`ui-poc-*` scope は UI 検出に依らず常にアーキタイプ A（アプリ系）** を選ぶ。表に無い scope は
   UI の有無で A / C を選ぶ。
+- `ui-poc-requirements`（要件定義ループ）は設計・構築ステージを持たない。ラウンド（intent）を重ねて `--doc` を
+  再実行すると要件・ストーリー・画面の章は育つが、基本設計・詳細設計の章は「未検討」のまま残る。それらは
+  `ui-poc-application` などで設計ステージを実行した intent が加わったときに初めて埋まる。
 - **どのアーキタイプでも共通**: `00_設計管理/` の章、未検討/対象外マーカー、`README.md` 表紙。骨格内では章を網羅する。
 - そのアーキタイプの骨格に**含まれる**章は、該当しなくても「対象外/未検討」で残す。骨格に**含まれない**章
   （例: インフラ系に画面設計）は最初から作らない。これが「scope で設計書タイプを変える」の実体である。

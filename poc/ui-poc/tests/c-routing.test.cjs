@@ -53,11 +53,34 @@ test('routing explicitly covers every core stage', () => {
   assert.deepEqual(Object.keys(load().stages).sort(), expectedStages.sort());
 });
 test('routing config is the single source for enabled scopes and separates application runtime from comparison treatment', () => {
-  assert.deepEqual(Object.keys(load().runtimeProfiles).sort(), ['ui-poc-application','ui-poc-comparison']);
+  assert.deepEqual(Object.keys(load().runtimeProfiles).sort(), ['ui-poc-application','ui-poc-comparison','ui-poc-requirements']);
   assert.equal(plan('build-and-test', {}, 'ui-poc-comparison').comparisonTreatment, 'C');
   assert.equal(plan('build-and-test', {}, 'ui-poc-application').comparisonTreatment, null);
   assert.equal(plan('build-and-test', {}, 'ui-poc-application').runtimeProfile, 'application-c');
+  assert.equal(plan('user-stories', {}, 'ui-poc-requirements').comparisonTreatment, null);
+  assert.equal(plan('user-stories', {}, 'ui-poc-requirements').runtimeProfile, 'requirements-c');
   assert.equal(plan('build-and-test', {}, 'poc').pass, false);
+});
+test('requirements loop scope stops after refined-mockups', () => {
+  const contributions = path.join(root, 'poc/ui-poc/contributions');
+  const members = [];
+  for (const phase of fs.readdirSync(contributions)) {
+    for (const file of fs.readdirSync(path.join(contributions, phase))) {
+      const frontmatter = fs.readFileSync(path.join(contributions, phase, file), 'utf8').split(/^---$/m)[1];
+      if (/^ {4}- ui-poc-requirements$/m.test(frontmatter)) members.push(`${phase}/${file.replace(/\.md$/, '')}`);
+    }
+  }
+  assert.deepEqual(members.sort(), [
+    'ideation/intent-capture','ideation/rough-mockups','ideation/scope-definition',
+    'inception/practices-discovery','inception/refined-mockups','inception/requirements-analysis','inception/reverse-engineering','inception/user-stories',
+    'initialization/state-init','initialization/workspace-detection','initialization/workspace-scaffold',
+  ]);
+  const stages = path.join(root, 'core/aidlc-common/stages');
+  for (const phase of fs.readdirSync(stages)) {
+    for (const file of fs.readdirSync(path.join(stages, phase)).filter(f => f.endsWith('.md'))) {
+      assert.doesNotMatch(fs.readFileSync(path.join(stages, phase, file), 'utf8'), /ui-poc-requirements/);
+    }
+  }
 });
 test('ordinary UI routing is distinct, reproducible, and preserves explicit choice semantics', () => {
   const scope=fs.readFileSync(path.join(root,'poc/ui-poc/scopes/ui-poc-application.md'),'utf8');
