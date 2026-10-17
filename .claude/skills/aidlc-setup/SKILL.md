@@ -33,6 +33,8 @@ bun "$SRC/dist/claude/.claude/tools/aidlc.ts" config --from "$SRC/dist/claude" -
 
 Use exactly `SRC/dist/claude` as runtime source and `SRC/poc/ui-poc/dist/claude` as the project-local compose payload. Confirm projection of `tools/ui-poc-c-routing.cjs`, `tools/ui-poc/c-stage-routing.json`, treatment/source-lock/runtime contract, and sensor adapter. Never use `dist` or `.claude` for `--from`, edit generated output, or use `--force`.
 
+For a separate clean target, `bun poc/d-acceleration/fresh-install.ts install --src "$SRC" --product "$PRODUCT"` automates this section, the C payload placement, compose, parity, and preflight below, and `update` handles a later package update without a blanket `--force` (it replaces only composed files whose bytes match `.claude/d-install-receipt.json`); see [`clean-target.md`](../../../poc/d-acceleration/clean-target.md).
+
 Present target, writes, and collisions. Stop on dirty target, differing path, or impact to settings/hooks/skills/plugins. A passing preview is not apply authority. Apply only after approval by rerunning the same command without `--dry-run`.
 
 ## Place the exact C payload
@@ -81,7 +83,7 @@ Report paths, build/dry-run, authorized writes, collisions, exact payload/licens
 
 Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude distribution projects the bounded runtime into `.claude/tools/d-acceleration`; verify that ordinary `/aidlc` uses that installed copy and never reaches back into `SRC`. The setup-only preflight is:
 
-Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted.
+Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted. `fresh-install.ts parity` additionally resolves every installed D, spawned-official, and hook entrypoint with Bun's resolver from PRODUCT and stops on any module outside PRODUCT, differing from the package, or importing a non-built-in package.
 
 Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Setup must not enable autopilot or create project configuration unless the person explicitly requested those exact settings for this product.
 

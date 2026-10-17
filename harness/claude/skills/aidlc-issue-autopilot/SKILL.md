@@ -9,7 +9,11 @@ user-invocable: true
 
 Run the installed fixed-argv controller:
 
-`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir "$PWD" $ARGUMENTS`
+`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir <PRODUCT> $ARGUMENTS`
+
+`<PRODUCT>` is the absolute project directory written out literally (the
+session's working directory); never `$PWD` or any other shell expansion, which
+Claude Code's permission check cannot pre-approve.
 
 The controller is the authority for configuration, exact Issue/list intake,
 case-sensitive labels, claims, lease renewal, assumption evidence, bounded

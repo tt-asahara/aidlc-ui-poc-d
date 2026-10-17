@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkpointHostSession, directiveProgressFingerprint, resolveThroughBoundary } from "../host-session.ts";
+import { activeElapsedMs, checkpointHostSession, directiveProgressFingerprint, leaveHumanWait, resolveThroughBoundary } from "../host-session.ts";
 
 describe("host-driven autopilot session", () => {
   test("resolves a phase to the last active scope stage", () => {
@@ -33,5 +33,28 @@ describe("host-driven autopilot session", () => {
     expect(one.action).toBe("continue");
     expect(checkpointHostSession(one.state, second, 300).action).toBe("continue");
     expect(checkpointHostSession(one.state, first, 300).reason).toBe("no-progress");
+  });
+  test("credits official human-gate wait time against the deadline for unclaimed sessions only", () => {
+    const initial = { startedAt: 0, deadlineMs: 1000, maxSteps: 5, steps: 0, through: null };
+    const waiting = checkpointHostSession(initial, { kind: "ask", stage: "requirements-analysis", gate: true }, 400);
+    expect(waiting).toMatchObject({ reason: "human-gate", state: { waitingSince: 400 } });
+    const parked = { ...waiting.state, awaitingHuman: true };
+    // The person answers 50 minutes later; only 400ms of unattended time was used.
+    expect(activeElapsedMs(parked, 3_000_400)).toBe(400);
+    const resumed = checkpointHostSession(parked, { kind: "run-stage", stage: "requirements-analysis", gate: true }, 3_000_400);
+    expect(resumed).toMatchObject({ action: "continue", state: { pausedMs: 3_000_000 } });
+    expect(resumed.state.waitingSince).toBeUndefined();
+    expect(checkpointHostSession({ ...resumed.state, awaitingHuman: false }, { kind: "run-stage", stage: "code-generation" }, 3_001_000)).toMatchObject({ reason: "deadline-exceeded" });
+    // A claimed Issue session keeps wall-clock semantics while it waits.
+    const claimed = { ...parked, claim: { issueNumber: 1, owner: "o", leaseMs: 100 } };
+    expect(activeElapsedMs(claimed, 3_000_400)).toBe(3_000_400);
+    expect(leaveHumanWait(claimed, 3_000_400).pausedMs).toBe(0);
+    expect(checkpointHostSession(claimed, { kind: "run-stage", stage: "requirements-analysis" }, 3_000_400).reason).toBe("deadline-exceeded");
+  });
+  test("an ended session never continues and the ordinary crossing reports boundary-reached", () => {
+    const ended = { startedAt: 0, deadlineMs: 1000, maxSteps: 5, steps: 1, through: null, endedAt: 10, terminalReason: "heartbeat-stale" };
+    expect(checkpointHostSession(ended, { kind: "run-stage", stage: "intent-capture" }, 20)).toMatchObject({ action: "stop", reason: "session-ended", state: { steps: 1 } });
+    const atBoundary = { startedAt: 0, deadlineMs: 1000, maxSteps: 5, steps: 2, through: "requirements-analysis", lastStage: "requirements-analysis", activeStages: ["intent-capture", "requirements-analysis", "code-generation"] };
+    expect(checkpointHostSession(atBoundary, { kind: "run-stage", stage: "code-generation" }, 20).reason).toBe("boundary-reached");
   });
 });

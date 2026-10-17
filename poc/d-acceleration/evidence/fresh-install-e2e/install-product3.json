@@ -1,0 +1,32 @@
+{
+ "mode": "install",
+ "product": "<SCRATCH>/product3",
+ "cPayload": {
+  "added": 24,
+  "identical": 0
+ },
+ "composedTree": {
+  "sha256": "dcc3687adaedcd86e080c22145eee510c3a15d8ed84781242ca6268b7847bf94",
+  "files": 362
+ },
+ "parity": {
+  "ok": true,
+  "resolvedModules": 120,
+  "entrypoints": 31,
+  "outsideProduct": [],
+  "changedFromDist": [],
+  "dAccelerationTree": {
+   "missing": [],
+   "extra": [],
+   "changed": [],
+   "sha256": "945f28abb911bf7744d0684b249d38e70e115aa8ec210d617a345a2dbdf4b9d5",
+   "files": 29
+  }
+ },
+ "preflight": {
+  "uiBaseline": "C-composed",
+  "acceleration": "D-automatic-for-supported-waves",
+  "missing": [],
+  "runtime": "<SCRATCH>/product3/.claude"
+ }
+}

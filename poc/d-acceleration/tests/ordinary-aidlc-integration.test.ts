@@ -95,14 +95,14 @@ describe("ordinary /aidlc D integration", () => {
 
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {
     const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
-    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir \"$PWD\" --worker claude");
-    expect(skill).toContain("generic-auto-cli.ts start --project-dir \"$PWD\" --description-file");
+    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude");
+    expect(skill).toContain("generic-auto-cli.ts start --project-dir <PRODUCT> --description-file");
     expect(skill).toContain("d-auto-request-<random>.txt");
-    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir \"$PWD\" --directive-file");
+    expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir <PRODUCT> --directive-file");
     expect(skill).toContain("machine_action.kind: \"intent-create\"");
-    expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir \"$PWD\" --directive-file");
-    expect(skill).toContain("generic-auto-cli.ts action-start --project-dir \"$PWD\"");
-    expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir \"$PWD\" --action-token");
+    expect(skill).toContain("generic-auto-cli.ts checkpoint --project-dir <PRODUCT> --directive-file");
+    expect(skill).toContain("generic-auto-cli.ts action-start --project-dir <PRODUCT>");
+    expect(skill).toContain("generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token");
     expect(skill).toContain("Never pass the literal `--auto` to official `orchestrate next`");
     expect(skill).toContain("**Read-only research fanout (optional).**");
     expect(skill).toContain("--fanout-input <fanout-json>");

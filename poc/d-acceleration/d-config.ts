@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 
@@ -141,6 +142,45 @@ export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssue
 export function resolveDParallel(projectDir: string): DParallelConfig { const { project, local } = layers(projectDir); return { enabled: local.parallel?.enabled ?? project.parallel?.enabled ?? true }; }
 export function resolveDConstructionDefaults(projectDir: string): DConstructionDefaults { const { project, local } = layers(projectDir), base = project.constructionDefaults ?? {}, override = local.constructionDefaults ?? {}; const resolved: DConstructionDefaults = { iteration: override.iteration ?? base.iteration ?? "official", execution: override.execution ?? base.execution ?? "official" }; if (resolved.execution === "swarm" && resolved.iteration !== "stage-major") throw new Error("D constructionDefaults.execution=swarm requires constructionDefaults.iteration=stage-major"); return resolveDParallel(projectDir).enabled ? resolved : { iteration: "official", execution: "official" }; }
 export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir) }; }
+
+export type DPrerequisite = { setting: string; requires: string; satisfied: boolean };
+/**
+ * Deterministic prerequisites of every enabled D switch, from configuration
+ * and project facts only (no network, no model). Disabled switches add no
+ * rows, so an all-OFF configuration reports nothing to satisfy. Preflight
+ * prints every row so the person sees exactly which ON switch is not ready.
+ */
+export function checkDPrerequisites(projectDir: string, env: Record<string, string | undefined> = process.env): DPrerequisite[] {
+  const config = resolveDConfig(projectDir), git = resolveDGitPersistence(projectDir);
+  const rows: DPrerequisite[] = [];
+  const need = (setting: string, requires: string, satisfied: boolean) => rows.push({ setting, requires, satisfied });
+  if (config.features.sourceGrounding) need("features.sourceGrounding", "featureInputs.sourceRoots is non-empty", config.featureInputs.sourceRoots.length > 0);
+  if (config.features.specGrounding) need("features.specGrounding", "featureInputs.specRoots is non-empty", config.featureInputs.specRoots.length > 0);
+  if (config.features.requirementIdValidation || config.features.mockupPngGeneration || config.features.visualRegression) {
+    const contract = join(projectDir, ".claude", "tools", "ui-poc", "c-stage-routing.json");
+    for (const name of ["requirementIdValidation", "mockupPngGeneration", "visualRegression"] as const) {
+      if (config.features[name]) need(`features.${name}`, "composed C UI contract (.claude/tools/ui-poc/c-stage-routing.json)", existsSync(contract));
+    }
+  }
+  if (config.issueAutopilot.enabled) {
+    need("issueAutopilot.enabled", "auto.enabled is true", config.auto.enabled);
+    need("issueAutopilot.enabled", "auto.labelAllowlist is non-empty", config.auto.labelAllowlist.length > 0);
+  }
+  if (git.push) need("gitPersistence.push", "gitPersistence.enabled is true", git.enabled);
+  if (git.enabled) need("gitPersistence.enabled", "PRODUCT is a Git repository", existsSync(join(projectDir, ".git")));
+  if (git.enabled && git.push) {
+    const remote = spawnSync("git", ["-C", projectDir, "remote", "get-url", git.remote], { encoding: "utf8" });
+    need("gitPersistence.push", `Git remote "${git.remote}" exists`, remote.status === 0 && Boolean(remote.stdout.trim()));
+  }
+  if (config.decisionIssueSummary.enabled) need("decisionIssueSummary.enabled", "decisionIssueSummary.repository is owner/name", /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.decisionIssueSummary.repository ?? ""));
+  if (config.decisionIssueSummary.send) {
+    need("decisionIssueSummary.send", "decisionIssueSummary.enabled is true", config.decisionIssueSummary.enabled);
+    need("decisionIssueSummary.send", "host env AIDLC_GH_EXECUTABLE_PATH and AIDLC_GH_EXECUTABLE_SHA256 are set", Boolean(env.AIDLC_GH_EXECUTABLE_PATH && env.AIDLC_GH_EXECUTABLE_SHA256));
+  }
+  return rows;
+}
+
+
 
 if (import.meta.main) {
   const [command, projectDir] = process.argv.slice(2);

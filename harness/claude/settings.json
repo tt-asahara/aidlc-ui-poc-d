@@ -7,6 +7,11 @@
       "Edit(/**)",
       "Bash(bun .claude/tools/aidlc.ts engine *)",
       "Bash(bun .claude/tools/aidlc-*)",
+      "Bash(bun .claude/tools/d-acceleration/generic-auto-cli.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/run.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/host-stage-boundary.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-question-controller.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-approval-controller.ts *)",
       "Task",
       "WebSearch"
     ]

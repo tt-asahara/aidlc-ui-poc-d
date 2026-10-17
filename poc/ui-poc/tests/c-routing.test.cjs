@@ -122,6 +122,12 @@ test('rejects an engine scope outside the routing config allowlist', t => {
   const result=verify('code-generation',f.logPath,f.facts,{contextPath:f.contextPath,factsPath:f.factsPath,outputPath:f.outputPath});
   assert.equal(result.pass,false);assert.match(result.findings[0],/not enabled by the routing config/);
 });
+test('reads the scope from the official bulleted aidlc-state.md format', t => {
+  const f=fixture(t),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
+  fs.writeFileSync(f.statePath,'# State\n\n- **Scope**: poc\n- **Current Stage**: code-generation\n- **Last Updated**: attempt-1\n');
+  const result=verify('code-generation',f.logPath,f.facts,{contextPath:f.contextPath,factsPath:f.factsPath,outputPath:f.outputPath});
+  assert.equal(result.pass,false);assert.match(result.findings[0],/not enabled by the routing config: poc$/);
+});
 test('rejects skill-applied evidence for an unselected disabled skill', t => {
   const f=fixture(t),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
   f.events.push({type:'skill-applied',skill:'to-spec',inputs:[],outputs:[]});f.write();

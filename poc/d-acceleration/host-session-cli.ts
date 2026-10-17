@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { checkpointHostSession, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
+import { activeElapsedMs, checkpointHostSession, leaveHumanWait, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
 import { createFileClaimStore, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
 import type { ParallelGuardResult } from "./parallel-guard.ts";
 
@@ -108,7 +108,7 @@ const recoverLifecycle = async (): Promise<{ state: HostSessionState | null; rec
     if (!expectedToken || !record || expectedToken !== record.token) reason = "host-action-orphaned";
     else if (failure?.token === record.token) reason = failure.reason ?? "heartbeat-failed";
     else if (existsSync(issueAutopilotRuntimePaths(projectDir).stop)) reason = "operator-stop";
-    else if (Date.now() - state.startedAt >= state.deadlineMs) reason = "deadline-exceeded";
+    else if (activeElapsedMs(state) >= state.deadlineMs) reason = "deadline-exceeded";
     else if (record.status === "failed") reason = "heartbeat-failed";
     else if (!pidAlive(record.pid) || record.expiresAt <= Date.now()) reason = "heartbeat-stale";
     if (!reason && !claimIsOwned(state)) reason = "claim-lost";
@@ -180,7 +180,7 @@ if (mode === "heartbeat-worker") {
     if (record.token !== token || existsSync(heartbeatStop)) break;
     const state = readState();
     const reason = existsSync(issueAutopilotRuntimePaths(projectDir).stop) ? "operator-stop"
-      : Date.now() - state.startedAt >= state.deadlineMs ? "deadline-exceeded"
+      : activeElapsedMs(state) >= state.deadlineMs ? "deadline-exceeded"
       : await renewResilient(state) !== "renewed" ? "claim-lost" : null;
     if (reason) {
       writeHeartbeat({ ...record, pid: process.pid, status: "failed", lastRenewedAt: Date.now(), expiresAt: Date.now() });
@@ -203,7 +203,7 @@ if (mode === "action-start") {
     if (await renew(current) !== "renewed") return { action: "stop", reason: "claim-lost", state: await terminalize(current, "claim-lost") };
     remove(heartbeatStop); remove(heartbeatFailed);
     const token = randomUUID(), startedAt = Date.now();
-    save({ ...current, hostAction: { token, startedAt }, awaitingHuman: false });
+    save({ ...leaveHumanWait(current, startedAt), hostAction: { token, startedAt }, awaitingHuman: false });
     writeHeartbeat({ token, pid: null, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + (current.claim?.leaseMs ?? 30_000), status: "starting" });
     try {
       const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
@@ -285,7 +285,8 @@ try {
   } else {
     const result = checkpointHostSession(state, directive);
     let finalState: HostSessionState;
-    if (result.action === "stop" && result.reason !== "human-gate") finalState = await finish(result.state, result.reason ?? "terminal-stop");
+    if (result.reason === "session-ended") finalState = result.state;
+    else if (result.action === "stop" && result.reason !== "human-gate") finalState = await finish(result.state, result.reason ?? "terminal-stop");
     else if (result.reason === "human-gate" && result.state.claim) {
       const leaseMs = result.state.claim.leaseMs;
       const guarded = await withLifecycleLock(async () => {

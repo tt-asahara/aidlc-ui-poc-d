@@ -109,6 +109,21 @@ const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at
     expect(existsSync(join(root, "nope"))).toBeFalse();
   });
 
+  test("consumes only the skill's request handoff file, in every outcome", () => {
+    for (const auto of [{ enabled: true, sessionOnly: false }, { enabled: false, sessionOnly: false }]) {
+      const root = fixture({ auto });
+      const handoff = join(root, ".aidlc-engine", "d-auto-request-a1B2_c3.txt");
+      writeFileSync(handoff, "Build a tiny todo CLI");
+      const result = run(root, ["start", "--description-file", ".aidlc-engine/d-auto-request-a1B2_c3.txt"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(handoff)).toBeFalse();
+      const lookalike = join(root, ".aidlc-engine", "d-auto-request-x.txt.keep");
+      writeFileSync(lookalike, "Build it");
+      run(root, ["start", "--description-file", ".aidlc-engine/d-auto-request-x.txt.keep"]);
+      expect(existsSync(lookalike)).toBeTrue();
+    }
+  });
+
   test("fails closed when auto is disabled or session-only", () => {
     for (const auto of [{ enabled: false, sessionOnly: false }, { enabled: true, sessionOnly: true }]) {
       const root = fixture({ auto });

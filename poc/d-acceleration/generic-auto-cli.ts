@@ -83,13 +83,19 @@ function confinedRegularFile(input: string): string {
 const auto = resolveDAutomation(product);
 const constructionDefaults = resolveDConstructionDefaults(product);
 const parallel = resolveDParallel(product);
+// A request file named by the skill's handoff contract is controller-owned:
+// the controller removes it once read, so the host needs no separate `rm`
+// (which Claude Code cannot pre-approve safely). Any other caller-supplied
+// project file is read but never deleted.
+const REQUEST_HANDOFF = /^\.aidlc-engine\/d-auto-request-[A-Za-z0-9_-]{1,64}\.txt$/;
 if (command === "start") {
-  if (!auto.enabled) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
-  if (auto.sessionOnly) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "session-only" })}\n`); process.exit(0); }
   const descriptionFile = value("--description-file");
   if (!descriptionFile) throw new Error("start requires --description-file");
   const path = confinedRegularFile(descriptionFile);
   const description = readFileSync(path, "utf8");
+  if (REQUEST_HANDOFF.test(relative(product, path).split("\\").join("/"))) unlinkSync(path);
+  if (!auto.enabled) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "disabled" })}\n`); process.exit(0); }
+  if (auto.sessionOnly) { process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "session-only" })}\n`); process.exit(0); }
   if (!description.trim()) throw new Error("description must not be empty");
   // The user's text is one argv value, never shell source. The official router
   // owns scope selection and intent creation; --auto is deliberately absent.
