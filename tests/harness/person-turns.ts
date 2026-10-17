@@ -194,9 +194,14 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         (row.event === "GATE_REJECTED" || row.event === "STAGE_AWAITING_APPROVAL");
       const construction = audit().findStageBySlug(stage)?.phase === "construction";
       const checkpoint = auditBlockField(row.block, "Checkpoint");
-      const engineApproved = row.event === "GATE_APPROVED" && construction && (
+      const delegatedAiApproved = row.event === "GATE_APPROVED" &&
+        auditBlockField(row.block, "Decision Actor") === "AI" &&
+        auditBlockField(row.block, "Decision Authority") === "explicit user delegation" &&
+        /^[0-9a-f]{64}$/.test(auditBlockField(row.block, "Decision SHA256") ?? "") &&
+        /^[0-9a-f]{64}$/.test(auditBlockField(row.block, "Delegation Evidence SHA256") ?? "");
+      const engineApproved = delegatedAiApproved || (row.event === "GATE_APPROVED" && construction && (
         (autonomous && checkpoint !== "walking-skeleton") || (checkpoint === null && covers(stage))
-      );
+      ));
       let since: number | undefined;
       let reply = true;
       let answer = false;

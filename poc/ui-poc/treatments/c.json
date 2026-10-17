@@ -1,0 +1,108 @@
+{
+  "arm": "C",
+  "plugin": "ui-poc@0.1.0",
+  "scope": "ui-poc-comparison",
+  "upstream": {
+    "version": "2.11.0",
+    "commit": "6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a"
+  },
+  "status": "historical-component-selected; stage-invocation-not-run",
+  "skills": {
+    "content": [
+      "same Matt payload as B",
+      "pbakaus/impeccable@209444a9d552c18bcaa74e26bf66a25fc568a767:.codex/skills/frontend-design/",
+      "conditional teach-impeccable dependency at the same commit",
+      "LICENSE",
+      "NOTICE.md"
+    ],
+    "status": "SELECTED historical official design component; not latest full Impeccable",
+    "collision_rule": "Do not load Anthropic frontend-design in C. Preserve one design-skill identity per isolated repository.",
+    "selection_ref": "selected_C"
+  },
+  "source_lock": "source-lock.json",
+  "actual_stage_read_evidence": null,
+  "selection": {
+    "status": "installed from pinned historical component; live stage execution not verified",
+    "label": "Matt + historical official Impeccable frontend-design component",
+    "repository": "pbakaus/impeccable",
+    "commit": "209444a9d552c18bcaa74e26bf66a25fc568a767",
+    "component": ".codex/skills/frontend-design/",
+    "dependency": ".codex/skills/teach-impeccable/SKILL.md",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "path": ".codex/skills/frontend-design/SKILL.md",
+        "git_blob_sha": "a776c78dd8da099c5d4530bfb914db7b72305fb6",
+        "bytes": 9550
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/color-and-contrast.md",
+        "git_blob_sha": "77aaf03296ef84f3699268dab9c605502c883938",
+        "bytes": 5291
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/interaction-design.md",
+        "git_blob_sha": "19d6809a8fbd6e062adc26c0ca469f07371edcba",
+        "bytes": 7085
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/motion-design.md",
+        "git_blob_sha": "eff2788b4aea3b159f3819bdde97c827204fd32d",
+        "bytes": 4753
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/responsive-design.md",
+        "git_blob_sha": "74f5a10013f1f37e1938c20b9274be927d82db81",
+        "bytes": 3464
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/spatial-design.md",
+        "git_blob_sha": "27c8e74f3d6a3a52133d28d9e07f76b717bc67bc",
+        "bytes": 3545
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/typography.md",
+        "git_blob_sha": "fc201c8a6f7736ef23594fcaf079ed23f306dee3",
+        "bytes": 5962
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/ux-writing.md",
+        "git_blob_sha": "42109217a651769c6a9de4475a87cc2855581f6a",
+        "bytes": 4330
+      },
+      {
+        "path": ".codex/skills/teach-impeccable/SKILL.md",
+        "git_blob_sha": "5267bf59970423b29c3b0b500510b7b848565d1b",
+        "bytes": 2828
+      },
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9",
+        "bytes": 10766
+      },
+      {
+        "path": "NOTICE.md",
+        "git_blob_sha": "ddf948fa075abc57767390b25dc97a9cd7933509",
+        "bytes": 602
+      }
+    ],
+    "notes": [
+      "Eight design Markdown files plus conditional teach-impeccable dependency; preserve seven relative references.",
+      "Use Codex-expanded payload, not unresolved source templates. Same confirmed Design Context can avoid setup rewriting harness instructions.",
+      "Entire historical package was not text-only: critique/scripts/detect-antipatterns.mjs already existed. Latest wholly prompt-only release not established."
+    ],
+    "excluded": [
+      "latest full Impeccable engine/runtime",
+      "hooks",
+      "packaged subagents",
+      "critique/scripts/detect-antipatterns.mjs",
+      "Anthropic frontend-design in C"
+    ],
+    "installation_layout": {
+      "design": ".agents/skills/frontend-design/",
+      "conditional_dependency": ".agents/skills/teach-impeccable/",
+      "licenses": "Preserve LICENSE and NOTICE.md with the historical component payload."
+    },
+    "harness_policy": "Use identical AI-DLC harness in A/B/C. Preserve relative reference paths. No full-package runtime or hooks are authorized by this selection."
+  }
+}

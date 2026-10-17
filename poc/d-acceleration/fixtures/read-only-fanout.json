@@ -1,0 +1,37 @@
+{
+  "directive": {
+    "kind": "run-stage",
+    "stage": "market-research",
+    "phase": "ideation",
+    "mode": "inline",
+    "gate": false,
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [],
+    "inline_context_paths": ["core/agents/aidlc-product-agent.md"],
+    "memory_path": "aidlc/spaces/default/intents/replace-me/ideation/market-research/memory.md",
+    "consumes": [],
+    "produces": ["aidlc/spaces/default/intents/replace-me/ideation/market-research/research.md"],
+    "rules_in_context": [],
+    "sensors_applicable": [],
+    "ceremony": { "sensors": "on", "learnings": "on", "summary_confirmation": "on", "plan_approval": "on", "collaborators": "off" },
+    "stage_file": "core/aidlc-common/stages/ideation/market-research.md"
+  },
+  "modelCatalog": {
+    "balanced": "replace-with-caller-supplied-balanced-model-request"
+  },
+  "maxParallel": 2,
+  "tasks": [
+    {
+      "id": "existing-constraints",
+      "agent": "aidlc-architect-agent",
+      "objective": "Extract existing architectural constraints and cite their source paths.",
+      "evidencePaths": ["README.md", "core"]
+    },
+    {
+      "id": "quality-evidence",
+      "agent": "aidlc-quality-agent",
+      "objective": "Identify existing test and quality evidence and cite its source paths.",
+      "evidencePaths": ["tests"]
+    }
+  ]
+}

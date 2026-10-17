@@ -1,0 +1,18 @@
+{
+  "maxParallel": 3,
+  "modelCatalog": { "fast": "fixture-fast", "balanced": "fixture-balanced", "judgment": "fixture-judgment" },
+  "clef": { "enabled": false },
+  "directives": [
+    { "kind": "wave", "stage": "functional-design", "entries": ["fd-a", "fd-b", "fd-c"] }
+  ],
+  "tasks": [
+    { "id": "requirements", "stage": "requirements-analysis", "dependsOn": [], "estimatedMs": 120, "taskType": "design", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["requirements.md"] },
+    { "id": "fd-a", "stage": "functional-design", "unit": "a", "dependsOn": ["requirements"], "estimatedMs": 150, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["a/design.md"] },
+    { "id": "fd-b", "stage": "functional-design", "unit": "b", "dependsOn": ["requirements"], "estimatedMs": 100, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["b/design.md"] },
+    { "id": "fd-c", "stage": "functional-design", "unit": "c", "dependsOn": ["requirements"], "estimatedMs": 130, "taskType": "design", "difficulty": "medium", "risk": "low", "execution": "official-wave", "writeSet": ["c/design.md"] },
+    { "id": "approval", "stage": "code-generation", "dependsOn": ["fd-a", "fd-b", "fd-c"], "estimatedMs": 10, "taskType": "approval", "difficulty": "low", "risk": "high", "execution": "serial", "writeSet": ["approval"] },
+    { "id": "code-a", "stage": "code-generation", "unit": "a", "dependsOn": ["approval"], "estimatedMs": 240, "taskType": "implementation", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["source"] },
+    { "id": "code-b", "stage": "code-generation", "unit": "b", "dependsOn": ["code-a"], "estimatedMs": 220, "taskType": "implementation", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["source"] },
+    { "id": "review", "stage": "build-and-test", "dependsOn": ["code-a", "code-b"], "estimatedMs": 90, "taskType": "review", "difficulty": "medium", "risk": "medium", "execution": "serial", "writeSet": ["receipt"] }
+  ]
+}

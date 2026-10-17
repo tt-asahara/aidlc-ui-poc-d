@@ -50,6 +50,14 @@ function project(): string {
 }
 
 describe("person-turn check", () => {
+  test("a hash-bound delegated AI gate is not misreported as the person's decision", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "requirements-analysis" });
+    row(dir, "GATE_APPROVED", { Stage: "requirements-analysis", "Decision Actor": "AI", "Decision Authority": "explicit user delegation", "Decision SHA256": "a".repeat(64), "Delegation Evidence SHA256": "b".repeat(64) });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
   test("an approval the agent recorded with no turn after the gate opened is flagged", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

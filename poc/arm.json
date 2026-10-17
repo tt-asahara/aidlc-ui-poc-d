@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "arm": "D",
+  "treatment_config": "ui-poc/treatments/c.json",
+  "runtime_treatment_config": "ui-poc/tools/ui-poc/treatments/c.json",
+  "source_lock": "ui-poc/treatments/source-lock.json",
+  "skill_installation": "skill-installation.json",
+  "acceleration": "d-acceleration/stage-policy.json",
+  "ui_baseline": "C",
+  "status": "pinned-c-ui-baseline-plus-opt-in-d-acceleration; official-plugin-validation-not-run; stage-invocation-not-run"
+}

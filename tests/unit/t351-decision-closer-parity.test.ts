@@ -129,6 +129,10 @@ describe("t351 decision closer parity (#1466)", () => {
     }
   });
 
+  test("AI provenance never closes a human or protected decision", () => {
+    expect(decisionAnsweredBy(block({ Decision: "ordinary question" }), "AI_QUESTION_ANSWERED", block({ "AI Decision ID": "a".repeat(64) }))).toBe(false);
+  });
+
   for (const [file, name] of [
     ["core/tools/aidlc-lib.ts", "hasPendingDecision"],
     ["core/tools/aidlc-log.ts", "hasPendingDecisionAtGate"],
