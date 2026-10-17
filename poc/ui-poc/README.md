@@ -34,6 +34,26 @@ proposes stage-major execution and official Code Generation swarm; the person
 still decides at the official gate. Opus defaults, routing evidence, and D's
 four automatic design waves do not depend on wording them into this prompt.
 
+## Requirements-only loop
+
+To grow requirements and the `/aidlc --doc` design document set without
+building, select the requirements loop explicitly (UI keywords such as
+`Webアプリ` otherwise propose `ui-poc-application` first):
+
+```text
+/aidlc --scope ui-poc-requirements
+```
+
+`ui-poc-requirements` runs intent-capture, scope-definition, rough-mockups,
+reverse-engineering (brownfield only), practices-discovery,
+requirements-analysis, user-stories and refined-mockups with the same HTML
+evidence handoffs and official gates, and nothing after them. One round is one
+intent: start the next round as a new intent, or reopen the current one with
+`/aidlc --stage requirements-analysis`. Run `/aidlc --doc` after each round; it
+merges every intent into the product-level design set. Basic and detailed
+design chapters stay "未検討" because this scope runs no design stage. To build,
+start a new intent under `ui-poc-application`.
+
 Arm C's full 33-stage matrix is `docs/c-stage-skill-matrix.md`; routing is `tools/ui-poc-c-routing.cjs` over `tools/ui-poc/c-stage-routing.json`. The verifier binds routing evidence to engine state and pinned files. It cannot prove model cognition or distinguish different attempts whose official engine state bytes are identical.
 
 The source-contract check needs the inspected pinned source directory and corresponding Git tree JSON. You may set UI_POC_SOURCE_ROOT and UI_POC_UPSTREAM_TREE instead of its CLI flags. The sensor command is an invocation example, not a completed live check. Without valid evidence and an independently managed `UI_POC_APPROVAL_LEDGER`, the sensor fails closed. See docs/contract.md for the format and trust assumptions.
