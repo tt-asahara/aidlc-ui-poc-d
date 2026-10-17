@@ -1,0 +1,26 @@
+# disposable product: bun dist/claude/.claude/tools/aidlc.ts config --from dist/claude --harness claude --mcp none; then ui-poc compose.ts x3 (source tree bb813a16)
+## stage files carrying a ui-poc sentinel fragment
+.claude/aidlc-common/stages/construction/build-and-test.md <!-- plugin:ui-poc:after-step:1:100:a08244a1 sha256=740f12ab7303a914dcfa0be80e81a9d3ffa0e331d380a59152855b58c58afc54
+.claude/aidlc-common/stages/construction/code-generation.md <!-- plugin:ui-poc:before-step:1:100:af876078 sha256=4ef00658a56dc109b9752c82be209cc131728e1af1339d0f1ab60563cd32b03d
+.claude/aidlc-common/stages/construction/functional-design.md <!-- plugin:ui-poc:after-step:1:100:395da4cc sha256=f92399b8ad2cc6d4b9483b405bfa4cfd32dcf2d60da26170d51eeb673614d5e5
+.claude/aidlc-common/stages/ideation/rough-mockups.md <!-- plugin:ui-poc:before-step:4:100:ea432144 sha256=309c21ac093951dc428092721a187358b4dd32405ea248e0d9d30f3e448fe6de
+.claude/aidlc-common/stages/inception/domain-design.md <!-- plugin:ui-poc:after-step:1:100:cbbb44dd sha256=2f0a259c3a57631eacb941a4e4d1efec7069c0f521aba967286cfabdf5b585fb
+.claude/aidlc-common/stages/inception/refined-mockups.md <!-- plugin:ui-poc:before-step:4:100:2a6ceaa4 sha256=d146a223320b99ec72ea79c6365e31d0fddd6b5f5a1e7c420e4e2046eac850e2
+.claude/aidlc-common/stages/inception/requirements-analysis.md <!-- plugin:ui-poc:after-step:1:100:e1eadf49 sha256=95db26a5b8d2282466306dbdb35f22af4cf5a1a7b851e39e3752b30217c3232f
+## stage files with ui-poc only in frontmatter (scope membership/produces/sensors), no fragment: infrastructure-design nfr-design nfr-requirements approval-handoff intent-capture scope-definition team-formation contract-design delivery-planning practices-discovery reverse-engineering units-generation user-stories state-init workspace-detection workspace-scaffold 
+## idempotency: sha256 over sorted .claude file hashes after pass 2 and pass 3
+7c51c60b1014c94e7cf5ecedf80384c8c6c9a9b6babf62c9e3043f47d17234b2 (both)
+## routing plan per stage (facts all true where required) -> decision/skill
+rough-mockups: pass=True [('teach-impeccable', 'use'), ('prototype-ui', 'use'), ('frontend-design', 'use'), ('prototype-logic', 'use')]
+requirements-analysis: pass=True [('grilling', 'use'), ('domain-modeling', 'use')]
+user-stories: pass=True []
+refined-mockups: pass=False []
+domain-design: pass=False []
+functional-design: pass=True []
+code-generation: pass=True [('frontend-design', 'use')]
+build-and-test: pass=True []
+## Skill-tool registration check: .agents/skills/* entrypoints are not under .claude/skills
+none of the C skills is a registered Claude Code skill
+## rerun with the stage-specific facts the router demanded (missing fact = hard stop, shown above as pass=False)
+refined-mockups: pass=True [('frontend-design', 'use'), ('prototype-ui', 'use')]
+domain-design: pass=True [('domain-modeling', 'use')]

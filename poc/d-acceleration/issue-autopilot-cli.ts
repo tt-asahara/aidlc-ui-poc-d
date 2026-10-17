@@ -9,6 +9,7 @@ import { runIssueAutopilot, issueAutopilotStatus, intakeBindingKey, canonicalGit
 import { createFileAssumptionLedger, createFileClaimStore, createFileIntakeBindingStore, createGhIssueSource, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
 import { createClaudeIssueAssessor } from "./issue-ambiguity-assessor.ts";
 import { resolveThroughBoundary, type HostSessionState } from "./host-session.ts";
+import { ghAuthPreflight, githubHostFromRepository, spawnGhRunner } from "./gh-host.ts";
 
 type Json = Record<string, unknown>;
 class OfficialCommandError extends Error {
@@ -315,8 +316,30 @@ if (command === "repair") {
 const issueNumber = /^\d+$/.test(command) ? Number(command) : undefined;
 const requiredLabel = issueNumber || command === "list" ? undefined : command;
 const effective = requiredLabel ? { ...config, labelAllowlist: [...config.labelAllowlist, requiredLabel] } : config;
-const issues = createGhIssueSource({ cwd: projectDir, repository, executable: value("--gh-executable") });
-if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", selectionStrategy: "issue-number-ascending", issues: await issues.list() }, null, 2)}\n`); process.exit(0); }
+// GitHub is touched only through this source. Before its first read, fail
+// closed when gh has no login for the exact host the repository lives on (a
+// login for another host never satisfies this). Read failures (API error,
+// missing label data, malformed JSON) are a clean stop; reads happen before
+// any claim or intake binding, so nothing is left behind.
+const ghExecutable = value("--gh-executable") ?? "gh";
+class GitHubReadError extends Error { constructor(message: string, readonly payload: Json) { super(message); } }
+let ghAuthChecked = false;
+const ghIssues = createGhIssueSource({ cwd: projectDir, repository, executable: ghExecutable });
+const guarded = async <T>(read: () => Promise<T>): Promise<T> => {
+  if (!ghAuthChecked) {
+    const auth = await ghAuthPreflight(githubHostFromRepository(repository), spawnGhRunner(ghExecutable, projectDir));
+    if (!auth.ok) throw new GitHubReadError(auth.reason, { status: "stopped", reason: auth.reason, host: auth.host, repository, nextStep: auth.nextStep, detail: auth.detail });
+    ghAuthChecked = true;
+  }
+  try { return await read(); }
+  catch (error) { const detail = (error instanceof Error ? error.message : String(error)).slice(0, 400); throw new GitHubReadError(detail, { status: "stopped", reason: "github-read-failed", repository, detail }); }
+};
+const issues: typeof ghIssues = { get: (number) => guarded(() => ghIssues.get(number)), list: () => guarded(() => ghIssues.list()) };
+const stopOnReadFailure = (error: unknown): never => {
+  if (!(error instanceof GitHubReadError)) throw error;
+  process.stdout.write(`${JSON.stringify(error.payload, null, 2)}\n`); process.exit(0);
+};
+if (command === "list") { process.stdout.write(`${JSON.stringify({ status: "selection-required", selectionStrategy: "issue-number-ascending", issues: await issues.list().catch(stopOnReadFailure) }, null, 2)}\n`); process.exit(0); }
 const explicitState = issueNumber ? issueIntentState(issueNumber) : "none";
 if (issueNumber && explicitState === "unknown") {
   process.stdout.write(`${JSON.stringify({ status: "stopped", reason: "reconcile-required", issueNumber, detail: "official intent state scan is incomplete or unreadable" })}\n`); process.exit(0);
@@ -347,7 +370,7 @@ const result = await runIssueAutopilot({
     assessor: ambiguityAssessor,
     engine: new OfficialEngine(),
   },
-});
+}).catch(stopOnReadFailure);
 const selection = issueNumber
   ? { mode: "explicit-number", selectedIssueNumber: issueNumber }
   : { mode: "label-poll", strategy: "issue-number-ascending", reason: "first eligible unbound Issue in ascending issue-number order", eligibleIssueNumbers, selectedIssueNumber: result.issueNumber ?? null };

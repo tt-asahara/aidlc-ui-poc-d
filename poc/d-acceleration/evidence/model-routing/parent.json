@@ -1,0 +1,117 @@
+{
+  "meta": {
+    "cli": "2.1.302 (Claude Code)",
+    "recordedAt": "2026-10-17T05:54:43.943Z",
+    "observedParentSessionModel": "not-observable",
+    "parentEffortEnv": "medium"
+  },
+  "kind": "parent-haiku-worker-opus",
+  "rows": [
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11304,
+        "cacheCreationInputTokens": 7402,
+        "costUSD": 0.061564799999999996,
+        "costBasis": "list",
+        "durationMs": 1887,
+        "durationApiMs": 1422
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3813,
+      "resultText": "OK",
+      "stderrHead": "",
+      "simulatedParentModel": "claude-haiku-5-5",
+      "inheritedEnv": [
+        "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL"
+      ]
+    },
+    {
+      "workerType": "read-only-fanout-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 4221,
+        "cacheCreationInputTokens": 777,
+        "costUSD": 0.0071482,
+        "costBasis": "list",
+        "durationMs": 1552,
+        "durationApiMs": 1257
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3355,
+      "resultText": "OK",
+      "stderrHead": "",
+      "simulatedParentModel": "claude-haiku-5-5",
+      "inheritedEnv": [
+        "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL"
+      ]
+    },
+    {
+      "workerType": "control-no-model-flag",
+      "requestedModel": null,
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": null,
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "unverified",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11697,
+        "cacheCreationInputTokens": 8185,
+        "costUSD": 0.00175617,
+        "costBasis": "list",
+        "durationMs": 1282,
+        "durationApiMs": 890
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3931,
+      "resultText": "OK",
+      "stderrHead": "",
+      "simulatedParentModel": "claude-haiku-5-5"
+    }
+  ],
+  "unauthorizedSubstitution": false,
+  "substituted": []
+}

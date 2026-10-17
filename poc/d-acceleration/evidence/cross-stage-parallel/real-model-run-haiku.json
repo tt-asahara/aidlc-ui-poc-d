@@ -1,0 +1,82 @@
+{
+  "requestedModel": "haiku",
+  "wallMs": 15059,
+  "speculation": {
+    "action": "speculation-recorded",
+    "launched": [
+      "integration-constraints",
+      "regulatory-scan"
+    ],
+    "completed": [
+      {
+        "taskId": "regulatory-scan",
+        "merkleRoot": "fc0f70d0587bd0ee2a0ea57a35be04adf83ce1bd756f904e56afc2cfde0ae534"
+      },
+      {
+        "taskId": "integration-constraints",
+        "merkleRoot": "46ffec413f9293c7557fba4f0e4791781f4e916c1c8882087fed286e56cc749b"
+      }
+    ],
+    "failed": [],
+    "deferred": [
+      {
+        "taskId": "build-vs-buy-risk",
+        "eligible": false,
+        "reason": "dependent-on-gated-stage",
+        "detail": "aidlc/spaces/default/intents/i1/ideation/market-research/build-vs-buy.md"
+      }
+    ],
+    "intervals": [
+      {
+        "taskId": "regulatory-scan",
+        "mode": "speculative",
+        "startedAt": 211,
+        "endedAt": 14673
+      },
+      {
+        "taskId": "integration-constraints",
+        "mode": "speculative",
+        "startedAt": 200,
+        "endedAt": 14972
+      }
+    ],
+    "maxConcurrency": 2
+  },
+  "routing": [
+    {
+      "tier": "judgment",
+      "effort": "high",
+      "requestedModel": "haiku",
+      "runtimeReportedModel": null
+    },
+    {
+      "tier": "judgment",
+      "effort": "high",
+      "requestedModel": "haiku",
+      "runtimeReportedModel": null
+    }
+  ],
+  "consumed": {
+    "action": "lead-integration-required",
+    "serialFallback": [
+      "build-vs-buy-risk"
+    ],
+    "discarded": [],
+    "drafts": [
+      {
+        "taskId": "integration-constraints",
+        "merkleRoot": "46ffec413f9293c7557fba4f0e4791781f4e916c1c8882087fed286e56cc749b",
+        "draftSha256": "8125cba82ac5715972a4ad262141d03937f19d3183ede3ad699be8df3d3c4c85",
+        "notesChars": 2359,
+        "notesHead": "**Draft pre-research, not an official artifact or decision.** The only input is `aidlc/spaces/default/intents/i1/ideation/intent-capture/intent-statement.md`, which is labelled \"Synthetic.\" Every finding below comes from that file.\n\n- **All state lives in the browser, with no server sync.** The file says \"no backend in v1.\" Notes are tied to one browser profile and origin, so they can't be shared "
+      },
+      {
+        "taskId": "regulatory-scan",
+        "merkleRoot": "fc0f70d0587bd0ee2a0ea57a35be04adf83ce1bd756f904e56afc2cfde0ae534",
+        "draftSha256": "f0d6dc2edb5f65bcd169982320afa3eb926c8dac2e06c4fb34b129b392b989c2",
+        "notesChars": 2150,
+        "notesHead": "Draft pre-research notes (D-private). These are not an official artifact, approval, or decision. All points come from `aidlc/spaces/default/intents/i1/ideation/intent-capture/intent-statement.md`, which is labeled \"Synthetic,\" so treat them as provisional.\n\n- **Data classification of note content:** The intent doesn't say what notes will contain. Open question: could they hold personal data (names"
+      }
+    ]
+  }
+}

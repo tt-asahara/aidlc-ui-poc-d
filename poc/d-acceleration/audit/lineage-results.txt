@@ -1,0 +1,124 @@
+# lineage.sh  date=2026-10-17T06:05:58Z  D_REPO_HEAD=52447d81411883765caccca26fbabee7e287d265
+
+## remote heads (git ls-remote, pull refs omitted)
+### aidlc-ui-poc-a
+3c8c0c5237de5dda77489e6a83de2fb32d78a51c	HEAD
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/heads/baseline/aidlc-v2.11.0
+e7a685538878e1cf66743f6aca934a9199a983a3	refs/heads/feature/aidlc-setup-skill
+ad6afd9e2dd3901e09b17cb77713bf2a4ffe181b	refs/heads/feature/ui-poc-foundation
+a699de1c28aaee3af4a0bb698b2aa8e40d9f6f5a	refs/heads/integration/aidlc-v2.11.0-ui-poc-a
+62a5794d0b538db3dc96066cfbe205207df72a9b	refs/heads/issue/6-formal-workflow-probe
+3c8c0c5237de5dda77489e6a83de2fb32d78a51c	refs/heads/main
+### aidlc-ui-poc-b
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	HEAD
+dd88c39f348b169236ec331ae0052e289a0de99c	refs/heads/feature/aidlc-setup-skill
+eaccab0f0370859e50e32c7927dd2571ebf4fde5	refs/heads/feature/ui-poc-b-stage-harness
+2957057207c3a9d4471838492ccafe3dc0770596	refs/heads/feature/ui-poc-foundation
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/heads/main
+4079edbea52cf4d3c80e580825da3a4dd8213271	refs/tags/v2.11.0
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/tags/v2.11.0^{}
+6cba691dd6d6c0b8867958057e780d5112fcfc1a	refs/tags/v2.11.1-preview.20261014.1
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/tags/v2.11.1-preview.20261014.1^{}
+### aidlc-ui-poc-c
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	HEAD
+c738518615c91bb5968f2fea4e1c670f4eefdac8	refs/heads/feature/aidlc-setup-skill
+e0a522a201f36eb4c6c36aa221b61e5c5124ff37	refs/heads/feature/ui-poc-c-stage-harness
+442b44d09f339cb6425098b0d25811d4c3ca6e92	refs/heads/feature/ui-poc-foundation
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/heads/main
+4079edbea52cf4d3c80e580825da3a4dd8213271	refs/tags/v2.11.0
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/tags/v2.11.0^{}
+45ea1b4fede6df2a94fbf90dd56b4dfa8b180378	refs/tags/v2.11.1-preview.20261014.1
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/tags/v2.11.1-preview.20261014.1^{}
+### aidlc-ui-poc-d
+3bde2496bffd0088ed50f07a5ef03cf10c24e88a	HEAD
+52447d81411883765caccca26fbabee7e287d265	refs/heads/develop
+2c58296539b7ea5babc947139a54d287e92c998f	refs/heads/feat/auto-d-acceleration
+3c90e0259772def5994a5a3497095845231d05c1	refs/heads/feat/d-automation-intake-grounding
+29f4820d11081a771bccb23301db3a796f4e380c	refs/heads/feat/ui-fidelity-contract
+86f1ec7f9fe4bdb062e2414411c3431ac764beb5	refs/heads/feature/aidlc-setup-skill
+7e9a86c4166451732a63833bb1aa767aaf63c54b	refs/heads/feature/ui-poc-d-acceleration
+44c1a67f4ee662d22917c79cb8108bca0ffaaa06	refs/heads/fix/inherit-c-ui-layer
+3bde2496bffd0088ed50f07a5ef03cf10c24e88a	refs/heads/main
+9c3ff31c047568898b724f8eb625a6c63aba136b	refs/tags/v2.11.1-preview.20261016.1
+6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a	refs/tags/v2.11.1-preview.20261016.1^{}
+
+## per-branch divergence from upstream v2.11.0 (6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a)
+a baseline/aidlc-v2.11.0 tip=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=0
+a feature/aidlc-setup-skill tip=e7a685538878e1cf66743f6aca934a9199a983a3 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=15
+a feature/ui-poc-foundation tip=ad6afd9e2dd3901e09b17cb77713bf2a4ffe181b merge-base=none ahead=5
+a integration/aidlc-v2.11.0-ui-poc-a tip=a699de1c28aaee3af4a0bb698b2aa8e40d9f6f5a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=11
+a issue/6-formal-workflow-probe tip=62a5794d0b538db3dc96066cfbe205207df72a9b merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=12
+a main tip=3c8c0c5237de5dda77489e6a83de2fb32d78a51c merge-base=none ahead=1
+b feature/aidlc-setup-skill tip=dd88c39f348b169236ec331ae0052e289a0de99c merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=10
+b feature/ui-poc-b-stage-harness tip=eaccab0f0370859e50e32c7927dd2571ebf4fde5 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=9
+b feature/ui-poc-foundation tip=2957057207c3a9d4471838492ccafe3dc0770596 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=5
+b main tip=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=0
+c feature/aidlc-setup-skill tip=c738518615c91bb5968f2fea4e1c670f4eefdac8 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=9
+c feature/ui-poc-c-stage-harness tip=e0a522a201f36eb4c6c36aa221b61e5c5124ff37 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=8
+c feature/ui-poc-foundation tip=442b44d09f339cb6425098b0d25811d4c3ca6e92 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=5
+c main tip=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=0
+d origin tip=3bde2496bffd0088ed50f07a5ef03cf10c24e88a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=67 ancestor-of-29f4820d=no
+d origin/develop tip=52447d81411883765caccca26fbabee7e287d265 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=67 ancestor-of-29f4820d=no
+d origin/feat/auto-d-acceleration tip=2c58296539b7ea5babc947139a54d287e92c998f merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=38 ancestor-of-29f4820d=yes
+d origin/feat/d-automation-intake-grounding tip=3c90e0259772def5994a5a3497095845231d05c1 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=52 ancestor-of-29f4820d=yes
+d origin/feat/ui-fidelity-contract tip=29f4820d11081a771bccb23301db3a796f4e380c merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=66 ancestor-of-29f4820d=yes
+d origin/feature/aidlc-setup-skill tip=86f1ec7f9fe4bdb062e2414411c3431ac764beb5 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=14 ancestor-of-29f4820d=yes
+d origin/feature/ui-poc-d-acceleration tip=7e9a86c4166451732a63833bb1aa767aaf63c54b merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=12 ancestor-of-29f4820d=yes
+d origin/fix/inherit-c-ui-layer tip=44c1a67f4ee662d22917c79cb8108bca0ffaaa06 merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=53 ancestor-of-29f4820d=no
+d origin/main tip=3bde2496bffd0088ed50f07a5ef03cf10c24e88a merge-base=6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a ahead=67 ancestor-of-29f4820d=no
+
+## diff vs upstream (shortstat) at each arm's most complete published tip
+A e7a68553  55 files changed, 14613 insertions(+)
+B dd88c39f  67 files changed, 15148 insertions(+)
+C c7385186  76 files changed, 16287 insertions(+)
+D 29f4820d  171 files changed, 26792 insertions(+), 24 deletions(-)
+D paths changed outside poc/ and .agents/:
+A	.claude/skills/aidlc-setup/SKILL.md
+A	WORKLOG.md
+M	core/aidlc-common/stages/inception/delivery-planning.md
+M	core/knowledge/aidlc-shared/audit-format.md
+A	core/tools/aidlc-ai-answers.ts
+M	core/tools/aidlc-audit.ts
+M	core/tools/aidlc-directive.ts
+M	core/tools/aidlc-lib.ts
+M	core/tools/aidlc-orchestrate.ts
+M	core/tools/aidlc-state.ts
+M	core/tools/aidlc-utility.ts
+M	harness/claude/manifest.ts
+M	harness/claude/settings.json
+A	harness/claude/skills/aidlc-issue-autopilot/SKILL.md
+M	harness/claude/skills/aidlc/SKILL.md
+M	scripts/package.ts
+M	tests/harness/person-turns.ts
+A	tests/resume-ledger.test.ts
+A	tests/unit/t-delegated-ai-approval.test.ts
+M	tests/unit/t-person-turns.test.ts
+M	tests/unit/t28-audit-event-sync.test.ts
+M	tests/unit/t351-decision-closer-parity.test.ts
+
+## shared-commit identity (same SHA => byte-identical history)
+3ecaba40 in C=commit in D=commit in B=commit in A=absent
+442b44d0 in C=commit in D=commit in B=absent in A=absent
+e0a522a2 in C=commit in D=commit in B=absent in A=absent
+c7385186 in C=commit in D=commit in B=absent in A=absent
+
+## C payload / plugin tree parity (C pin c7385186 vs D 29f4820d)
+.agents       C=a0de87d68b9425825656fd1cc053d9cf108231ad D=a0de87d68b9425825656fd1cc053d9cf108231ad
+poc/ui-poc    C=aba7ec2a4011a9ed6e9f1640cc61f98fbbb01ac0 D=e867ee29f2141193212251a94b74c50ed552644d
+ 40 files changed, 821 insertions(+), 53 deletions(-)
+D commits touching poc/ui-poc or .agents after the C pin:
+2ee0914a feat: complete bounded UI fidelity automation
+6ae4c89f docs(setup): compose UI baseline project-locally
+38c483bb feat(ui): enforce rendered fidelity contracts
+2c582965 feat: persist approved D stage checkpoints
+4605c171 fix: route UI requests and require runtime parity
+d1e54d7f test: verify UI proposal approval boundary
+d860e829 fix: project UI concurrency proposal into delivery planning
+0387b8f4 feat: auto-route ordinary UI app intents
+
+## main / develop / PR #4 identity
+origin/main commit=3bde2496bffd0088ed50f07a5ef03cf10c24e88a tree=bb813a169157ffe7aa85ea03892d82ef1200252a
+origin/develop commit=52447d81411883765caccca26fbabee7e287d265 tree=bb813a169157ffe7aa85ea03892d82ef1200252a
+29f4820d commit=29f4820d11081a771bccb23301db3a796f4e380c tree=bb813a169157ffe7aa85ea03892d82ef1200252a
+origin/fix/inherit-c-ui-layer commit=44c1a67f4ee662d22917c79cb8108bca0ffaaa06 tree=be1fca9cd1cc34f11cffb39e2a4b275139fc54ec
+3c90e025 commit=3c90e0259772def5994a5a3497095845231d05c1 tree=be1fca9cd1cc34f11cffb39e2a4b275139fc54ec

@@ -1,0 +1,6 @@
+{
+  "status": "stopped",
+  "reason": "github-read-failed",
+  "repository": "github.com/unauthenticated.invalid/aidlc-d-sandbox",
+  "detail": "gh issue read failed (1): GraphQL: Could not resolve to a Repository with the name 'unauthenticated.invalid/aidlc-d-sandbox'. (repository)"
+}

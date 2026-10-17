@@ -6088,8 +6088,8 @@ function handleVerifyDecisionSummaryPermission(args: string[]): void {
   const repository = getFlagValue(args, "--repository");
   const intentPath = getFlagValue(args, "--intent");
   const payloadSha256 = getFlagValue(args, "--payload-sha256");
-  if (!repository || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !intentPath || !payloadSha256 || !/^[0-9a-f]{64}$/.test(payloadSha256)) {
-    error("Usage: aidlc-state.ts verify-decision-summary-permission --repository owner/name --intent RELATIVE_ACTIVE_INTENT --payload-sha256 SHA256");
+  if (!repository || !/^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !intentPath || !payloadSha256 || !/^[0-9a-f]{64}$/.test(payloadSha256)) {
+    error("Usage: aidlc-state.ts verify-decision-summary-permission --repository [HOST/]owner/name --intent RELATIVE_ACTIVE_INTENT --payload-sha256 SHA256");
   }
   const pd = resolveProjectDir(projectDir);
   const intent = activeIntent(pd);

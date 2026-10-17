@@ -1,0 +1,110 @@
+{
+  "recordedAt": "2026-10-17T06:27:09.153Z",
+  "concurrency": [
+    {
+      "maxParallel": 1,
+      "timeoutMs": 10000,
+      "wallMs": 6984.956708,
+      "outcomes": [
+        "selected",
+        "selected",
+        "low-confidence",
+        "selected",
+        "low-confidence"
+      ],
+      "tiers": {
+        "rename-constant": "fast",
+        "fix-typo-docs": "fast",
+        "add-pagination": "judgment",
+        "cache-consistency": "balanced",
+        "fd-unit": "judgment"
+      },
+      "perRouteMs": [
+        1255,
+        1593,
+        1399,
+        1427,
+        1308
+      ]
+    },
+    {
+      "maxParallel": 5,
+      "timeoutMs": 10000,
+      "wallMs": 6093.011917,
+      "outcomes": [
+        "selected",
+        "selected",
+        "low-confidence",
+        "selected",
+        "low-confidence"
+      ],
+      "tiers": {
+        "rename-constant": "fast",
+        "fix-typo-docs": "fast",
+        "add-pagination": "judgment",
+        "cache-consistency": "balanced",
+        "fd-unit": "judgment"
+      },
+      "perRouteMs": [
+        1305,
+        2579,
+        3769,
+        4954,
+        6092
+      ]
+    }
+  ],
+  "liveTimeout": {
+    "maxParallel": 1,
+    "timeoutMs": 50,
+    "wallMs": 276.9303749999999,
+    "outcomes": [
+      "timeout",
+      "timeout",
+      "timeout",
+      "timeout",
+      "timeout"
+    ],
+    "tiers": {
+      "rename-constant": "judgment",
+      "fix-typo-docs": "judgment",
+      "add-pagination": "judgment",
+      "cache-consistency": "judgment",
+      "fd-unit": "judgment"
+    },
+    "perRouteMs": [
+      57,
+      55,
+      52,
+      56,
+      55
+    ]
+  },
+  "threshold090": {
+    "rename-constant": {
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected"
+    },
+    "fix-typo-docs": {
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "unavailable"
+    },
+    "add-pagination": {
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence"
+    },
+    "cache-consistency": {
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence"
+    },
+    "fd-unit": {
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence"
+    }
+  }
+}

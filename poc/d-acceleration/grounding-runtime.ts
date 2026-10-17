@@ -1,7 +1,7 @@
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, relative } from "node:path";
 import { spawn } from "node:child_process";
-import type { GroundingTask, GroundingWorker, GroundingWorkerResult } from "./grounding.ts";
+import { sha256, type GroundingSnapshotEntry, type GroundingTask, type GroundingWorker, type GroundingWorkerResult } from "./grounding.ts";
 
 export type GroundingCommandRunner = (executable: string, argv: readonly string[], cwd: string) => Promise<{ status: number; stdout: string; stderr: string }>;
 export const groundingSpawnRunner: GroundingCommandRunner = (executable, argv, cwd) => new Promise((resolve, reject) => {
@@ -12,28 +12,22 @@ export const groundingSpawnRunner: GroundingCommandRunner = (executable, argv, c
   child.once("error", reject); child.once("close", (code) => resolve({ status: code ?? 1, stdout, stderr }));
 });
 
+/**
+ * Production worker. It renders only the tool-owned snapshot in `task` (the
+ * bounded walk, symlink refusal, and size limits live in grounding.ts) and
+ * refuses to render a file whose bytes no longer match the snapshot hash.
+ */
 export function createClaudeGroundingWorker(options: { cwd: string; executable?: string; runner?: GroundingCommandRunner }): GroundingWorker {
   const runner = options.runner ?? groundingSpawnRunner;
   return async (task: GroundingTask): Promise<GroundingWorkerResult> => {
-    const evidenceFiles: string[] = [];
-    for (const evidenceRoot of task.evidenceRoots) {
-      const pending = [evidenceRoot];
-      while (pending.length) {
-        const path = pending.pop()!; const stat = lstatSync(path);
-        if (stat.isSymbolicLink()) throw new Error(`grounding evidence contains a symlink: ${path}`);
-        if (stat.isDirectory()) { for (const name of readdirSync(path)) pending.push(`${path}/${name}`); continue; }
-        if (stat.isFile()) evidenceFiles.push(path);
-        if (evidenceFiles.length > 200) throw new Error("grounding evidence exceeds 200 files");
-      }
-    }
-    const artifactFiles = [...new Set(task.artifactPaths)].sort();
-    const all = [...artifactFiles, ...evidenceFiles.sort()];
-    let declaredBytes = 0;
-    for (const path of all) { const stat = lstatSync(path); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`grounding input is not a regular file: ${path}`); declaredBytes += stat.size; if (declaredBytes > 1_000_000) throw new Error("grounding inputs exceed 1000000 bytes before read"); }
-    let actualBytes = 0;
-    const render = (paths: string[], label: string) => paths.map((path) => { const content = readFileSync(path, "utf8"); actualBytes += Buffer.byteLength(content); if (actualBytes > 1_000_000) throw new Error("grounding inputs exceed 1000000 bytes while reading"); return `--- ${label}: ${relative(options.cwd, path)} ---\n${content}`; }).join("\n");
-    const artifactSnapshot = render(artifactFiles, "STAGE ARTIFACT");
-    const evidenceSnapshot = render(evidenceFiles.sort(), "EVIDENCE");
+    const cwd = realpathSync(options.cwd);
+    const render = (entries: GroundingSnapshotEntry[], label: string) => entries.map((item) => {
+      const content = readFileSync(item.path);
+      if (sha256(content) !== item.sha256) throw new Error(`grounding evidence is stale: ${item.path} changed after the snapshot`);
+      return `--- ${label}: ${relative(cwd, item.path)} ---\n${content.toString("utf8")}`;
+    }).join("\n");
+    const artifactSnapshot = render(task.artifactFiles, "STAGE ARTIFACT");
+    const evidenceSnapshot = render(task.evidenceFiles, "EVIDENCE");
     const schema = '{"findings":[{"code":"confirmed|refuted|grounding-unavailable","severity":"info|warn|error","claim":"...","evidencePaths":["..."],"detail":"..."}],"uncertainty":["..."]}';
     const result = await runner(options.executable ?? "claude", ["-p", `${task.prompt}\nBounded stage artifact snapshot:\n${artifactSnapshot}\nBounded evidence snapshot:\n${evidenceSnapshot}\nReturn JSON only matching ${schema}`, "--allowedTools", "", "--permission-mode", "dontAsk"], options.cwd);
     if (result.status !== 0) throw new Error(`grounding worker failed (${result.status}): ${result.stderr.trim()}`);

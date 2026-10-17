@@ -2,19 +2,13 @@
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
   "parallel": {
-    // D並列処理の親スイッチ。既定値: ON。ONでも公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化する。OFFはread-only fanoutを逐次化し、新規IntentへのConstruction swarm既定適用も抑止する。run開始時にsnapshotされ、途中変更は次runから有効。
+    // 対象: D設計wave・retry・read-only fanout・generic/Issue autoのcheckpoint・公式invoke-swarm前のguard。役割: D並列処理の親スイッチ。既定値: ON。ON時: 公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化。OFF時: D worker同時数を1に制限し、新規IntentへのConstruction swarm既定適用を抑止、既存swarm Intentは公式setterでserialへ移す（拒否時は公式swarmへhand-offせず1行recoveryで停止）。OFFは即時反映（wave途中でも次のworker起動から）、ONは進行中を広げず次のD起動から有効。AIDLC_USE_SWARM / flags.swarm より優先。利用場面: 再現性・負荷・費用を優先し逐次で確認したいとき。
     "enabled": true,
   },
   "constructionDefaults": {
     // 対象: D generic auto が新規Intentを作成した直後（既存Intentには遡及しない）。役割: 公式state setterでConstructionの歩行順と実行方式を初期設定する。既定値: stage-major + swarm。Intent作成後に利用者が公式setterで明示変更した値が以後優先する。Construction非対応scopeでは適用せず、単一Unitではswarmは実質serial、複数Unitでも公式DAGが独立かつisolated worktreeを許可したwaveだけ並列化する。`official`へ変更するとAI-DLC本体既定値を維持する。
     "iteration": "stage-major",
     "execution": "swarm",
-  },
-  "clef": {
-    // 対象: D対応の設計wave内で明示したlow-risk Unitのrouting時。役割: loopback Clefへtier判断を委譲する。ON時: urlへ問い合わせ、失敗・低信頼ならOpusへ安全にfallback。OFF時: Clefを呼ばない。既定値: OFF。利用場面: ローカルClefを別途起動済みの場合だけ。
-    "enabled": false,
-    "url": "http://127.0.0.1:18742",
-    "lowRiskUnits": [],
   },
   "gitPersistence": {
     // 対象: 公式reportが承認境界を正常通過した直後。役割: 承認済みmanifestだけをcheckpoint commitする。ON時: 必須secret scan後にcommit、OFF時: Gitを変更しない。既定値: OFF。利用場面: PRODUCT側で明示的な承認履歴を残す場合。機能7の秘密検査自体にはOFFスイッチを設けない。
@@ -28,9 +22,9 @@
     "requirementIdValidation": false,
     // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: 機能21/27/28には非依存、functionalDesignBudgetsだけを使用。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
-    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須で空なら停止。利用場面: brownfield設計。
+    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない。利用場面: brownfield設計。
     "sourceGrounding": false,
-    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須で空なら停止。利用場面: 外部仕様準拠が必要な案件。
+    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない。利用場面: 外部仕様準拠が必要な案件。
     "specGrounding": false,
     // UI fidelity / 対象: refined-mockups承認前。役割: 承認HTMLと同じrenderer実行から人向け基準PNGを生成する。ON時: PNGをHTML hash・viewport・renderer情報へ結合、OFF時: PNG専用captureを行わない。既定値: OFF。依存関係: visualRegressionがONならこの値に関係なく基準PNG生成も有効。負担: browser撮影と画像保管。利用場面: 人が承認時の見た目を後から確認したい画面。
     "mockupPngGeneration": false,
@@ -42,7 +36,7 @@
     "requirementIdBridges": [],
     // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
     "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },
-    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せず停止する。
+    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せずoff-no-valid-roots(NOT-READY、準拠主張なし)を記録する。root配下は合計200 file・1,000,000 byte以内、symlink不可。
     "sourceRoots": [],
     "specRoots": [],
   },
@@ -56,7 +50,7 @@
     "sessionOnly": true,
     // 不明点: halt=停止、assume=仮定台帳へ記録、research=調査後も不明なら停止。既定値: halt。
     "ambiguityPolicy": "halt",
-    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
+    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: ambiguityPolicyに関係なくhaltとして扱い、自動仮定・調査事実を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
     "assumptionLedger": true,
     // 明示的な一時失敗時の指数backoff付きbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとにprovider/repository/Issue番号の構造化keyで公式状態を再照合できる場合だけ再試行し、曖昧・認証・入力失敗や照合不能時は停止する。
     "maxRetries": 2,
@@ -70,7 +64,7 @@
   "issueAutopilot": {
     // 機能17 / 対象: /aidlc-issue-autopilot、/aidlc --from-issue、およびClaude標準 /loopからの同コマンド起動。役割: GitHub Issue intakeを許可する子スイッチ。ON時: auto.enabledもONかつlabel完全一致時だけ処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: Issue駆動運用。
     "enabled": false,
-    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue、OFFは安全契約違反のため現在も1件に強制。既定値: ON。利用場面: 常時ONを維持する。
+    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue。OFF時: 安全契約違反のため設定エラーで停止し、黙って無視しない。既定値: ON。利用場面: 常時ON。複数Issueは /loop で繰り返し起動する。
     "oneIssuePerRun": true,
   },
   "aiApproval": {

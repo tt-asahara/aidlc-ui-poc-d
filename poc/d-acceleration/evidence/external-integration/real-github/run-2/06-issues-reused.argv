@@ -1,0 +1,1 @@
+gh issue list --repo tt-asahara/aidlc-d-sandbox --state all --json number\,title\,labels\,state 
