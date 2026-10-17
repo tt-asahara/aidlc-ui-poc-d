@@ -12,6 +12,10 @@ review, audit, or Testing Contract boundaries. Most of it remains outside
 seam so AI decisions cannot masquerade as human replies. An install must opt in
 before dispatching work through the existing engine directives.
 
+A separate clean target (install, receipt-proven update, package parity,
+headless real-host turns, and an evidence manifest) follows
+[`clean-target.md`](clean-target.md).
+
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
 local service contract.

@@ -62,7 +62,7 @@
     "maxRetries": 2,
     // 自動進行の最大公式directive数。no-progress検出とは別のhard stop。既定値: 64。
     "maxSteps": 64,
-    // 自動進行1回の最大経過ms。lease更新中でも超過時は停止。既定値: 900000（15分）。
+    // 自動進行1回の最大経過ms。lease更新中でも超過時は停止。generic autoでは公式human gate（ask）で人の回答を待つ時間は含めない（Issue claim付きsessionは壁時計のまま）。既定値: 900000（15分）。
     "deadlineMs": 900000,
     // Issue自動処理を許可するlabel。空配列は許可対象なし。
     "labelAllowlist": [],
