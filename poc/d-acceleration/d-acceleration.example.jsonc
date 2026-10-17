@@ -28,9 +28,9 @@
     "requirementIdValidation": false,
     // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: 機能21/27/28には非依存、functionalDesignBudgetsだけを使用。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
-    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須で空なら停止。利用場面: brownfield設計。
+    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない。利用場面: brownfield設計。
     "sourceGrounding": false,
-    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須で空なら停止。利用場面: 外部仕様準拠が必要な案件。
+    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない。利用場面: 外部仕様準拠が必要な案件。
     "specGrounding": false,
     // UI fidelity / 対象: refined-mockups承認前。役割: 承認HTMLと同じrenderer実行から人向け基準PNGを生成する。ON時: PNGをHTML hash・viewport・renderer情報へ結合、OFF時: PNG専用captureを行わない。既定値: OFF。依存関係: visualRegressionがONならこの値に関係なく基準PNG生成も有効。負担: browser撮影と画像保管。利用場面: 人が承認時の見た目を後から確認したい画面。
     "mockupPngGeneration": false,
@@ -42,7 +42,7 @@
     "requirementIdBridges": [],
     // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
     "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },
-    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せず停止する。
+    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せずoff-no-valid-roots(NOT-READY、準拠主張なし)を記録する。root配下は合計200 file・1,000,000 byte以内、symlink不可。
     "sourceRoots": [],
     "specRoots": [],
   },
