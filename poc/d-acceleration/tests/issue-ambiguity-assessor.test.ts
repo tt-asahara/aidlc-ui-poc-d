@@ -29,6 +29,31 @@ describe("bounded Issue ambiguity assessor", () => {
     expect(result.modelIdentity).toMatchObject({ requested: "claude-opus-5-5", runtimeReported: "claude-opus-5-5", status: "verified-match", source: "claude-modelUsage" });
   });
 
+  test("accepts exactly one fenced JSON result and still fails closed on anything else", async () => {
+    const fenced = (text: string) => {
+      const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
+      executable(fake, `console.log(JSON.stringify({result:${JSON.stringify(text)}}));`);
+      return createClaudeIssueAssessor({ projectDir: root, model: "fixture", executable: fake }).assess(issue, "assume");
+    };
+    const body = JSON.stringify({ unresolved: [], assumptions: ["Use JPY"], researchedFacts: [] }, null, 2);
+    // Observed in the dogfood-3 run: opus wrapped the whole answer in a ```json fence.
+    expect((await fenced("```json\n" + body + "\n```")).assumptions).toEqual(["Use JPY"]);
+    expect((await fenced("```\n" + body + "\n```\n")).assumptions).toEqual(["Use JPY"]);
+    for (const bad of ["Here you go:\n```json\n" + body + "\n```", "```json\n" + body + "\n```\nDone.", "```json\n" + body + "\n```\n```json\n{}\n```", "```json\n" + body])
+      expect((await fenced(bad)).unresolved).toEqual(["Ambiguity assessment failed closed: model returned invalid structured output"]);
+  }, 60_000);
+
+  test("defaults to the 60 s ceiling and tells the model approval is not an input ambiguity", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
+    // Sleeps past the old 30 s default would make this slow; instead assert the prompt and that 60 000 is accepted.
+    executable(fake, `import {writeFileSync} from "node:fs"; writeFileSync("prompt.txt", process.argv.at(-1)); console.log(JSON.stringify({result:JSON.stringify({unresolved:[],assumptions:[],researchedFacts:[]})}));`);
+    await createClaudeIssueAssessor({ projectDir: root, model: "fixture", executable: fake, timeoutMs: 60_000 }).assess(issue, "assume");
+    const prompt = readFileSync(join(root, "prompt.txt"), "utf8");
+    expect(prompt).toContain("Do not wrap the JSON in a Markdown code fence.");
+    expect(prompt).toContain("Approval of the work is not an ambiguity");
+    expect(() => createClaudeIssueAssessor({ projectDir: root, model: "fixture", executable: fake, timeoutMs: 60_001 })).toThrow("1 through 60000");
+  });
+
   test("tells the model which fields each policy forbids", async () => {
     const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
     executable(fake, `import {appendFileSync} from "node:fs"; appendFileSync("prompts.jsonl", JSON.stringify(process.argv.at(-1))+"\\n"); console.log(JSON.stringify({result:JSON.stringify({unresolved:["x"],assumptions:[],researchedFacts:[]})}));`);
