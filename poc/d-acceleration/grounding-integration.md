@@ -28,11 +28,44 @@ default-off semantic checks. The caller passes already-resolved configuration to
   rejected root and its reason. One invalid root invalidates the lane; partial
   coverage is never reported as grounded.
 - `grounding.ts` owns one deterministic snapshot of the stage artifacts and every
-  file under the roots: any symlink or special file, more than 200 evidence files,
-  or more than 1,000,000 bytes in total fails closed before any model call. Each
-  entry carries its canonical path, SHA-256, and size. The production worker
-  (`grounding-runtime.ts`) renders only that snapshot and refuses a file whose
-  bytes no longer match its hash.
+  file under the roots: any symlink or special file, more evidence files than
+  `maxEvidenceFiles`, or more total bytes than `maxInputBytes` fails closed before
+  any model call. Each entry carries its canonical path, SHA-256, and size. The
+  production worker (`grounding-runtime.ts`) renders only that snapshot and
+  refuses a file whose bytes no longer match its hash. It passes fixed argv
+  (`-p --allowedTools "" --permission-mode dontAsk`) and sends the prompt with the
+  whole snapshot on stdin, because a snapshot near the byte cap overflows argv
+  (macOS `ARG_MAX` is 1 MiB; Linux caps one argument at 128 KiB).
+
+## Snapshot caps (`featureInputs.groundingLimits`)
+
+The caps apply per lane and are configurable in `.claude/d-acceleration.jsonc`,
+with `.claude/d-acceleration.local.jsonc` overriding field by field
+(`d-config.ts` owns the precedence; `grounding.ts` owns the single validity rule,
+`groundingLimitError`).
+
+| Key | Default (unset) | Allowed |
+| --- | --- | --- |
+| `maxEvidenceFiles` | 200 | integer 1..5000 |
+| `maxInputBytes` (stage artifacts + evidence) | 1,000,000 | integer 1..4,000,000 |
+
+- Invalid values (zero, negative, fractional, string, unknown key) and values above
+  the ceiling are never clamped: the D entry exits 2 with one line naming the key
+  and the allowed range, for example
+  `D configuration invalid: invalid featureInputs.groundingLimits.maxInputBytes: 20000000 (allowed: integer 1..4000000) in <path>`.
+  `run.ts --preflight` fails the same way.
+- Why these ceilings: the hashed snapshot is embedded in a single worker prompt, so
+  bytes bound prompt size and cost. 4,000,000 bytes is roughly the 1,000,000-token
+  context window of the largest worker model at about 4 bytes per token; a larger
+  snapshot cannot fit one prompt and would only fail after spending the call. 5,000
+  files bounds the deterministic walk and hash time (about 0.2 s for 5,000 files of
+  reference repo B) and the per-file prompt headers well inside that byte budget.
+  Raising a cap raises the cost of every grounded stage; narrow roots first.
+- A cap breach records `grounding-failed` whose error names the key and ceiling,
+  e.g. `grounding evidence exceeds 200 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)`.
+- The effective caps are recorded as `limits` on every lane result in the evidence
+  JSON (`grounding-findings`, `grounding-failed`, `off-no-valid-roots`) and shown
+  under `optional.featureInputs.groundingLimits` in `run.ts --preflight`.
 - A cited path must resolve, without any symlink component, to a regular file in
   the snapshot. Missing, traversing (`..`, absolute, NUL), out-of-root, or
   symlinked citations fail closed.
@@ -54,7 +87,11 @@ default-off semantic checks. The caller passes already-resolved configuration to
 - Real brownfield checkouts usually need narrowly scoped roots: a read-only plan
   against the reference KDDI repository failed closed on `core/tools`,
   `harness/kddi/tools`, `docs/reference` (bytes), and `.`/`node_modules` (file
-  count) within 1-16 ms each (`evidence/grounding-brownfield/`).
+  count) within 1-16 ms each under the default caps (`evidence/grounding-brownfield/`).
+  With raised caps (1,000 files / 2,000,000 bytes) `harness/kddi/tools` (32 files,
+  1.16 MB) and `docs/reference` (49 files, 1.64 MB) plan successfully; `core/tools`
+  still exceeds even the 4,000,000-byte ceiling and `.`/`node_modules` exceed 5,000
+  files, so they need narrower roots (`evidence/grounding-caps/`, no worker calls).
 
 The official host remains responsible for deciding whether and where to persist the
 findings and for every normal engine transition. Grounding must run after the stage

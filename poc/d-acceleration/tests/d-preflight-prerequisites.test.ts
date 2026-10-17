@@ -41,7 +41,22 @@ describe("D preflight prerequisites and effective values", () => {
     const { status, json } = preflight(root);
     expect(status).toBe(0);
     expect(json.optional).toEqual({ ...resolveDConfig(root), gitPersistence: resolveDGitPersistence(root) });
+    expect(json.optional.featureInputs.groundingLimits).toEqual({ maxEvidenceFiles: 200, maxInputBytes: 1_000_000 });
     expect(json.prerequisites).toEqual({ checked: [], unmet: [] });
+  });
+
+  test("preflight shows the effective grounding caps after local-over-project layering", () => {
+    const root = product();
+    writeFileSync(join(root, ".claude", "d-acceleration.jsonc"), JSON.stringify({ featureInputs: { groundingLimits: { maxEvidenceFiles: 1000, maxInputBytes: 2_000_000 } } }));
+    writeFileSync(join(root, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ featureInputs: { groundingLimits: { maxInputBytes: 3_000_000 } } }));
+    const { status, json } = preflight(root);
+    expect(status).toBe(0);
+    expect(json.optional.featureInputs.groundingLimits).toEqual({ maxEvidenceFiles: 1000, maxInputBytes: 3_000_000 });
+    writeFileSync(join(root, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ featureInputs: { groundingLimits: { maxInputBytes: 20_000_000 } } }));
+    const invalid = spawnSync(process.execPath, [join(import.meta.dir, "..", "run.ts"), "--project-dir", root, "--preflight"], { cwd: root, encoding: "utf8" });
+    expect(invalid.status).toBe(2);
+    expect(invalid.stdout).toBe("");
+    expect(invalid.stderr).toMatch(/^D configuration invalid: invalid featureInputs\.groundingLimits\.maxInputBytes: 20000000 \(allowed: integer 1\.\.4000000\) in \S+d-acceleration\.local\.jsonc\n$/);
   });
 
   test("all-ON with missing prerequisites names each unmet requirement and exits 3", () => {

@@ -32,7 +32,7 @@ if (recheckPath) {
   process.exit(fresh ? 0 : 2);
 }
 const manifest = JSON.parse(readFileSync(bounded(inputPath!), "utf8")) as Manifest;
-const config = resolveDConfig(projectDir), readJson = (path: string) => JSON.parse(readFileSync(bounded(path), "utf8"));
+const config = (() => { try { return resolveDConfig(projectDir); } catch (error) { process.stderr.write(`D configuration invalid: ${(error as Error).message}\n`); process.exit(2); } })(), readJson = (path: string) => JSON.parse(readFileSync(bounded(path), "utf8"));
 const results: Record<string, unknown> = {}, notReady: string[] = [];
 const applicableEnabled =
   (config.features.requirementIdValidation && ["refined-mockups", "functional-design"].includes(manifest.stage)) ||
@@ -55,15 +55,17 @@ for (const lane of ["source", "spec"] as const) {
   const enabled = lane === "source" ? config.features.sourceGrounding : config.features.specGrounding;
   if (!enabled) continue;
   const roots = lane === "source" ? config.featureInputs.sourceRoots : config.featureInputs.specRoots;
+  const limits = config.featureInputs.groundingLimits;
   let result: GroundingRunResult | { action: "grounding-failed"; lane: typeof lane; stage: string; verdict: "NOT-READY"; compliance: "not-claimed"; error: string; approvalRecorded: false };
   try {
-    result = await runGrounding({ lane, stage: manifest.stage as GroundingStage, projectDir, artifactPaths: manifest.artifactPaths ?? [], config: { [`${lane}Grounding`]: { enabled: true, roots } }, worker: createClaudeGroundingWorker({ cwd: projectDir, executable: manifest.workerExecutable }) });
+    result = await runGrounding({ lane, stage: manifest.stage as GroundingStage, projectDir, artifactPaths: manifest.artifactPaths ?? [], config: { [`${lane}Grounding`]: { enabled: true, roots, limits } }, worker: createClaudeGroundingWorker({ cwd: projectDir, executable: manifest.workerExecutable }) });
   } catch (error) {
     // Missing, stale, symlinked, oversized, or out-of-root evidence fails
     // closed into recorded NOT-READY evidence; it never becomes a compliance claim.
     result = { action: "grounding-failed", lane, stage: manifest.stage, verdict: "NOT-READY", compliance: "not-claimed", error: (error as Error).message, approvalRecorded: false };
   }
-  results[`${lane}Grounding`] = result;
+  // Every lane result records the effective caps it was (or would have been) bounded by.
+  results[`${lane}Grounding`] = { ...result, limits };
   if ("verdict" in result && (result.verdict === "NOT-READY" || ("uncertainty" in result && result.uncertainty.length))) notReady.push(`${lane}Grounding`);
 }
 const evidence = { schema: 1, stage: manifest.stage, unit: manifest.unit ?? null, verdict: notReady.length ? "NOT-READY" : "READY", notReady, results, approvalRecorded: false, reviewPresentation: "Pass this evidence path to the existing official reviewer; it is not a review receipt or approval." };

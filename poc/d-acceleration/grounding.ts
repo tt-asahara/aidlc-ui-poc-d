@@ -5,7 +5,9 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 export type GroundingLane = "source" | "spec";
 export type GroundingStage = "domain-design" | "functional-design" | "code-generation";
-export type GroundingFeatureConfig = { enabled?: boolean; roots?: string[] };
+/** Per-lane snapshot caps. Resolved by the caller (d-config.ts owns project/local precedence). */
+export type GroundingLimits = { maxEvidenceFiles: number; maxInputBytes: number };
+export type GroundingFeatureConfig = { enabled?: boolean; roots?: string[]; limits?: GroundingLimits };
 export type GroundingConfig = { sourceGrounding?: GroundingFeatureConfig; specGrounding?: GroundingFeatureConfig };
 export type GroundingFinding = {
   code: "confirmed" | "refuted" | "grounding-unavailable";
@@ -28,6 +30,8 @@ export type GroundingTask = {
   /** Deterministic, bounded, symlink-free snapshot. The worker sees only these files. */
   artifactFiles: GroundingSnapshotEntry[];
   evidenceFiles: GroundingSnapshotEntry[];
+  /** The effective caps this snapshot was bounded by. */
+  limits: GroundingLimits;
   prompt: string;
   tools: readonly ["Read", "Grep", "Glob"];
   writesAllowed: false;
@@ -37,13 +41,39 @@ export type GroundingRunResult =
   | { action: "disabled"; lane: GroundingLane; workerCalls: 0; artifactsWritten: 0; reviewsRun: 0 }
   | { action: "not-applicable"; lane: GroundingLane; stage: GroundingStage; workerCalls: 0; artifactsWritten: 0; reviewsRun: 0 }
   | { action: "off-no-valid-roots"; lane: GroundingLane; stage: GroundingStage; workerCalls: 0; artifactsWritten: 0; reviewsRun: 0; verdict: "NOT-READY"; compliance: "not-claimed"; rejectedRoots: GroundingRejectedRoot[]; detail: string; approvalRecorded: false }
-  | { action: "grounding-findings"; lane: GroundingLane; stage: GroundingStage; workerCalls: 1; artifactsWritten: 0; reviewsRun: 0; verdict: "READY" | "NOT-READY"; compliance: "grounded" | "not-claimed"; findings: GroundingFinding[]; uncertainty: string[]; citedEvidence: GroundingSnapshotEntry[]; artifacts: GroundingSnapshotEntry[]; git: GroundingGitProvenance; approvalRecorded: false };
+  | { action: "grounding-findings"; lane: GroundingLane; stage: GroundingStage; workerCalls: 1; artifactsWritten: 0; reviewsRun: 0; verdict: "READY" | "NOT-READY"; compliance: "grounded" | "not-claimed"; findings: GroundingFinding[]; uncertainty: string[]; citedEvidence: GroundingSnapshotEntry[]; artifacts: GroundingSnapshotEntry[]; limits: GroundingLimits; git: GroundingGitProvenance; approvalRecorded: false };
 
 export type GroundingWorker = (task: GroundingTask) => Promise<GroundingWorkerResult>;
 
-/** Snapshot limits. Exceeding either fails closed before any model call. */
+/** Default snapshot limits per lane. Exceeding either fails closed before any model call. */
 export const GROUNDING_MAX_EVIDENCE_FILES = 200;
 export const GROUNDING_MAX_INPUT_BYTES = 1_000_000;
+export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = { maxEvidenceFiles: GROUNDING_MAX_EVIDENCE_FILES, maxInputBytes: GROUNDING_MAX_INPUT_BYTES };
+/**
+ * Hard ceilings for configured limits. The whole hashed snapshot is embedded in
+ * one worker prompt, so bytes bound prompt size and cost: 4,000,000 bytes is
+ * roughly the 1,000,000-token context window of the largest worker model at
+ * ~4 bytes/token; a larger snapshot cannot fit one prompt and would only fail
+ * after spending the call. 5,000 files bounds the deterministic walk/hash time
+ * and per-file prompt headers well inside that byte budget.
+ */
+export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = { maxEvidenceFiles: 5_000, maxInputBytes: 4_000_000 };
+const LIMIT_KEY = "featureInputs.groundingLimits";
+
+/**
+ * The single validity rule for a grounding limit: a positive safe integer no
+ * greater than its ceiling. Returns a one-line error naming the key and the
+ * allowed range, or null. Values are never clamped.
+ */
+export function groundingLimitError(key: keyof GroundingLimits, value: unknown): string | null {
+  const ceiling = GROUNDING_LIMIT_CEILINGS[key];
+  if (Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= ceiling) return null;
+  return `invalid ${LIMIT_KEY}.${key}: ${JSON.stringify(value) ?? String(value)} (allowed: integer 1..${ceiling})`;
+}
+export function assertGroundingLimits(limits: GroundingLimits): GroundingLimits {
+  for (const key of ["maxEvidenceFiles", "maxInputBytes"] as const) { const error = groundingLimitError(key, limits?.[key]); if (error) throw new Error(error); }
+  return { maxEvidenceFiles: limits.maxEvidenceFiles, maxInputBytes: limits.maxInputBytes };
+}
 
 const SOURCE_STAGES = new Set<GroundingStage>(["domain-design"]);
 const SPEC_STAGES = new Set<GroundingStage>(["domain-design", "functional-design", "code-generation"]);
@@ -103,10 +133,11 @@ function entry(path: string): GroundingSnapshotEntry {
 
 /**
  * Deterministic bounded snapshot owned by the tool. Symlinks anywhere under a
- * root, special files, more than GROUNDING_MAX_EVIDENCE_FILES files, or more than
- * GROUNDING_MAX_INPUT_BYTES declared bytes fail closed before anything is read.
+ * root, special files, more than `limits.maxEvidenceFiles` files, or more than
+ * `limits.maxInputBytes` declared bytes fail closed before anything is read.
  */
-export function snapshotGroundingInputs(artifactPaths: string[], evidenceRoots: string[]): { artifactFiles: GroundingSnapshotEntry[]; evidenceFiles: GroundingSnapshotEntry[] } {
+export function snapshotGroundingInputs(artifactPaths: string[], evidenceRoots: string[], limits: GroundingLimits = DEFAULT_GROUNDING_LIMITS): { artifactFiles: GroundingSnapshotEntry[]; evidenceFiles: GroundingSnapshotEntry[] } {
+  const { maxEvidenceFiles, maxInputBytes } = assertGroundingLimits(limits);
   const evidence = new Set<string>();
   for (const evidenceRoot of evidenceRoots) {
     const pending = [evidenceRoot];
@@ -116,7 +147,7 @@ export function snapshotGroundingInputs(artifactPaths: string[], evidenceRoots: 
       if (stat.isDirectory()) { for (const name of readdirSync(path)) pending.push(join(path, name)); continue; }
       if (!stat.isFile()) throw new Error(`grounding evidence contains a non-regular file: ${path}`);
       evidence.add(path);
-      if (evidence.size > GROUNDING_MAX_EVIDENCE_FILES) throw new Error(`grounding evidence exceeds ${GROUNDING_MAX_EVIDENCE_FILES} files`);
+      if (evidence.size > maxEvidenceFiles) throw new Error(`grounding evidence exceeds ${maxEvidenceFiles} files (${LIMIT_KEY}.maxEvidenceFiles; ceiling ${GROUNDING_LIMIT_CEILINGS.maxEvidenceFiles})`);
     }
   }
   const artifacts = [...new Set(artifactPaths)].sort(), evidenceFiles = [...evidence].sort();
@@ -125,11 +156,11 @@ export function snapshotGroundingInputs(artifactPaths: string[], evidenceRoots: 
     const stat = lstatSync(path);
     if (!stat.isFile()) throw new Error(`grounding input is not a regular file: ${path}`);
     declared += stat.size;
-    if (declared > GROUNDING_MAX_INPUT_BYTES) throw new Error(`grounding inputs exceed ${GROUNDING_MAX_INPUT_BYTES} bytes before read`);
+    if (declared > maxInputBytes) throw new Error(`grounding inputs exceed ${maxInputBytes} bytes before read (${LIMIT_KEY}.maxInputBytes; ceiling ${GROUNDING_LIMIT_CEILINGS.maxInputBytes})`);
   }
   const snapshot = { artifactFiles: artifacts.map(entry), evidenceFiles: evidenceFiles.map(entry) };
   const actual = [...snapshot.artifactFiles, ...snapshot.evidenceFiles].reduce((sum, item) => sum + item.bytes, 0);
-  if (actual > GROUNDING_MAX_INPUT_BYTES) throw new Error(`grounding inputs exceed ${GROUNDING_MAX_INPUT_BYTES} bytes while reading`);
+  if (actual > maxInputBytes) throw new Error(`grounding inputs exceed ${maxInputBytes} bytes while reading (${LIMIT_KEY}.maxInputBytes; ceiling ${GROUNDING_LIMIT_CEILINGS.maxInputBytes})`);
   return snapshot;
 }
 
@@ -211,7 +242,8 @@ export function planGrounding(input: {
   if (!input.artifactPaths.length) throw new Error("grounding requires at least one stage artifact");
   const artifactPaths = input.artifactPaths.map((path) => boundedEvidenceFile(input.projectDir, path));
   const evidenceRoots = resolvedRoots.roots;
-  const snapshot = snapshotGroundingInputs(artifactPaths, evidenceRoots);
+  const limits = assertGroundingLimits(selected.limits ?? DEFAULT_GROUNDING_LIMITS);
+  const snapshot = snapshotGroundingInputs(artifactPaths, evidenceRoots, limits);
   const subject = input.lane === "source" ? "実装ソース" : "既存仕様書";
   return {
     lane: input.lane,
@@ -220,6 +252,7 @@ export function planGrounding(input: {
     artifactPaths,
     evidenceRoots,
     ...snapshot,
+    limits,
     prompt: [
       `Grounding lane: ${input.lane}; stage: ${input.stage}.`,
       `Artifacts: ${artifactPaths.join(", ")}`,
@@ -270,6 +303,7 @@ export async function runGrounding(input: {
     uncertainty: result.uncertainty,
     citedEvidence,
     artifacts: planned.artifactFiles,
+    limits: planned.limits,
     git: groundingGitProvenance(input.projectDir, citedEvidence.map((item) => item.path)),
     approvalRecorded: false,
   };
