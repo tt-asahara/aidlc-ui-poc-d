@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "purpose": "Pinned upstream identities for the optional refined-mockups design skills selected by uiDesign.refinedMockupSkill. The Arm C baseline stays in treatments/source-lock.json; this file never applies to ui-poc-comparison.",
+  "checked_at_utc": "2026-10-17T14:20:00Z",
+  "sources": [
+    {
+      "repository": "pbakaus/impeccable",
+      "commit": "08d5b470495d242ca0470f4aeae1956c3a074f83",
+      "version": "4.6.0",
+      "license": "Apache-2.0",
+      "licenseFiles": [
+        { "path": "LICENSE", "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9", "bytes": 10766, "sha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812" },
+        { "path": "NOTICE.md", "git_blob_sha": "0468271c904ae334cfaf27da6f8df3d5f419a1f0", "bytes": 503, "sha256": "c60a093c2845fd9fb82f9c6f742ece31f379f8190b535309d32d66c45ccffdcb" }
+      ],
+      "files": [
+        { "path": ".claude/skills/impeccable/SKILL.md", "git_blob_sha": "00f7787d0beeb0fce72342f6d3408963e376f380", "bytes": 11906 },
+        { "path": ".claude/skills/impeccable/reference/new-work.md", "git_blob_sha": "cd0fe5b3d6c0e581e2485cb4610993204357f513", "bytes": 62411 },
+        { "path": ".claude/skills/impeccable/reference/operate.md", "git_blob_sha": "524f2c3ae9fa497284e9699f3ca5320cce5d05cf", "bytes": 4145 },
+        { "path": ".claude/skills/impeccable/reference/mode-operate.md", "git_blob_sha": "833775ba85f03bf65a4c1b23e39192f7653414e6", "bytes": 4716 },
+        { "path": ".claude/skills/impeccable/reference/craft-floor.md", "git_blob_sha": "64a195eba65afc56cbe8e51da785aa9d4a8819cc", "bytes": 4486 },
+        { "path": ".claude/skills/impeccable/reference/critique.md", "git_blob_sha": "19feee5d5201ccee8e29e68f401b8bbeedab09d5", "bytes": 45636 },
+        { "path": ".claude/skills/impeccable/reference/polish.md", "git_blob_sha": "d981459468a485dc3b3e8add112ea0f5e6b9e576", "bytes": 6646 }
+      ]
+    },
+    {
+      "repository": "nextlevelbuilder/ui-ux-pro-max-skill",
+      "commit": "56ea9cf174ed86786187daa9de0e6247cb0747e4",
+      "license": "MIT",
+      "licenseFiles": [
+        { "path": "LICENSE", "git_blob_sha": "1e71cbf26660f31903807d099fe902c098fc7e4c", "bytes": 1075, "sha256": "738f69dfa83db5c347c678fb9d90e560877059f0de93a327c39001bff92dc014" }
+      ],
+      "files": [
+        { "path": ".claude/skills/ui-ux-pro-max/SKILL.md", "git_blob_sha": "41f8e2fd7f8c568228d0b55186ebe3f7b4007377", "bytes": 15969 },
+        { "path": ".claude/skills/ui-ux-pro-max/references/quick-reference.md", "git_blob_sha": "7acc7e7540ca6981d878a90aae4455c1638e2385", "bytes": 24526 },
+        { "path": ".claude/skills/ui-ux-pro-max/references/pro-rules.md", "git_blob_sha": "b2ce233287e37ec9ca13476c4014b922e9d5a0e9", "bytes": 10909 }
+      ]
+    }
+  ]
+}

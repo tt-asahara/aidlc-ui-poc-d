@@ -16,7 +16,7 @@ const expectedStages = [
   'functional-design','nfr-requirements','nfr-design','infrastructure-design','code-generation','build-and-test','ci-pipeline',
   'deployment-pipeline','environment-provisioning','deployment-execution','observability-setup','performance-validation','incident-response','feedback-optimization'
 ];
-function fixture(t, stage='code-generation', facts={}, scope='ui-poc-comparison') {
+function fixture(t, stage='code-generation', facts={}, scope='ui-poc-comparison', opts={}) {
   const project=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-routing-project-')); t.after(()=>fs.rmSync(project,{recursive:true,force:true}));
   const record=path.join(project,'aidlc/spaces/default/intents/intent-001');fs.mkdirSync(record,{recursive:true});
   const statePath=path.join(record,'aidlc-state.md');fs.writeFileSync(statePath,'# State\n\n**Scope**: '+scope+'\n**Current Stage**: '+stage+'\n**Last Updated**: attempt-1\n');
@@ -26,10 +26,10 @@ function fixture(t, stage='code-generation', facts={}, scope='ui-poc-comparison'
   const commonBriefRel='evidence/common-comparison-brief.md',commonBriefFile=path.join(project,commonBriefRel);fs.writeFileSync(commonBriefFile,'Approved common A/B/C comparison brief');
   const confirmationRel='evidence/design-context-confirmation.md',confirmationFile=path.join(project,confirmationRel);fs.writeFileSync(confirmationFile,'Observed AI-DLC question answers supplied by the creator');
   const designContextRel='evidence/creator-confirmed-design-context.json',designContextFile=path.join(project,designContextRel);fs.writeFileSync(designContextFile,JSON.stringify({schema:1,creatorConfirmed:true,source:{kind:'aidlc-questions',path:confirmationRel,sha256:sha256(confirmationFile)},commonBrief:{path:commonBriefRel,sha256:sha256(commonBriefFile)},audience:'operators',useCases:'complete the approved task',brandTone:'calm and precise'}));
-  const p=plan(stage,facts,scope), events=[];
+  const p=(opts.routing?.plan ?? plan)(stage,facts,scope,opts.designSkill), events=[];
   for (const inv of p.invocations.filter(x=>x.decision==='use')) {
     for (const entrypoint of inv.entrypoints) {
-      const target=path.join(project,entrypoint); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.copyFileSync(path.join(root,entrypoint),target);
+      const target=path.join(project,entrypoint); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.copyFileSync(opts.entrypointSource?.(entrypoint) ?? path.join(root,entrypoint),target);
       events.push({type:'skill-read',skill:inv.skill,entrypoint,sha256:sha256(target)});
     }
     const inputs=inv.inputs.map((name,index)=>{
@@ -45,7 +45,7 @@ function fixture(t, stage='code-generation', facts={}, scope='ui-poc-comparison'
   const contextPath=path.join(evidence,'ui-poc-routing-context.json'); fs.writeFileSync(contextPath,JSON.stringify(context));
   const outputPath=path.join(evidence,'stage-output.md'); fs.writeFileSync(outputPath,'stage output');
   const logPath=path.join(evidence,'ui-poc-skill-evidence.json');
-  const write=()=>fs.writeFileSync(logPath,JSON.stringify({schema:1,runtimeProfile:p.runtimeProfile,comparisonTreatment:p.comparisonTreatment,stage,configSha256:p.configSha256,context,contextSha256:sha256(contextPath),factsSha256:sha256(factsPath),events})); write();
+  const write=()=>fs.writeFileSync(logPath,JSON.stringify({schema:1,runtimeProfile:p.runtimeProfile,comparisonTreatment:p.comparisonTreatment,stage,configSha256:p.configSha256,...(p.designSkill?{designSkill:p.designSkill}:{}),context,contextSha256:sha256(contextPath),factsSha256:sha256(factsPath),events})); write();
   return {project,record,statePath,evidence,p,events,facts,context,factsPath,contextPath,outputPath,logPath,write};
 }
 
@@ -202,6 +202,8 @@ test('routing pins exact upstream commits and installed entrypoints', () => {
   assert.equal(cfg.designCommit,'209444a9d552c18bcaa74e26bf66a25fc568a767');
   assert.deepEqual(cfg.accessibilityCorrections,{largeTextNormalCssPx:24,largeTextBoldCssPx:18.6667,sourceStatement:'18px+ or 14px bold',normativeBasis:'WCAG 18pt or 14pt bold; 1pt = 1.333 CSS px'});
   for (const [name,skill] of Object.entries(cfg.skills)) for (const entrypoint of skill.entrypoints) {
+    // Optional design skills are fetched into PRODUCT by setup-design-skill.ts, not vendored here.
+    if (skill.lock==='design-skill-lock') { assert.match(lockedEntrypoint(name,entrypoint).git_blob_sha,/^[a-f0-9]{40}$/); continue; }
     const bytes=fs.readFileSync(path.join(root,entrypoint)),locked=lockedEntrypoint(name,entrypoint);
     assert.equal(bytes.length,locked.bytes);
     assert.equal(crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'),locked.git_blob_sha);
@@ -240,4 +242,80 @@ test('real sensor dispatcher records failed when routing log is missing', t => {
   assert.ok(fs.existsSync(dispatcher),'run bun scripts/package.ts before this integration test');
   const r=spawnSync('bun',[dispatcher,'fire','ui-poc-evidence','--stage','requirements-analysis','--output-path',f.outputPath],{cwd:root,encoding:'utf8',env:{...process.env,CLAUDE_PROJECT_DIR:f.project,AIDLC_SENSORS_DIR:path.join(root,'poc/ui-poc/sensors'),AIDLC_SENSOR_SCRIPT_DIR:path.join(root,'poc/ui-poc/tools')}});
   assert.equal(r.status,0,`${r.stdout}${r.stderr}`);const out=JSON.parse(r.stdout.trim().split(/\r?\n/).at(-1));assert.equal(out.result,'failed');
+});
+
+// uiDesign.refinedMockupSkill: the refined-mockups design slot.
+const refinedFacts={unresolved_visual_alternatives:false};
+/** A copy of the installed routing tools whose design-skill lock pins fake upstream bytes, so verify runs offline. */
+function fakeDesignTools(t, choice='impeccable') {
+  const tools=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-routing-tools-')); t.after(()=>fs.rmSync(tools,{recursive:true,force:true}));
+  fs.copyFileSync(path.join(root,'poc/ui-poc/tools/ui-poc-c-routing.cjs'),path.join(tools,'ui-poc-c-routing.cjs'));
+  fs.cpSync(path.join(root,'poc/ui-poc/tools/ui-poc'),path.join(tools,'ui-poc'),{recursive:true});
+  const cfg=JSON.parse(fs.readFileSync(path.join(tools,'ui-poc/c-stage-routing.json'),'utf8')),skill=cfg.skills[cfg.designSkillChoices[choice].skill];
+  const lockPath=path.join(tools,'ui-poc/design-skill-lock.json'),lock=JSON.parse(fs.readFileSync(lockPath,'utf8'));
+  const source=lock.sources.find(x=>x.repository===skill.repository&&x.commit===skill.commit),fake=path.join(tools,'fake-upstream'),files={};
+  for (const entrypoint of skill.entrypoints) {
+    const bytes=Buffer.from(`fake pinned ${entrypoint}\n`),file=path.join(fake,entrypoint);
+    fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,bytes);files[entrypoint]=file;
+    Object.assign(source.files.find(x=>x.path===skill.sourcePaths[entrypoint]),{git_blob_sha:crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'),bytes:bytes.length});
+  }
+  fs.writeFileSync(lockPath,JSON.stringify(lock));
+  return {routing:require(path.join(tools,'ui-poc-c-routing.cjs')),entrypointSource:entrypoint=>files[entrypoint]};
+}
+test('the refined-mockups design slot defaults to the pinned Arm C component', () => {
+  const p=plan('refined-mockups',refinedFacts,'ui-poc-application');
+  assert.equal(p.designSkill,'impeccable-historical');
+  const design=p.invocations.find(x=>x.designApplication);
+  assert.equal(design.skill,'frontend-design');assert.ok(design.outputs.includes('accessibility-correction-report'));
+  assert.deepEqual(plan('refined-mockups',refinedFacts,'ui-poc-application',null).invocations,p.invocations);
+});
+test('a selected design skill replaces only the refined-mockups slot, with its own adapter and outputs', () => {
+  for (const id of ['impeccable','ui-ux-pro-max']) {
+    const p=plan('refined-mockups',refinedFacts,'ui-poc-application',id),cfg=load();
+    assert.equal(p.pass,true);assert.equal(p.designSkill,id);
+    const design=p.invocations.find(x=>x.designApplication);
+    assert.equal(design.skill,cfg.designSkillChoices[id].skill);assert.deepEqual(design.entrypoints,cfg.skills[design.skill].entrypoints);
+    assert.equal(design.adapter,cfg.designSkillChoices[id].adapter);assert.ok(!design.outputs.includes('accessibility-correction-report'));
+    assert.ok(p.invocations.some(x=>x.skill==='prototype-ui'));
+    for (const stage of ['rough-mockups','code-generation']) assert.equal(plan(stage,{design_context_missing:false,state_model_uncertainty:false},'ui-poc-application',id).designSkill,undefined);
+  }
+  assert.equal(plan('code-generation',{},'ui-poc-application','impeccable').invocations[0].skill,'frontend-design');
+});
+test('ui-poc-comparison keeps the pinned Arm C design skill and unknown choices fail with the choice list', () => {
+  const blocked=plan('refined-mockups',refinedFacts,'ui-poc-comparison','impeccable');
+  assert.equal(blocked.pass,false);assert.match(blocked.findings[0],/compares the pinned Arm C treatment/);
+  assert.equal(plan('refined-mockups',refinedFacts,'ui-poc-comparison','impeccable-historical').pass,true);
+  assert.equal(plan('build-and-test',{},'ui-poc-comparison','impeccable').pass,true);
+  const unknown=plan('refined-mockups',refinedFacts,'ui-poc-application','taste-skill');
+  assert.equal(unknown.pass,false);assert.match(unknown.findings[0],/Unknown uiDesign\.refinedMockupSkill: taste-skill \(choices: impeccable-historical, impeccable, ui-ux-pro-max\)/);
+});
+test('verify accepts a selected design skill whose installed entrypoints match the pin, without a WCAG report', t => {
+  const tools=fakeDesignTools(t),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'impeccable'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
+  const args=[f.logPath,f.facts,{contextPath:f.contextPath,factsPath:f.factsPath,outputPath:f.outputPath}];
+  assert.deepEqual(tools.routing.verify('refined-mockups',args[0],args[1],{...args[2],designSkill:'impeccable'}),{pass:true,findings_count:0,findings:[]});
+  // The configured choice must match the log: the default configuration rejects impeccable evidence, and vice versa.
+  assert.match(tools.routing.verify('refined-mockups',args[0],args[1],{...args[2],designSkill:null}).findings[0],/does not match the configured uiDesign\.refinedMockupSkill impeccable-historical/);
+  assert.equal(tools.routing.designSkillStatus('impeccable',f.project).ok,false,'licences are not installed in this fixture');
+  fs.appendFileSync(path.join(f.project,'.agents/skills/impeccable/reference/polish.md'),'edited');
+  assert.match(tools.routing.verify('refined-mockups',args[0],args[1],{...args[2],designSkill:'impeccable'}).findings[0],/Installed entrypoint differs from source-lock: \.agents\/skills\/impeccable\/reference\/polish\.md/);
+});
+test('verify still requires the creator-confirmed Design Context for a selected design skill', t => {
+  const tools=fakeDesignTools(t,'ui-ux-pro-max'),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'ui-ux-pro-max'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
+  f.events.find(x=>x.type==='skill-applied'&&x.skill==='ui-ux-pro-max').inputs.find(x=>x.name==='creator-confirmed-design-context-snapshot').kind='value';f.write();
+  const result=tools.routing.verify('refined-mockups',f.logPath,f.facts,{contextPath:f.contextPath,factsPath:f.factsPath,outputPath:f.outputPath,designSkill:'ui-ux-pro-max'});
+  assert.equal(result.pass,false);assert.match(result.findings[0],/creator-confirmed|Invalid bounded value input/);
+});
+test('the design skill is read from D configuration through the installed D resolver, failing closed without it', t => {
+  const project=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-design-config-'));t.after(()=>fs.rmSync(project,{recursive:true,force:true}));
+  const tools=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-design-tools-'));t.after(()=>fs.rmSync(tools,{recursive:true,force:true}));
+  const {resolveDesignSkill}=require('../tools/ui-poc-c-routing.cjs');
+  assert.equal(resolveDesignSkill(project,tools),null);
+  fs.mkdirSync(path.join(project,'.claude'));fs.writeFileSync(path.join(project,'.claude/d-acceleration.jsonc'),'{ // choose\n "uiDesign": { "refinedMockupSkill": "impeccable", }, }');
+  assert.throws(()=>resolveDesignSkill(project,tools),/D config resolver is not installed/);
+  fs.symlinkSync(path.join(root,'poc/d-acceleration'),path.join(tools,'d-acceleration'));
+  assert.equal(resolveDesignSkill(project,tools),'impeccable');
+  fs.writeFileSync(path.join(project,'.claude/d-acceleration.local.jsonc'),'{ "uiDesign": { "refinedMockupSkill": "impeccable-historical" } }');
+  assert.equal(resolveDesignSkill(project,tools),'impeccable-historical');
+  fs.writeFileSync(path.join(project,'.claude/d-acceleration.local.jsonc'),'{ "uiDesign": { "refinedMockupSkill": "Impeccable Latest" } }');
+  assert.throws(()=>resolveDesignSkill(project,tools),/invalid D uiDesign refinedMockupSkill/);
 });

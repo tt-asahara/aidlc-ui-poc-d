@@ -15,7 +15,7 @@ Invoke from the D checkout containing this skill. D retains the complete pinned 
 2. Inspect both repos with `git -C <path> status --short --branch`. Preserve all existing tracked, untracked, ignored, and uncommitted files. Never replace product `CLAUDE.md`, `AGENTS.md`, `.claude`, skills, hooks, settings, or plugins.
 3. Read [`../../../poc/ui-poc/README.md`](../../../poc/ui-poc/README.md), [`../../../poc/ui-poc/docs/verification.md`](../../../poc/ui-poc/docs/verification.md), [`../../../poc/ui-poc/docs/contract.md`](../../../poc/ui-poc/docs/contract.md), [`../../../poc/ui-poc/docs/c-stage-skill-matrix.md`](../../../poc/ui-poc/docs/c-stage-skill-matrix.md), [`../../../poc/ui-poc/treatments/c.json`](../../../poc/ui-poc/treatments/c.json), its [`source-lock.json`](../../../poc/ui-poc/treatments/source-lock.json), [`../../../poc/skill-installation.json`](../../../poc/skill-installation.json), and the D acceleration [`README.md`](../../../poc/d-acceleration/README.md), [`verification.md`](../../../poc/d-acceleration/verification.md), [`configuration.md`](../../../poc/d-acceleration/configuration.md), [`feature-21-22.md`](../../../poc/d-acceleration/feature-21-22.md), [`grounding-integration.md`](../../../poc/d-acceleration/grounding-integration.md), and [`stage-policy.json`](../../../poc/d-acceleration/stage-policy.json).
 
-Keep A/B/C conditions comparable. Do not substitute Anthropic frontend-design, latest Impeccable, engine/hooks/subagents, or an unavailable historical custom extension.
+Keep A/B/C conditions comparable. Do not substitute Anthropic frontend-design, latest Impeccable, engine/hooks/subagents, or an unavailable historical custom extension. The only sanctioned exception is the person's explicit opt-in to a refined-mockups design skill outside `ui-poc-comparison` (see "Optional refined-mockups design skill" below); the router refuses it inside the comparison.
 
 The complete C UI baseline is mandatory even when acceleration is disabled. The official host remains the single writer for questions, approvals, reviews, transitions, state, artifacts, and swarm settlement. D acceleration may schedule only the bounded seams in its policy and must return all UI contribution consumes/produces, sensor results, gates, and handoffs to that host unchanged.
 
@@ -142,3 +142,42 @@ no unmet `features.prLensReview` row.
 The review never replaces official reviewers, sensors, approvals, or gates.
 When it is OFF it does nothing. When it is ON without the pinned install, it
 fails closed with a one-line next step.
+
+## Optional refined-mockups design skill (opt-in only)
+
+The refined-mockups design slot defaults to the pinned Arm C component
+(`impeccable-historical`). The person may choose another skill for the
+`ui-poc-application` and `ui-poc-requirements` scopes:
+
+- `impeccable`: Impeccable 4.6.0, `pbakaus/impeccable@08d5b470`, Apache-2.0.
+- `ui-ux-pro-max`: UI/UX Pro Max, `nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1`, MIT. It needs `python3`.
+
+The router refuses any non-default choice in `ui-poc-comparison`. Do not
+install a choice or set `uiDesign.refinedMockupSkill` unless the person
+explicitly asked for that skill in this PRODUCT. Setup itself must never set
+the value.
+
+When asked, read [`../../../poc/d-acceleration/configuration.md`](../../../poc/d-acceleration/configuration.md)
+("詳細モックアップのデザインスキル"). Then, from `SRC`, after the D install:
+
+```bash
+bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill <id> --dry-run
+```
+
+Present the preview: the pinned repository and commit, the source skill
+directory, `PRODUCT/.agents/skills/<id>/`, and the licence paths. Apply by
+rerunning the same command without `--dry-run`.
+
+The setup stops on any of these, and you report it as a setup failure:
+
+- installed routing files that differ from SRC
+- a symlink or submodule in the pinned skill
+- a licence that differs from the record
+- an existing file that differs from the pinned file
+- an extra file in the install directory
+
+The person selects the skill in `.claude/d-acceleration.local.jsonc` or
+`.claude/d-acceleration.jsonc` with
+`{ "uiDesign": { "refinedMockupSkill": "<id>" } }`. Then preflight must show
+`optional.uiDesign` with that value and no unmet `uiDesign.refinedMockupSkill`
+row.

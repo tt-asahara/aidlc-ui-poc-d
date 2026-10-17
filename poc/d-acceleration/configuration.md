@@ -173,6 +173,54 @@ setupはこのスイッチを変更しません。ONにするかどうかは利�
 
 前提が未充足のときは、他のswitchと同じくexit 3です。
 
+## 詳細モックアップのデザインスキル (`uiDesign.refinedMockupSkill`)
+
+refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザインスキルを1つ選びます。
+既定値は `impeccable-historical`（未指定と同じ）で、Arm Cの固定版Impeccable
+`frontend-design` のままです。localの `.claude/d-acceleration.local.jsonc` がprojectの
+`.claude/d-acceleration.jsonc` より優先されます。
+
+| 値 | スキル | 固定版 | 向いている場面 |
+|---|---|---|---|
+| `impeccable-historical` | Impeccable `frontend-design`（Arm C） | `pbakaus/impeccable@209444a9`（Apache-2.0） | 既定。A/B/C比較と同じ条件で作る |
+| `impeccable` | Impeccable 4.6.0 | `pbakaus/impeccable@08d5b470`（Apache-2.0） | 業務アプリの見た目を作り込む。new-workで方向を決め、描画を見てcritique・polishで直す |
+| `ui-ux-pro-max` | UI/UX Pro Max | `nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1`（MIT） | ローカル検索でスタイル・配色・書体・UX規則のデザインシステム案を作る（要python3） |
+
+選択肢の正本は、合成済みのC routing設定 `.claude/tools/ui-poc/c-stage-routing.json` の
+`designSkillChoices` です。固定版のファイルハッシュは `.claude/tools/ui-poc/design-skill-lock.json`
+にあります。Dの設定は値の形だけを検査します。どの値が選べるかはrouting設定が決めます。
+
+- **切り替わる範囲:** refined-mockupsのデザイン枠だけです。rough-mockupsとcode-generationは、
+  常に固定版 `frontend-design` を使います。
+- **ui-poc-comparisonスコープ:** A/B/Cの比較条件を保つため、既定値以外はrouterが拒否します。
+  切り替えは `ui-poc-application` と `ui-poc-requirements` で有効です。
+- **使い方の制限（adapter）:** 各スキルは上流をそのまま実行せず、AI-DLCの中で範囲を区切って使います。
+  Impeccable 4.6.0では、バイナリを取得して実行するランチャー（`scripts/impeccable`）、hooks、
+  live modeを使いません。UI/UX Pro Maxでは、ローカル検索だけを使い、`--persist` は使いません。
+  どちらも、依頼者が確認したDesign Contextをスキルの好みより優先します。
+- **WCAG補正レポート:** 既定値のときだけ必要です。固定版の誤った大きい文字の基準を補正するためのものです。
+
+既定値以外を選ぶ前に、固定版をPRODUCTへ取得します（D checkoutから実行）。
+
+```bash
+bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill impeccable --dry-run
+bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill impeccable
+```
+
+setupは固定コミットを一時checkoutに取得し、symlinkとsubmoduleを拒否します。LICENSEが
+記録と一致することを確かめ、スキルを `.agents/skills/<id>/`、ライセンスを
+`.agents/skills/LICENSES/` に置きます。既存のファイルは上書きしません。内容が違うファイルや
+余分なファイルがあれば停止します。setupはこの設定値を変更しません。選ぶかどうかは利用者が決めます。
+
+```jsonc
+{ "uiDesign": { "refinedMockupSkill": "impeccable" } }
+```
+
+`run.ts --preflight` は実効値 `optional.uiDesign` を表示します。既定値以外のときは、前提行
+`uiDesign.refinedMockupSkill` を1行加えます（選択肢として存在し、固定版とライセンスが
+installされていること）。未充足ならexit 3です。sensorも同じinstall検査を行います。
+installされていない、または証跡のスキルが設定と違う場合は、refined-mockupsをNOT-READYで止めます。
+
 ## UI fidelity image settings
 
 `features.mockupPngGeneration` と `features.visualRegression` は独立した既定OFFの

@@ -44,6 +44,16 @@
     // 機能27/28 / 対象: sourceGrounding・specGroundingの各laneがworker起動前に作るsnapshot。役割: lane単位のfile数(maxEvidenceFiles)と成果物+証拠の合計byte数(maxInputBytes)の上限。ON時（各laneの機能がON）: 上限超過はworker呼出し前にgrounding-failed(NOT-READY、準拠主張なし)。OFF時（両機能OFF）: 参照しない。既定値: 200 file・1,000,000 byte（未設定時）。許容範囲: maxEvidenceFiles 1〜5000、maxInputBytes 1〜4000000の正の整数。範囲外・小数・文字列・未知keyは丸めずに設定エラーで停止。上限根拠: snapshot全体が1つのworker promptに埋め込まれるため、4,000,000 byteは最大1M token context相当（約4 byte/token）でpromptサイズと費用を制限する。依存関係: localがprojectよりfield単位で優先。実効値は run.ts --preflight と証拠JSONの各lane結果 limits に記録。利用場面: brownfieldでrootを絞っても既定上限に当たるとき（引上げはprompt費用増に直結）。
     "groundingLimits": { "maxEvidenceFiles": 200, "maxInputBytes": 1000000 },
   },
+  "uiDesign": {
+    // 対象: refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザインスキル。役割: C routingのデザイン枠に入るスキルを1つ選ぶ。rough-mockupsとcode-generationは常に固定版frontend-designのまま。既定値: "impeccable-historical"（未指定と同じ）。
+    // 選択肢（正本は .claude/tools/ui-poc/c-stage-routing.json の designSkillChoices）:
+    //   "impeccable-historical" … Arm Cの固定版Impeccable frontend-design（pbakaus/impeccable@209444a9）。既定値。追加installは不要。
+    //   "impeccable"            … Impeccable 4.6.0（pbakaus/impeccable@08d5b470、Apache-2.0）。new-workで見た目の方向を決め、craft-floor・critique・polishで描画を見て直す。業務アプリ（Operate mode）向け。
+    //   "ui-ux-pro-max"         … UI/UX Pro Max（nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1、MIT）。ローカル検索でスタイル・配色・書体・UX規則のデザインシステム案を作る。要python3。
+    // 既定値以外は事前に固定版の取得が必要: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill <選択肢>（setupはこの値を書き換えない）。未installならpreflightの前提行が未充足になり、sensorはNOT-READYで止まる。
+    // 境界: ui-poc-comparisonスコープでは比較条件を保つため既定値以外を拒否する（ui-poc-application / ui-poc-requirementsで有効）。承認・review・sensorは置き換えない。利用場面: 詳細モックアップの見た目を別のスキルで作り比べたいとき。
+    "refinedMockupSkill": "impeccable-historical",
+  },
   // 自動進行 / 対象: 現在セッションの公式engine正規遷移のみ。既定値: OFF。
   "auto": {
     // 対象: /aidlc --auto <description>、/aidlc-issue-autopilot、または /aidlcのIssue入口。役割: 公式遷移だけをboundedに自動継続する親スイッチ。ON時: generic入力を許可し、Issue入口はissueAutopilot.enabledもONの場合だけ1 Issueを処理。OFF時: generic入力を停止しGitHubへ接続しない。既定値: OFF。利用場面: 明示されたbounded自動処理。定期Issue実行にはClaude標準 /loop から別コマンド起動が必要。
