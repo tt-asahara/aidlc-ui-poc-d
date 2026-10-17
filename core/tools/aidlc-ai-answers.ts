@@ -10,7 +10,7 @@ const hash = (value: string | Uint8Array) => createHash("sha256").update(value).
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, child) => child && typeof child === "object" && !Array.isArray(child) ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
 const template = (body: string) => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID)\]:[^\r\n]*(?:\r?\n)?/gm, "");
 const answerValues = (body: string) => [...body.matchAll(/^\s*\[Answer\]:[ \t]*(.*?)[ \t]*$/gm)].map((match) => match[1].trim());
-function questionSections(body: string) { const headings = [...body.matchAll(/^###\s+([^\r\n]+)\s*$/gm)]; return headings.map((heading, index) => ({ id: heading[1].trim(), body: body.slice(heading.index!, headings[index + 1]?.index ?? body.length) })); }
+function questionSections(body: string) { const headings = [...body.matchAll(/^##\s+(Q\d+)\b[^\r\n]*$/gmi)]; const ids = headings.map((heading) => heading[1].toUpperCase()); if (new Set(ids).size !== ids.length) return []; return headings.map((heading, index) => ({ id: ids[index], body: body.slice(heading.index!, headings[index + 1]?.index ?? body.length) })); }
 function inside(root: string, path: string) { const rel = relative(root, path); return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)); }
 function readBound(root: string, input: unknown, expected: unknown, label: string): { path: string; bytes: Buffer } {
   if (typeof input !== "string" || !input || isAbsolute(input) || input.split(/[\\/]/).includes("..") || typeof expected !== "string" || !SHA.test(expected)) throw new Error(`invalid ${label} binding`);

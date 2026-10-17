@@ -6,7 +6,7 @@ import { evaluateAiQuestions } from "../ai-question-controller.ts";
 import { createAiApprovalGrant } from "../ai-approval-controller.ts";
 import { settleAiAnswers } from "../../../core/tools/aidlc-ai-answers.ts";
 
-function fixture(question = "### Q1\nChoose a display currency.\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n") {
+function fixture(question = "## Sources\n- Product brief\n\n## Q1 — Display currency\nChoose a display currency.\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n") {
   const root = mkdtempSync(join(tmpdir(), "aidlc-ai-question-")), intent = join(root, "aidlc/spaces/default/intents/example");
   mkdirSync(join(root, ".claude"), { recursive: true }); mkdirSync(join(intent, "ideation/intent-capture"), { recursive: true });
   writeFileSync(join(root, "aidlc/spaces/default/intents/active-intent"), "example\n");
@@ -35,7 +35,7 @@ describe("delegated AI stage questions", () => {
     const noGrant = fixture(), executable = model(noGrant.root, { outcome: "answer", reason: "guess", confidence: 0.99, riskFlags: [], uncertainties: [], answers: [{ answer: "JPY", source: "delegated-ai-assumption", reason: "safe", evidencePaths: [] }] });
     writeFileSync(join(noGrant.root, noGrant.grant), JSON.stringify({ schemaVersion: 1, mode: "human", allowedStages: [] }));
     expect((await evaluateAiQuestions({ projectDir: noGrant.root, stage: "intent-capture", questionsFile: noGrant.questions, delegationFile: noGrant.grant, evidenceFiles: [], claudeExecutable: executable })).status).toBe("block");
-    const sensitive = fixture("### Q1\nMay I publish externally and change permissions?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
+    const sensitive = fixture("## Q1\nMay I publish externally and change permissions?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
     expect((await evaluateAiQuestions({ projectDir: sensitive.root, stage: "intent-capture", questionsFile: sensitive.questions, delegationFile: sensitive.grant, evidenceFiles: [], claudeExecutable: model(sensitive.root, {}) })).reason).toContain("human");
     const low = fixture(); const lowResult = await evaluateAiQuestions({ projectDir: low.root, stage: "intent-capture", questionsFile: low.questions, delegationFile: low.grant, evidenceFiles: [], claudeExecutable: model(low.root, { outcome: "answer", reason: "uncertain", confidence: 0.4, riskFlags: [], uncertainties: [], answers: [{ answer: "JPY", source: "delegated-ai-assumption", reason: "guess", evidencePaths: [] }] }) });
     expect(lowResult.status).toBe("block");
@@ -43,20 +43,20 @@ describe("delegated AI stage questions", () => {
 
   test("settlement rejects changed questions or answers", async () => {
     const f = fixture(), result = await evaluateAiQuestions({ projectDir: f.root, stage: "intent-capture", questionsFile: f.questions, delegationFile: f.grant, evidenceFiles: [], claudeExecutable: model(f.root, { outcome: "answer", reason: "safe default", confidence: 0.95, riskFlags: [], uncertainties: [], answers: [{ answer: "JPY", source: "delegated-ai-assumption", reason: "reversible display default", evidencePaths: [] }] }) });
-    writeFileSync(join(f.root, f.questions), "### Q1\nChanged material question.\n[AI-Autonomy]: low-risk-reversible\n[Answer]: JPY\n");
+    writeFileSync(join(f.root, f.questions), "## Q1\nChanged material question.\n[AI-Autonomy]: low-risk-reversible\n[Answer]: JPY\n");
     expect(() => settleAiAnswers(f.root, "intent-capture", result.decisionFilePath!)).toThrow("questions changed");
   });
 
   test("fails closed for stage/path/material/partial-answer boundary violations", async () => {
     const stage = fixture(); writeFileSync(join(stage.intent, "aidlc-state.md"), "- **Scope**: greenfield\n- **Lifecycle Phase**: ideation\n- **Current Stage**: scope-definition\n- [-] scope-definition — EXECUTE\n");
     expect((await evaluateAiQuestions({ projectDir: stage.root, stage: "intent-capture", questionsFile: stage.questions, delegationFile: stage.grant, evidenceFiles: [], claudeExecutable: model(stage.root, {}) })).reason).toContain("current");
-    const material = fixture("### Q1\n対象利用者と成功基準を決めてください。\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
+    const material = fixture("## Q1\n対象利用者と成功基準を決めてください。\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
     expect((await evaluateAiQuestions({ projectDir: material.root, stage: "intent-capture", questionsFile: material.questions, delegationFile: material.grant, evidenceFiles: [], claudeExecutable: model(material.root, {}) })).reason).toContain("human");
-    const partial = fixture("### Q1\nDisplay currency?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: USD\n### Q2\nDate style?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
+    const partial = fixture("## Q1\nDisplay currency?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: USD\n## Q2\nDate style?\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n");
     expect((await evaluateAiQuestions({ projectDir: partial.root, stage: "intent-capture", questionsFile: partial.questions, delegationFile: partial.grant, evidenceFiles: [], claudeExecutable: model(partial.root, {}) })).reason).toContain("entirely blank");
     const path = fixture(); writeFileSync(join(path.intent, "ideation/intent-capture/other-questions.md"), readFileSync(join(path.root, path.questions)));
     expect((await evaluateAiQuestions({ projectDir: path.root, stage: "intent-capture", questionsFile: "aidlc/spaces/default/intents/example/ideation/intent-capture/other-questions.md", delegationFile: path.grant, evidenceFiles: [], claudeExecutable: model(path.root, {}) })).reason).toContain("canonical");
-    const misplaced = fixture("### Q1\nSafe display?\n[AI-Autonomy]: low-risk-reversible\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n### Q2\nAnother display?\n[Answer]: ____\n");
+    const misplaced = fixture("## Q1\nSafe display?\n[AI-Autonomy]: low-risk-reversible\n[AI-Autonomy]: low-risk-reversible\n[Answer]: ____\n## Q2\nAnother display?\n[Answer]: ____\n");
     expect((await evaluateAiQuestions({ projectDir: misplaced.root, stage: "intent-capture", questionsFile: misplaced.questions, delegationFile: misplaced.grant, evidenceFiles: [], claudeExecutable: model(misplaced.root, {}) })).reason).toContain("exactly one");
   });
 

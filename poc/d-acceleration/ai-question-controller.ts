@@ -21,7 +21,7 @@ const hash = (value: string | Uint8Array) => createHash("sha256").update(value).
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, child) => child && typeof child === "object" && !Array.isArray(child) ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
 export const questionTemplate = (body: string): string => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID)\]:[^\r\n]*(?:\r?\n)?/gm, "");
 const answerLines = (body: string) => [...body.matchAll(/^\s*\[Answer\]:[ \t]*(.*?)[ \t]*$/gm)];
-function questionSections(body: string) { const headings = [...body.matchAll(/^###\s+([^\r\n]+)\s*$/gm)]; return headings.map((heading, index) => ({ id: heading[1].trim(), body: body.slice(heading.index!, headings[index + 1]?.index ?? body.length) })); }
+function questionSections(body: string) { const headings = [...body.matchAll(/^##\s+(Q\d+)\b[^\r\n]*$/gmi)]; const ids = headings.map((heading) => heading[1].toUpperCase()); if (new Set(ids).size !== ids.length) return []; return headings.map((heading, index) => ({ id: ids[index], body: body.slice(heading.index!, headings[index + 1]?.index ?? body.length) })); }
 function inside(root: string, path: string) { const rel = relative(root, path); return rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel)); }
 function file(root: string, input: string, label: string): Binding & { absolute: string; bytes: Buffer } {
   if (!input || isAbsolute(input) || input.split(/[\\/]/).includes("..")) throw new Error(`${label} must be a project-relative path`);
