@@ -43,6 +43,15 @@ describe("clean-target D install, parity, and update", () => {
     // Every ordinary-/aidlc D command is pre-approved by the project allow list.
     const allow = JSON.parse(readFileSync(join(product, ".claude", "settings.json"), "utf8")).permissions.allow as string[];
     for (const script of ["generic-auto-cli.ts", "run.ts", "host-stage-boundary.ts"]) expect(allow).toContain(`Bash(bun .claude/tools/d-acceleration/${script} *)`);
+    // The ui-poc stage-major+swarm proposal is composed in before Step 6, so the
+    // agent reads it before the official Construction iteration choice.
+    const delivery = readFileSync(join(product, ".claude", "aidlc-common", "stages", "inception", "delivery-planning.md"), "utf8");
+    const at = (needle: string) => { const index = delivery.indexOf(needle); expect(index, needle).toBeGreaterThanOrEqual(0); return index; };
+    const proposal = at("### UI application execution proposal (ui-poc)");
+    expect(at("### Step 5: Phase Boundary Verification")).toBeLessThan(proposal);
+    expect(proposal).toBeLessThan(at("### Step 6: Completion Handoff"));
+    expect(at("### Step 6: Completion Handoff")).toBeLessThan(at("**Construction iteration.**"));
+    expect(delivery.slice(proposal, at("**Construction iteration.**"))).not.toMatch(/^### Step [0-57-9]/m);
     git("add", "-A"); git("commit", "-qm", "install");
   }, TIMEOUT);
 

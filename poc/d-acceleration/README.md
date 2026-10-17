@@ -58,7 +58,7 @@ extension surfaces:
 
 | Feature | Outcome |
 | --- | --- |
-| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `after-step:6` spliced by compose. |
+| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `before-step:6` spliced by compose, so it precedes Step 6's Construction iteration choice. |
 | UI scope routing | Partly re-homed: plugin scope keywords route short ASCII requests. UI-specific high-specificity keywords, CJK keyword boundaries, and Japanese negation needed core and were dropped; long or Japanese prose gets the stock proposal and the person picks `ui-poc-application` at the official scope confirmation. |
 | Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds only to an Intent proven created since `start` (absent from the Intent inventory `start` recorded, with its own `WORKFLOW_STARTED` audit row at or after `startedAt`); a switched-to or resumed Intent is refused in one line and its Construction policy is never touched. The typed `machine_action` field was core-only and is gone. |
 | Delegated low-risk question answers | Re-homed: D-owned grammar/settler `ai-question-answers.ts` and the D ledger `decisions/ai-question-answers.jsonl`; the `AI_QUESTION_ANSWERED` audit event was core-only and is gone. |
