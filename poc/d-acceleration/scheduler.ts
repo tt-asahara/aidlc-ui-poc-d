@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { plan, type Input, type Tier } from "./aidlc-acceleration-plan.ts";
+import { effortForTier, plan, type Input, type Tier } from "./aidlc-acceleration-plan.ts";
 import { claudeWorkerLaunch, fakeWorkerLaunch, runWorker, type WorkerKind } from "./worker-adapters.ts";
 const escalate = (tier: Tier): Tier | null => tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : null;
 type Options = { failOnce?: string[]; workerKind?: WorkerKind; ledgerPath?: string; projectDir: string; requestedClaudeModels?: Partial<Record<Tier, string>>; requestedClaudeEffort?: string; claudeExecutable?: string; disposableTestMode?: boolean; timeoutMs?: number };
@@ -48,9 +48,10 @@ export async function execute(input: Input, options: Options) {
         const model = options.workerKind === "claude" ? options.requestedClaudeModels?.[tier] : input.modelCatalog?.[tier];
         if (options.workerKind === "claude" && !model) return { ok: false, failure: "missing-requested-model" };
         const launch = options.workerKind === "claude"
-          ? claudeWorkerLaunch({ model: model!, effort: options.requestedClaudeEffort ?? (tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high"), prompt: buildClaudeBuilderPrompt(input, task, options.projectDir), executable: options.claudeExecutable })
+          ? claudeWorkerLaunch({ model: model!, effort: options.requestedClaudeEffort ?? effortForTier(tier), prompt: buildClaudeBuilderPrompt(input, task, options.projectDir), executable: options.claudeExecutable })
           : fakeWorkerLaunch({ script: `${import.meta.dir}/fake-worker.ts`, task: id, stage: task.stage, unit: task.unit, tier, model, durationMs: task.estimatedMs, retryOrdinal, fail: failOnce.has(id) && retryOrdinal === 0, produces: options.disposableTestMode ? task.writeSet : [] });
-        const result = await runWorker(launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 30_000, maxStdoutBytes: 1_048_576, maxStderrBytes: 262_144 }); records.push({ task: id, tier, retryOrdinal, ...result });
+        const result = await runWorker(launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 30_000, maxStdoutBytes: 1_048_576, maxStderrBytes: 262_144 }); const routed = planned.routes[id]!;
+        records.push({ task: id, tier, retryOrdinal, route: { source: routed.source, reason: retryOrdinal === 0 ? routed.reason : `escalated from ${routed.tier} after ${retryOrdinal} failed attempt(s)`, plannedTier: routed.tier, plannedEffort: routed.effort }, ...result });
         // Worker completion is only candidate evidence. The official engine
         // must accept the Unit before a separate single writer records it in
         // the resume ledger.

@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConfig, resolveDModels } from "./d-config.ts";
+import { clefRunnerArgs, resolveDClef, resolveDConfig, resolveDModelContract, resolveDModels } from "./d-config.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
@@ -11,13 +11,7 @@ const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.m
 const missing = required.filter((path) => !existsSync(path));
 const clef = resolveDClef(projectDir);
 const optional = resolveDConfig(projectDir);
-const requestedModels = resolveDModels(projectDir);
-const observedParentModel = process.env.AIDLC_PARENT_MODEL?.trim() || null;
-const parentMatches = observedParentModel?.toLowerCase().includes("opus") === true;
-const parentSession = observedParentModel
-  ? { status: parentMatches ? "caller-reported-match" : "caller-reported-mismatch", source: "unverified-caller-report", model: observedParentModel, ...(parentMatches ? {} : { requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." }) }
-  : { status: "not-observable", source: "none", model: null, requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." };
-const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: { parentSession, dWorkers: { requested: requestedModels.models, runtimeIdentity: "reported-per-worker-result" } }, constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
+const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");

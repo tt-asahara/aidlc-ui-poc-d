@@ -13,13 +13,20 @@ describe("bounded Issue ambiguity assessor", () => {
     const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
     executable(fake, `import {writeFileSync} from "node:fs"; writeFileSync("assessor-argv.json", JSON.stringify(process.argv.slice(2))); console.log(JSON.stringify({result:JSON.stringify({unresolved:[],assumptions:["Use JPY until the user specifies another currency"],researchedFacts:[]})}));`);
     const result = await createClaudeIssueAssessor({ projectDir: root, model: "fixture-judgment", executable: fake }).assess(issue, "assume");
-    expect(result).toEqual({ unresolved: [], assumptions: ["Use JPY until the user specifies another currency"], researchedFacts: [], description: issue.body });
+    expect(result).toEqual({ unresolved: [], assumptions: ["Use JPY until the user specifies another currency"], researchedFacts: [], description: issue.body, modelIdentity: { requested: "fixture-judgment", runtimeReported: null, runtimeReportedModels: [], status: "unverified", source: "none" } });
     const argv = JSON.parse(readFileSync(join(root, "assessor-argv.json"), "utf8")) as string[];
     for (const expected of ["--no-session-persistence", "--restricted", "--strict-mcp-config", "--disable-slash-commands", "--tools", "--allowed-tools", "--disallowed-tools", "--model", "fixture-judgment", "--effort", "high"]) expect(argv).toContain(expected);
     expect(argv[argv.indexOf("--tools") + 1]).toBe("");
     expect(argv[argv.indexOf("--allowed-tools") + 1]).toBe("");
     expect(argv[argv.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
     expect(argv.at(-1)).toContain("Do not approve work");
+  });
+
+  test("records verified runtime identity from Claude modelUsage", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
+    executable(fake, `console.log(JSON.stringify({result:JSON.stringify({unresolved:[],assumptions:[],researchedFacts:[]}),modelUsage:{"claude-opus-5-5":{inputTokens:3,outputTokens:4,costUSD:0.01,canonicalModel:"claude-opus-5-5",costBasis:"list"}}}));`);
+    const result = await createClaudeIssueAssessor({ projectDir: root, model: "claude-opus-5-5", executable: fake }).assess(issue, "assume");
+    expect(result.modelIdentity).toMatchObject({ requested: "claude-opus-5-5", runtimeReported: "claude-opus-5-5", status: "verified-match", source: "claude-modelUsage" });
   });
 
   test("connects research facts while retaining unresolved evidence needs", async () => {

@@ -148,3 +148,34 @@ if (import.meta.main) {
   }
   process.stdout.write(`${JSON.stringify(resolveDAiApproval(projectDir))}\n`);
 }
+
+/**
+ * Parent-session vs D-worker model contract reported by `run.ts --preflight`.
+ * The parent session's model is not observable from a child process: the CLI
+ * offers no query for it, and D cannot switch it. A caller may report it with
+ * AIDLC_PARENT_MODEL; that report stays labelled unverified. D workers always
+ * pass an explicit `--model`, so a parent default (ANTHROPIC_MODEL,
+ * CLAUDE_CODE_SUBAGENT_MODEL) never selects a worker's model; each worker
+ * result carries its own runtime-reported identity.
+ */
+export function resolveDModelContract(projectDir: string, parentReport: string | undefined, cli: Partial<DModelCatalog> = {}) {
+  const requested = resolveDModels(projectDir, cli);
+  const observedParentModel = parentReport?.trim() || null;
+  const parentMatches = observedParentModel?.toLowerCase().includes("opus") === true;
+  const requiredAction = "Select Opus in the parent Claude session when Opus-first execution is required.";
+  const parentSession = observedParentModel
+    ? { status: parentMatches ? "caller-reported-match" : "caller-reported-mismatch", source: "unverified-caller-report", model: observedParentModel, ...(parentMatches ? {} : { requiredAction }) }
+    : { status: "not-observable", source: "none", model: null, requiredAction };
+  return {
+    parentSession,
+    dWorkers: {
+      requested: requested.models,
+      sources: requested.sources,
+      effortByTier: { fast: "low", balanced: "medium", judgment: "high" },
+      selection: "explicit --model per worker launch; independent of the parent session model",
+      runtimeIdentity: "reported-per-worker-result",
+      identityStatuses: ["verified-match", "alias-resolved", "mismatch", "unverified"],
+    },
+    separation: "D can request a worker model but cannot switch or prove the already-running parent session model.",
+  };
+}

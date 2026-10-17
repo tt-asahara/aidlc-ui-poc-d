@@ -20,6 +20,27 @@ served model: worker records keep `requestedModel` separate from
 `runtimeReportedModel`. The planner never validates availability by making a
 paid model call.
 
+Claude CLI 2.1.302 JSON results carry no top-level `model`; the served model
+is the key of `modelUsage`. Every worker result (design-wave worker, read-only
+fanout worker, Issue ambiguity assessor, delegated question and approval
+assessors) carries `modelIdentity` with `requested`, `runtimeReported`,
+`runtimeReportedModels`, `source`, and `status`: `verified-match` (exact ID),
+`alias-resolved` (a family alias such as `opus` served by one model of that
+family), `mismatch`, or `unverified` (no identity reported; never inferred from
+the request). Usage tokens and the CLI's list-price `costUSD` are kept in
+`usage` when reported. The question decision stores `model.identityStatus`.
+The approval CLI result carries `modelIdentity` outside the ledger record,
+because core validates that record's exact keys. Assumption-ledger
+entries carry the assessor's `modelIdentity`.
+
+Each route records `tier`, `effort` (fast=low, balanced=medium,
+judgment=high), `reason`, and `source`. Scheduler records repeat the route
+reason, or the escalation reason on retries. The planner owns two
+safeguards that callers cannot override. Official design-wave stages and
+`design` tasks never route below `balanced`, even when Clef answers `fast` or
+a caller supplies `fallbackTier: "fast"`. `approval`/`security`/`compliance`
+tasks and every stage whose policy says `clef: "never"` are never sent to Clef.
+
 Output contains per-task `route`, ordered `waves`, routing metrics, and enforced
 constraints. A wave contains only entries from one issued directive: the official engine
 still owns directive issuance, approvals, audit events, review scope, and swarm
@@ -31,5 +52,6 @@ Each route also contains bounded Clef evidence. `attempted: false` means the
 task was not eligible or Clef was disabled. `available: false` means the local
 transport or HTTP endpoint failed. `available: true, used: false` means a
 response arrived but was invalid or below the confidence threshold, so the
-conservative fallback was used. No route claims Clef was used unless
+conservative fallback was used. `outcome: "timeout"` (with `available: null`)
+means the request was aborted at `timeoutMs`. No route claims Clef was used unless
 `used: true` and `outcome: selected`.

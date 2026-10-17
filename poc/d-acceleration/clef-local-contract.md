@@ -36,10 +36,15 @@ quality or end-to-end acceleration.
 
 The adapter permits only `http://127.0.0.1`, rejects redirects, applies a
 timeout and confidence threshold, validates the returned choice, and falls
-back to the task's conservative fallback tier on any failure. Each route
+back to the task's conservative fallback tier on any failure. The planner
+enforces a `balanced` floor for official design-wave stages and design tasks
+over both Clef answers and fallbacks. It never sends approval, security, or
+compliance tasks, or any stage whose policy says `clef: "never"`, to Clef. The
+human-decision controllers (question/approval assessors) and the Issue
+ambiguity assessor have no Clef path at all. Each route
 records `attempted`, `available`, `used`, the loopback endpoint, and a bounded
-outcome (`selected`, `unavailable`, `invalid-response`, `low-confidence`, or
-`not-eligible`). Availability never implies that Clef's answer was used. It
+outcome (`selected`, `unavailable`, `timeout`, `invalid-response`,
+`low-confidence`, or `not-eligible`). Malformed JSON is `invalid-response`. Availability never implies that Clef's answer was used. It
 never starts or stops Clef.
 
 ## Ordinary `/aidlc` configuration
@@ -63,3 +68,11 @@ Enabling Clef never starts it and never makes every Unit eligible; each
 low-risk Unit must be named explicitly. If the service is stopped, the route
 records `attempted:true`, `available:false`, `used:false`, and
 `outcome:"unavailable"`, then uses the conservative fallback tier.
+
+## Availability check on 2026-10-17
+
+`curl --fail http://127.0.0.1:18742/health` failed with exit code 7 (connection
+refused). The `model-routing` workstream does not start Clef, so real
+availability, accuracy, throughput, and speed-up remain **未検証**. Fallback
+behaviour was measured instead. See `evidence/model-routing/README.md` for
+the results and the exact live procedure (`clef-eval.ts`).

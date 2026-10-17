@@ -137,7 +137,13 @@ must only be used with a throwaway fixture project.
 separately. D can request Opus for its own workers, but it cannot silently
 change an already-running parent Claude session; when the parent model is not
 observable, preflight gives the exact session action instead of claiming the
-worker request applies to inline stages. It likewise reports that safe
+worker request applies to inline stages. The parent model comes only from a
+caller's `AIDLC_PARENT_MODEL` report, labelled `unverified-caller-report`.
+`modelContract.dWorkers` lists the requested worker models with their sources
+(`cli`/`local`/`project`/`default`) and the per-tier effort. Every D worker
+passes an explicit `--model`, so a parent default such as `ANTHROPIC_MODEL` or
+`CLAUDE_CODE_SUBAGENT_MODEL` never selects a worker model. Each worker result
+carries its own `modelIdentity` (see `schema.md`). It likewise reports that safe
 Construction parallelism remains `stage-major/swarm` only after the official
 Unit DAG proves independent ready Units with disjoint writes and the person's
 recorded request authorizes the policy change.
@@ -209,3 +215,5 @@ measured LLM latency or cost. The output separately reports planner wall time,
 Clef routing time, retries, model/cost observability, critical-path estimate,
 and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
+`model-routing-probe.ts` and `clef-eval.ts` produce that evidence. The
+2026-10-17 results are in `evidence/model-routing/README.md`.

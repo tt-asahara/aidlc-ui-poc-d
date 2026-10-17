@@ -12,7 +12,25 @@
    non-confidential ambiguous task. Confirm the route records `source=clef`, a
    confidence, and routing latency. Stop neither the service nor other work.
 4. Repeat with an unreachable loopback port and a low-confidence fixture server;
-   both must produce `source=fallback`, `tier=judgment`.
+   both must produce `source=fallback`, `tier=judgment` (design-wave stages:
+   `balanced`). `tests/clef-routing.test.ts` automates the enabled, disabled,
+   unavailable, malformed, timeout, and low-confidence cases against a real
+   loopback fixture server. `clef-eval.ts` measures a live service.
+
+## Model identity and tier probe (real CLI, synthetic prompts)
+
+```bash
+bun poc/d-acceleration/model-routing-probe.ts identity --out poc/d-acceleration/evidence/model-routing
+bun poc/d-acceleration/model-routing-probe.ts parent   --out poc/d-acceleration/evidence/model-routing
+bun poc/d-acceleration/model-routing-probe.ts compare  --out poc/d-acceleration/evidence/model-routing
+bun poc/d-acceleration/clef-eval.ts --url http://127.0.0.1:18742 --out <file>
+```
+
+`identity` runs every worker type's production argv builder against each
+requested model. `parent` simulates a Haiku parent through the inherited
+environment while workers request Opus. `compare` runs three accepted tasks
+per tier, plus a matched serial-Opus versus routed-parallel pair. Results and
+caveats are in `evidence/model-routing/README.md`.
 
 ## Real-model A/B (requires existing authorized runtime; no new API purchase)
 
