@@ -221,3 +221,8 @@ measured LLM latency or cost. The output separately reports planner wall time,
 Clef routing time, retries, model/cost observability, critical-path estimate,
 and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
+
+The A/B/C/D lineage, the adopted-number ledger (items 7, 9–17, 21, 22, 27,
+28), stage-to-skill invocation evidence, and the pr-lens record are in
+[`audit/`](audit/README.md). Reproduce the lineage comparison with
+`bash poc/d-acceleration/audit/lineage.sh`.
