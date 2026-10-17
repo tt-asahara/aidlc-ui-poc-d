@@ -12,7 +12,7 @@ description: >
   --summary-confirmation on|off, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and the scope will be auto-detected.
-argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --version | --help]"
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full] | --version | --help]"
 user-invocable: true
 ---
 
@@ -52,6 +52,24 @@ Issue body as flags. The controller creates at most one intent and returns to
 this ordinary loop for all stage work. The dedicated recurring entry is
 `/aidlc-issue-autopilot`; Claude Code's standard `/loop` remains untouched and
 may schedule it as `/loop 15m /aidlc-issue-autopilot <required-label>`.
+
+When `$ARGUMENTS` leads with `--doc` and the installed
+`{{HARNESS_DIR}}/tools/d-acceleration/design-document.ts` exists, generate the
+product-level design document instead of calling official `orchestrate next`;
+never pass `--doc` to the engine. Read
+`{{HARNESS_DIR}}/tools/d-acceleration/design-document-guide.md` first: it owns
+the chapter layout, incremental rules, and input-scope rule. Then run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-manifest --json --project-dir "$PWD"`
+and read only inside each listed `record_root` (plus source files an artifact
+cites by resolvable path). Plain `--doc` merges into the existing space-level
+`design_document_root`; `--doc --full` regenerates from every intent and first runs
+`bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-snapshot --project-dir "$PWD"`.
+If the snapshot fails, do not regenerate: say what failed and stop. A non-empty
+`warnings[]` names excluded records: continue, tell the person, and point to
+`/aidlc --doctor`. This is read-only with respect to the workflow: write only
+under `design_document_root` and the manifest's `design_summary` paths, never
+advance a stage, emit audit, or touch state. Name the generated root in one
+line and stop.
 
 When the request is `/aidlc --auto <description>` and the installed generic
 controller exists, remove only the leading `--auto`, write the complete remaining
