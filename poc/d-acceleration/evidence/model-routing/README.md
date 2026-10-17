@@ -66,7 +66,10 @@ Matched-input arms ran on the same three tasks:
 
 The D arm's fast T1 returned `["TX","OH","UT"]`, which is unsorted. The same
 prompt passed on the earlier fast run. The scheduler escalates only on process
-failure, not on an acceptance defect, so the defect was not reworked.
+failure, not on an acceptance defect, so the defect was not reworked. Follow-up, not implemented: design-wave
+workers produce official artifacts, and only the official host, sensors, and
+review judge them. The scheduler has no deterministic acceptance signal that
+it could safely escalate on without becoming a second judge of the artifacts.
 Routing overhead was under 1 ms.
 
 Caveats: n=1 per cell, with no variance or significance claim. The baseline

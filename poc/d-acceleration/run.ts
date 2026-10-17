@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { clefRunnerArgs, resolveDClef, resolveDConfig, resolveDModelContract, resolveDModels } from "./d-config.ts";
+import { enforceParallelOff } from "./parallel-guard.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
@@ -21,13 +22,24 @@ if (stageCheckInput) {
   const check = spawnSync(process.execPath, [join(import.meta.dir, "host-stage-boundary.ts"), "--project-dir", projectDir, "--directive-file", directiveFile, "--manifest", stageCheckInput, "--engine-dir", tools], { cwd: projectDir, encoding: "utf8" });
   process.stdout.write(check.stdout); process.stderr.write(check.stderr); process.exit(check.status ?? 1);
 }
-const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
-if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
-const directive = JSON.parse(next.stdout);
+const officialNext = () => {
+  const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
+  return JSON.parse(next.stdout);
+};
+let directive = officialNext();
+// parallel.enabled=false: serialize an existing stage-major/swarm Intent through
+// the official setter and never hand an official swarm back while D is off.
+let parallelGuard = optional.parallel.enabled ? null : enforceParallelOff({ projectDir, engineDir: tools, directive, parallelEnabled: false });
+if (parallelGuard?.action === "refresh") { directive = officialNext(); parallelGuard = enforceParallelOff({ projectDir, engineDir: tools, directive, parallelEnabled: false }); }
+if (parallelGuard?.action === "stop") {
+  process.stdout.write(`${JSON.stringify({ status: "parallel-off-action-required", reason: parallelGuard.reason, recovery: parallelGuard.recovery, directive, parallelGuard, enabled }, null, 2)}\n`);
+  process.exit(2);
+}
 const readOnlyStages = new Set(enabled.supportedReadOnlyFanout);
 const designStages = new Set(enabled.supportedDesignWaves);
 if (directive.gate || directive.kind !== "run-stage" || (!readOnlyStages.has(directive.stage) && !designStages.has(directive.stage))) {
-  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled, ...(parallelGuard ? { parallelGuard } : {}) }, null, 2)}\n`);
   process.exit(0);
 }
 if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
