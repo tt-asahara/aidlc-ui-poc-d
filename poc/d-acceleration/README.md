@@ -41,6 +41,18 @@ functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.
 
+## Design document (`/aidlc --doc`)
+
+Ported from the KDDI harness. `/aidlc --doc` merges a product-level design
+document spanning every intent into the space-level
+`aidlc/spaces/<space>/design-document/`; `/aidlc --doc --full` regenerates it
+after `design-document.ts doc-snapshot` keeps one previous generation under the
+already-ignored `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`. The LLM
+writes the document following `design-document-guide.md`; `design-document.ts
+doc-manifest --json` owns the deterministic input set. It is read-only with
+respect to workflow state. The KDDI critic loop (`docCriticLoop`, design-doc
+audit and reviewer agent) is not ported.
+
 ## Approved-transition Git persistence
 
 The Claude projection includes a host-only PostToolUse coordinator that runs
