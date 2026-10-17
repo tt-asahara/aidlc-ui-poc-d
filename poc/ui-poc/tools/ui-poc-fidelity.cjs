@@ -50,6 +50,38 @@ function validateSnapshot(snapshot) {
   return findings;
 }
 
+/** The single owner of element identity (SCREEN/STATE/KEY) across snapshots. */
+function snapshotElements(snapshot) {
+  const elements = new Map();
+  for (const capture of snapshot?.captures || []) for (const element of capture.elements || []) elements.set(`${capture.screen}/${capture.state}/${element.key}`, { capture, element });
+  return elements;
+}
+
+/**
+ * The single owner of "what counts as an element difference". Implementation
+ * comparison, Build and Test matrices, and approved-upstream change control all
+ * call this; none re-implements its own notion of drift.
+ */
+function elementDifferences(expected, observed, { observedIsApproved = false } = {}) {
+  const differences = [];
+  if (!observed) { differences.push('missing'); return differences; }
+  if (expected.exactCopy === true && expected.text !== observed.text) differences.push(`copy ${JSON.stringify(expected.text)} != ${JSON.stringify(observed.text)}`);
+  if ((expected.role || '') !== (observed.role || '')) differences.push(`role ${expected.role || '(none)'} != ${observed.role || '(none)'}`);
+  if (observedIsApproved) {
+    // Comparing two approved design snapshots: contracts, not runtime observations.
+    if (expected.exactCopy !== observed.exactCopy) differences.push(`exact-copy ${Boolean(expected.exactCopy)} != ${Boolean(observed.exactCopy)}`);
+    if (canonical(expected.truncation || null) !== canonical(observed.truncation || null)) differences.push('truncation contract changed');
+    if (canonical(expected.action || null) !== canonical(observed.action || null)) differences.push('action contract changed');
+    if (!expected.exactCopy && expected.important && (expected.text || '') !== (observed.text || '')) differences.push(`text ${JSON.stringify(expected.text)} != ${JSON.stringify(observed.text)}`);
+    return differences;
+  }
+  if (expected.truncation?.mode === 'required' && observed.truncated !== true) differences.push('required truncation not observed');
+  if (expected.truncation?.mode === 'forbidden' && observed.truncated === true) differences.push('unexpected truncation observed');
+  if (expected.action && observed.actionVerified !== true) differences.push(`action ${expected.action.id} did not reach ${expected.action.expectedState}`);
+  return differences;
+}
+const elementDeltaSha256 = (elementKey, differences) => hashJson({elementKey,differences});
+
 function dispositionReceipt(disposition, ledger, approvedSnapshotHash, observedDeltaSha256 = disposition?.deltaSha256) {
   if (!disposition || !['upstream-revised','approved-deviation','intentionally-omitted'].includes(disposition.status) || typeof disposition.reason !== 'string' || !disposition.reason.trim() || typeof disposition.approvalReceipt !== 'string' || !disposition.approvalReceipt.trim() || !/^[a-f0-9]{64}$/.test(disposition.deltaSha256 || '') || disposition.deltaSha256 !== observedDeltaSha256) return false;
   const dispositionSha256=hashJson({elementKey:disposition.elementKey,status:disposition.status,reason:disposition.reason});
@@ -64,34 +96,41 @@ function compareSnapshots(approved, actual, dispositions = [], ledger = {}) {
   try { const url=new URL(actual.source.path); if (!['127.0.0.1','localhost','::1'].includes(url.hostname)) findings.push('Actual snapshot source is not a loopback implementation URL'); }
   catch { findings.push('Actual snapshot source is not a loopback implementation URL'); }
   const approvedHash = hashJson(approved);
-  const approvedElements = new Map();
-  const actualElements = new Map();
-  for (const capture of approved.captures) for (const element of capture.elements) approvedElements.set(`${capture.screen}/${capture.state}/${element.key}`, { capture, element });
-  for (const capture of actual.captures) for (const element of capture.elements) actualElements.set(`${capture.screen}/${capture.state}/${element.key}`, { capture, element });
-  const byElement = new Map(dispositions.map(value => [value.elementKey, value]));
+  const results = elementResults(approved, actual, dispositions, ledger);
   let deviated = 0;
-  for (const [key, expected] of approvedElements) {
-    const observed = actualElements.get(key);
-    const differences = [];
-    if (!observed) differences.push('missing');
-    else {
-      if (expected.element.exactCopy === true && expected.element.text !== observed.element.text) differences.push(`copy ${JSON.stringify(expected.element.text)} != ${JSON.stringify(observed.element.text)}`);
-      if ((expected.element.role || '') !== (observed.element.role || '')) differences.push(`role ${expected.element.role || '(none)'} != ${observed.element.role || '(none)'}`);
-      if (expected.element.truncation?.mode === 'required' && observed.element.truncated !== true) differences.push('required truncation not observed');
-      if (expected.element.truncation?.mode === 'forbidden' && observed.element.truncated === true) differences.push('unexpected truncation observed');
-      if (expected.element.action && observed.element.actionVerified !== true) differences.push(`action ${expected.element.action.id} did not reach ${expected.element.action.expectedState}`);
-    }
-    if (!differences.length) continue;
-    const disposition = byElement.get(key);
-    const deltaSha256 = hashJson({elementKey:key,differences});
-    if (dispositionReceipt(disposition, ledger, approvedHash, deltaSha256)) deviated += 1;
-    else findings.push(`Unapproved UI difference ${key}: ${differences.join(', ')}`);
+  for (const row of results) {
+    if (row.result === 'pass') continue;
+    if (row.result === 'fail') findings.push(`${row.addition ? 'Unapproved UI addition' : 'Unapproved UI difference'} ${row.elementKey}: ${row.differences.join(', ')}`);
+    else deviated += 1;
   }
+  const known = new Set(results.map(row => row.elementKey));
   for (const disposition of dispositions) {
-    if (!approvedElements.has(disposition.elementKey)) findings.push(`Disposition names an unknown approved element: ${disposition.elementKey}`);
+    if (!known.has(disposition.elementKey)) findings.push(`Disposition names an unknown approved element: ${disposition.elementKey}`);
     else if (!dispositionReceipt(disposition, ledger, approvedHash)) findings.push(`Disposition has no matching detached approval receipt: ${disposition.elementKey}`);
   }
-  return { pass: findings.length === 0, findings_count: findings.length, findings, checked: approvedElements.size, deviated };
+  return { pass: findings.length === 0, findings_count: findings.length, findings, checked: results.filter(row => !row.addition).length, deviated };
+}
+
+/**
+ * The single owner of per-element implementation results. One row per approved
+ * element (the denominator never comes from the implementation), plus a row
+ * for every important explicit-ID element the implementation added without
+ * approval. compareSnapshots and the Build and Test element matrix both read
+ * these rows; neither re-derives pass/fail on its own.
+ */
+function elementResults(approved, actual, dispositions = [], ledger = {}) {
+  const approvedHash = hashJson(approved);
+  const approvedElements = snapshotElements(approved), actualElements = snapshotElements(actual);
+  const byElement = new Map(dispositions.map(value => [value.elementKey, value]));
+  const rows = [];
+  const settle = (elementKey, differences, extra) => {
+    const disposition = byElement.get(elementKey);
+    const result = !differences.length ? 'pass' : dispositionReceipt(disposition, ledger, approvedHash, elementDeltaSha256(elementKey, differences)) ? disposition.status : 'fail';
+    rows.push({ elementKey, differences, result, ...extra });
+  };
+  for (const [key, { element }] of approvedElements) settle(key, elementDifferences(element, actualElements.get(key)?.element), { element });
+  for (const [key, { element }] of actualElements) if (!approvedElements.has(key) && element.explicitId && element.important) settle(key, ['unapproved-addition'], { element, addition: true });
+  return rows.sort((a, b) => a.elementKey.localeCompare(b.elementKey));
 }
 
 function compareImages(baselinePng, actualPng, baselineSnapshot, actualSnapshot, options = {}) {
@@ -121,7 +160,7 @@ function requestJson(url, method = 'GET') {
   });
 }
 
-async function waitForFile(file, timeoutMs = 10000) {
+async function waitForFile(file, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
@@ -150,6 +189,15 @@ async function waitForExpression(cdp, expression, timeoutMs = 5000) {
   throw new Error('RENDER_STATE_TIMEOUT');
 }
 
+// Each action verification must start from the same state the capture
+// observed: an earlier verified action (for example a confirmed delete that
+// persists to localStorage) must not leak into the next reload.
+async function resetPageStorage(cdp) {
+  const origin = (await cdp.send('Runtime.evaluate', { expression: 'location.origin', returnByValue: true })).result?.value;
+  if (origin && origin !== 'null') { try { await cdp.send('Storage.clearDataForOrigin', { origin, storageTypes: 'all' }); } catch {} }
+  await cdp.send('Runtime.evaluate', { expression: 'try{localStorage.clear();sessionStorage.clear()}catch(e){}', returnByValue: true });
+}
+
 const extractionExpression = `(() => {
   const visible = element => { const s=getComputedStyle(element), r=element.getBoundingClientRect(); return s.display!=='none' && s.visibility!=='hidden' && Number(s.opacity)!==0 && r.width>0 && r.height>0; };
   const norm = value => String(value||'').replace(/\\s+/g,' ').trim();
@@ -159,7 +207,8 @@ const extractionExpression = `(() => {
   const elements=[]; let ordinal=0;
   const add=(element, kind, text) => { if (!visible(element)) return; const explicitId=element.getAttribute('data-ui-id')||''; const normalized=norm(text); if (!explicitId && !normalized && kind==='text') return; const role=element.getAttribute('role')||({BUTTON:'button',A:'link',INPUT:'textbox',SELECT:'combobox',TEXTAREA:'textbox'}[element.tagName]||''); const rect=element.getBoundingClientRect(), style=getComputedStyle(element); const truncated=element.scrollHeight>element.clientHeight+1 || element.scrollWidth>element.clientWidth+1 || style.textOverflow==='ellipsis' || style.webkitLineClamp!=='none'; const key=explicitId || 'AUTO-'+sha(normalized+'|'+role+'|'+ordinal++).slice(0,16); const actionId=element.getAttribute('data-ui-action-id'), expectedState=element.getAttribute('data-ui-expected-state'), target=element.getAttribute('data-ui-action-target'); elements.push({key,explicitId:Boolean(explicitId),kind,text:normalized||undefined,role:role||undefined,exactCopy:element.hasAttribute('data-ui-exact-copy'),important:element.hasAttribute('data-ui-important'),truncated,truncation:element.hasAttribute('data-ui-require-truncation')?{mode:'required'}:undefined,action:actionId&&expectedState?{id:actionId,expectedState,target:target||undefined}:undefined,metrics:{clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,clientWidth:element.clientWidth,scrollWidth:element.scrollWidth,overflow:style.overflow,textOverflow:style.textOverflow,lineClamp:style.webkitLineClamp}}); };
   const sha=value=>{let h=2166136261;for(let i=0;i<value.length;i++){h^=value.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(16).padStart(8,'0')};
-  root.querySelectorAll('button,a,input,select,textarea,[role],[data-ui-id]').forEach(el=>add(el, /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)?'field':'control', el.getAttribute('aria-label')||el.textContent||el.value));
+  const kindOf=el=>/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)?'field':(/^(BUTTON|A)$/.test(el.tagName)||['button','link','checkbox','radio','switch','tab','menuitem'].includes(el.getAttribute('role')||'')||el.hasAttribute('data-ui-action-id'))?'control':el.hasAttribute('data-ui-business-value')?'business-value':(el.hasAttribute('data-ui-require-truncation')||el.hasAttribute('data-ui-region')||el.getAttribute('role'))?'region':'text';
+  root.querySelectorAll('button,a,input,select,textarea,[role],[data-ui-id]').forEach(el=>add(el, kindOf(el), el.getAttribute('aria-label')||el.textContent||el.value));
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT); let node; while(node=walker.nextNode()){ const parent=node.parentElement; if(parent && !parent.closest('button,a,input,select,textarea,[role],[data-ui-id]') && visible(parent) && norm(node.nodeValue)) add(parent,'text',node.nodeValue); }
   return {rendered:true,screen,state,elements};
 })()`;
@@ -238,7 +287,9 @@ async function capture(options) {
   if (options.html) {
     const html = path.resolve(options.html);
     if (!fs.statSync(html).isFile()) throw new Error('HTML_NOT_FOUND');
-    target = pathToFileURL(html).href;
+    const fileUrl = pathToFileURL(html);
+    if (options.query) { if (typeof options.query !== 'string' || !/^[A-Za-z0-9_=&.-]+$/.test(options.query)) throw new Error('INVALID_QUERY'); fileUrl.search = `?${options.query}`; }
+    target = fileUrl.href;
     source = { path:path.basename(html), sha256:sha256(fs.readFileSync(html)) };
     observation = { mode:'approved-file', targetSha256:sha256(Buffer.from(target)) };
   } else {
@@ -265,7 +316,7 @@ async function capture(options) {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width:viewport.width, height:viewport.height, deviceScaleFactor:viewport.deviceScaleFactor, mobile:false });
     await cdp.send('Emulation.setEmulatedMedia', { media:'screen', features:[{name:'prefers-reduced-motion',value:'reduce'},{name:'prefers-color-scheme',value:'light'}] });
     await waitForExpression(cdp, `document.readyState==='complete' && Boolean(document.querySelector('[data-ui-screen][data-ui-state]'))`);
-    const applySetup = async () => { for (const spec of String(options['setup-click'] || '').split(',').map(value => value.trim()).filter(Boolean)) { const separator=spec.lastIndexOf('@'), key=separator>0?spec.slice(0,separator):'', expectedState=separator>0?spec.slice(separator+1):''; if(!key||!id(expectedState,'STATE-'))throw new Error(`INVALID_SETUP_CLICK: ${spec}; expected ELEMENT-ID@STATE-ID`); const clicked = await cdp.send('Runtime.evaluate', { expression:`(()=>{const el=document.querySelector('[data-ui-id='+CSS.escape(${JSON.stringify(key)})+']');if(!el)return false;el.click();return true})()`, returnByValue:true }); if (clicked.result?.value !== true) throw new Error(`SETUP_CONTROL_NOT_FOUND: ${key}`); await waitForExpression(cdp, `(document.querySelector('[data-ui-screen]')||document.body).getAttribute('data-ui-state')===${JSON.stringify(expectedState)}`); } };
+    const applySetup = async () => { for (const spec of String(options['setup-click'] || '').split(',').map(value => value.trim()).filter(Boolean)) { const separator=spec.lastIndexOf('@'), key=separator>0?spec.slice(0,separator):'', expectedState=separator>0?spec.slice(separator+1):''; if(!key||!id(expectedState,'STATE-'))throw new Error(`INVALID_SETUP_CLICK: ${spec}; expected ELEMENT-ID@STATE-ID`); try { await waitForExpression(cdp, `Boolean(document.querySelector('[data-ui-id='+CSS.escape(${JSON.stringify(key)})+']'))`); } catch { throw new Error(`SETUP_CONTROL_NOT_FOUND: ${key}`); } const clicked = await cdp.send('Runtime.evaluate', { expression:`(()=>{const el=document.querySelector('[data-ui-id='+CSS.escape(${JSON.stringify(key)})+']');if(!el)return false;el.click();return true})()`, returnByValue:true }); if (clicked.result?.value !== true) throw new Error(`SETUP_CONTROL_NOT_FOUND: ${key}`); await waitForExpression(cdp, `(document.querySelector('[data-ui-screen]')||document.body).getAttribute('data-ui-state')===${JSON.stringify(expectedState)}`); } };
     await applySetup();
     const frozen = await cdp.send('Runtime.evaluate', { expression:freezeExpression, returnByValue:true, awaitPromise:true });
     if (frozen.result?.value?.running !== 0) throw new Error(`ANIMATION_NOT_FROZEN: ${JSON.stringify(frozen.result?.value ?? frozen.exceptionDetails?.text)}`);
@@ -288,7 +339,7 @@ async function capture(options) {
       const action = JSON.stringify(element.action), key = JSON.stringify(element.key);
       const verification = await cdp.send('Runtime.evaluate', { expression:`(async()=>{const action=${action},el=document.querySelector('[data-ui-id='+CSS.escape(${key})+']');if(!el)return false;const target=action.target?document.querySelector('[data-ui-id='+CSS.escape(action.target)+']'):null,before=target?{clientHeight:target.clientHeight,scrollHeight:target.scrollHeight}:null;el.click();for(let attempt=0;attempt<100;attempt++){const root=document.querySelector('[data-ui-screen]')||document.body,stateOk=root.getAttribute('data-ui-state')===action.expectedState;if(stateOk&&!target)return true;if(stateOk&&target){const after={clientHeight:target.clientHeight,scrollHeight:target.scrollHeight};if(after.clientHeight>before.clientHeight||after.scrollHeight<=after.clientHeight+1)return true}await new Promise(r=>setTimeout(r,50))}return false})()`, returnByValue:true, awaitPromise:true });
       element.actionVerified = verification.result?.value === true;
-      if(index<captureResult.elements.filter(value=>value.action).length-1){await cdp.send('Page.reload');await waitForExpression(cdp, `document.readyState==='complete' && Boolean(document.querySelector('[data-ui-screen][data-ui-state]'))`);await applySetup();}
+      if(index<captureResult.elements.filter(value=>value.action).length-1){await resetPageStorage(cdp);await cdp.send('Page.reload');await waitForExpression(cdp, `document.readyState==='complete' && Boolean(document.querySelector('[data-ui-screen][data-ui-state]'))`);await applySetup();}
     }
     const environment = {
       renderer:{ executable:path.basename(executable), product:version.Browser, revision:version['WebKit-Version'], protocolVersion:version['Protocol-Version'], jsVersion:version['V8-Version'] },
@@ -309,6 +360,11 @@ async function capture(options) {
   }
 }
 
+function sameObservedSource(snapshot, first) {
+  if (canonical(snapshot.source)===canonical(first.source)) return true;
+  if (snapshot.observation?.mode!=='loopback-url' || first.observation?.mode!=='loopback-url') return false;
+  try { const a=new URL(snapshot.source.path), b=new URL(first.source.path); return a.origin===b.origin && a.pathname===b.pathname && snapshot.observation.target===snapshot.source.path && snapshot.observation.targetSha256===snapshot.source.sha256; } catch { return false; }
+}
 const withoutFontHash = environment => environment?.fonts ? {...environment,fonts:{...environment.fonts,sha256:undefined}} : environment;
 
 function mergeSnapshots(snapshots) {
@@ -316,12 +372,15 @@ function mergeSnapshots(snapshots) {
   const [first] = snapshots;
   for (const snapshot of snapshots) {
     const findings=validateSnapshot(snapshot); if(findings.length) throw new Error(findings.join('; '));
-    if (canonical(snapshot.source)!==canonical(first.source) || canonical(withoutFontHash(snapshot.environment))!==canonical(withoutFontHash(first.environment))) throw new Error('SNAPSHOT_SOURCE_OR_ENVIRONMENT_DIFFERS');
+    if (!sameObservedSource(snapshot, first) || canonical(withoutFontHash(snapshot.environment))!==canonical(withoutFontHash(first.environment))) throw new Error('SNAPSHOT_SOURCE_OR_ENVIRONMENT_DIFFERS');
   }
   const captures=snapshots.flatMap(snapshot=>snapshot.captures);
   const merged={...first,captures};
   // Each state may render different glyphs; the merged font fingerprint binds every state's fonts in order.
   if (first.environment?.fonts) merged.environment={...first.environment,fonts:{...first.environment.fonts,sha256:hashJson(captures.map(capture=>capture.fonts?.sha256??null))}};
+  // Loopback states reached through different query scenarios of one page keep
+  // every bound observation; the first remains the snapshot's primary binding.
+  if (snapshots.some(snapshot => canonical(snapshot.source)!==canonical(first.source))) merged.observations=snapshots.map(snapshot=>({state:`${snapshot.captures[0].screen}/${snapshot.captures[0].state}`,...snapshot.observation}));
   const findings=validateSnapshot(merged);if(findings.length)throw new Error(findings.join('; '));return merged;
 }
 
@@ -329,7 +388,7 @@ function parse(argv) { const result={_:[]}; for(let i=0;i<argv.length;i++){ if(!
 async function main(argv) {
   try {
     const args=parse(argv), command=args._[0];
-    if(command==='capture') { if((!args.html&&!args.url)||(args.html&&args.url)||!args.out) throw new Error('USAGE: capture (--html FILE | --url LOOPBACK_URL) --out FILE [--png FILE] [--width N] [--height N] [--device-scale-factor 1|2|3] [--visual-policy JSON] [--setup-click ELEMENT-ID@STATE-ID,...]'); const snapshot=await capture(args); fs.writeFileSync(args.out,`${JSON.stringify(snapshot,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(snapshot),captures:snapshot.captures.length,png:Boolean(args.png)})); return; }
+    if(command==='capture') { if((!args.html&&!args.url)||(args.html&&args.url)||!args.out) throw new Error('USAGE: capture (--html FILE [--query k=v] | --url LOOPBACK_URL) --out FILE [--png FILE] [--width N] [--height N] [--device-scale-factor 1|2|3] [--visual-policy JSON] [--setup-click ELEMENT-ID@STATE-ID,...]'); const snapshot=await capture(args); fs.writeFileSync(args.out,`${JSON.stringify(snapshot,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(snapshot),captures:snapshot.captures.length,png:Boolean(args.png)})); return; }
     if(command==='merge') { if(!args.input||!args.out) throw new Error('USAGE: merge --input ONE.json,TWO.json --out MERGED.json'); const merged=mergeSnapshots(String(args.input).split(',').map(file=>JSON.parse(fs.readFileSync(file.trim(),'utf8')))); fs.writeFileSync(args.out,`${JSON.stringify(merged,null,2)}\n`); console.log(JSON.stringify({pass:true,snapshotSha256:hashJson(merged),captures:merged.captures.length})); return; }
     if(command==='compare') { if(!args.approved||!args.actual) throw new Error('USAGE: compare --approved FILE --actual FILE [--dispositions FILE] [--approval-ledger FILE]'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const result=compareSnapshots(read(args.approved),read(args.actual),args.dispositions?read(args.dispositions):[],args['approval-ledger']?read(args['approval-ledger']):{}); console.log(JSON.stringify(result)); process.exitCode=result.pass?0:1; return; }
     if(command==='visual-compare') { if(!args.baseline||!args.actual||!args['baseline-snapshot']||!args['actual-snapshot']) throw new Error('USAGE: visual-compare --baseline PNG --actual PNG --baseline-snapshot JSON --actual-snapshot JSON [--diff-out PNG]'); const read=file=>JSON.parse(fs.readFileSync(file,'utf8')); const result=compareImages(args.baseline,args.actual,read(args['baseline-snapshot']),read(args['actual-snapshot']),{diffOut:args['diff-out']}); console.log(JSON.stringify(result)); process.exitCode=result.pass?0:1; return; }
@@ -338,4 +397,4 @@ async function main(argv) {
   } catch(error) { console.log(JSON.stringify({pass:false,findings_count:1,findings:[error.message]})); process.exitCode=1; }
 }
 if(require.main===module) main(process.argv.slice(2));
-module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,compareSnapshots,compareImages,dispositionReceipt,browserExecutable,capture,mergeSnapshots,main};
+module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,snapshotElements,elementDifferences,elementDeltaSha256,elementResults,compareSnapshots,compareImages,dispositionReceipt,browserExecutable,capture,mergeSnapshots,main};

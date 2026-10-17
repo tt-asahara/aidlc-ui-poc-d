@@ -1,0 +1,405 @@
+{
+  "schema": 1,
+  "kind": "ui-element-rule-matrix",
+  "snapshotSha256": "6df784d173aad0d019c3d0434062418e5cb4755843ca95876d2ca86a745ac344",
+  "rows": [
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CANCEL-DELETE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "キャンセル",
+      "action": {
+        "id": "CANCEL-DELETE",
+        "expectedState": "STATE-LIST"
+      },
+      "ruleIds": [
+        "BR-DELETE-CANCEL-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CONFIRM-DELETE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "削除する",
+      "action": {
+        "id": "CONFIRM-DELETE",
+        "expectedState": "STATE-DELETED"
+      },
+      "ruleIds": [
+        "BR-DELETE-EXEC-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL",
+      "kind": "text",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "text": "「買い物リスト」（2026/10/01 更新）を削除します。この操作は取り消せません。",
+      "ruleIds": [
+        "BR-DELETE-CONFIRM-DETAIL-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE",
+      "kind": "text",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "text": "メモを削除しますか？",
+      "ruleIds": [
+        "BR-DELETE-CONFIRM-TITLE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-DIALOG",
+      "kind": "region",
+      "obligations": [],
+      "requiresRule": false,
+      "role": "alertdialog",
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/DELETE-COMPLETE",
+      "kind": "region",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "role": "status",
+      "text": "メモを削除しました",
+      "ruleIds": [
+        "BR-DELETE-MSG-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/DELETE-NOTE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "削除",
+      "action": {
+        "id": "DELETE",
+        "expectedState": "STATE-CONFIRM-DELETE"
+      },
+      "ruleIds": [
+        "BR-DELETE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/EXPAND-MEMO",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "全文を表示",
+      "action": {
+        "id": "EXPAND",
+        "expectedState": "STATE-EXPANDED",
+        "target": "MEMO-BODY"
+      },
+      "ruleIds": [
+        "BR-EXPAND-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/MEMO-BODY",
+      "kind": "region",
+      "obligations": [
+        "important",
+        "truncation-required"
+      ],
+      "requiresRule": true,
+      "text": "牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。",
+      "truncation": {
+        "mode": "required"
+      },
+      "ruleIds": [
+        "BR-TRUNC-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/NOTE-TITLE-1",
+      "kind": "text",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "text": "買い物リスト",
+      "ruleIds": [
+        "BR-LIST-TITLE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/SAVE-NOTE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "保存",
+      "action": {
+        "id": "SAVE",
+        "expectedState": "STATE-SAVED"
+      },
+      "ruleIds": [
+        "BR-SAVE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/DELETE-NOTE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "削除",
+      "action": {
+        "id": "DELETE",
+        "expectedState": "STATE-CONFIRM-DELETE"
+      },
+      "ruleIds": [
+        "BR-DELETE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/EXPAND-MEMO",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "全文を表示",
+      "action": {
+        "id": "EXPAND",
+        "expectedState": "STATE-EXPANDED",
+        "target": "MEMO-BODY"
+      },
+      "ruleIds": [
+        "BR-EXPAND-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/MEMO-BODY",
+      "kind": "region",
+      "obligations": [
+        "important",
+        "truncation-required"
+      ],
+      "requiresRule": true,
+      "text": "牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。",
+      "truncation": {
+        "mode": "required"
+      },
+      "ruleIds": [
+        "BR-TRUNC-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/NOTE-TITLE-1",
+      "kind": "text",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "text": "買い物リスト",
+      "ruleIds": [
+        "BR-LIST-TITLE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/PRIVATE-MODE-GUIDANCE",
+      "kind": "region",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "role": "note",
+      "text": "プライベートモードでは、メモはこのタブを閉じると消えます。残したいメモは通常モードで保存してください。",
+      "ruleIds": [
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/SAVE-NOTE",
+      "kind": "control",
+      "obligations": [
+        "action",
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "保存",
+      "action": {
+        "id": "SAVE",
+        "expectedState": "STATE-SAVED"
+      },
+      "ruleIds": [
+        "BR-SAVE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/SAVE-COMPLETE",
+      "kind": "region",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "role": "status",
+      "text": "✓ 保存しました",
+      "ruleIds": [
+        "BR-SAVE-MSG-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/AUTO-821a485e",
+      "kind": "text",
+      "obligations": [],
+      "requiresRule": false,
+      "ruleIds": [],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/RETRY-LOAD",
+      "kind": "control",
+      "obligations": [
+        "exact-copy",
+        "important",
+        "interactive"
+      ],
+      "requiresRule": true,
+      "role": "button",
+      "text": "再読み込み",
+      "ruleIds": [
+        "BR-RETRY-01"
+      ],
+      "unimplementedReason": null
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/STORAGE-READ-ERROR",
+      "kind": "region",
+      "obligations": [
+        "exact-copy",
+        "important"
+      ],
+      "requiresRule": true,
+      "role": "alert",
+      "text": "保存データを読み込めませんでした。ブラウザのストレージ設定を確認してから、再読み込みしてください。",
+      "ruleIds": [
+        "BR-STORAGE-ERR-01"
+      ],
+      "unimplementedReason": null
+    }
+  ]
+}
