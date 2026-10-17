@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { latestPersonTurn } from "../../core/tools/aidlc-lib.ts";
 import { resolveDAiApproval, resolveDDecisionIssueSummary } from "./d-config.ts";
 import { ghAuthPreflight, githubHostFromRepository, type GhAuthResult } from "./gh-host.ts";
 
@@ -52,12 +53,24 @@ function activeIntent(project: string): string {
   return resolved;
 }
 
+/** `[HOST/]owner/name`; validated here in D (core/ stays upstream). */
+export const DECISION_SUMMARY_REPOSITORY = /^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * Publication needs the person's exact permission words as the latest
+ * host-recorded human turn. The turn is read through the upstream engine's own
+ * read-only `latestPersonTurn` (the record-human-turn hook writes it); D never
+ * writes engine state or audit and never treats its own text as the person's.
+ */
 async function verifyPublicationPermission(input: { projectDir: string; repository: string; intent: string; payloadSha256: string }): Promise<{ authorized: boolean; receipt?: Record<string, unknown>; reason?: string }> {
-  const installed = join(import.meta.dir, "..", "aidlc-state.ts");
-  const stateTool = existsSync(installed) ? installed : join(import.meta.dir, "..", "..", "core", "tools", "aidlc-state.ts");
-  const child = spawnSync(process.execPath, [stateTool, "verify-decision-summary-permission", "--repository", input.repository, "--intent", input.intent, "--payload-sha256", input.payloadSha256, "--project-dir", input.projectDir], { cwd: input.projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 });
-  if (child.status !== 0) return { authorized: false, reason: child.stderr || child.stdout || "host-permission-verification-failed" };
-  try { const receipt = JSON.parse(child.stdout) as Record<string, unknown>; return { authorized: receipt.authorized === true, receipt }; } catch { return { authorized: false, reason: "invalid-host-permission-receipt" }; }
+  if (!DECISION_SUMMARY_REPOSITORY.test(input.repository) || !/^[0-9a-f]{64}$/.test(input.payloadSha256)) return { authorized: false, reason: "Usage: --repository [HOST/]owner/name --intent RELATIVE_ACTIVE_INTENT --payload-sha256 SHA256" };
+  const project = realpathSync(input.projectDir);
+  const expectedIntent = relative(project, activeIntent(project)).split(sep).join("/");
+  if (input.intent !== expectedIntent) return { authorized: false, reason: "Decision summary permission does not target the active Intent" };
+  const expectedWords = `AI-DLC authorize-decision-summary --repository ${input.repository} --intent ${input.intent} --payload-sha256 ${input.payloadSha256}`;
+  const latestTurn = latestPersonTurn(project);
+  if (!latestTurn || latestTurn.words !== expectedWords) return { authorized: false, reason: "Decision summary publication lacks an exact latest host-recorded human permission" };
+  return { authorized: true, receipt: { authorized: true, schemaVersion: 1, repository: input.repository, intent: input.intent, payloadSha256: input.payloadSha256, humanTurnAt: latestTurn.at, userMessageSha256: createHash("sha256").update(expectedWords).digest("hex") } };
 }
 
 function decisions(path: string, project: string): Decision[] {
@@ -120,7 +133,7 @@ async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput,
   if (intent !== activeIntent(project)) throw new Error("intent directory must be the active Intent");
   const repository = input.config.repository?.trim();
   if (!repository) return { status: "stopped", reason: "repository-required" };
-  if (!/^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must be [HOST/]owner/name");
+  if (!DECISION_SUMMARY_REPOSITORY.test(repository)) throw new Error("repository must be [HOST/]owner/name");
   const host = githubHostFromRepository(repository);
   if (!Number.isSafeInteger(input.config.maxRetries) || input.config.maxRetries < 0 || input.config.maxRetries > 10) throw new Error("maxRetries must be an integer from 0 to 10");
 
