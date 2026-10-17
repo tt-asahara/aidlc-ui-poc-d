@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { grantHumanTurnRefusal } from "./ai-approval-controller.ts";
 
 // D-owned delegated-question grammar, target resolver, and settler.
 //
@@ -130,9 +131,9 @@ export function settleAiAnswers(projectDir: string, stage: string, decisionFile:
   const stateBody = state.bytes.toString("utf8");
   const target = resolveAiQuestionTarget(root, active.dir, stateBody, stage, unit); if (!target.ok) throw new Error(`AI answer target refused: ${target.reason}`);
   const grant = readBound(root, decision.delegation?.path, decision.delegation?.sha256, "delegation"); const grantValue: any = JSON.parse(grant.bytes.toString("utf8"));
-  const grantRequest = { messageId: grantValue.messageId, userMessage: grantValue.userMessage, userMessageSha256: grantValue.userMessageSha256, mode: grantValue.mode, scope: grantValue.scope, through: grantValue.through, allowedStages: grantValue.allowedStages, minConfidence: grantValue.minConfidence };
+  const unbound = grantHumanTurnRefusal(active.dir, grantValue); if (unbound) throw new Error(`delegation does not authorize this AI answer: ${unbound}`);
   const stateScope = stateValue(stateBody, "Scope");
-  if (grantValue.schemaVersion !== 1 || grantValue.mode !== "stage-gates" || hash(String(grantValue.userMessage ?? "")) !== grantValue.userMessageSha256 || hash(canonical(grantRequest)) !== grantValue.requestSha256 || !grantValue.allowedStages?.includes(stage) || grantValue.scope !== stateScope || grantValue.messageId !== decision.delegation.messageId || grantValue.requestSha256 !== decision.delegation.requestSha256 || decision.confidence < Number(grantValue.minConfidence ?? 1)) throw new Error("delegation does not authorize this AI answer");
+  if (grantValue.mode !== "stage-gates" || !grantValue.allowedStages?.includes(stage) || grantValue.scope !== stateScope || grantValue.messageId !== decision.delegation.messageId || grantValue.requestSha256 !== decision.delegation.requestSha256 || decision.confidence < Number(grantValue.minConfidence ?? 1)) throw new Error("delegation does not authorize this AI answer");
   if (decision.questions?.path !== target.canonicalPath) throw new Error("questions file is not canonical for the current stage");
   const questionsPath = resolve(root, decision.questions?.path ?? ""); if (!inside(active.dir, questionsPath) || !existsSync(questionsPath) || lstatSync(questionsPath).isSymbolicLink()) throw new Error("questions binding is invalid"); const questions = readFileSync(realpathSync(questionsPath), "utf8");
   if (hash(questionTemplate(questions)) !== decision.questions.templateSha256) throw new Error("questions changed outside answer slots"); const actualAnswers = answerValues(questions);

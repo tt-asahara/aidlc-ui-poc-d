@@ -37,8 +37,10 @@ Issueと安定した一般知識だけから得た事実を台帳へ渡します
 intent作成前にfail-closedで停止し、approval recordを作成しません。
 
 `aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任
-（`AI-DLC delegate-ai-approvals ...` の完全一致文）をhash-bound grantとしてactive Intentへ
-保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
+（`AI-DLC delegate-ai-approvals ...` の完全一致文。host記録の最新human turn
+（`latestPersonTurn`）と一致する場合のみ `grant` が作成され、そのturnのTimestamp/Sessionを
+grantに束縛し、controllerとsettlerの双方が公式auditの `HUMAN_TURN` 行を再確認します）を
+hash-bound grantとしてactive Intentへ保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
 回答できるようにします。stage gateのAI承認は廃止しました: core/ を上流AI-DLC v2.11.0
 （`6a378b53`）と同一に保つため、承認は常に人が公式gateで行います（`ai-approval-controller.ts`
 は `grant` のみ、`evaluate`/`verify` は1行のblockを返して停止）。AI回答は

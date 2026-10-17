@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { auditBlockField, latestPersonTurn } from "../../core/tools/aidlc-lib.ts";
 import { resolveDAiApproval } from "./d-config.ts";
 import stagePolicy from "./stage-policy.json";
 
@@ -27,13 +28,19 @@ const OPERATION_STAGES = new Set(stagePolicy.stages.filter((entry) => entry.phas
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 const DEFAULT_GRANT_PATH = "decisions/ai-approval-delegation.json";
 const DELEGATION_COMMAND = /^AI-DLC delegate-ai-approvals --scope ([A-Za-z0-9._-]+) --through ([A-Za-z0-9._-]+) --stages ([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*)$/;
+/** Grants minted before the human-turn binding (schemaVersion 1) are never accepted. */
+export const DELEGATION_GRANT_SCHEMA_VERSION = 2;
+export const GRANT_HUMAN_TURN_REQUIRED = "AI delegation grant needs the person's own latest turn to be the exact delegate-ai-approvals command; ask the person to type it, then rerun grant.";
 
+/** The host-recorded HUMAN_TURN the delegation words were read from. */
+export type GrantHumanTurn = { at: string; session: string; wordsSha256: string };
 
-type DelegationGrant = {
-  schemaVersion: 1;
+export type DelegationGrant = {
+  schemaVersion: typeof DELEGATION_GRANT_SCHEMA_VERSION;
   messageId: string;
   userMessage: string;
   userMessageSha256: string;
+  humanTurn: GrantHumanTurn;
   mode: "stage-gates";
   scope: string;
   through: string | null;
@@ -41,10 +48,6 @@ type DelegationGrant = {
   minConfidence: number;
   requestSha256: string;
 };
-
-
-
-
 
 export type AiApprovalGrantOptions = {
   projectDir: string;
@@ -157,8 +160,6 @@ function snapshot(projectRoot: string, path: string, label: string): Snapshot {
   return { path: normalized, absolute, bytes, sha256: sha256(bytes) };
 }
 
-
-
 function boundedString(value: unknown, label: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a non-empty string`);
   const normalized = value.trim();
@@ -175,7 +176,6 @@ function boundedStrings(value: unknown, label: string): string[] {
   }
   return result;
 }
-
 
 function grantRequestSha(grant: Omit<DelegationGrant, "schemaVersion" | "requestSha256">): string {
   return sha256(canonicalJson(grant));
@@ -206,14 +206,10 @@ function activeIntentDir(projectRoot: string): string {
   return resolved;
 }
 
-
-
 function stateScope(state: Snapshot): string | null {
   const match = state.bytes.toString("utf8").match(/^\s*-\s*\*\*Scope\*\*:\s*(.+?)\s*$/im);
   return match?.[1]?.trim() || null;
 }
-
-
 
 function atomicWrite(path: string, text: string): void {
   const parent = dirname(path);
@@ -247,17 +243,60 @@ function intentOutputPath(intentDir: string, relativePath: string, label: string
   return output;
 }
 
-
-
 function assertUnchanged(snapshots: Snapshot[]): void {
   for (const item of snapshots) {
     if (!existsSync(item.absolute) || sha256(readFileSync(item.absolute)) !== item.sha256) throw new Error(`bound input changed during assessment: ${item.path}`);
   }
 }
 
+/**
+ * The latest HUMAN_TURN the record-human-turn hook wrote for the active
+ * Intent, read through core's read-only `latestPersonTurn` plus the row's
+ * Session field (so a settler can find the same row again). Null when no turn
+ * with kept words is on record.
+ */
+function latestRecordedHumanTurn(projectRoot: string, intentDir: string): { at: string; session: string; words: string } | null {
+  const turn = latestPersonTurn(projectRoot);
+  if (!turn?.words || !turn.at) return null;
+  const row = humanTurnRows(intentDir).filter((block) => auditBlockField(block, "Timestamp") === turn.at).at(-1);
+  const session = row ? auditBlockField(row, "Session") : null;
+  return session ? { at: turn.at, session, words: turn.words } : null;
+}
 
+function humanTurnRows(intentDir: string): string[] {
+  const audit = join(intentDir, "audit");
+  if (!existsSync(audit) || lstatSync(audit).isSymbolicLink()) return [];
+  return readdirSync(audit).filter((name) => name.endsWith(".md")).sort().flatMap((name) => {
+    const path = join(audit, name);
+    if (lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) return [];
+    return readFileSync(path, "utf8").replace(/\r\n/g, "\n").split("\n---\n").filter((block) => auditBlockField(block, "Event") === "HUMAN_TURN");
+  });
+}
 
-/** Create the explicit, hash-bound user delegation grant consumed by evaluate. */
+/**
+ * The one shared check that a delegation grant was minted by
+ * `createAiApprovalGrant` from the person's own host-recorded turn: current
+ * schema, a self-consistent request hash, delegation words that hash to the
+ * bound turn, and a HUMAN_TURN row with that exact Timestamp and Session in
+ * the active Intent's official audit (read-only). Returns a refusal reason,
+ * or null when the grant holds.
+ */
+export function grantHumanTurnRefusal(intentDir: string, grant: unknown): string | null {
+  const value = grant as Partial<DelegationGrant> | null;
+  if (!value || typeof value !== "object" || value.schemaVersion !== DELEGATION_GRANT_SCHEMA_VERSION) return "delegation grant predates the human-turn binding; mint a new one with grant";
+  const turn = value.humanTurn;
+  if (!turn || typeof turn.at !== "string" || !turn.at || typeof turn.session !== "string" || !turn.session || typeof turn.wordsSha256 !== "string") return "delegation grant is not bound to a recorded human turn";
+  if (typeof value.userMessage !== "string" || sha256(value.userMessage) !== value.userMessageSha256 || turn.wordsSha256 !== value.userMessageSha256) return "delegation grant words do not match its bound human turn";
+  const { schemaVersion: _version, requestSha256, ...request } = value;
+  if (grantRequestSha(request as Omit<DelegationGrant, "schemaVersion" | "requestSha256">) !== requestSha256) return "delegation grant request hash does not bind its contents";
+  const recorded = humanTurnRows(intentDir).some((block) => auditBlockField(block, "Timestamp") === turn.at && auditBlockField(block, "Session") === turn.session);
+  return recorded ? null : "delegation grant's human turn is not in the official audit";
+}
+
+/**
+ * Create the explicit, hash-bound delegation grant for low-risk stage
+ * questions. The words must be the person's own latest host-recorded turn.
+ */
 export function createAiApprovalGrant(options: AiApprovalGrantOptions): AiApprovalGrantResult {
   if (!isAbsolute(options.projectDir) || !existsSync(options.projectDir)) throw new Error("--project-dir must be an existing absolute path");
   const projectRoot = realpathSync(options.projectDir);
@@ -290,17 +329,21 @@ export function createAiApprovalGrant(options: AiApprovalGrantOptions): AiApprov
   const intentDir = activeIntentDir(projectRoot);
   const state = snapshot(projectRoot, relative(projectRoot, join(intentDir, "aidlc-state.md")), "active intent state");
   if (stateScope(state) !== scope) throw new Error("grant scope must match the active intent state Scope");
+  const turn = latestRecordedHumanTurn(projectRoot, intentDir);
+  if (!turn || turn.words.trim() !== userMessage) throw new Error(GRANT_HUMAN_TURN_REQUIRED);
+  const userMessageSha256 = sha256(userMessage);
   const request = {
     messageId,
     userMessage,
-    userMessageSha256: sha256(userMessage),
+    userMessageSha256,
+    humanTurn: { at: turn.at, session: turn.session, wordsSha256: userMessageSha256 },
     mode: "stage-gates" as const,
     scope,
     through,
     allowedStages,
     minConfidence: config.minConfidence,
   };
-  const grant: DelegationGrant = { schemaVersion: 1, ...request, requestSha256: grantRequestSha(request) };
+  const grant: DelegationGrant = { schemaVersion: DELEGATION_GRANT_SCHEMA_VERSION, ...request, requestSha256: grantRequestSha(request) };
   const path = intentOutputPath(intentDir, DEFAULT_GRANT_PATH, "AI approval delegation path");
   const body = `${JSON.stringify(grant, null, 2)}\n`;
   assertUnchanged([messageFile, state]);
@@ -324,7 +367,6 @@ function cliValues(argv: string[], known: ReadonlySet<string>): { values: (flag:
   for (let index = 1; index < argv.length; index += 2) if (!known.has(argv[index]) || argv[index + 1] === undefined) throw new Error(`unknown or incomplete argument: ${argv[index]}`);
   return { values, one };
 }
-
 
 function grantCliOptions(argv: string[]): AiApprovalGrantOptions {
   if (argv[0] !== "grant") throw new Error("usage: ai-approval-controller.ts grant --project-dir ABS --user-message-file REL --message-id ID --scope SCOPE --allowed-stages CSV [--through BOUNDARY]");

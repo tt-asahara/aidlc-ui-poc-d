@@ -16,6 +16,21 @@ byte-identical to upstream AI-DLC v2.11.0, which knows no such event, so the
 record moved to the D ledger. The engine never needed that event: answered
 questions files advance through the ordinary stage protocol either way.
 
+## The grant is bound to the person's own turn
+
+`ai-approval-controller.ts grant` mints the delegation only when the words in
+`--user-message-file` equal the person's latest host-recorded turn, read
+through core's read-only `latestPersonTurn` (the record-human-turn hook is the
+only writer). A missing turn, a later turn, or different words refuse with one
+line: ask the person to type the exact `AI-DLC delegate-ai-approvals ...`
+command, then rerun `grant`. The grant (`schemaVersion: 2`) records
+`humanTurn: { at, session, wordsSha256 }` inside its request hash. The one
+shared check `grantHumanTurnRefusal` runs in the controller precheck and again
+in the settler: the schema, the request hash, the words hash, and a
+`HUMAN_TURN` row with that exact Timestamp and Session in the active Intent's
+official audit. A hand-written or schema-1 grant never reaches the model and
+never settles.
+
 ## One owner for the file grammar and the target
 
 `ai-question-answers.ts` (D-owned, projected to
@@ -208,10 +223,6 @@ a real model).
 - Delegated AI stage-gate approval was dropped with the core restore: the
   upstream engine accepts a stage approval only from the person, so every gate
   (including the E2E gate above) is approved by the person.
-- The grant records the words the host saved to a file; the controller does
-  not re-read the host-recorded human turn to prove they were the person's
-  latest message (the removed core approval path did). Binding the grant to
-  `latestPersonTurn` is a possible D-only hardening.
 - Summary confirmation, the advisory reviewer, and learnings were switched off
   by the synthetic person's own recorded requests (the official `config set`
   setters refuse without a human turn). With summary confirmation on, the

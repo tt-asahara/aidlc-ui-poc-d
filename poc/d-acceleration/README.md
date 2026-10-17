@@ -34,7 +34,8 @@ JSONC settings. Setup never enables autopilot without an explicit user request.
 
 Every stage gate stays the person's: delegated AI stage-gate approval was
 dropped (see "Core restore"). With `aiApproval.mode: "stage-gates"` and the
-person's exact `AI-DLC delegate-ai-approvals ...` grant, D may answer
+person's exact `AI-DLC delegate-ai-approvals ...` grant (minted only when those
+words are the person's latest host-recorded turn), D may answer
 explicitly marked low-risk stage questions, including per-Unit Construction
 design questions (`--unit`), through `ai-question-controller.ts` and the D
 settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /

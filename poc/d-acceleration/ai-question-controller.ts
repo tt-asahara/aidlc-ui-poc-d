@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveDAiApproval, resolveDModels } from "./d-config.ts";
 import { runWorker, type ModelIdentity, type ModelIdentityStatus, type WorkerLaunch, type WorkerUsage } from "./worker-adapters.ts";
-import { productionClaudeExecutable } from "./ai-approval-controller.ts";
+import { grantHumanTurnRefusal, productionClaudeExecutable } from "./ai-approval-controller.ts";
 import stagePolicy from "./stage-policy.json";
 
 import { questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility } from "./ai-question-answers.ts";
@@ -70,6 +70,8 @@ export function questionAssessorLaunch(request: { executable: string; model: str
   return { kind: "claude", executable: request.executable, requestedModel: request.model, requestedEffort: "high", args: ["--print", "--output-format", "json", "--no-session-persistence", "--restricted", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--permission-mode", "dontAsk", "--tools", "", "--allowed-tools", "", "--disallowed-tools", "Bash,Edit,Write,Agent,Task,WebFetch,WebSearch", "--model", request.model, "--effort", "high", request.prompt] };
 }
 
+/** Prefix of every precheck refusal that means "no usable delegation for this stage". */
+export const DELEGATION_NOT_AUTHORIZED = "delegation does not authorize this stage";
 type Classification = NonNullable<AiQuestionResult["classification"]>;
 /**
  * The deterministic gates in front of the judgment model, shared by
@@ -79,7 +81,9 @@ type Classification = NonNullable<AiQuestionResult["classification"]>;
  */
 export function delegatedQuestionPrecheck(input: { root: string; intentDir: string; stateBody: string; stage: string; unit: string | null; grant: any; questionsPath: string; questionsBody: string }): { ok: true; sections: Array<{ id: string; body: string }>; classification: Classification; slots: number } | { ok: false; reason: string; classification?: Classification } {
   const { grant, stage } = input;
-  if (!grant || grant.schemaVersion !== 1 || grant.mode !== "stage-gates" || !Array.isArray(grant.allowedStages) || !grant.allowedStages.includes(stage) || !SHA.test(grant.requestSha256) || typeof grant.messageId !== "string") return { ok: false, reason: "delegation does not authorize this stage" };
+  const unbound = grantHumanTurnRefusal(input.intentDir, grant);
+  if (unbound) return { ok: false, reason: `${DELEGATION_NOT_AUTHORIZED}: ${unbound}` };
+  if (grant.mode !== "stage-gates" || !Array.isArray(grant.allowedStages) || !grant.allowedStages.includes(stage) || !SHA.test(grant.requestSha256) || typeof grant.messageId !== "string") return { ok: false, reason: DELEGATION_NOT_AUTHORIZED };
   const target = resolveAiQuestionTarget(input.root, input.intentDir, input.stateBody, stage, input.unit);
   if (!target.ok) return { ok: false, reason: target.reason };
   if (input.questionsPath !== target.canonicalPath) return { ok: false, reason: "questions file is not canonical for the current stage" };
