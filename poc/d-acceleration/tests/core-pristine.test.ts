@@ -30,9 +30,10 @@ describe("core/ is pristine upstream AI-DLC v2.11.0", () => {
     const untracked = git("ls-files", "--others", "--exclude-standard", "--", "core").stdout.trim();
     expect(untracked).toBe("");
   });
-  test("the Claude packager refuses to project a D runtime file over a core path", () => {
+  // The projection collision guard itself is exercised on real trees in d-projection.test.ts.
+  test("the Claude packager routes D through the guarded projection and ships no removed core settler", () => {
     const packager = readFileSync(join(root, "scripts", "package.ts"), "utf8");
-    expect(packager).toContain("D acceleration runtime would overwrite a projected core file");
+    expect(packager).toContain("projectDAcceleration(treeRoot");
     expect(packager).not.toContain("aidlc-ai-answers.ts");
   });
 });
