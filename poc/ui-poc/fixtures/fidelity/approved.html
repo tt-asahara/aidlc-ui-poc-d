@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>UI fidelity approved fixture</title>
+<style>
+  #MEMO { width: 160px; max-height: 20px; overflow: hidden; }
+  [data-ui-state="STATE-EXPANDED"] #MEMO { max-height: none; }
+</style>
+<main data-ui-screen="SCREEN-BUDGET" data-ui-state="STATE-READY">
+  <p data-ui-id="SAVE-NOTICE" data-ui-important data-ui-exact-copy>✓ 保存しました</p>
+  <p>プライベートモードなど</p>
+  <div id="MEMO" data-ui-id="MEMO" data-ui-important data-ui-require-truncation>長いメモの内容を省略して表示し、利用者が必要な場合だけ全文を確認できるようにします。</div>
+  <button data-ui-id="EXPAND-MEMO" data-ui-important data-ui-action-id="EXPAND" data-ui-expected-state="STATE-EXPANDED" data-ui-action-target="MEMO">全文を表示</button>
+</main>
+<script>
+  document.querySelector('[data-ui-id="EXPAND-MEMO"]').addEventListener('click', () => {
+    document.querySelector('[data-ui-screen]').dataset.uiState = 'STATE-EXPANDED';
+  });
+</script>

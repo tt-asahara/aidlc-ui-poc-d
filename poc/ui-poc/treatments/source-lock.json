@@ -1,0 +1,1301 @@
+{
+  "schema_version": 1,
+  "checked_at_utc": "2026-10-14T00:12:00Z",
+  "status": "research-only; no installation or execution",
+  "harness_baseline": {
+    "aidlc_version": "2.11.0",
+    "commit": "6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a",
+    "evidence": "Pinned upstream Git tree and inspected source blob identities recorded in docs/source-evidence.json"
+  },
+  "sources": [
+    {
+      "repository": "anthropics/skills",
+      "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "skills/frontend-design/LICENSE.txt",
+          "git_blob_sha": "f433b1a53f5b830a205fd2df78e2b34974656c7b",
+          "bytes": 10174,
+          "content_read": true
+        },
+        {
+          "path": "skills/frontend-design/SKILL.md",
+          "git_blob_sha": "a5333457c414d20d625f307df945842c0952ecc3",
+          "bytes": 9390,
+          "content_read": true
+        }
+      ]
+    },
+    {
+      "repository": "mattpocock/skills",
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "LICENSE",
+          "git_blob_sha": "f1dd2c09108dde1a5f56097cee8461b3ea834499",
+          "bytes": 1068,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/domain-modeling/ADR-FORMAT.md",
+          "git_blob_sha": "d7e61f30a9fd8ca70d9ee68f019c2a9ebf2d13f7",
+          "bytes": 2733,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md",
+          "git_blob_sha": "9c0b4c7a2e8507c23cbb5e0baa66d81699321cc6",
+          "bytes": 2300,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/domain-modeling/SKILL.md",
+          "git_blob_sha": "a4438c6879c517d1a08e2b5fbca049b632688dfe",
+          "bytes": 3346,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/domain-modeling/agents/openai.yaml",
+          "git_blob_sha": "7f1522d2f11506ee205275ab7c282aa52366ecf6",
+          "bytes": 101,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/grill-with-docs/SKILL.md",
+          "git_blob_sha": "62b9efb6f991d1b229adee7506962f13ced0c499",
+          "bytes": 247,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/grill-with-docs/agents/openai.yaml",
+          "git_blob_sha": "5dbe2780a51be3e9b118bd7758a73e54a9384e11",
+          "bytes": 145,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/prototype/LOGIC.md",
+          "git_blob_sha": "32be86a0a5d9928db84b3988e55f9debe476ab40",
+          "bytes": 6036,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/prototype/SKILL.md",
+          "git_blob_sha": "a0044501fe0d385b4d8575b610188ede9b236ccf",
+          "bytes": 2931,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/prototype/UI.md",
+          "git_blob_sha": "3977951663490882c2632b40695d9f59a2fe2408",
+          "bytes": 6913,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/prototype/agents/openai.yaml",
+          "git_blob_sha": "1618b147965bc729b7bf3e8da5f130132067aadc",
+          "bytes": 100,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+          "git_blob_sha": "293c25b75590119794af03b037ba4288054a32b3",
+          "bytes": 6978,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/agents/openai.yaml",
+          "git_blob_sha": "65a0da8128c98051183235e490767a8065310868",
+          "bytes": 152,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/domain.md",
+          "git_blob_sha": "4032de016c1e91119d33d477633e2b8f265f4195",
+          "bytes": 2042,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-github.md",
+          "git_blob_sha": "a63510f74038300d8da354553f9d31d1bd954d94",
+          "bytes": 4117,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-gitlab.md",
+          "git_blob_sha": "81499dca459e8097d560b641f8ba7c2e1c7c9da4",
+          "bytes": 3816,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/issue-tracker-local.md",
+          "git_blob_sha": "0209a19af92c9c485cf3acc3d9e253171517ea17",
+          "bytes": 1810,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/setup-matt-pocock-skills/triage-labels.md",
+          "git_blob_sha": "5276464244857a3cc29890ff4a978a197b21f3fc",
+          "bytes": 1057,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/to-spec/SKILL.md",
+          "git_blob_sha": "3f52599ae2a4347aee5a07432c2707518e691a7f",
+          "bytes": 3043,
+          "content_read": true
+        },
+        {
+          "path": "skills/engineering/to-spec/agents/openai.yaml",
+          "git_blob_sha": "549e6f76f020a1b9ba65f52ccda336566ee6222a",
+          "bytes": 135,
+          "content_read": true
+        },
+        {
+          "path": "skills/productivity/grilling/SKILL.md",
+          "git_blob_sha": "df69d9936880cd3314c28858c6c52f48db23b856",
+          "bytes": 2049,
+          "content_read": true
+        },
+        {
+          "path": "skills/productivity/grilling/agents/openai.yaml",
+          "git_blob_sha": "ddbdb96139c0c1dfe6bca698f39d0465674b8a39",
+          "bytes": 113,
+          "content_read": true
+        }
+      ]
+    },
+    {
+      "repository": "pbakaus/impeccable",
+      "commit": "2f98774f86bc05563876643db37e6c37c322850f",
+      "license": "Apache-2.0",
+      "skill_version": "4.5.2",
+      "engine_version": "0.1.14",
+      "canonical_source_files": [
+        {
+          "path": "LICENSE",
+          "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9",
+          "bytes": 10766,
+          "content_read": true
+        },
+        {
+          "path": "NOTICE.md",
+          "git_blob_sha": "0468271c904ae334cfaf27da6f8df3d5f419a1f0",
+          "bytes": 503,
+          "content_read": true
+        },
+        {
+          "path": "skill/SKILL.src.md",
+          "git_blob_sha": "c413ae26e832b36d54603353f1c7a0ae04784eea",
+          "bytes": 12962,
+          "content_read": true
+        },
+        {
+          "path": "skill/agents/impeccable-asset-producer.md",
+          "git_blob_sha": "93d0bbbe72d0d470a5cbb997f3e13e8b65f87072",
+          "bytes": 8446,
+          "content_read": false
+        },
+        {
+          "path": "skill/agents/impeccable-documenter.md",
+          "git_blob_sha": "d2c4e107c8031e932bbdab6bb2cfb3efe0edd225",
+          "bytes": 3255,
+          "content_read": false
+        },
+        {
+          "path": "skill/agents/impeccable-finish-reviewer.md",
+          "git_blob_sha": "ab1afa66103d709bdb1cf6a63388321facdd9e71",
+          "bytes": 15784,
+          "content_read": false
+        },
+        {
+          "path": "skill/agents/impeccable-manual-edit-applier.md",
+          "git_blob_sha": "81fe9fd8170738e4f66c1831f654285a7582592b",
+          "bytes": 7099,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/adapt.md",
+          "git_blob_sha": "25a95fcf6f15093d904da416d18a9f795b9e757a",
+          "bytes": 11318,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/adapt.native.md",
+          "git_blob_sha": "4307b559f458f01c0ba50da83b7467656b596970",
+          "bytes": 3927,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/android.md",
+          "git_blob_sha": "a04ba29b547810d30e5f9d029ae1b39a9872a798",
+          "bytes": 4895,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/animate.md",
+          "git_blob_sha": "f80ebd154cd0b51ac713f3a535ca9640a30ab966",
+          "bytes": 5253,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/audit.md",
+          "git_blob_sha": "11f035a44bdb417ba204ce740ce4e69d71cfb4b6",
+          "bytes": 7854,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/audit.native.md",
+          "git_blob_sha": "9a51dd8a24aaf54e5c75affbf14ae0ba2e07beee",
+          "bytes": 7690,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/bolder.md",
+          "git_blob_sha": "e06aa32121b7de5b21c7bd83f3be1ec851ffa7a5",
+          "bytes": 3457,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/clarify.md",
+          "git_blob_sha": "309a056793ff912ff7b412f797a5ecc643d36cc9",
+          "bytes": 4607,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/colorize.md",
+          "git_blob_sha": "ba536574aa86bfb08cd47dc0a80313692800a53d",
+          "bytes": 4554,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/component-review.md",
+          "git_blob_sha": "44962913269431a96fa9d2b5871c72193959ad3e",
+          "bytes": 7864,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/craft-floor.md",
+          "git_blob_sha": "0252f5b9cd77acaafce46dd57cb93b054c76ac0a",
+          "bytes": 7134,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/craft.md",
+          "git_blob_sha": "dbbc9402c07cdab21f2b6eb69279b8435fecfd7f",
+          "bytes": 555,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/critique.md",
+          "git_blob_sha": "ad0831694497d99e455fe02d02ce526867b2eea0",
+          "bytes": 45216,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/delight.md",
+          "git_blob_sha": "952af09711345b28fb54aa1d335eed6cf38f86a5",
+          "bytes": 3733,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/distill.md",
+          "git_blob_sha": "bc0f6e96472be319e27e62e681975d3716e7b43a",
+          "bytes": 5610,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/doctor.md",
+          "git_blob_sha": "92387c2eeb47dba7b0eabbf7f0af427a2ac86fff",
+          "bytes": 5529,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/document.md",
+          "git_blob_sha": "90b963b1a74a1e98848d200eafc1230b8e77e803",
+          "bytes": 27397,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/extract.md",
+          "git_blob_sha": "0f49cfbaa0f6787b0f3b2e5e89980f88fe06af7c",
+          "bytes": 3309,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/generate.md",
+          "git_blob_sha": "7247104e9a1e743cf19ac0910d8788ef889cc6eb",
+          "bytes": 12993,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/harden.md",
+          "git_blob_sha": "e8a0567c5964ab154a726a2e53ea2b6563b780d5",
+          "bytes": 9467,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/hooks.md",
+          "git_blob_sha": "7e8b5cf24220a84f42baf236f743fb4d25411cb1",
+          "bytes": 13843,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/init.md",
+          "git_blob_sha": "87a0f8b8b805a60316cff901c9c8f39ef55fc720",
+          "bytes": 11640,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/ios.md",
+          "git_blob_sha": "bff06b2a3ccd029930be7df19794bb20aa02be26",
+          "bytes": 4644,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/layout.md",
+          "git_blob_sha": "4b9eadcb10bbcf3e4d8de84ebd0d86d90e804d4b",
+          "bytes": 5161,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/live-setup.md",
+          "git_blob_sha": "274f8c3bd091afcf49fc33aaba70edecc11acfbf",
+          "bytes": 8169,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/live.md",
+          "git_blob_sha": "5823d3407ebd4679ac3531eaa3008db798d9ed12",
+          "bytes": 36269,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/mode-operate.md",
+          "git_blob_sha": "833775ba85f03bf65a4c1b23e39192f7653414e6",
+          "bytes": 4716,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/mode-persuade.md",
+          "git_blob_sha": "1d4299e507b666221ed569aaf10b5bbdf68c2985",
+          "bytes": 3686,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/mode-read.md",
+          "git_blob_sha": "b30c4c9139e3094bd35c60738decb6109326153f",
+          "bytes": 4396,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/new-work.md",
+          "git_blob_sha": "44abb022a31a3f45cca07560794679ad25cc90d2",
+          "bytes": 63305,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/onboard.md",
+          "git_blob_sha": "e6f835b46209087e6801f449160f7569c0efe713",
+          "bytes": 7757,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/operate.md",
+          "git_blob_sha": "5e4666de08f63f55c832c7bb2511cc9ad8068744",
+          "bytes": 5200,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/optimize.md",
+          "git_blob_sha": "9c7bb144ab0d5fa72f5bbb20785249895b0998ba",
+          "bytes": 7631,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/overdrive.md",
+          "git_blob_sha": "474100a3043084ac187217edb6ffe9815f8b344f",
+          "bytes": 9054,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/polish.md",
+          "git_blob_sha": "f2146990505863574e3c8298613a37d4c31ee73c",
+          "bytes": 6612,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/quieter.md",
+          "git_blob_sha": "8483d305d781885f549cb104346f534331d2ba8d",
+          "bytes": 4845,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/region-map.md",
+          "git_blob_sha": "de8c5c1f8d6c24593af38980deb4c3032571bd64",
+          "bytes": 3310,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/routing.md",
+          "git_blob_sha": "fb35adc46a200ce09f3efbfdc9ae87b3a5be123f",
+          "bytes": 3319,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/shape.md",
+          "git_blob_sha": "90a74ae813331cbce8fff6beb498ced77970fadf",
+          "bytes": 3547,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/typeset.md",
+          "git_blob_sha": "a315599ca7ec821ba513b3181ad1bf9043b9218e",
+          "bytes": 5256,
+          "content_read": false
+        },
+        {
+          "path": "skill/reference/visualize.md",
+          "git_blob_sha": "594ce801d48aac850e5eddb2e6f68e80994db3b3",
+          "bytes": 13901,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/VERSION",
+          "git_blob_sha": "71d6a66eda4c751cd57798e19de8b770703abdd6",
+          "bytes": 7,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/command-metadata.json",
+          "git_blob_sha": "89891ea4df179d5a07cf3aef42e84dafb1d05689",
+          "bytes": 8392,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/data/font-index-failures.json",
+          "git_blob_sha": "1aca67220413ef163570c75405b444d7a27a32be",
+          "bytes": 2437,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/data/font-index.json",
+          "git_blob_sha": "9d2029971df232a72ff6584d264c104490521742",
+          "bytes": 1100013,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/impeccable",
+          "git_blob_sha": "eb60f8667dd6924bc6271e9e1a0761ea5f945751",
+          "bytes": 8514,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/impeccable.cmd",
+          "git_blob_sha": "dc0fd33e5ac02ec325cb21af7cef39b201959a35",
+          "bytes": 8498,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/live-browser-dom.js",
+          "git_blob_sha": "8646944982fcb5e36c111d134c5bf1e027bb27c6",
+          "bytes": 10623,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/live-browser-ignores.js",
+          "git_blob_sha": "1c8514c7bcd8b8d889a1763965326fb6adec24a1",
+          "bytes": 10346,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/live-browser-session.js",
+          "git_blob_sha": "ad9cdf008fdbeebd3da6a93d4ef408b5abff7420",
+          "bytes": 4346,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/live-browser.js",
+          "git_blob_sha": "c7eed77fb06fa81ef9841f61b5ac28d3bfe5a4f1",
+          "bytes": 548448,
+          "content_read": false
+        },
+        {
+          "path": "skill/scripts/modern-screenshot.umd.js",
+          "git_blob_sha": "a9c5208f6b141d3bafdb8eb843d6fcbdcf23e370",
+          "bytes": 29290,
+          "content_read": false
+        }
+      ],
+      "codex_compatible_payload": [
+        {
+          "path": ".agents/skills/impeccable/SKILL.md",
+          "git_blob_sha": "b9d82965dd59a45596c5b63a1cf4207168a272a7",
+          "bytes": 12263,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/agents/impeccable_asset_producer.toml",
+          "git_blob_sha": "91eeca4cce0e62881149b094e758f814510649c3",
+          "bytes": 8429,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/agents/impeccable_documenter.toml",
+          "git_blob_sha": "45203ec73dc5d2509d0bd4f13e0eccbe51b4366e",
+          "bytes": 3203,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/agents/impeccable_finish_reviewer.toml",
+          "git_blob_sha": "0ea04ad52f0142e8428e483e86e0acb9367949dd",
+          "bytes": 15734,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/agents/impeccable_manual_edit_applier.toml",
+          "git_blob_sha": "469dd2da6512966a110b94e20abd18283d3689e7",
+          "bytes": 7032,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/agents/openai.yaml",
+          "git_blob_sha": "ee6cae7726ef85d3744c1b978608668a07aefeef",
+          "bytes": 235,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/adapt.md",
+          "git_blob_sha": "85f7c022f5c65baebdd8df16b996898a4f520e3a",
+          "bytes": 11301,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/adapt.native.md",
+          "git_blob_sha": "88975b36f38bc6b709eec052d398ce8996d55d19",
+          "bytes": 3910,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/android.md",
+          "git_blob_sha": "1f67a6bb574960cccb1692f460cc5432baebad65",
+          "bytes": 4093,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/animate.md",
+          "git_blob_sha": "c8fb9e038bb74a125646b64c49bc39711f63e8f4",
+          "bytes": 5236,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/audit.md",
+          "git_blob_sha": "fc9c3112427e0162d1eaa3fa0b9dd776e83f5a3d",
+          "bytes": 8528,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/audit.native.md",
+          "git_blob_sha": "321847a79680fd61908fced1ddab0ac20581aeb7",
+          "bytes": 8364,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/bolder.md",
+          "git_blob_sha": "0ea9bcc0eb5f94d06bb3c3b52c5079eb1d0ca22a",
+          "bytes": 3564,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/clarify.md",
+          "git_blob_sha": "4506a31c95e02b2ad918367a0ef4461643d51532",
+          "bytes": 4590,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/colorize.md",
+          "git_blob_sha": "02fa661efac9229d6e869a20ef8ee928d4b986a0",
+          "bytes": 4537,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/component-review.md",
+          "git_blob_sha": "a3c35c92999ecde66f53c96fb287d8adaa0e17f3",
+          "bytes": 8017,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/craft-floor.md",
+          "git_blob_sha": "ae213ce801ebb2085033b309b4144e8d7e9996ba",
+          "bytes": 5500,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/craft.md",
+          "git_blob_sha": "dbbc9402c07cdab21f2b6eb69279b8435fecfd7f",
+          "bytes": 555,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/critique.md",
+          "git_blob_sha": "c1285ca137d9aa1280e538601a0e84140246fe56",
+          "bytes": 45944,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/degraded/asset-producer.md",
+          "git_blob_sha": "76f2357b8aaec59fcb77dbc87582e235c3fcb365",
+          "bytes": 8581,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/degraded/documenter.md",
+          "git_blob_sha": "e9dfb799bcece32233386bf9702bc3141d56d196",
+          "bytes": 3325,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/degraded/finish-reviewer.md",
+          "git_blob_sha": "1b0311080e7d6ada595ae119cba5ff327617c5bb",
+          "bytes": 15834,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/degraded/manual-edit-applier.md",
+          "git_blob_sha": "ef5095b924623ce04e02188a6790ebd98a273bcd",
+          "bytes": 7196,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/delight.md",
+          "git_blob_sha": "60a8e83ee48d50901acfa886d3ec4bc72b40ec6f",
+          "bytes": 3716,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/distill.md",
+          "git_blob_sha": "13f6cd5840c2030406c8fa59b70cb5fa86c239ab",
+          "bytes": 5717,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/doctor.md",
+          "git_blob_sha": "99211927a5a045f24521c92cb26815e8f664eef9",
+          "bytes": 5563,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/document.md",
+          "git_blob_sha": "83abb54b8ea773577a464f08ab78beaa411f4c70",
+          "bytes": 27521,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/extract.md",
+          "git_blob_sha": "7e98bd04605aaa8e6e7200deff5fe5cd5cc28841",
+          "bytes": 3433,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/generate.md",
+          "git_blob_sha": "b28b3f96e97327fbc96901934ff517a058633904",
+          "bytes": 13219,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/harden.md",
+          "git_blob_sha": "124742e1cca3caff2c495009a8f408382e73e7d1",
+          "bytes": 9450,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/hooks.md",
+          "git_blob_sha": "190437cf90afc712bebdb10049adf02263b2cddf",
+          "bytes": 13911,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/init.md",
+          "git_blob_sha": "550ba484802c4bbaf50e46edef2bb90de0915ef3",
+          "bytes": 11764,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/ios.md",
+          "git_blob_sha": "c6244dfe32176e5718d86211b7d1eb5601eb0860",
+          "bytes": 3812,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/layout.md",
+          "git_blob_sha": "aa547c742fc373bc459bdbb7977683441aa48ec0",
+          "bytes": 5161,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/live-setup.md",
+          "git_blob_sha": "6e10f00f7f2a789da582f38cdaef89de39ead266",
+          "bytes": 8186,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/live.md",
+          "git_blob_sha": "fb85b3fdd99f94c78752da4c4d2d2c06bdaa1439",
+          "bytes": 36490,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/mode-operate.md",
+          "git_blob_sha": "833775ba85f03bf65a4c1b23e39192f7653414e6",
+          "bytes": 4716,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/mode-persuade.md",
+          "git_blob_sha": "9c152d67064fb8453a7eaa89de20c35fc115b085",
+          "bytes": 3638,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/mode-read.md",
+          "git_blob_sha": "b30c4c9139e3094bd35c60738decb6109326153f",
+          "bytes": 4396,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/new-work.md",
+          "git_blob_sha": "f0bf69d0962adb577716286acfda85359958027e",
+          "bytes": 61566,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/onboard.md",
+          "git_blob_sha": "90e33916ef348f050681d400a67e5745bfdb6d41",
+          "bytes": 7740,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/operate.md",
+          "git_blob_sha": "524f2c3ae9fa497284e9699f3ca5320cce5d05cf",
+          "bytes": 4145,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/optimize.md",
+          "git_blob_sha": "fc56c22376854d77e8099b925232bba25001e5e6",
+          "bytes": 7614,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/overdrive.md",
+          "git_blob_sha": "34dface28cb99425f4153ee08447220ea1839b79",
+          "bytes": 9178,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/polish.md",
+          "git_blob_sha": "f93170f773cac058f51e289603aed7575d62a6a2",
+          "bytes": 6646,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/quieter.md",
+          "git_blob_sha": "870ea86599bebf65509291df22533e4b5c3d4ceb",
+          "bytes": 4952,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/region-map.md",
+          "git_blob_sha": "7b7685cf59a7ee8fa9361d4f0b986ec0ba5b48ad",
+          "bytes": 3361,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/routing.md",
+          "git_blob_sha": "21c12a626e7ef084fa6ed5d03b93b91e3eb122ce",
+          "bytes": 3336,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/shape.md",
+          "git_blob_sha": "90a74ae813331cbce8fff6beb498ced77970fadf",
+          "bytes": 3547,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/typeset.md",
+          "git_blob_sha": "6f117f429cdefe60c0a07cbd5f02f72a40eb8a7d",
+          "bytes": 5256,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/reference/visualize.md",
+          "git_blob_sha": "11ba6d7cd67a344ebc24c0a7870a4aa7c0b412cc",
+          "bytes": 13918,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/VERSION",
+          "git_blob_sha": "71d6a66eda4c751cd57798e19de8b770703abdd6",
+          "bytes": 7,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/command-metadata.json",
+          "git_blob_sha": "89891ea4df179d5a07cf3aef42e84dafb1d05689",
+          "bytes": 8392,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/data/font-index-failures.json",
+          "git_blob_sha": "1aca67220413ef163570c75405b444d7a27a32be",
+          "bytes": 2437,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/data/font-index.json",
+          "git_blob_sha": "9d2029971df232a72ff6584d264c104490521742",
+          "bytes": 1100013,
+          "content_read": false
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/impeccable",
+          "git_blob_sha": "eb60f8667dd6924bc6271e9e1a0761ea5f945751",
+          "bytes": 8514,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/impeccable.cmd",
+          "git_blob_sha": "dc0fd33e5ac02ec325cb21af7cef39b201959a35",
+          "bytes": 8498,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/live-browser-dom.js",
+          "git_blob_sha": "8646944982fcb5e36c111d134c5bf1e027bb27c6",
+          "bytes": 10623,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/live-browser-ignores.js",
+          "git_blob_sha": "1c8514c7bcd8b8d889a1763965326fb6adec24a1",
+          "bytes": 10346,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/live-browser-session.js",
+          "git_blob_sha": "ad9cdf008fdbeebd3da6a93d4ef408b5abff7420",
+          "bytes": 4346,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/live-browser.js",
+          "git_blob_sha": "c7eed77fb06fa81ef9841f61b5ac28d3bfe5a4f1",
+          "bytes": 548448,
+          "content_read": true
+        },
+        {
+          "path": ".agents/skills/impeccable/scripts/modern-screenshot.umd.js",
+          "git_blob_sha": "a9c5208f6b141d3bafdb8eb843d6fcbdcf23e370",
+          "bytes": 29290,
+          "content_read": true
+        }
+      ],
+      "security_review_files": [
+        {
+          "path": ".codex/hooks.json",
+          "git_blob_sha": "2163338c9f10228bcdf92633cf60479087c7d9f2",
+          "bytes": 1076,
+          "content_read": true
+        },
+        {
+          "path": "README.md",
+          "git_blob_sha": "0d6c0ec686eaaafc3c1917ecbbd5bb5107771564",
+          "bytes": 29582,
+          "content_read": true
+        },
+        {
+          "path": "scripts/lib/transformers/providers.js",
+          "git_blob_sha": "e712d884ecd710ed83a8623906beb3aed30b56fa",
+          "bytes": 8154,
+          "content_read": true
+        }
+      ]
+    }
+  ],
+  "additional_read_dependency": {
+    "repository": "google-labs-code/design.md",
+    "commit": "9bf8eae67128b6cc55ad9bf86665767deb4c11cd",
+    "path": "docs/spec.md",
+    "git_blob_sha": "5995e5482fc338a9f9923d5912551241a82e6e8a",
+    "reason": "Impeccable document reference links moving main; pin content separately for reproducibility"
+  },
+  "treatments": {
+    "A": {
+      "content": [
+        "anthropics/skills:skills/frontend-design/"
+      ],
+      "layout": ".agents/skills/frontend-design/{SKILL.md,LICENSE.txt}"
+    },
+    "B": {
+      "content": [
+        "A",
+        "mattpocock/skills:skills/engineering/prototype/",
+        "mattpocock/skills:skills/productivity/grilling/",
+        "mattpocock/skills:skills/engineering/domain-modeling/",
+        "mattpocock/skills:skills/engineering/to-spec/"
+      ],
+      "support": [
+        "grill-with-docs wrapper",
+        "setup-matt-pocock-skills configuration references"
+      ],
+      "layout": "Copy each selected leaf skill directory under .agents/skills/, preserving UI.md, LOGIC.md, GLOSSARY-FORMAT.md, ADR-FORMAT.md, and agents/openai.yaml."
+    },
+    "C": {
+      "content": [
+        "same Matt payload as B",
+        "pbakaus/impeccable@209444a9d552c18bcaa74e26bf66a25fc568a767:.codex/skills/frontend-design/",
+        "conditional teach-impeccable dependency at the same commit",
+        "LICENSE",
+        "NOTICE.md"
+      ],
+      "status": "SELECTED historical official design component; not latest full Impeccable",
+      "collision_rule": "Do not load Anthropic frontend-design in C. Preserve one design-skill identity per isolated repository.",
+      "selection_ref": "selected_C"
+    }
+  },
+  "strategy": [
+    "Use verified commit-based contents, never mutable main URLs during runs. Preserve notices and licenses; mark any adapted files.",
+    "Keep the three repositories isolated; same AIDLC harness, model, tools, seeded input, budget, answer oracle, initial code and evaluation. Record skill files loaded and interaction counts.",
+    "Matt UI is three structurally different variants by default, cap five; LOGIC is one self-contained state-machine HTML demo. Predeclare branch per test, not chosen retrospectively.",
+    "Provide identical local issue-tracker/label context to B and C through task inputs rather than run setup that edits AGENTS.md/CLAUDE.md. This is a documented setup adaptation. Do not publish issues or push branches automatically.",
+    "Matt grilling requires rounds and final shared-understanding confirmation; use the same bounded answer oracle, record decisions and time, and do not silently skip the interview.",
+    "Matt prototype intentionally has no tests/minimal error handling, and its current capture step calls for an out-of-main prototype branch plus issue pointer. Evaluate production correctness separately using unchanged common checks; do not score those prototype constraints as production delivery.",
+    "For a content-only C, preserve all prompt references as read-only source material, explicitly disable runtime, hook, external-service, live-server, image and packaged-subagent execution. Use a clearly labeled adapter and log every omitted instruction. This does not reproduce full Impeccable.",
+    "Do not copy .codex/hooks.json: it changes harness behavior, and committed root manifest references .codex/skills while recommended universal payload uses .agents/skills."
+  ],
+  "unsupported_or_unpinned": [
+    "Impeccable new-work requires concept-seed runtime; default remote roll can be replaced by supported valid local catalog.",
+    "Launcher can select unversioned home/PATH or override binaries. Release asset digests recorded from API, but downloaded bytes/signatures remain unverified.",
+    "Launcher may download engine-v0.1.14 and SHA256 sidecar, cache, chmod and execute. No launcher or engine was executed in this research.",
+    "Full package includes PostToolUse and Stop detector hooks, four packaged Codex agents, browser-injected JS, local servers and engine-provided checks. Prompt-only ablation excludes these treatment factors.",
+    "Telemetry opt-out alone does not disable default remote roll; valid local catalog can. No roll request made.",
+    "Live manual edits may execute project's impeccable:manual-edit-validate shell script with user permissions. Review and authorization required before use.",
+    "Impeccable document.md references external moving design.md specification; auxiliary pinned snapshot is recorded above. No redistribution license review of that dependency was performed.",
+    "Impeccable references native design material derived from ehmo/platform-design-skills; NOTICE.md records MIT origin. Bundled files are already pinned; no live upstream fetching is required for those files.",
+    "Some Impeccable live-setup example links deliberately pin older 8dac6ae7e020c43ab10ce9b41939f6fd42627b96; they are optional examples, not executed.",
+    "font-index.json blob identity was verified from the complete tree but fetch_file returned empty content. This is inventory verification, not exhaustive executable security audit."
+  ],
+  "evidence": [
+    {
+      "repository": "anthropics/skills",
+      "commit_url": "https://github.com/anthropics/skills/commit/dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+      "tree_verified_complete": true
+    },
+    {
+      "repository": "mattpocock/skills",
+      "commit_url": "https://github.com/mattpocock/skills/commit/49dd158d1076134a641b33efb035946536778336",
+      "tree_verified_complete": true
+    },
+    {
+      "repository": "pbakaus/impeccable",
+      "commit_url": "https://github.com/pbakaus/impeccable/commit/2f98774f86bc05563876643db37e6c37c322850f",
+      "tree_verified_complete": true
+    }
+  ],
+  "runtime_release_pins": [
+    {
+      "tag": "skill-v4.5.2",
+      "commit": "d631a8827f99414d2b6daba4ef08b7f8701751d7",
+      "release_url": "https://github.com/pbakaus/impeccable/releases/tag/skill-v4.5.2",
+      "assets": [
+        {
+          "name": "universal.zip",
+          "api_reported_digest": "sha256:8b445a7529581a36626b328c3077e3d3dd7fbf247521e20ec8759ca939f77470",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/skill-v4.5.2/universal.zip"
+        },
+        {
+          "name": "universal.zip.sig.json",
+          "api_reported_digest": "sha256:3f5f45457d1cb607bd5b66938ccccaddcda5a628a10869111d5c648ee8f15444",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/skill-v4.5.2/universal.zip.sig.json"
+        }
+      ],
+      "verification": "GitHub metadata only; bytes/signatures not downloaded or verified"
+    },
+    {
+      "tag": "engine-v0.1.14",
+      "commit": "866f3557a13847bf450d8d09d23459243d2fb7c3",
+      "release_url": "https://github.com/pbakaus/impeccable/releases/tag/engine-v0.1.14",
+      "assets": [
+        {
+          "name": "impeccable-darwin-arm64",
+          "api_reported_digest": "sha256:abbd69d540532b91e9599c41d3a6127dfbaabae5e24bafd74ff7e2fb18f4f87c",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-darwin-arm64"
+        },
+        {
+          "name": "impeccable-darwin-arm64.sha256",
+          "api_reported_digest": "sha256:1f4c0f71e57f8fba54f62ba669c361285b854095ffb5a91bffa80fedb809d243",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-darwin-arm64.sha256"
+        },
+        {
+          "name": "impeccable-darwin-x64",
+          "api_reported_digest": "sha256:dfa4570309939f49615a441baa9c73f1c2d339bf07494517a6c6eb2eb28aa0f5",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-darwin-x64"
+        },
+        {
+          "name": "impeccable-darwin-x64.sha256",
+          "api_reported_digest": "sha256:f20de8af1ddb7da078f5c0e063980fdeafd11629e24e6967ecf194c3a6b7b691",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-darwin-x64.sha256"
+        },
+        {
+          "name": "impeccable-linux-arm64",
+          "api_reported_digest": "sha256:396263ee694780db942483fc80933a012ef08bf981f5f26b0da5e16b6208c948",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-linux-arm64"
+        },
+        {
+          "name": "impeccable-linux-arm64.sha256",
+          "api_reported_digest": "sha256:862f4856ee533382fc95ec11597b864ffcc23aaa73ee0cfce105cf43af342af7",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-linux-arm64.sha256"
+        },
+        {
+          "name": "impeccable-linux-x64",
+          "api_reported_digest": "sha256:3d31ec1a664ac35c815ea1d7c10abad1155ce364d0f461157eb837a34368efb6",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-linux-x64"
+        },
+        {
+          "name": "impeccable-linux-x64.sha256",
+          "api_reported_digest": "sha256:01fe3ef7a31c081566e786272bd1bce53bb2029a490a5851566e7eb6a74a9537",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-linux-x64.sha256"
+        },
+        {
+          "name": "impeccable-windows-x64.exe",
+          "api_reported_digest": "sha256:38e09451694973ba664a24e67e1502a6913e6d0e533a0a5ae1e04c5963a804b1",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-windows-x64.exe"
+        },
+        {
+          "name": "impeccable-windows-x64.exe.sha256",
+          "api_reported_digest": "sha256:d25709af923b132f6ec32815f8b0a129bc21df4ce403b9f7624b9bbe1c1b5e4c",
+          "url": "https://github.com/pbakaus/impeccable/releases/download/engine-v0.1.14/impeccable-windows-x64.exe.sha256"
+        }
+      ],
+      "verification": "GitHub metadata only; bytes/signatures not downloaded or verified"
+    }
+  ],
+  "historical_option": {
+    "status": "Selected historical design component for C; no installation or execution.",
+    "commit": "209444a9d552c18bcaa74e26bf66a25fc568a767",
+    "date": "2026-03-30T20:40:01Z",
+    "subject": "Bump version to 2.0.2",
+    "license": "Apache-2.0",
+    "provenance": "Parent of rename commit f683f413c81e5a1adc58593897837bf3ad7af2b7. No corresponding release tag verified.",
+    "files": [
+      {
+        "path": ".codex/skills/frontend-design/SKILL.md",
+        "git_blob_sha": "a776c78dd8da099c5d4530bfb914db7b72305fb6",
+        "bytes": 9550
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/color-and-contrast.md",
+        "git_blob_sha": "77aaf03296ef84f3699268dab9c605502c883938",
+        "bytes": 5291
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/interaction-design.md",
+        "git_blob_sha": "19d6809a8fbd6e062adc26c0ca469f07371edcba",
+        "bytes": 7085
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/motion-design.md",
+        "git_blob_sha": "eff2788b4aea3b159f3819bdde97c827204fd32d",
+        "bytes": 4753
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/responsive-design.md",
+        "git_blob_sha": "74f5a10013f1f37e1938c20b9274be927d82db81",
+        "bytes": 3464
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/spatial-design.md",
+        "git_blob_sha": "27c8e74f3d6a3a52133d28d9e07f76b717bc67bc",
+        "bytes": 3545
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/typography.md",
+        "git_blob_sha": "fc201c8a6f7736ef23594fcaf079ed23f306dee3",
+        "bytes": 5962
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/ux-writing.md",
+        "git_blob_sha": "42109217a651769c6a9de4475a87cc2855581f6a",
+        "bytes": 4330
+      },
+      {
+        "path": ".codex/skills/teach-impeccable/SKILL.md",
+        "git_blob_sha": "5267bf59970423b29c3b0b500510b7b848565d1b",
+        "bytes": 2828
+      },
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9",
+        "bytes": 10766
+      },
+      {
+        "path": "NOTICE.md",
+        "git_blob_sha": "ddf948fa075abc57767390b25dc97a9cd7933509",
+        "bytes": 602
+      }
+    ],
+    "notes": [
+      "Eight design Markdown files plus conditional teach-impeccable dependency; preserve seven relative references.",
+      "Use Codex-expanded payload, not unresolved source templates. Same confirmed Design Context can avoid setup rewriting harness instructions.",
+      "Entire historical package was not text-only: critique/scripts/detect-antipatterns.mjs already existed. Latest wholly prompt-only release not established."
+    ]
+  },
+  "network_details": {
+    "roll": {
+      "url": "https://impeccable.style/api/roll",
+      "method": "GET",
+      "fields": [
+        "scope",
+        "key (random default)",
+        "reroll",
+        "optional mode, grain, platform",
+        "X-Impeccable-Client version/provider"
+      ],
+      "no_project_content": "Request construction includes no project names, paths, prompt or brief."
+    },
+    "chosen": {
+      "url": "https://impeccable.style/api/chosen",
+      "method": "POST",
+      "fields": [
+        "chosenId",
+        "key",
+        "scope",
+        "mode",
+        "kind",
+        "register",
+        "option",
+        "reroll",
+        "poolRevision",
+        "handId",
+        "pingId",
+        "kindSource",
+        "source",
+        "client header"
+      ],
+      "optout": "DO_NOT_TRACK=1 or IMPECCABLE_NO_TELEMETRY=1 suppresses choice reporting and asks roll server not to record."
+    },
+    "cards": {
+      "url": "https://impeccable.style/worlds/cards/<catalog-image>",
+      "data": "catalog image request and normal network metadata"
+    },
+    "version": {
+      "url": "https://impeccable.style/api/version",
+      "optout": "IMPECCABLE_NO_UPDATE_CHECK=1",
+      "data": "No project content per official privacy policy"
+    },
+    "optional_image_api": {
+      "urls": [
+        "https://api.openai.com/v1/images/generations",
+        "https://api.openai.com/v1/images/edits"
+      ],
+      "data": "Prompt, reference images on edit, generation parameters and API-key authentication. Separate authorization and cost/data treatment; no credentials read."
+    },
+    "downloads": "GitHub release URLs and reported digests are runtime_release_pins. Downloads may redirect to GitHub asset delivery hosts.",
+    "local": "Picker/live localhost services exchange working state and annotations; project manual-edit validation may run an optional shell script.",
+    "local_catalog_correction": "IMPECCABLE_CATALOG_DIR with valid concept-ingredients.json, concept-reviews.json, composition-ingredients.json, composition-reviews.json loads before remote API. Internet roll is default, not intrinsically mandatory. No production catalog snapshot was procured.",
+    "privacy": "https://impeccable.style/privacy/"
+  },
+  "runtime_verification_requirements": [
+    "Select release skill commit versus latest-main snapshot explicitly; both identify as 4.5.2 but are different bytes.",
+    "After authorization only: verify exact platform binary bytes against pinned API SHA256 and sidecar; validate signed skill bundle using trusted release signing key.",
+    "Isolate engine path to prevent unversioned home/PATH selection. Pin executable and all four agent definitions, hook manifest and model settings.",
+    "Codex hooks require user approval through /hooks and alter the common harness. No hook installation authorized.",
+    "Freeze catalog+seed or record API responses; define native image tools versus optional direct OpenAI route. No execution done."
+  ],
+  "selected_C": {
+    "status": "installed from pinned historical component; live stage execution not verified",
+    "label": "Matt + historical official Impeccable frontend-design component",
+    "repository": "pbakaus/impeccable",
+    "commit": "209444a9d552c18bcaa74e26bf66a25fc568a767",
+    "component": ".codex/skills/frontend-design/",
+    "dependency": ".codex/skills/teach-impeccable/SKILL.md",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "path": ".codex/skills/frontend-design/SKILL.md",
+        "git_blob_sha": "a776c78dd8da099c5d4530bfb914db7b72305fb6",
+        "bytes": 9550
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/color-and-contrast.md",
+        "git_blob_sha": "77aaf03296ef84f3699268dab9c605502c883938",
+        "bytes": 5291
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/interaction-design.md",
+        "git_blob_sha": "19d6809a8fbd6e062adc26c0ca469f07371edcba",
+        "bytes": 7085
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/motion-design.md",
+        "git_blob_sha": "eff2788b4aea3b159f3819bdde97c827204fd32d",
+        "bytes": 4753
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/responsive-design.md",
+        "git_blob_sha": "74f5a10013f1f37e1938c20b9274be927d82db81",
+        "bytes": 3464
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/spatial-design.md",
+        "git_blob_sha": "27c8e74f3d6a3a52133d28d9e07f76b717bc67bc",
+        "bytes": 3545
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/typography.md",
+        "git_blob_sha": "fc201c8a6f7736ef23594fcaf079ed23f306dee3",
+        "bytes": 5962
+      },
+      {
+        "path": ".codex/skills/frontend-design/reference/ux-writing.md",
+        "git_blob_sha": "42109217a651769c6a9de4475a87cc2855581f6a",
+        "bytes": 4330
+      },
+      {
+        "path": ".codex/skills/teach-impeccable/SKILL.md",
+        "git_blob_sha": "5267bf59970423b29c3b0b500510b7b848565d1b",
+        "bytes": 2828
+      },
+      {
+        "path": "LICENSE",
+        "git_blob_sha": "bb3f6d23b1f8025514a62a12b51b47d73e3c9aa9",
+        "bytes": 10766
+      },
+      {
+        "path": "NOTICE.md",
+        "git_blob_sha": "ddf948fa075abc57767390b25dc97a9cd7933509",
+        "bytes": 602
+      }
+    ],
+    "notes": [
+      "Eight design Markdown files plus conditional teach-impeccable dependency; preserve seven relative references.",
+      "Use Codex-expanded payload, not unresolved source templates. Same confirmed Design Context can avoid setup rewriting harness instructions.",
+      "Entire historical package was not text-only: critique/scripts/detect-antipatterns.mjs already existed. Latest wholly prompt-only release not established."
+    ],
+    "excluded": [
+      "latest full Impeccable engine/runtime",
+      "hooks",
+      "packaged subagents",
+      "critique/scripts/detect-antipatterns.mjs",
+      "Anthropic frontend-design in C"
+    ],
+    "installation_layout": {
+      "design": ".agents/skills/frontend-design/",
+      "conditional_dependency": ".agents/skills/teach-impeccable/",
+      "licenses": "Preserve LICENSE and NOTICE.md with the historical component payload."
+    },
+    "harness_policy": "Use identical AI-DLC harness in A/B/C. Preserve relative reference paths. No full-package runtime or hooks are authorized by this selection."
+  }
+}

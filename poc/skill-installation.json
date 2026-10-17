@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "arm": "C",
+  "source_lock": "ui-poc/treatments/source-lock.json",
+  "installed": [
+    {
+      "repository": "mattpocock/skills",
+      "commit": "49dd158d1076134a641b33efb035946536778336",
+      "license": "MIT",
+      "paths": [
+        ".agents/skills/prototype/",
+        ".agents/skills/grilling/",
+        ".agents/skills/domain-modeling/",
+        ".agents/skills/to-spec/",
+        ".agents/skills/LICENSES/mattpocock-skills/LICENSE"
+      ]
+    },
+    {
+      "repository": "pbakaus/impeccable",
+      "commit": "209444a9d552c18bcaa74e26bf66a25fc568a767",
+      "license": "Apache-2.0",
+      "paths": [
+        ".agents/skills/frontend-design/",
+        ".agents/skills/teach-impeccable/",
+        ".agents/skills/LICENSES/impeccable/LICENSE",
+        ".agents/skills/LICENSES/impeccable/NOTICE.md"
+      ],
+      "excluded": [
+        "latest full Impeccable engine/runtime",
+        "hooks",
+        "packaged subagents",
+        "critique/scripts/detect-antipatterns.mjs",
+        "Anthropic frontend-design"
+      ]
+    }
+  ],
+  "execution_status": "not run"
+}

@@ -140,6 +140,7 @@ const manifest: HarnessManifest = {
   // from harness/claude/<src> → <harnessDir>/<dst>.
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
+    { src: "skills/aidlc-issue-autopilot/SKILL.md", dst: "skills/aidlc-issue-autopilot/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
     // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated

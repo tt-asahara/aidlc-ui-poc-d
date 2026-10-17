@@ -1,0 +1,26 @@
+{
+  "traceability": {
+    "stage": "functional-design",
+    "upstream_ids": ["AC1.1.1", "AC1.1.2"],
+    "coverage": [
+      { "id": "AC1.1.1", "status": "OK", "target": "BR1.1" },
+      { "id": "AC1.1.2", "status": "OK", "target": "BR1.2" }
+    ],
+    "reverse": []
+  },
+  "contract": {
+    "schema": 1,
+    "mappings": [
+      { "screen": "SCREEN-BUDGET", "state": "STATE-EMPTY", "ac": "AC-001" },
+      { "screen": "SCREEN-BUDGET", "state": "STATE-SAVED", "ac": "AC1.1.2" }
+    ],
+    "requiredMappings": [
+      "SCREEN-BUDGET/STATE-EMPTY/AC-001",
+      "SCREEN-BUDGET/STATE-SAVED/AC1.1.2"
+    ]
+  },
+  "bridges": [
+    { "uiAc": "AC-001", "officialId": "AC1.1.1" }
+  ]
+}
+

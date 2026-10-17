@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "arm": "D",
+  "uiBaseline": {
+    "arm": "C",
+    "commit": "c738518615c91bb5968f2fea4e1c670f4eefdac8",
+    "harnessCommit": "e0a522a201f36eb4c6c36aa221b61e5c5124ff37",
+    "plugin": "ui-poc",
+    "treatment": "ui-poc/treatments/c.json",
+    "sourceLock": "ui-poc/treatments/source-lock.json",
+    "routing": "ui-poc/tools/ui-poc/c-stage-routing.json",
+    "requiredWhenAccelerationDisabled": true
+  },
+  "acceleration": {
+    "baseCommit": "86f1ec7f9fe4bdb062e2414411c3431ac764beb5",
+    "featureCommit": "7e9a86c4166451732a63833bb1aa767aaf63c54b",
+    "policy": "d-acceleration/stage-policy.json",
+    "optIn": true,
+    "officialHostSingleWriter": true,
+    "missingComposedUiBehavior": "fail-closed-to-official-host"
+  }
+}

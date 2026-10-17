@@ -1,0 +1,7 @@
+{
+  "name": "ui-poc",
+  "version": "0.1.0",
+  "description": "Shared, fail-closed HTML evidence handoffs for the A/B/C UI comparison",
+  "dependencies": ["core"],
+  "aidlc": {"contributes": {"overlays": "contributions/", "scopes": "scopes/", "sensors": "sensors/", "tools": "tools/"}}
+}

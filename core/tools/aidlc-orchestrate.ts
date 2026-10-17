@@ -539,7 +539,7 @@ interface PreparedEmission {
   // The agent stops after this step (see writePrepared).
   endsTurn?: true;
   marker?: {
-    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
+    kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm" | "present-gate"; stage: string; unit?: string;
     units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
     rules_bundle?: string; directive_sha256?: string;
@@ -931,7 +931,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
   const publication = publicationContexts.get(directive);
   const askState =
-    directive.kind === "ask" && engineProjectDir
+    (directive.kind === "ask" || directive.kind === "present-gate") && engineProjectDir
       ? loadStateFileIfPresent(engineProjectDir)
       : null;
   // Enrich before transport so the inline decision measures the emitted body.
@@ -1054,6 +1054,24 @@ function prepareEmission(directive: Directive): PreparedEmission {
     return prepareEmission(errorDirective(message));
   }
   let marker: PreparedEmission["marker"];
+  // A stage gate carries a machine-keyed receipt for its complete emitted
+  // bytes. Approval can therefore distinguish an engine-issued directive from
+  // a hand-written JSON object that merely copies kind/stage fields.
+  if (transported.kind === "present-gate" && askState !== null && engineProjectDir) {
+    const directiveSha256 = sha256(serialized);
+    const payload: SteeringTokenPayload = {
+      v: 1, s: transported.stage, c: "present-gate", i: 1, b: "", d: directiveSha256,
+      r: "", a: false, u: null, k: null, f: false, g: true, n: null,
+      x: false, p: false, w: false, h: null,
+    };
+    const minted = mintSteeringReceipt(payload, engineProjectDir);
+    if (minted.receipt === null) return prepareEmission(errorDirective(`Unable to issue authenticated stage gate: ${minted.error ?? "receipt unavailable"}`));
+    marker = {
+      kind: "present-gate", stage: transported.stage,
+      state_sha256: stateDigest(askState), directive_sha256: directiveSha256,
+      steering_payload: payload, steering_payload_receipt: minted.receipt,
+    };
+  }
   // A guard-recovery ask is published as a marker so the human's selection has
   // somewhere to live across turns. Other asks keep their own machinery (the
   // resume choice) or none; publishing every ask would supersede a live
@@ -4228,6 +4246,18 @@ function createPrintDirective(
   const directive = printDirective(
     `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
   );
+  const machineArgv = ["intent", "create", "--scope", scope];
+  if (requestId) machineArgv.push("--request", requestId);
+  if (flags.depth) machineArgv.push("--depth", flags.depth);
+  if (flags.testStrategy) machineArgv.push("--test-strategy", flags.testStrategy);
+  if (flags.projectType) machineArgv.push("--project-type", flags.projectType);
+  if (flags.review) machineArgv.push("--review", flags.review);
+  if (flags.changeControl && !(routedGuardPolicyNote && guardPolicyLowered(flags))) machineArgv.push("--guard-policy", flags.changeControl);
+  for (const key of CEREMONY_KEYS) if (flags.ceremony?.[key]) machineArgv.push(CEREMONY_FLAGS[key], flags.ceremony[key]);
+  if (flags.planChanges?.skip.length) machineArgv.push("--skip", flags.planChanges.skip.join(","));
+  if (flags.planChanges?.add.length) machineArgv.push("--add", flags.planChanges.add.join(","));
+  if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) machineArgv.push("--plan-name", flags.planName);
+  directive.machine_action = { kind: "intent-create", argv: machineArgv };
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
   // counts the compiled grid already gave us.

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "uiBaseline": {
+    "arm": "C",
+    "requiredWhenAccelerationDisabled": true,
+    "officialStageContributionsRemainEnabled": true,
+    "missingComposedConsumes": "fail-closed-to-official-host"
+  },
+  "invariants": {
+    "crossStageParallelism": false,
+    "officialDirectiveIsAuthority": true,
+    "approvalAndReviewBoundaries": "official-host",
+    "sharedStateWriter": "official-host"
+  },
+  "stages": [
+    { "phase": "initialization", "stage": "workspace-detection", "status": "official-delegation", "parallelism": "deterministic-only", "tier": "fast", "effort": "low", "clef": "never", "reason": "Deterministic discovery is cheap; the official host owns state." },
+    { "phase": "initialization", "stage": "workspace-scaffold", "status": "official-delegation", "parallelism": "serial-host", "tier": "fast", "effort": "low", "clef": "never", "reason": "Scaffold writes shared workspace state." },
+    { "phase": "initialization", "stage": "state-init", "status": "official-delegation", "parallelism": "serial-host", "tier": "fast", "effort": "low", "clef": "never", "reason": "The official engine is the single state writer." },
+
+    { "phase": "ideation", "stage": "intent-capture", "status": "official-delegation", "parallelism": "serial-host", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "User intent and questions require a single coherent conversation." },
+    { "phase": "ideation", "stage": "feasibility", "status": "implemented-read-only-fanout", "parallelism": "read-only-fanout", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Independent read-only evidence gathering may fan out; synthesis and risk calls remain official-host work." },
+    { "phase": "ideation", "stage": "market-research", "status": "implemented-read-only-fanout", "parallelism": "read-only-fanout", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Independent read-only research may fan out; evidence synthesis remains single-writer." },
+    { "phase": "ideation", "stage": "team-formation", "status": "official-delegation", "parallelism": "serial-host", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Agent roles and authority are selected by the official host." },
+    { "phase": "ideation", "stage": "rough-mockups", "status": "candidate-not-enabled", "parallelism": "read-only-fanout", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Variants may be independent, but selection and artifact settlement are not implemented here." },
+    { "phase": "ideation", "stage": "scope-definition", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Scope controls downstream execution and requires human alignment." },
+    { "phase": "ideation", "stage": "approval-handoff", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Human approval cannot be delegated to a lightweight classifier." },
+
+    { "phase": "inception", "stage": "reverse-engineering", "status": "official-delegation", "parallelism": "official-pipeline", "tier": "judgment", "effort": "high", "clef": "never", "reason": "The stage declares an official ordered pipeline; D does not reorder it." },
+    { "phase": "inception", "stage": "requirements-analysis", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Requirements share assumptions and need coherent settlement." },
+    { "phase": "inception", "stage": "user-stories", "status": "official-delegation", "parallelism": "official-mob", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Use the stage's official mob contributions and host synthesis." },
+    { "phase": "inception", "stage": "domain-design", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Domain boundaries are cross-cutting design decisions." },
+    { "phase": "inception", "stage": "refined-mockups", "status": "candidate-not-enabled", "parallelism": "read-only-fanout", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Independent variants are possible; official host retains selection and writes." },
+    { "phase": "inception", "stage": "units-generation", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "The Unit DAG defines all later safe parallelism." },
+    { "phase": "inception", "stage": "contract-design", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Contracts are shared dependencies and conflict-prone." },
+    { "phase": "inception", "stage": "practices-discovery", "status": "official-delegation", "parallelism": "official-ensemble", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Use the documented official ensemble and host synthesis." },
+    { "phase": "inception", "stage": "delivery-planning", "status": "official-delegation", "parallelism": "serial-host", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "The delivery plan orders dependent work and approvals." },
+
+    { "phase": "construction", "stage": "functional-design", "status": "implemented", "parallelism": "official-wave", "tier": "balanced", "effort": "medium", "clef": "explicit-low-risk-escalation-only", "reason": "The official Unit wave is adapted without inventing independence." },
+    { "phase": "construction", "stage": "nfr-requirements", "status": "implemented", "parallelism": "official-wave", "tier": "balanced", "effort": "medium", "clef": "explicit-low-risk-escalation-only", "reason": "The official Unit wave is adapted without crossing its gate." },
+    { "phase": "construction", "stage": "nfr-design", "status": "implemented", "parallelism": "official-wave", "tier": "balanced", "effort": "medium", "clef": "explicit-low-risk-escalation-only", "reason": "The official Unit wave is adapted; Clef cannot downgrade below balanced." },
+    { "phase": "construction", "stage": "infrastructure-design", "status": "implemented", "parallelism": "official-wave", "tier": "balanced", "effort": "medium", "clef": "explicit-low-risk-escalation-only", "reason": "Only the official conflict-checked Unit wave is concurrent." },
+    { "phase": "construction", "stage": "code-generation", "status": "official-delegation", "parallelism": "official-swarm", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Official worktrees, referee, receipts, and landing must remain intact." },
+    { "phase": "construction", "stage": "build-and-test", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Testing Contract and reviewer receipts are authoritative." },
+    { "phase": "construction", "stage": "ci-pipeline", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "CI changes affect security, credentials, and shared delivery state." },
+
+    { "phase": "operation", "stage": "environment-provisioning", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Provisioning has external side effects and approval boundaries." },
+    { "phase": "operation", "stage": "deployment-pipeline", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Deployment policy and credentials are high risk." },
+    { "phase": "operation", "stage": "deployment-execution", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Deployment is an externally mutating, approval-gated action." },
+    { "phase": "operation", "stage": "observability-setup", "status": "official-delegation", "parallelism": "serial-host", "tier": "balanced", "effort": "medium", "clef": "never", "reason": "Shared telemetry configuration requires coordinated settlement." },
+    { "phase": "operation", "stage": "performance-validation", "status": "implemented-read-only-fanout", "parallelism": "read-only-fanout", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Independent analysis of existing measurements may fan out; workers may not run loads, mutate environments, or settle conclusions." },
+    { "phase": "operation", "stage": "feedback-optimization", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Optimization changes depend on validated feedback and approvals." },
+    { "phase": "operation", "stage": "incident-response", "status": "official-delegation", "parallelism": "serial-host", "tier": "judgment", "effort": "high", "clef": "never", "reason": "Incident decisions are time-critical, security-sensitive, and human-owned." }
+  ]
+}

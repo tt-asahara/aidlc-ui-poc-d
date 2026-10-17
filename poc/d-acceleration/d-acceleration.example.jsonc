@@ -1,0 +1,93 @@
+{
+  // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
+  "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
+  "parallel": {
+    // D並列処理の親スイッチ。既定値: ON。ONでも公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化する。OFFはread-only fanoutを逐次化し、新規IntentへのConstruction swarm既定適用も抑止する。run開始時にsnapshotされ、途中変更は次runから有効。
+    "enabled": true,
+  },
+  "constructionDefaults": {
+    // 対象: D generic auto が新規Intentを作成した直後（既存Intentには遡及しない）。役割: 公式state setterでConstructionの歩行順と実行方式を初期設定する。既定値: stage-major + swarm。Intent作成後に利用者が公式setterで明示変更した値が以後優先する。Construction非対応scopeでは適用せず、単一Unitではswarmは実質serial、複数Unitでも公式DAGが独立かつisolated worktreeを許可したwaveだけ並列化する。`official`へ変更するとAI-DLC本体既定値を維持する。
+    "iteration": "stage-major",
+    "execution": "swarm",
+  },
+  "clef": {
+    // 対象: D対応の設計wave内で明示したlow-risk Unitのrouting時。役割: loopback Clefへtier判断を委譲する。ON時: urlへ問い合わせ、失敗・低信頼ならOpusへ安全にfallback。OFF時: Clefを呼ばない。既定値: OFF。利用場面: ローカルClefを別途起動済みの場合だけ。
+    "enabled": false,
+    "url": "http://127.0.0.1:18742",
+    "lowRiskUnits": [],
+  },
+  "gitPersistence": {
+    // 対象: 公式reportが承認境界を正常通過した直後。役割: 承認済みmanifestだけをcheckpoint commitする。ON時: 必須secret scan後にcommit、OFF時: Gitを変更しない。既定値: OFF。利用場面: PRODUCT側で明示的な承認履歴を残す場合。機能7の秘密検査自体にはOFFスイッチを設けない。
+    "enabled": false,
+    // 対象: 上記checkpoint commit成功後。役割: 固定refspecをremoteへ送る。ON時: enabledもONのときだけpush、OFF時: local commitまで。既定値: OFF。利用場面: 利用者がPRODUCTのpushを明示許可した場合だけ。
+    "push": false,
+    "remote": "origin",
+  },
+  "features": {
+    // 機能21 / 対象: refined-mockupsとfunctional-designの成果物作成後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: CのUI契約と公式traceability（機能22/27/28には非依存）。利用場面: C UI契約を使う案件。
+    "requirementIdValidation": false,
+    // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: 機能21/27/28には非依存、functionalDesignBudgetsだけを使用。利用場面: 大規模Unitの設計文書を統制するとき。
+    "functionalDesignDocumentDiscipline": false,
+    // 機能27 / 対象: domain-design成果物作成後、既存review前。役割: 設計主張を実装sourceと意味的に照合。ON時: sourceRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/28には非依存、sourceRoots必須で空なら停止。利用場面: brownfield設計。
+    "sourceGrounding": false,
+    // 機能28 / 対象: domain-design、各Unitのfunctional-design/code-generation後、既存review前。役割: 成果物を既存仕様と意味的に照合。ON時: specRoots限定のread-only workerを別コマンド経由で起動し証拠JSONを保存、OFF時: workerも読込もなし。既定値: OFF。依存関係: 機能21/22/27には非依存、specRoots必須で空なら停止。利用場面: 外部仕様準拠が必要な案件。
+    "specGrounding": false,
+    // UI fidelity / 対象: refined-mockups承認前。役割: 承認HTMLと同じrenderer実行から人向け基準PNGを生成する。ON時: PNGをHTML hash・viewport・renderer情報へ結合、OFF時: PNG専用captureを行わない。既定値: OFF。依存関係: visualRegressionがONならこの値に関係なく基準PNG生成も有効。負担: browser撮影と画像保管。利用場面: 人が承認時の見た目を後から確認したい画面。
+    "mockupPngGeneration": false,
+    // UI fidelity / 対象: build-and-test。役割: 承認時に固定した基準PNGと実装画面の視覚差を補助検査する。ON時: 基準PNG生成も有効になり欠落・環境不一致はNOT-READY、OFF時: pixel比較なし。既定値: OFF。依存関係: 承認時baselineと固定viewport/fontが必要。比較時の基準生成・更新は禁止。負担: browser実行とfalse-positive調査。利用場面: DOM契約では表せない重要レイアウトの回帰確認。
+    "visualRegression": false,
+  },
+  "featureInputs": {
+    // 機能21: CのAC-形式と公式AC形式が異なる場合だけ明示する。暗黙変換や再採番はしない。
+    "requirementIdBridges": [],
+    // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
+    "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },
+    // 機能27/28: 明示rootだけを調査する。空のままONにすると全走査せず停止する。
+    "sourceRoots": [],
+    "specRoots": [],
+  },
+  // 自動進行 / 対象: 現在セッションの公式engine正規遷移のみ。既定値: OFF。
+  "auto": {
+    // 対象: /aidlc --auto <description>、/aidlc-issue-autopilot、または /aidlcのIssue入口。役割: 公式遷移だけをboundedに自動継続する親スイッチ。ON時: generic入力を許可し、Issue入口はissueAutopilot.enabledもONの場合だけ1 Issueを処理。OFF時: generic入力を停止しGitHubへ接続しない。既定値: OFF。利用場面: 明示されたbounded自動処理。定期Issue実行にはClaude標準 /loop から別コマンド起動が必要。
+    "enabled": false,
+    // ON時のinclusive停止stageまたはphase。phase名は現在scopeで有効な最後のstageへ解決し、その正規review/sensor/approval完了後に停止する。省略時は利用者が明示した範囲を超えない。
+    "through": "code-generation",
+    // 対象: generic入力とIssue入力のIntent作成直後。役割: 無人継続を現在呼出し内に限定する。ON時: Intent作成後に停止、OFF時: maxSteps/deadline/through内で公式hostが継続可能。既定値: ON。利用場面: 通常はON、安全に限定した明示autoだけOFF。
+    "sessionOnly": true,
+    // 不明点: halt=停止、assume=仮定台帳へ記録、research=調査後も不明なら停止。既定値: halt。
+    "ambiguityPolicy": "halt",
+    // 対象: ambiguityPolicyがassume/researchで仮定・調査事実が生じた時。役割: durable JSONL台帳へ保存。ON時: 記録後に進行、OFF時: 自動仮定を許可せず停止。既定値: ON。利用場面: 監査可能な自動 intake。
+    "assumptionLedger": true,
+    // 明示的な一時失敗時の指数backoff付きbounded retry回数（0〜10）。既定値: 2。非冪等なIntent作成は失敗ごとにprovider/repository/Issue番号の構造化keyで公式状態を再照合できる場合だけ再試行し、曖昧・認証・入力失敗や照合不能時は停止する。
+    "maxRetries": 2,
+    // 自動進行の最大公式directive数。no-progress検出とは別のhard stop。既定値: 64。
+    "maxSteps": 64,
+    // 自動進行1回の最大経過ms。lease更新中でも超過時は停止。既定値: 900000（15分）。
+    "deadlineMs": 900000,
+    // Issue自動処理を許可するlabel。空配列は許可対象なし。
+    "labelAllowlist": [],
+  },
+  "issueAutopilot": {
+    // 機能17 / 対象: /aidlc-issue-autopilot、/aidlc --from-issue、およびClaude標準 /loopからの同コマンド起動。役割: GitHub Issue intakeを許可する子スイッチ。ON時: auto.enabledもONかつlabel完全一致時だけ処理、OFF時: GitHubへ接続しない。既定値: OFF。利用場面: Issue駆動運用。
+    "enabled": false,
+    // 対象: autopilot各呼出し。役割: runaway batchを防ぐ。ON時: 必ず最大1 Issue、OFFは安全契約違反のため現在も1件に強制。既定値: ON。利用場面: 常時ONを維持する。
+    "oneIssuePerRun": true,
+  },
+  "aiApproval": {
+    // 対象: 正式review/sensorがREADYになった通常stageの承認gate。役割: 明示的な事前委任を根拠にAIが成果物を判定し、主体・理由・hashを人間承認と区別して記録する。stage-gates時: 許可stageだけ判定、human時: 従来どおり人が承認。既定値: human。境界: scope/route/Plan Approval、summary/skeleton、sensor不合格、未検証、曖昧な危険操作、権限・認証・公開・外部送信・破壊操作は常に人間停止。利用場面: 事前委任された限定PoC。
+    "mode": "human",
+    // 対象: AI工程承認判定。役割: approveに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。
+    "minConfidence": 0.9,
+    "decisionRecordPath": "decisions/ai-approval-decisions.jsonl",
+    // 通常は親PATH上のproject外native claudeを安全に解決する。厳格固定が必要な場合だけhost process環境の AIDLC_CLAUDE_EXECUTABLE_PATH / AIDLC_CLAUDE_EXECUTABLE_SHA256 を両方指定する。
+  },
+  "decisionIssueSummary": {
+    // 対象: IntentごとのAI判断要約。役割: リポジトリ内正本へのリンクを持つGitHub Issue要約を生成する。ON時: ローカルpayload/同期状態を生成、OFF時: GitHub処理なし。既定値: OFF。境界: 正本は常にリポジトリ内記録で、別Issueは自動作成しない。利用場面: チーム共有用のIntent単位要約。
+    "enabled": false,
+    "repository": "owner/repository",
+    // 対象: GitHubへのIssue作成・更新。役割: 外部送信を別途許可する。ON時: 実行時の明示publish許可も必要、OFF時: payload生成のみ。既定値: OFF。利用場面: 投稿先repoと公開許可を利用者が明示した場合だけ。
+    "send": false,
+    "maxRetries": 2,
+    // send の実行CLIはproject設定ではなくhost process環境の AIDLC_GH_EXECUTABLE_PATH / AIDLC_GH_EXECUTABLE_SHA256 で固定する。
+  },
+}
