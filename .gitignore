@@ -12,7 +12,7 @@ node_modules/
 # Generated AI-DLC projections (materialized locally by scripts/package.ts)
 /dist/
 /dist-release/
-# Generated plugin build output (aidlc-plugin-build.ts poc/ui-poc claude)
+# Locally built AIDLC plugin projections (aidlc-plugin-build output)
 /poc/ui-poc/dist/
 build/
 

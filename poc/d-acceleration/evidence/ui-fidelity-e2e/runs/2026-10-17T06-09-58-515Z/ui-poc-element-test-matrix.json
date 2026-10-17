@@ -1,0 +1,383 @@
+{
+  "schema": 1,
+  "kind": "ui-element-test-matrix",
+  "approvedSnapshotSha256": "6df784d173aad0d019c3d0434062418e5cb4755843ca95876d2ca86a745ac344",
+  "actualSnapshotSha256": "ee8373024a0e9e3014d0e90f07ef29263ddd9ec59c058a7b77287d7207d1092b",
+  "ruleMatrixSha256": "5cdc980b4f8cf2c053b67ca42ff9578cf1826d91c8afca81e2438d55054d12ce",
+  "rows": [
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CANCEL-DELETE",
+      "ruleIds": [
+        "BR-DELETE-CANCEL-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CONFIRM-DELETE",
+      "ruleIds": [
+        "BR-DELETE-EXEC-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL",
+      "ruleIds": [
+        "BR-DELETE-CONFIRM-DETAIL-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE",
+      "ruleIds": [
+        "BR-DELETE-CONFIRM-TITLE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-DIALOG",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [
+        "missing"
+      ],
+      "result": "fail"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-DELETED/DELETE-COMPLETE",
+      "ruleIds": [
+        "BR-DELETE-MSG-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/DELETE-NOTE",
+      "ruleIds": [
+        "BR-DELETE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/EXPAND-MEMO",
+      "ruleIds": [
+        "BR-EXPAND-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/MEMO-BODY",
+      "ruleIds": [
+        "BR-TRUNC-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "truncation-required"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/NOTE-TITLE-1",
+      "ruleIds": [
+        "BR-LIST-TITLE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-LIST/SAVE-NOTE",
+      "ruleIds": [
+        "BR-SAVE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/DELETE-NOTE",
+      "ruleIds": [
+        "BR-DELETE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/EXPAND-MEMO",
+      "ruleIds": [
+        "BR-EXPAND-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/MEMO-BODY",
+      "ruleIds": [
+        "BR-TRUNC-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "truncation-required"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/NOTE-TITLE-1",
+      "ruleIds": [
+        "BR-LIST-TITLE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/PRIVATE-MODE-GUIDANCE",
+      "ruleIds": [
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-PRIVATE-MODE/SAVE-NOTE",
+      "ruleIds": [
+        "BR-SAVE-01",
+        "BR-PRIVATE-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy",
+        "action"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-SAVED/SAVE-COMPLETE",
+      "ruleIds": [
+        "BR-SAVE-MSG-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/AUTO-821a485e",
+      "ruleIds": [],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/RETRY-LOAD",
+      "ruleIds": [
+        "BR-RETRY-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    },
+    {
+      "elementKey": "SCREEN-NOTES/STATE-STORAGE-ERROR/STORAGE-READ-ERROR",
+      "ruleIds": [
+        "BR-STORAGE-ERR-01"
+      ],
+      "unimplementedReason": null,
+      "checks": [
+        "presence",
+        "role",
+        "exact-copy"
+      ],
+      "differences": [],
+      "result": "pass"
+    }
+  ],
+  "summary": {
+    "total": 26,
+    "pass": 20,
+    "fail": 6,
+    "deviated": 0
+  }
+}
