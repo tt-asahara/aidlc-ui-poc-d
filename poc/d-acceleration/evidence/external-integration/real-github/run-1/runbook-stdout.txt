@@ -1,0 +1,159 @@
+mode=execute repo=tt-asahara/aidlc-d-sandbox host=github.com product=<sandbox>/product d_dir=<sandbox>/product/.claude/tools/d-acceleration branch=aidlc-sandbox/20261017T064921Z evidence=<sandbox>/run
+
+## 01 Preflight (read-only): exact-host gh auth, repo identity, origin host
+$ gh auth status --hostname github.com
+github.com
+  ✓ Logged in to github.com account tt-asahara (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'
+$ gh repo view tt-asahara/aidlc-d-sandbox --json nameWithOwner\,visibility\,isArchived\,defaultBranchRef
+{"defaultBranchRef":{"name":"main"},"isArchived":false,"nameWithOwner":"tt-asahara/aidlc-d-sandbox","visibility":"PRIVATE"}
+$ git -C <sandbox>/product config --get remote.origin.url
+https://github.com/tt-asahara/aidlc-d-sandbox.git
+
+## 02 Autopilot before any write (read-only): status while OFF; OFF run never reaches GitHub
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox status
+{
+  "enabled": false,
+  "mode": "single-issue-per-run",
+  "sessionAuto": false,
+  "through": null,
+  "uncertaintyPolicy": "halt",
+  "labelAllowlist": [],
+  "maxAttempts": 3,
+  "maxSteps": 64,
+  "deadlineMs": 900000,
+  "activeSession": null,
+  "sessionRecoveryBusy": false,
+  "heartbeatPresent": false,
+  "inspectionError": null
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox aidlc-auto
+{"status":"stopped","reason":"disabled"}
+
+## 03 WRITE: label + disposable Issues (labelled x2, unlabelled x1)
+$ gh label create aidlc-auto --repo tt-asahara/aidlc-d-sandbox --description AI-DLC\ sandbox\ autopilot --force
+$ gh issue create --repo tt-asahara/aidlc-d-sandbox --title \[aidlc-sandbox\ 20261017T064921Z\]\ labelled\ task\ A --body Disposable\ sandbox\ task.\ Add\ a\ GET\ /hello\ endpoint\ that\ returns\ the\ plain\ text\ hello. --label aidlc-auto
+https://github.com/tt-asahara/aidlc-d-sandbox/issues/1
+$ gh issue create --repo tt-asahara/aidlc-d-sandbox --title \[aidlc-sandbox\ 20261017T064921Z\]\ labelled\ task\ B --body Disposable\ sandbox\ task.\ Add\ a\ GET\ /health\ endpoint\ that\ returns\ HTTP\ 200\ with\ body\ ok. --label aidlc-auto
+https://github.com/tt-asahara/aidlc-d-sandbox/issues/2
+$ gh issue create --repo tt-asahara/aidlc-d-sandbox --title \[aidlc-sandbox\ 20261017T064921Z\]\ unlabelled\ task --body Disposable\ sandbox\ task\ without\ the\ label.
+https://github.com/tt-asahara/aidlc-d-sandbox/issues/3
+issues: labelled=1,2 unlabelled=3
+>> HUMAN [enable-autopilot]: set auto.enabled=true, auto.sessionOnly=true, auto.labelAllowlist=["aidlc-auto"], issueAutopilot.enabled=true in <sandbox>/product/.claude/d-acceleration.jsonc
+
+## 04 Exact-host auth: an unauthenticated host fails closed with the login command (no network)
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo unauthenticated.invalid/aidlc-d-sandbox 1
+{
+  "status": "stopped",
+  "reason": "github-read-failed",
+  "repository": "github.com/unauthenticated.invalid/aidlc-d-sandbox",
+  "detail": "gh issue read failed (1): GraphQL: Could not resolve to a Repository with the name 'unauthenticated.invalid/aidlc-d-sandbox'. (repository)"
+}
+
+## 05 from-issue: discovery list, label poll (continue, continue, terminate), explicit numbers, rerun
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox list
+{
+  "status": "selection-required",
+  "selectionStrategy": "issue-number-ascending",
+  "issues": [
+    {
+      "number": 1,
+      "title": "[aidlc-sandbox 20261017T064921Z] labelled task A",
+      "labels": [
+        "aidlc-auto"
+      ]
+    },
+    {
+      "number": 2,
+      "title": "[aidlc-sandbox 20261017T064921Z] labelled task B",
+      "labels": [
+        "aidlc-auto"
+      ]
+    },
+    {
+      "number": 3,
+      "title": "[aidlc-sandbox 20261017T064921Z] unlabelled task",
+      "labels": []
+    }
+  ]
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox aidlc-auto
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "label-poll",
+    "strategy": "issue-number-ascending",
+    "reason": "first eligible unbound Issue in ascending issue-number order",
+    "eligibleIssueNumbers": [
+      1,
+      2
+    ],
+    "selectedIssueNumber": 1
+  }
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox aidlc-auto
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "label-poll",
+    "strategy": "issue-number-ascending",
+    "reason": "first eligible unbound Issue in ascending issue-number order",
+    "eligibleIssueNumbers": [
+      1,
+      2
+    ],
+    "selectedIssueNumber": 1
+  }
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox aidlc-auto
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "label-poll",
+    "strategy": "issue-number-ascending",
+    "reason": "first eligible unbound Issue in ascending issue-number order",
+    "eligibleIssueNumbers": [
+      1,
+      2
+    ],
+    "selectedIssueNumber": 1
+  }
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox 3
+{
+  "status": "stopped",
+  "reason": "label-not-allowed",
+  "issueNumber": 3,
+  "selection": {
+    "mode": "explicit-number",
+    "selectedIssueNumber": 3
+  }
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox 1
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "explicit-number",
+    "selectedIssueNumber": 1
+  }
+}
+$ bun <sandbox>/product/.claude/tools/d-acceleration/issue-autopilot-cli.ts --claude-judgment haiku --claude-effort low --project-dir <sandbox>/product --repo tt-asahara/aidlc-d-sandbox stop
+{"status":"stopped","reason":"operator-stop","stopFile":"<sandbox>/product/.git/aidlc/issue-autopilot/stop"}
+
+## 06 Decision summary: generate, publish without a host-recorded permission (must stop)
+>> HUMAN [summary-config]: set decisionIssueSummary {enabled:true, repository:"tt-asahara/aidlc-d-sandbox", send:true}; the active Intent must hold decisions/ai-approval-decisions.jsonl; AIDLC_GH_EXECUTABLE_PATH/AIDLC_GH_EXECUTABLE_SHA256 must name the native gh
+cat: <sandbox>/product/aidlc/spaces/default/intents/active-intent: No such file or directory

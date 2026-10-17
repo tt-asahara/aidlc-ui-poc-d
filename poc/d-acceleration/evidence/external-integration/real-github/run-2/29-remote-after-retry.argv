@@ -1,0 +1,1 @@
+git -C <sandbox>/product ls-remote origin refs/heads/aidlc-sandbox/20261017T065220Z 

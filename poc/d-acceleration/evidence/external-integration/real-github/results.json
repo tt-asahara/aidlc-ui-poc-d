@@ -1,0 +1,59 @@
+{
+  "schema": "aidlc-d-real-github-sandbox/1",
+  "date": "2026-10-17",
+  "authorization": "Repository owner authorized (relayed by the coordinator) real-GitHub verification against the disposable PRIVATE repository tt-asahara/aidlc-d-sandbox only.",
+  "repository": "https://github.com/tt-asahara/aidlc-d-sandbox",
+  "runbook": "poc/d-acceleration/scripts/real-github-sandbox-runbook.sh --execute (AIDLC_SANDBOX_CONFIRM=tt-asahara/aidlc-d-sandbox), operator hook operator-hook.sh",
+  "sourceCommit": "d/external-integration (this commit), D tools from the generated Claude package",
+  "ghVersion": "2.96.0 (native, pinned by path + sha256)",
+  "assessorModel": { "requested": "haiku", "runtimeReported": "claude-haiku-5-5", "effort": "low", "note": "runtime id observed by a direct probe with the same model alias; the autopilot CLI does not record it" },
+  "issues": {
+    "labelledA": "https://github.com/tt-asahara/aidlc-d-sandbox/issues/1",
+    "labelledB": "https://github.com/tt-asahara/aidlc-d-sandbox/issues/2",
+    "unlabelled": "https://github.com/tt-asahara/aidlc-d-sandbox/issues/3",
+    "searchTransportProbe": "https://github.com/tt-asahara/aidlc-d-sandbox/issues/4"
+  },
+  "branch": "https://github.com/tt-asahara/aidlc-d-sandbox/tree/aidlc-sandbox/20261017T065220Z",
+  "commits": {
+    "persistPushed": "https://github.com/tt-asahara/aidlc-d-sandbox/commit/3ee7d4141f2914d495699f7eced7129de7532424",
+    "pendingRefspecRetriedPushed": "https://github.com/tt-asahara/aidlc-d-sandbox/commit/a5c211de3e5d02a794ddfcb1a0274829d833e3ed",
+    "foreignConcurrentCommitKept": "https://github.com/tt-asahara/aidlc-d-sandbox/commit/b4397ab9d85fbadb752f05ad93a98b33bd04bbf1"
+  },
+  "run1": {
+    "dir": "run-1",
+    "outcome": "every label poll stopped fail-closed with 'model returned invalid structured output'; the halt-policy prompt did not tell the model that assumptions/researchedFacts must be empty, and the parser rejects them (probe: haiku returned assumptions+facts under halt). Fixed in issue-ambiguity-assessor.ts. Also a runbook bug: the other-host check built a 2-part repository. Run aborted at the summary checkpoint (no active Intent)."
+  },
+  "run2": {
+    "dir": "run-2",
+    "passed": [
+      "01 real gh auth status --hostname github.com",
+      "04/05 autopilot OFF: status disabled, run returns disabled without GitHub",
+      "10 unauthenticated host (unauthenticated.invalid) -> gh-auth-required, nextStep 'gh auth login --hostname unauthenticated.invalid'",
+      "11 discovery list returns open Issues 1,2,3 ascending",
+      "12 label poll -> intent-created for #1 (assume policy, ledger ON)",
+      "13 label poll continues -> intent-created for #2",
+      "14 label poll terminates -> selection-cancelled (no eligible Issue)",
+      "15 explicit unlabelled #3 -> label-not-allowed",
+      "16 explicit rerun #1 -> no second intent (reconcile-required, attempts 0)",
+      "17 stop -> operator-stop",
+      "18 decision summary generate -> local payload only",
+      "19-21 publish without a host-recorded human permission -> stopped fail-closed, zero GitHub writes (22: no summary Issue)",
+      "24 persistence commit + push to the disposable branch",
+      "26/27 origin unreachable -> deferred, fixed refspec journaled as pending",
+      "28 retry pushes exactly the pending refspec (a5c211d)",
+      "30/31 concurrent foreign commit -> push rejected (fetch first), never forced, remote unchanged",
+      "32 only main + the disposable branch exist on the remote"
+    ],
+    "notVerified": [
+      "Gated decision-summary publication + idempotent re-run on the real host: requires the owner to type the exact payload-bound permission in a host session; automation never records a human turn. The underlying gh transport (create, list --search marker, view, edit same Issue) was verified separately in search-probe.",
+      "CI on the real host: the sandbox has no workflow (33: no runs); d-acceleration.yml runs on PR #22 of the main repository.",
+      "Persistence via the real PostToolUse hook after a host stage approval (the run drives persistCrossing directly)."
+    ],
+    "findings": [
+      "Explicit re-run of an Issue whose bound Intent is no longer the active Intent stops as reconcile-required ('intake binding is bound') instead of resuming; no duplicate is created, but the operator needs a documented resume path.",
+      "Label polling never skips an Issue that stops on uncertainty (run 1): the loop stays on the lowest ambiguous Issue until a human resolves it. Fail-closed by design; worth documenting for /loop operators.",
+      "GitHub search indexes a new Issue after a few seconds (search-probe: found on the second poll, ~7s). A lost create response reconciled immediately can stop as pending-receipt-unresolved; a later retry binds the same Issue, never a duplicate."
+    ]
+  },
+  "searchProbe": { "dir": "search-probe", "createdIssue": 4, "foundBySearchAfterSeconds": 7, "editedSameIssue": true, "matchesAfterEdit": 1 }
+}

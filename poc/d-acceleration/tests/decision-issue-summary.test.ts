@@ -91,6 +91,31 @@ describe("decision Issue summary", () => {
     expect(gh.calls).toHaveLength(3);
   });
 
+  test("gh login missing for the repository host stops after permission and before any GitHub call", async () => {
+    const { root, intent, log } = fixture(); const gh = new FakeGh([]);
+    await authorize(root, intent, log);
+    const hosts: string[] = [];
+    const result = await runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config: { ...config, send: true }, gh, ghAuth: async (host) => { hosts.push(host); return { ok: false, host, reason: "gh-auth-required", nextStep: `gh auth login --hostname ${host}`, detail: "not logged in" }; } });
+    expect(result).toMatchObject({ status: "stopped", reason: "gh-auth-required", host: "github.com", nextStep: "gh auth login --hostname github.com" });
+    expect(hosts).toEqual(["github.com"]);
+    expect(gh.calls).toEqual([]);
+  });
+
+  test("a GHE HOST/owner/name repository is preserved in argv and preflighted against that host", async () => {
+    const { root, intent, log } = fixture(); const gheConfig = { ...config, repository: "github.kddi.com/owner/repo" };
+    const preview = await runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config: gheConfig });
+    const payloadSha256 = createHash("sha256").update(JSON.stringify(preview.payload)).digest("hex");
+    const prompt = `AI-DLC authorize-decision-summary --repository github.kddi.com/owner/repo --intent aidlc/spaces/default/intents/budget --payload-sha256 ${payloadSha256}`;
+    const tool = join(import.meta.dir, "..", "..", "..", "core", "tools", "aidlc.ts");
+    const hook = spawnSync(process.execPath, [tool, "engine", "hook", "record-human-turn", "--project-dir", root], { cwd: root, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: root }, input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "01995000-dead-7000-8000-000000000005", prompt }) });
+    expect(hook.status).toBe(0);
+    const gh = new FakeGh([{ status: 0, stdout: "https://github.kddi.com/owner/repo/issues/7\n" }]);
+    const hosts: string[] = [];
+    expect(await runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config: { ...gheConfig, send: true }, gh, ghAuth: async (host) => { hosts.push(host); return { ok: true, host }; } })).toMatchObject({ status: "published", operation: "created", issueNumber: 7 });
+    expect(hosts).toEqual(["github.kddi.com"]);
+    expect(gh.calls[0]?.slice(0, 4)).toEqual(["issue", "create", "--repo", "github.kddi.com/owner/repo"]);
+  });
+
   test("reconciles an ambiguous create receipt and never creates a duplicate", async () => {
     const { root, intent, log } = fixture();
     const preview = await runDecisionIssueSummary({ projectDir: root, intentDir: intent, decisionsFile: log, config });

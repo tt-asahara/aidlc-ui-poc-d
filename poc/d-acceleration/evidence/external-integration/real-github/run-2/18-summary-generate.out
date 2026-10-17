@@ -1,0 +1,11 @@
+{
+  "status": "generated",
+  "published": false,
+  "payload": {
+    "key": "20f1e8eea6ef2599180e2846c58f3bbafac66293c3932dcf4b762c6fe272ca1c",
+    "repository": "tt-asahara/aidlc-d-sandbox",
+    "intent": "aidlc/spaces/default/intents/261017-aidlc-sandbox-20261017t0-2",
+    "title": "AI-DLC decisions: aidlc/spaces/default/intents/261017-aidlc-sandbox-20261017t0-2",
+    "body": "<!-- aidlc-decision-summary:20f1e8eea6ef2599180e2846c58f3bbafac66293c3932dcf4b762c6fe272ca1c -->\n# Decision summary\n\n- **4638a102a0ef** · requirements-analysis · approve: Sandbox: synthetic decision for publication gating ([source](aidlc/spaces/default/intents/261017-aidlc-sandbox-20261017t0-2/aidlc-state.md))\n\nUnresolved items above remain in this one intent summary; no separate Issues are created."
+  }
+}

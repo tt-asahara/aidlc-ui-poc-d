@@ -42,8 +42,11 @@ browser attestation; preserve the capture command/result as review evidence.
 Never regenerate the approved snapshot or PNG baseline from implementation.
 Run `bun {{HARNESS_DIR}}/tools/ui-poc-fidelity.cjs` for capture/compare; an
 unavailable renderer or unreproduced state is NOT-READY, never a pass. PNG
-generation and exact visual comparison remain independent default-off D flags;
-visual comparison implies baseline PNG generation.
+generation and thresholded visual comparison remain independent default-off D
+flags; visual comparison implies baseline PNG generation. `visual-compare`
+refuses (NOT-READY) when renderer/OS/viewport/scale/font/flag metadata or the
+approved visual policy differ; threshold, anti-aliasing tolerance and masks
+come only from the approved baseline policy (see docs/contract.md).
 
 Paths are relative to this contract's stage directory. Absolute paths, parent traversal, backslashes, missing assets, non-files and symlink escapes are rejected. Declare every referenced HTML, CSS, JS, PNG/JPEG/SVG/WebP image and WOFF2 font in assets with its exact SHA-256. No remote dependencies are allowed. Browser-dependency completeness is a separate review obligation; this checker verifies declared assets and does not parse every possible dynamic import or network request. An independently approved inventory of screen/state/AC triples must cover loading, empty, success, error and interaction recovery states where applicable. A syntactically valid ID does not establish semantic completeness; reviewer comparison with requirements remains mandatory.
 

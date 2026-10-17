@@ -29,6 +29,17 @@ describe("bounded Issue ambiguity assessor", () => {
     expect(result.modelIdentity).toMatchObject({ requested: "claude-opus-5-5", runtimeReported: "claude-opus-5-5", status: "verified-match", source: "claude-modelUsage" });
   });
 
+  test("tells the model which fields each policy forbids", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
+    executable(fake, `import {appendFileSync} from "node:fs"; appendFileSync("prompts.jsonl", JSON.stringify(process.argv.at(-1))+"\\n"); console.log(JSON.stringify({result:JSON.stringify({unresolved:["x"],assumptions:[],researchedFacts:[]})}));`);
+    const assessor = createClaudeIssueAssessor({ projectDir: root, model: "fixture", executable: fake });
+    for (const mode of ["halt", "assume", "research"] as const) await assessor.assess(issue, mode);
+    const prompts = readFileSync(join(root, "prompts.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as string);
+    expect(prompts[0]).toContain("assumptions and researchedFacts MUST both be empty arrays");
+    expect(prompts[1]).toContain("researchedFacts MUST be an empty array");
+    expect(prompts[2]).toContain("assumptions MUST be an empty array");
+  }, 30_000);
+
   test("connects research facts while retaining unresolved evidence needs", async () => {
     const root = mkdtempSync(join(tmpdir(), "d-assessor-")), fake = join(root, "fake-claude.ts");
     executable(fake, `console.log(JSON.stringify({result:JSON.stringify({unresolved:["Current exchange rate requires external evidence"],assumptions:[],researchedFacts:["ISO 4217 identifies currencies with three-letter codes"]})}));`);

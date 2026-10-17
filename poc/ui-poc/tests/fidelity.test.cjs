@@ -1,11 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const crypto = require('node:crypto');
-const { compareImages, compareSnapshots, hashJson, validateSnapshot } = require('../tools/ui-poc-fidelity.cjs');
+const { compareSnapshots, hashJson, validateSnapshot } = require('../tools/ui-poc-fidelity.cjs');
 
 const source = { path:'screen.html', sha256:'a'.repeat(64) };
 const actualSource = { path:'http://127.0.0.1:4173/budget', sha256:'b'.repeat(64) };
@@ -81,16 +77,4 @@ test('a separately observed loopback implementation with identical semantics pas
   assert.equal(compareSnapshots(approved,actual).pass,true);
 });
 
-test('visual comparison never updates its approved baseline and fails on bytes or environment drift', t => {
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ui-visual-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
-  const baseline=path.join(dir,'baseline.png'), actual=path.join(dir,'actual.png');fs.writeFileSync(baseline,'approved');fs.writeFileSync(actual,'approved');
-  const digest=value=>crypto.createHash('sha256').update(value).digest('hex');
-  const baselineSnapshot={environment:{renderer:'Chrome',viewport:{width:1280,height:720}},png:{sha256:digest('approved')}};
-  const actualSnapshot=JSON.parse(JSON.stringify(baselineSnapshot));
-  assert.equal(compareImages(baseline,actual,baselineSnapshot,actualSnapshot).pass,true);
-  fs.writeFileSync(actual,'changed');actualSnapshot.png.sha256=digest('changed');
-  assert.equal(compareImages(baseline,actual,baselineSnapshot,actualSnapshot).pass,false);
-  assert.equal(fs.readFileSync(baseline,'utf8'),'approved');
-  fs.writeFileSync(actual,'approved');actualSnapshot.png.sha256=digest('approved');actualSnapshot.environment.viewport.width=375;
-  assert.match(compareImages(baseline,actual,baselineSnapshot,actualSnapshot).findings.join('\n'),/environment differs/);
-});
+// Visual (PNG) comparison tests live in tests/visual.test.cjs.

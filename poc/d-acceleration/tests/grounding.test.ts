@@ -28,7 +28,7 @@ describe("D source/spec grounding", () => {
   test("source grounding is limited to domain-design and bounded project paths", () => {
     const projectDir = fixture();
     expect(planGrounding({ lane: "source", stage: "functional-design", projectDir, artifactPaths: ["record/decisions.md"], config: { sourceGrounding: { enabled: true, roots: ["src"] } } })).toEqual({ action: "not-applicable" });
-    expect(() => planGrounding({ lane: "source", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { sourceGrounding: { enabled: true, roots: ["../"] } } })).toThrow("escapes project");
+    expect(planGrounding({ lane: "source", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { sourceGrounding: { enabled: true, roots: ["../"] } } })).toMatchObject({ action: "off-no-valid-roots", rejectedRoots: [{ root: "../", reason: expect.stringContaining("escapes project") }] });
   });
 
   test("spec grounding applies to domain, functional, and code stages", () => {
@@ -78,7 +78,7 @@ describe("D source/spec grounding", () => {
     const projectDir = fixture();
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [], uncertainty: [], approval: "approved" }) })).rejects.toThrow("must not create or claim approval");
     await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity: "error", claim: "x", evidencePaths: ["../"], detail: "x" }], uncertainty: [] }) })).rejects.toThrow("escapes project");
-    await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity: "error", claim: "x", evidencePaths: ["src/orders.ts"], detail: "x" }], uncertainty: [] }) })).rejects.toThrow("outside configured roots");
+    await expect(runGrounding({ lane: "spec", stage: "domain-design", projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } }, worker: async () => ({ findings: [{ code: "refuted", severity: "error", claim: "x", evidencePaths: ["src/orders.ts"], detail: "x" }], uncertainty: [] }) })).rejects.toThrow("outside configured roots or the grounding snapshot");
   });
 
   test("rejects directories and symlinks as confirmed/refuted evidence", async () => {
@@ -86,7 +86,7 @@ describe("D source/spec grounding", () => {
     symlinkSync(join(projectDir, "spec", "api.md"), join(projectDir, "spec", "api-link.md"));
     const base = { lane: "spec" as const, stage: "domain-design" as const, projectDir, artifactPaths: ["record/decisions.md"], config: { specGrounding: { enabled: true, roots: ["spec"] } } };
     for (const evidencePath of ["spec", "spec/api-link.md"]) {
-      await expect(runGrounding({ ...base, worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "orders endpoint exists", evidencePaths: [evidencePath], detail: "claimed evidence" }], uncertainty: [] }) })).rejects.toThrow("not a regular non-symlinked file");
+      await expect(runGrounding({ ...base, worker: async () => ({ findings: [{ code: "confirmed", severity: "info", claim: "orders endpoint exists", evidencePaths: [evidencePath], detail: "claimed evidence" }], uncertainty: [] }) })).rejects.toThrow(/not a regular non-symlinked file|traverses a symlink|contains a symlink/);
     }
   });
 });

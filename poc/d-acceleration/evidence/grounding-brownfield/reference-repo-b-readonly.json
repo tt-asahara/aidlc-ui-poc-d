@@ -1,0 +1,114 @@
+{
+  "repo": "reference-repo-B (read-only)",
+  "head": "79a2baab9d5ca3aa80a3fb3dad06fc51986327fe",
+  "gitProvenanceMs": 36,
+  "cases": [
+    {
+      "name": "small source root",
+      "lane": "source",
+      "roots": [
+        "core/tools/aidlc-version.ts"
+      ],
+      "ms": 11,
+      "result": {
+        "action": "planned",
+        "evidenceFiles": 1,
+        "bytes": 12255
+      }
+    },
+    {
+      "name": "module source root",
+      "lane": "source",
+      "roots": [
+        "harness/kddi/tools"
+      ],
+      "ms": 1,
+      "result": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read"
+      }
+    },
+    {
+      "name": "large source root",
+      "lane": "source",
+      "roots": [
+        "core/tools"
+      ],
+      "ms": 2,
+      "result": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read"
+      }
+    },
+    {
+      "name": "spec root docs/reference",
+      "lane": "spec",
+      "roots": [
+        "docs/reference"
+      ],
+      "ms": 3,
+      "result": {
+        "action": "failed-closed",
+        "error": "grounding inputs exceed 1000000 bytes before read"
+      }
+    },
+    {
+      "name": "whole repo root",
+      "lane": "source",
+      "roots": [
+        "."
+      ],
+      "ms": 12,
+      "result": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 200 files"
+      }
+    },
+    {
+      "name": "node_modules root",
+      "lane": "source",
+      "roots": [
+        "node_modules"
+      ],
+      "ms": 16,
+      "result": {
+        "action": "failed-closed",
+        "error": "grounding evidence exceeds 200 files"
+      }
+    },
+    {
+      "name": "escape",
+      "lane": "source",
+      "roots": [
+        "../"
+      ],
+      "ms": 0,
+      "result": {
+        "action": "off-no-valid-roots",
+        "rejectedRoots": [
+          {
+            "root": "../",
+            "reason": "grounding path escapes project: ../"
+          }
+        ]
+      }
+    },
+    {
+      "name": "missing",
+      "lane": "spec",
+      "roots": [
+        "docs/does-not-exist"
+      ],
+      "ms": 0,
+      "result": {
+        "action": "off-no-valid-roots",
+        "rejectedRoots": [
+          {
+            "root": "docs/does-not-exist",
+            "reason": "grounding path does not exist: docs/does-not-exist"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -10,6 +10,7 @@ The source plugin is named `ui-poc`. The original foundation was shared; this re
 
 ```
 node --test tests/evidence.test.cjs
+node --test tests/fidelity.test.cjs tests/visual.test.cjs
 python3 tests/check-source-contract.py --source-root /path/to/pinned-source --tree /path/to/tree.json
 node tools/ui-poc-evidence.cjs --stage refined-mockups --output-path /actual/stage/mockups.md
 ```

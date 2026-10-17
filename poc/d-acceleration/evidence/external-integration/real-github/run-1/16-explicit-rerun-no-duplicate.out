@@ -1,0 +1,10 @@
+{
+  "status": "stopped",
+  "reason": "uncertainty",
+  "issueNumber": 1,
+  "detail": "Ambiguity assessment failed closed: model returned invalid structured output",
+  "selection": {
+    "mode": "explicit-number",
+    "selectedIssueNumber": 1
+  }
+}

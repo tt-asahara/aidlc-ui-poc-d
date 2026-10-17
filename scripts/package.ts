@@ -878,8 +878,11 @@ function buildTree(
       "d-persistence-hook.ts",
       "d-persistence.ts",
       "decision-issue-summary.ts",
+      "design-document.ts",
+      "design-document-guide.md",
       "fake-worker.ts",
       "functional-design-discipline.ts",
+      "gh-host.ts",
       "d-feature-checks.ts",
       "grounding.ts",
       "grounding-runtime.ts",
@@ -908,7 +911,7 @@ function buildTree(
       }
       const destination = join(treeRoot, "tools", "d-acceleration", file);
       mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts") {
+      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts") {
         const projected = readFileSync(source, "utf8")
           .replace('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
           .replace('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');

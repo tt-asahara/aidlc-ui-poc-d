@@ -60,6 +60,7 @@ describe("ordinary /aidlc D integration", () => {
       "grounding-runtime.ts",
       "generic-auto-cli.ts",
       "issue-ambiguity-assessor.ts",
+      "gh-host.ts",
       "issue-autopilot-cli.ts",
       "host-session.ts",
       "host-session-cli.ts",
@@ -113,6 +114,17 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("Optional D checks (default off)");
     expect(skill).toContain('it rejects `gate: "unresolved"`, asks, and invented or stale directives');
     expect(skill).toContain("never replace, waive, or reorder the C HTML evidence sensor");
+  });
+
+  test("the ordinary skill routes --doc to the installed design-document runtime", () => {
+    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    expect(skill).toContain("design-document.ts doc-manifest --json --project-dir \"$PWD\"");
+    expect(skill).toContain("design-document.ts doc-snapshot --project-dir \"$PWD\"");
+    expect(skill).toContain("never pass `--doc` to the engine");
+    const tools = join(repo, "dist", "claude", ".claude", "tools");
+    expect(readFileSync(join(tools, "d-acceleration", "design-document.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
+    expect(existsSync(join(tools, "aidlc-lib.ts"))).toBe(true);
+    expect(readFileSync(join(tools, "d-acceleration", "design-document-guide.md"), "utf8")).toContain(".claude/tools/d-acceleration/design-document.ts doc-manifest");
   });
 
   test("Claude packages Issue autopilot without overriding standard /loop", () => {

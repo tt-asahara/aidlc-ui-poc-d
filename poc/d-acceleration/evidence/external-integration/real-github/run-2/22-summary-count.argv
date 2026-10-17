@@ -1,0 +1,1 @@
+gh issue list --repo tt-asahara/aidlc-d-sandbox --state all --search aidlc-decision-summary\ in:body --json number\,title\,url 
