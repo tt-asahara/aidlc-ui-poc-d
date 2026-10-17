@@ -212,6 +212,15 @@ Clef can escalate uncertain work to `judgment` but cannot downgrade design to
 `fast`. This PoC therefore does not claim universal fast-tier coverage across
 all AI-DLC stages.
 
+While an official stage waits at its human gate, `cross-stage-speculation.ts`
+can run independent, no-tool, read-only pre-research for a later analysis stage.
+It writes only D-private drafts that are bound by a Merkle root, and does
+nothing when `parallel.enabled` is `false`. Drafts are discarded when any input
+changes. They are consumed as evidence only after a fresh official `run-stage`
+for that stage, with every upstream settled. Official stages stay serial. See
+[`cross-stage-speculation.md`](cross-stage-speculation.md) for the contract
+and what remains out of scope.
+
 `stage-policy.json` is the machine-readable, test-enforced classification of
 all 33 official stages. Only official design waves are executable here;
 pipeline, mob, ensemble, and swarm directives are handed back intact to the
