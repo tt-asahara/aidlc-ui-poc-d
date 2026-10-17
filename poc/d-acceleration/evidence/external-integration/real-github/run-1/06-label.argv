@@ -1,0 +1,1 @@
+gh label create aidlc-auto --repo tt-asahara/aidlc-d-sandbox --description AI-DLC\ sandbox\ autopilot --force 

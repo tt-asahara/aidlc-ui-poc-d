@@ -1,0 +1,11 @@
+{
+  "status": "stopped",
+  "reason": "reconcile-required",
+  "issueNumber": 1,
+  "attempts": 0,
+  "detail": "intake binding is bound; durable reconciliation required",
+  "selection": {
+    "mode": "explicit-number",
+    "selectedIssueNumber": 1
+  }
+}

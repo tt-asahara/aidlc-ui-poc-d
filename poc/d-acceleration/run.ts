@@ -2,23 +2,21 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConfig, resolveDModels } from "./d-config.ts";
+import { CLEF_REMOVED, checkDPrerequisites, resolveDConfig, resolveDGitPersistence, resolveDModelContract, resolveDModels } from "./d-config.ts";
+import { enforceParallelOff } from "./parallel-guard.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
 const runtime = join(projectDir, ".claude"); const tools = join(runtime, "tools"); const orchestrate = join(tools, "aidlc-orchestrate.ts");
 const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.md"), join(tools, "ui-poc", "c-stage-routing.json"), join(tools, "data", "plugin-contrib-ui-poc.json"), join(tools, "data", "plugin-files-ui-poc.json")];
 const missing = required.filter((path) => !existsSync(path));
-const clef = resolveDClef(projectDir);
-const optional = resolveDConfig(projectDir);
-const requestedModels = resolveDModels(projectDir);
-const observedParentModel = process.env.AIDLC_PARENT_MODEL?.trim() || null;
-const parentMatches = observedParentModel?.toLowerCase().includes("opus") === true;
-const parentSession = observedParentModel
-  ? { status: parentMatches ? "caller-reported-match" : "caller-reported-mismatch", source: "unverified-caller-report", model: observedParentModel, ...(parentMatches ? {} : { requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." }) }
-  : { status: "not-observable", source: "none", model: null, requiredAction: "Select Opus in the parent Claude session when Opus-first execution is required." };
-const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: { parentSession, dWorkers: { requested: requestedModels.models, runtimeIdentity: "reported-per-worker-result" } }, constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
-if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : 0); }
+if (args.some((arg) => arg === "--clef-url" || arg === "--clef-low-risk-units")) { process.stderr.write(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units\n`); process.exit(2); }
+// Invalid D configuration fails closed with its one-line reason (key and allowed range), never a stack trace.
+const configured = (() => { try { return { optional: { ...resolveDConfig(projectDir), gitPersistence: resolveDGitPersistence(projectDir) }, prerequisites: checkDPrerequisites(projectDir) }; } catch (error) { process.stderr.write(`D configuration invalid: ${(error as Error).message}\n`); process.exit(2); } })();
+const { optional, prerequisites } = configured;
+const unmet = prerequisites.filter((row) => !row.satisfied);
+const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, unsupported: "all other stages return to official host", runtime: runtime, missing, prerequisites: { checked: prerequisites, unmet } };
+if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : unmet.length ? 3 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");
 if (stageCheckInput) {
@@ -27,13 +25,24 @@ if (stageCheckInput) {
   const check = spawnSync(process.execPath, [join(import.meta.dir, "host-stage-boundary.ts"), "--project-dir", projectDir, "--directive-file", directiveFile, "--manifest", stageCheckInput, "--engine-dir", tools], { cwd: projectDir, encoding: "utf8" });
   process.stdout.write(check.stdout); process.stderr.write(check.stderr); process.exit(check.status ?? 1);
 }
-const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
-if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
-const directive = JSON.parse(next.stdout);
+const officialNext = () => {
+  const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
+  return JSON.parse(next.stdout);
+};
+let directive = officialNext();
+// parallel.enabled=false: serialize an existing stage-major/swarm Intent through
+// the official setter and never hand an official swarm back while D is off.
+let parallelGuard = optional.parallel.enabled ? null : enforceParallelOff({ projectDir, engineDir: tools, directive, parallelEnabled: false });
+if (parallelGuard?.action === "refresh") { directive = officialNext(); parallelGuard = enforceParallelOff({ projectDir, engineDir: tools, directive, parallelEnabled: false }); }
+if (parallelGuard?.action === "stop") {
+  process.stdout.write(`${JSON.stringify({ status: "parallel-off-action-required", reason: parallelGuard.reason, recovery: parallelGuard.recovery, directive, parallelGuard, enabled }, null, 2)}\n`);
+  process.exit(2);
+}
 const readOnlyStages = new Set(enabled.supportedReadOnlyFanout);
 const designStages = new Set(enabled.supportedDesignWaves);
 if (directive.gate || directive.kind !== "run-stage" || (!readOnlyStages.has(directive.stage) && !designStages.has(directive.stage))) {
-  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled, ...(parallelGuard ? { parallelGuard } : {}) }, null, 2)}\n`);
   process.exit(0);
 }
 if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
@@ -49,8 +58,7 @@ const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
 const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
 for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);
-command.push(...clefRunnerArgs(clef));
-for (const flag of ["--claude-effort", "--clef-url", "--clef-low-risk-units", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
+for (const flag of ["--claude-effort", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
 if (args.includes("--disposable-test-mode")) command.push("--disposable-test-mode");
 const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

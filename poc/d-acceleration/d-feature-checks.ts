@@ -4,13 +4,13 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveDConfig } from "./d-config.ts";
 import { runRequirementUiCrossValidation } from "./requirement-ui-cross-validation.ts";
 import { runFunctionalDesignDiscipline } from "./functional-design-discipline.ts";
-import { runGrounding, type GroundingStage } from "./grounding.ts";
+import { recheckGroundingResult, runGrounding, type GroundingRunResult, type GroundingStage } from "./grounding.ts";
 import { createClaudeGroundingWorker, persistGroundingEvidence } from "./grounding-runtime.ts";
 
 type Manifest = { stage: string; unit?: string; traceabilityPath?: string; uiContractPath?: string; artifactPaths?: string[]; functionalArtifacts?: Record<string, string>; groundingOutputPath?: string; workerExecutable?: string };
 const args = process.argv.slice(2), get = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
-const projectDir = get("--project-dir"), inputPath = get("--input");
-if (!projectDir || !isAbsolute(projectDir) || !inputPath) throw new Error("--project-dir absolute path and --input are required");
+const projectDir = get("--project-dir"), inputPath = get("--input"), recheckPath = get("--recheck-evidence");
+if (!projectDir || !isAbsolute(projectDir) || (!inputPath && !recheckPath)) throw new Error("--project-dir absolute path and --input (or --recheck-evidence) are required");
 const root = realpathSync(projectDir);
 function bounded(path: string, mustExist = true): string {
   const candidate = isAbsolute(path) ? path : resolve(root, path);
@@ -20,8 +20,19 @@ function bounded(path: string, mustExist = true): string {
   if (mustExist && !existsSync(canonical)) throw new Error(`D feature path does not exist: ${path}`);
   return canonical;
 }
-const manifest = JSON.parse(readFileSync(bounded(inputPath), "utf8")) as Manifest;
-const config = resolveDConfig(projectDir), readJson = (path: string) => JSON.parse(readFileSync(bounded(path), "utf8"));
+if (recheckPath) {
+  // Read-only freshness recheck of persisted grounding evidence before the
+  // official reviewer relies on it. Any changed, missing, or symlink-swapped
+  // cited file (or stage artifact) is stale and exits 2.
+  const persisted = JSON.parse(readFileSync(bounded(recheckPath), "utf8")) as { results?: Record<string, unknown> };
+  const lanes = Object.entries(persisted.results ?? {}).filter(([name]) => name.endsWith("Grounding"));
+  const checks = Object.fromEntries(lanes.map(([name, value]) => [name, recheckGroundingResult(value as GroundingRunResult, root)]));
+  const fresh = lanes.length > 0 && Object.values(checks).every((check) => check.fresh);
+  process.stdout.write(`${JSON.stringify({ status: fresh ? "fresh" : "stale-or-unverifiable", checks }, null, 2)}\n`);
+  process.exit(fresh ? 0 : 2);
+}
+const manifest = JSON.parse(readFileSync(bounded(inputPath!), "utf8")) as Manifest;
+const config = (() => { try { return resolveDConfig(projectDir); } catch (error) { process.stderr.write(`D configuration invalid: ${(error as Error).message}\n`); process.exit(2); } })(), readJson = (path: string) => JSON.parse(readFileSync(bounded(path), "utf8"));
 const results: Record<string, unknown> = {}, notReady: string[] = [];
 const applicableEnabled =
   (config.features.requirementIdValidation && ["refined-mockups", "functional-design"].includes(manifest.stage)) ||
@@ -44,9 +55,18 @@ for (const lane of ["source", "spec"] as const) {
   const enabled = lane === "source" ? config.features.sourceGrounding : config.features.specGrounding;
   if (!enabled) continue;
   const roots = lane === "source" ? config.featureInputs.sourceRoots : config.featureInputs.specRoots;
-  const result = await runGrounding({ lane, stage: manifest.stage as GroundingStage, projectDir, artifactPaths: manifest.artifactPaths ?? [], config: { [`${lane}Grounding`]: { enabled: true, roots } }, worker: createClaudeGroundingWorker({ cwd: projectDir, executable: manifest.workerExecutable }) });
-  results[`${lane}Grounding`] = result;
-  if (result.action === "grounding-findings" && (result.verdict === "NOT-READY" || result.uncertainty.length)) notReady.push(`${lane}Grounding`);
+  const limits = config.featureInputs.groundingLimits;
+  let result: GroundingRunResult | { action: "grounding-failed"; lane: typeof lane; stage: string; verdict: "NOT-READY"; compliance: "not-claimed"; error: string; approvalRecorded: false };
+  try {
+    result = await runGrounding({ lane, stage: manifest.stage as GroundingStage, projectDir, artifactPaths: manifest.artifactPaths ?? [], config: { [`${lane}Grounding`]: { enabled: true, roots, limits } }, worker: createClaudeGroundingWorker({ cwd: projectDir, executable: manifest.workerExecutable }) });
+  } catch (error) {
+    // Missing, stale, symlinked, oversized, or out-of-root evidence fails
+    // closed into recorded NOT-READY evidence; it never becomes a compliance claim.
+    result = { action: "grounding-failed", lane, stage: manifest.stage, verdict: "NOT-READY", compliance: "not-claimed", error: (error as Error).message, approvalRecorded: false };
+  }
+  // Every lane result records the effective caps it was (or would have been) bounded by.
+  results[`${lane}Grounding`] = { ...result, limits };
+  if ("verdict" in result && (result.verdict === "NOT-READY" || ("uncertainty" in result && result.uncertainty.length))) notReady.push(`${lane}Grounding`);
 }
 const evidence = { schema: 1, stage: manifest.stage, unit: manifest.unit ?? null, verdict: notReady.length ? "NOT-READY" : "READY", notReady, results, approvalRecorded: false, reviewPresentation: "Pass this evidence path to the existing official reviewer; it is not a review receipt or approval." };
 const requestedOutput = manifest.groundingOutputPath ?? join("aidlc", ".aidlc-engine", "d-evidence", `${manifest.stage}${manifest.unit ? `-${manifest.unit}` : ""}.json`);

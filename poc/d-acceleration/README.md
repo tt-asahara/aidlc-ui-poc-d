@@ -7,14 +7,20 @@ and downstream handoffs remain active when acceleration is disabled and must
 not be bypassed when it is enabled. See `../ui-poc/` for that baseline.
 
 This proof of concept accelerates routing decisions without weakening AI-DLC's
-review, audit, or Testing Contract boundaries. Most of it remains outside
-`core/`; the delegated-AI stage-gate mode adds one explicit core settlement
-seam so AI decisions cannot masquerade as human replies. An install must opt in
-before dispatching work through the existing engine directives.
+review, audit, or Testing Contract boundaries. It lives entirely outside
+`core/`, which stays byte-identical to upstream AI-DLC v2.11.0 (`6a378b53`;
+guarded by `tests/core-pristine.test.ts`). D extends AI-DLC only through the
+Claude harness projection, the ui-poc plugin, and D-owned tools and ledgers; it
+never writes engine state or the official audit itself. An install must opt in
+before dispatching work through the existing engine directives. What the core
+restore re-homed and what it dropped is listed under "Core restore" below.
+
+A separate clean target (install, receipt-proven update, package parity,
+headless real-host turns, and an evidence manifest) follows
+[`clean-target.md`](clean-target.md).
 
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
-surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
-local service contract.
+surfaces.
 
 The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
 exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
@@ -26,20 +32,55 @@ lifecycle stops live in `issue-autopilot.ts`. It delegates every workflow transi
 review, sensor, and approval to ordinary `/aidlc`. See `configuration.md` for
 JSONC settings. Setup never enables autopilot without an explicit user request.
 
-For a narrowly delegated PoC, `aiApproval.mode: "stage-gates"` can evaluate
-ordinary stage gates only after their existing review and sensor checks pass.
-Its versioned Intent-local JSONL is the decision source of truth and binds the
-AI actor, reason, delegation, official directive, workflow state, and artifact
-hashes. Scope/routing and Plan Approval remain human stops, as do failed or
-unverified checks and operation, credential, publishing, external, or
-destructive work. The optional GitHub seam generates one summary payload per
-Intent and is default-off; publication requires a fresh host-recorded permission
-binding repository, Intent, and payload hash, and it never replaces the repository record.
+Every stage gate stays the person's: delegated AI stage-gate approval was
+dropped (see "Core restore"). With `aiApproval.mode: "stage-gates"` and the
+person's exact `AI-DLC delegate-ai-approvals ...` grant (minted only when those
+words are the person's latest host-recorded turn), D may answer
+explicitly marked low-risk stage questions, including per-Unit Construction
+design questions (`--unit`), through `ai-question-controller.ts` and the D
+settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /
+`[AI Decision ID]` provenance in the questions file and are recorded in the
+Intent's D-owned `decisions/ai-question-answers.jsonl`, which is not the
+official audit. The file grammar, per-Unit binding, marker decision, and
+real-model evidence are in `delegated-questions.md`. The optional GitHub seam
+generates one summary payload per Intent from the D question-answer ledger
+`decisions/ai-question-answers.jsonl` (missing or empty → `nothing-to-publish`)
+and is default-off; publication requires
+the person's exact permission words as the latest host-recorded human turn
+(read through the engine's own read-only `latestPersonTurn`), binding
+repository, Intent, and payload hash, and it never replaces the repository record.
+
+## Core restore (re-homed and dropped)
+
+The repository owner requires `core/` to equal upstream `6a378b53`. Every
+earlier D/C core change was reverted and re-implemented only through supported
+extension surfaces:
+
+| Feature | Outcome |
+| --- | --- |
+| UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `before-step:6` spliced by compose, so it precedes Step 6's Construction iteration choice. |
+| UI scope routing | Partly re-homed: plugin scope keywords route short ASCII requests. UI-specific high-specificity keywords, CJK keyword boundaries, and Japanese negation needed core and were dropped; long or Japanese prose gets the stock proposal and the person picks `ui-poc-application` at the official scope confirmation. |
+| Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds only to an Intent proven created since `start` (absent from the Intent inventory `start` recorded, with its own `WORKFLOW_STARTED` audit row at or after `startedAt`); a switched-to or resumed Intent is refused in one line and its Construction policy is never touched. The typed `machine_action` field was core-only and is gone. |
+| Delegated low-risk question answers | Re-homed: D-owned grammar/settler `ai-question-answers.ts` and the D ledger `decisions/ai-question-answers.jsonl`; the `AI_QUESTION_ANSWERED` audit event was core-only and is gone. |
+| Decision summary permission and `HOST/owner/name` check | Re-homed into `decision-issue-summary.ts` (the `aidlc-state.ts verify-decision-summary-permission` verb was core-only). |
+| Delegated AI stage-gate approval | Dropped: the upstream engine accepts a stage approval only from the person, and an extension cannot add an approval authority or authenticated `present-gate` receipt. `ai-approval-controller.ts` keeps only `grant`; `evaluate`/`verify` fail closed with one line. |
 
 Four independent checks are also default off: requirement/UI ID validation,
 functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.
+
+## Design document (`/aidlc --doc`)
+
+Ported from the KDDI harness. `/aidlc --doc` merges a product-level design
+document spanning every intent into the space-level
+`aidlc/spaces/<space>/design-document/`; `/aidlc --doc --full` regenerates it
+after `design-document.ts doc-snapshot` keeps one previous generation under the
+already-ignored `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`. The LLM
+writes the document following `design-document-guide.md`; `design-document.ts
+doc-manifest --json` owns the deterministic input set. It is read-only with
+respect to workflow state. The KDDI critic loop (`docCriticLoop`, design-doc
+audit and reviewer agent) is not ported.
 
 ## Approved-transition Git persistence
 
@@ -76,14 +117,33 @@ the same pending refspec rather than creating another commit. Parallel workers
 do not run this coordinator; official swarm publish, land, and merge contracts
 remain authoritative.
 
+## Reviewer dispatch cleanup
+
+The official reviewer protocol leaves `.aidlc-engine/reviewer-dispatch.json`
+for the conductor to delete after a per-unit review; a leftover record keeps
+the official reviewer-scope hook refusing the next Unit's reviewer for up to
+six hours. The Claude projection adds a PostToolUse Bash hook,
+`reviewer-dispatch-cleanup-hook.ts`, that closes that window without changing
+the official engine:
+
+- a recorded verdict (`engine log review ... --verdict`, answered with
+  `reviewRecord`) removes the record for that same stage and Unit;
+- a new review request removes a record that names a different stage or Unit;
+- a re-request for the same review, a refused or failed call, and an
+  unreadable record leave the file alone.
+
+The hook never blocks and never writes anything else.
+
 ## Safety contract
 
-- Deterministic rules win. Clef is consulted only for ambiguous, low-risk task
-  classification. Security, compliance, approval, and review decisions never
-  go to Clef.
-- Clef is optional and local-only (`127.0.0.1`). Timeout, transport failure,
-  malformed output, an unknown choice, or confidence below the configured
-  threshold falls back to the conservative `judgment` tier.
+- Deterministic rules decide every tier, and routing makes no network call.
+  The planner owns a quality floor: security, compliance, and approval stay at
+  `judgment`, and design-wave stages and design tasks stay at `balanced` or
+  above, whatever a caller's `minimumTier`/`fallbackTier` says. Ambiguous work
+  falls back to the conservative `judgment` tier.
+- Clef routing was evaluated and then declined on 2026-10-17 (see
+  `evidence/model-routing/README.md`). A leftover `clef` config key, planner
+  input key, or `--clef-*` flag fails closed with a one-line removal notice.
 - Parallel output is limited to official execution seams: `official-wave` for
   engine-emitted design-stage waves, and `official-swarm` for isolated
   Code-Generation worktrees. `unit-major`, approval barriers, reviewers, and
@@ -97,6 +157,39 @@ remain authoritative.
   receipts can be consumed and verified rather than asserted by input.
 - A failed fast/balanced attempt escalates to the next tier; a judgment failure
   stops for human review. The planner does not execute models itself.
+
+## Bounded-run deadline (`auto.deadlineMs`)
+
+`host-session.ts` is the single owner of deadline accounting for the generic
+`/aidlc --auto` session (`activeElapsedMs`, `enterHumanWait`,
+`leaveHumanWait`). The deadline measures D's working time, not the person's
+think time. An unclaimed session pauses the clock while it waits for the
+person, in two cases:
+
+- `official-ask`: a checkpoint received an official `ask` (human gate).
+- `stage-question`: `action-finish` found that the current stage's canonical
+  `<stage>-questions.md` (or the active Unit's per-Unit file) has a blank
+  `[Answer]:` slot that the delegated AI path cannot answer
+  (`question-wait.ts`). That holds when there is no `stage-gates` question grant for the
+  stage, when the deterministic precheck shared with `ai-question-controller.ts`
+  refuses the set, or when the Intent's `decisions/ai-question-blocks.jsonl`
+  records a delegated-path stop on those exact bytes. A set the delegated path
+  may still answer is D work, so the clock keeps running.
+
+Both waits are decided from recorded files, never from prose. Each wait is
+persisted in the session journal (`waitingSince`, `waitKind`, and a
+`humanWaits[]` entry with `startedAt` and evidence). The next checkpoint or
+`action-start` closes the entry (`endedAt`, `creditedMs`) and adds the credit
+to `pausedMs` in the same atomic save. A crash or restart mid-wait therefore
+neither loses the pause nor counts it twice. Active time keeps counting, so
+runaway work still stops with `deadline-exceeded`. There is no separate
+wall-clock ceiling for unclaimed sessions. `maxSteps`, the `through` boundary,
+and no-progress detection remain the other hard stops. A claimed Issue session
+keeps wall-clock semantics, because the claim lease must not outlive the
+deadline: its official-ask waits are journaled with `creditedMs: 0`, and it
+does not detect stage-question waits. A wait is detected only
+at `action-finish`, so the host runs `ai-question-controller.ts` inside an
+`action-start`/`action-finish` bracket like every other host action.
 
 ## Run
 
@@ -113,9 +206,7 @@ bun poc/d-acceleration/scheduler.ts \
   --ledger /tmp/d-resume.json --output /tmp/d-scheduler.json
 ```
 
-Set `clef.enabled` in the input only when the existing local service is already
-running. The planner never starts or stops it. See `schema.md` for the input and
-output contract.
+See `schema.md` for the input and output contract.
 
 The scheduler requires an explicit, existing absolute project directory and
 checks output paths against its real path, including symlink ancestors. It
@@ -137,7 +228,13 @@ must only be used with a throwaway fixture project.
 separately. D can request Opus for its own workers, but it cannot silently
 change an already-running parent Claude session; when the parent model is not
 observable, preflight gives the exact session action instead of claiming the
-worker request applies to inline stages. It likewise reports that safe
+worker request applies to inline stages. The parent model comes only from a
+caller's `AIDLC_PARENT_MODEL` report, labelled `unverified-caller-report`.
+`modelContract.dWorkers` lists the requested worker models with their sources
+(`cli`/`local`/`project`/`default`) and the per-tier effort. Every D worker
+passes an explicit `--model`, so a parent default such as `ANTHROPIC_MODEL` or
+`CLAUDE_CODE_SUBAGENT_MODEL` never selects a worker model. Each worker result
+carries its own `modelIdentity` (see `schema.md`). It likewise reports that safe
 Construction parallelism remains `stage-major/swarm` only after the official
 Unit DAG proves independent ready Units with disjoint writes and the person's
 recorded request authorizes the policy change.
@@ -149,7 +246,10 @@ project memory, but no project setting that initializes those two Construction
 fields; memory remains guidance rather than a policy setter. D therefore calls
 the official setters once, immediately after creating a new Intent, and only
 when that scope contains both Units Generation and Code Generation. Existing
-Intents are never changed. A later explicit per-Intent setter wins because a
+Intents are never changed by these defaults: bootstrap refuses an active
+Intent that was in `start`'s Intent inventory or whose `WORKFLOW_STARTED` row
+predates `start` (only `parallel.enabled=false`
+moves an existing swarm Intent to serial, see below). A later explicit per-Intent setter wins because a
 bootstrap replay never reapplies the defaults. `swarm` requires `stage-major`;
 a single Unit runs as the serial-equivalent case, while multiple Units still
 parallelize only where the official DAG and isolated-worktree checks allow it.
@@ -158,17 +258,52 @@ Set either value to `official` to retain the AI-DLC default.
 `parallel.enabled` is D's single master switch and defaults to `true`. It does
 not relax dependencies: enabled mode still uses only policy-approved read-only
 fanout or the official independent-Unit DAG with disjoint writes and a wave
-barrier. `false` serializes read-only fanout and suppresses D's Construction
-swarm defaults for newly bootstrapped Intents. Generic-auto records the resolved
-value in its bootstrap journal, so changing the file does not alter a run
-already in progress.
+barrier. `false` holds every D dispatch to one worker at a time and keeps work
+away from the official parallel swarm (`parallel-guard.ts` owns this rule):
 
-The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
-comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
-Clef. Design waves retain `balanced` as their minimum and failure fallback, so
-Clef can escalate uncertain work to `judgment` but cannot downgrade design to
-`fast`. This PoC therefore does not claim universal fast-tier coverage across
-all AI-DLC stages.
+- D design-wave workers already issued by the official engine, their retries
+  and tier escalations, and read-only fanout workers run strictly one at a
+  time. The scheduler result reports `parallel.maxConcurrentWorkers`.
+- New generic-auto Intents get no D swarm default (`constructionDefaults` is
+  ignored while OFF).
+- An existing Intent whose official `Construction Execution` is `swarm` is
+  moved to `serial` only through the official
+  `aidlc-state.ts set-construction-execution serial` setter, at the next D
+  boundary (run.ts/conductor step, generic-auto or issue-autopilot checkpoint,
+  or the `invoke-swarm` guard). The setter's own guards stay authoritative:
+  before Construction it applies; inside Construction an unattended run is
+  refused and an interactive run needs the person to have asked. While it is
+  refused, D still runs its own work serially, returns the one-line `recovery`,
+  and refuses every official `invoke-swarm` hand-off
+  (`parallel-off-action-required` from run.ts/conductor, `stop` from the host
+  checkpoint and from `parallel-guard.ts`). After the setter succeeds the host
+  gets `refresh` and obtains a fresh official directive.
+- `AIDLC_USE_SWARM` and `flags.swarm` (env, then local, project, machine
+  settings) only choose the driver for an `invoke-swarm` the engine already
+  issued. They never re-enable a swarm while D is OFF.
+
+Timing: OFF applies immediately. Every D boundary re-reads the configuration,
+and the scheduler re-reads it before every worker launch, so switching to OFF
+during a wave serializes every later launch of that wave (workers already
+running finish). ON never widens work already in progress: a run or wave that
+started under OFF stays at one worker, and ON applies from the next D
+invocation. An unreadable configuration counts as OFF at those boundaries. D
+never moves an Intent back to `swarm` when ON returns; use the official setter.
+The generic-auto bootstrap journal keeps the value seen at bootstrap as
+evidence only.
+
+Design waves route at `balanced`. Escalation after a worker failure can raise
+them to `judgment`, but nothing lowers design to `fast`. This PoC therefore
+does not claim universal fast-tier coverage across all AI-DLC stages.
+
+While an official stage waits at its human gate, `cross-stage-speculation.ts`
+can run independent, no-tool, read-only pre-research for a later analysis stage.
+It writes only D-private drafts that are bound by a Merkle root, and does
+nothing when `parallel.enabled` is `false`. Drafts are discarded when any input
+changes. They are consumed as evidence only after a fresh official `run-stage`
+for that stage, with every upstream settled. Official stages stay serial. See
+[`cross-stage-speculation.md`](cross-stage-speculation.md) for the contract
+and what remains out of scope.
 
 `stage-policy.json` is the machine-readable, test-enforced classification of
 all 33 official stages. Only official design waves are executable here;
@@ -206,6 +341,13 @@ model quality, or speed.
 `benchmark.ts` compares the same synthetic task durations under serial order and
 the generated dependency waves. Those durations are fixture estimates, not
 measured LLM latency or cost. The output separately reports planner wall time,
-Clef routing time, retries, model/cost observability, critical-path estimate,
+retries, model/cost observability, critical-path estimate,
 and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
+`model-routing-probe.ts` produces that evidence. The
+2026-10-17 results are in `evidence/model-routing/README.md`.
+
+The A/B/C/D lineage, the adopted-number ledger (items 7, 9–17, 21, 22, 27,
+28), stage-to-skill invocation evidence, and the pr-lens record are in
+[`audit/`](audit/README.md). Reproduce the lineage comparison with
+`bash poc/d-acceleration/audit/lineage.sh`.

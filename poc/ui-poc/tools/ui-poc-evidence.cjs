@@ -5,10 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const fidelity = require('./ui-poc-fidelity.cjs');
+const matrix = require('./ui-poc-element-matrix.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const contracts = {
   'rough-mockups': 'ui-poc-rough-contract.md',
   'refined-mockups': 'ui-poc-refined-contract.md',
+  'functional-design': 'ui-poc-functional-contract.md',
   'code-generation': 'ui-poc-implementation-contract.md',
   'build-and-test': 'ui-poc-test-contract.md'
 };
@@ -24,7 +26,12 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     if (!Object.hasOwn(contracts, stage)) throw Error('Unsupported stage');
     if (!outputPath || !fs.statSync(outputPath).isFile()) throw Error('Declared deliverable is missing');
     const root = path.dirname(path.resolve(outputPath));
-    if (depth > 2) throw Error('Upstream chain exceeds maximum depth');
+    // Functional Design is per unit and the core marks frontend-components as
+    // the UI-kind artifact. A unit with neither that artifact nor a UI contract
+    // is a non-UI unit; any UI unit (or any contract) is fully checked, and
+    // code-generation still refuses a UI handoff without an approved FD contract.
+    if (stage === 'functional-design' && depth === 0 && !fs.existsSync(path.join(root, contractName)) && !fs.existsSync(path.join(root, 'frontend-components.md'))) return {pass:true, findings_count:0, findings:[], notApplicable:'non-UI functional-design unit'};
+    if (depth > 3) throw Error('Upstream chain exceeds maximum depth');
     const bytes = boundedFile(root, contractName);
     const identity = fs.realpathSync(path.join(root, contractName));
     if (seen.has(identity)) throw Error('Cyclic upstream contract reference');
@@ -38,11 +45,12 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     const c = JSON.parse(blocks[0][1]);
     if (![1,2].includes(c.schema) || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
     if (c.schema === 1 && allowLegacySchema1 !== true) throw Error('Schema 1 is legacy migration input only; new/default UI evidence requires schema 2');
+    if (c.schema === 1 && stage === 'functional-design') throw Error('Functional Design UI evidence exists only in schema 2');
     if (!Array.isArray(c.assets) || !c.assets.length || !Array.isArray(c.mappings) || !c.mappings.length) throw Error('Empty assets or mappings');
     const assets = new Map();
     for (const a of c.assets) {
       if (!a || assets.has(a.path) || !/^[a-f0-9]{64}$/.test(a.sha256)) throw Error('Duplicate or invalid asset');
-      if (!/\.(html|css|js|json|png|jpg|jpeg|svg|webp|woff2)$/.test(a.path)) throw Error('Unsupported evidence asset type');
+      if (!/\.(html|css|js|json|png|jpg|jpeg|svg|webp|woff2|md)$/.test(a.path)) throw Error('Unsupported evidence asset type');
       const asset = boundedFile(root, a.path);
       if (hash(asset) !== a.sha256) throw Error('Asset hash mismatch: ' + a.path);
       assets.set(a.path, a);
@@ -69,13 +77,59 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       if (requiredStates.size !== capturedStates.size || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
       const dispositions = c.fidelity.dispositions || [];
       if (!Array.isArray(dispositions)) throw Error('Fidelity dispositions must be an array');
-      if (stage === 'code-generation') {
+      const readAsset = ref => JSON.parse(boundedFile(root, ref.path).toString('utf8'));
+      const boundAsset = (ref, label) => { if (!ref || typeof ref.path !== 'string' || !assets.has(ref.path) || ref.sha256 !== assets.get(ref.path).sha256) throw Error(`Missing or unbound ${label}`); return ref; };
+      if (stage === 'refined-mockups' && c.fidelity.revision !== undefined) {
+        // Approved-upstream change control: a revised mockup declares the exact
+        // element delta from the previously approved snapshot; the ordinary
+        // approval of this revised contract is the person's confirmation.
+        const previous = readAsset(boundAsset(c.fidelity.revision?.previousSnapshot, 'previous approved snapshot for the revision'));
+        const revision = matrix.checkRevision({ revision: c.fidelity.revision, previous, current: approved });
+        if (!revision.pass) throw Error('Artifact revision does not match the approved snapshot delta: ' + revision.findings.join('; '));
+      }
+      if (['functional-design','code-generation'].includes(stage)) {
         let ledger = {};
         if (dispositions.length) {
           if (!approvalLedger) throw Error('Trusted approval ledger is not configured for UI deviations');
           ledger = JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8'));
         }
         for (const disposition of dispositions) if (!fidelity.dispositionReceipt(disposition, ledger, fidelity.hashJson(approved))) throw Error(`UI disposition has no matching detached approval receipt: ${disposition?.elementKey || '?'}`);
+      }
+      if (['functional-design','code-generation','build-and-test'].includes(stage)) {
+        const ruleMatrix = readAsset(boundAsset(c.fidelity.elementRuleMatrix, 'element rule matrix (fidelity.elementRuleMatrix)'));
+        if (stage === 'functional-design') {
+          if (!Array.isArray(c.fidelity.functionalDesign) || !c.fidelity.functionalDesign.length) throw Error('Missing Functional Design artifact copies (fidelity.functionalDesign)');
+          const fdTexts = {};
+          for (const ref of c.fidelity.functionalDesign) { boundAsset(ref, 'Functional Design artifact'); if (!ref.path.endsWith('.md')) throw Error('Functional Design artifact copies must be Markdown'); fdTexts[ref.path] = boundedFile(root, ref.path).toString('utf8'); }
+          const ledger = dispositions.length && approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+          const result = matrix.checkRuleMatrix({ matrix: ruleMatrix, approved, fdTexts, dispositions, ledger });
+          if (!result.pass) throw Error('Element rule matrix failed: ' + result.findings.map(f => `${f.code}${f.elementKey ? ' ' + f.elementKey : ''}`).join('; '));
+        }
+        if (stage === 'code-generation') {
+          // The implementation handoff consumes the approved Functional Design
+          // contract, not merely a matrix file: a byte-identical copy with its
+          // own approval receipt, the same frozen snapshot, matrix and dispositions.
+          const fdRef = boundAsset(c.fidelity.functionalDesignContract, 'approved Functional Design UI contract (fidelity.functionalDesignContract)');
+          const fdBlocks = [...boundedFile(root, fdRef.path).toString('utf8').matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
+          if (fdBlocks.length !== 1) throw Error('Invalid Functional Design contract block');
+          const fd = JSON.parse(fdBlocks[0][1]);
+          if (fd.stage !== 'functional-design' || fd.arm !== c.arm || fd.schema !== 2) throw Error('Functional Design contract identity differs');
+          if (fd.fidelity?.approvedSnapshot?.sha256 !== c.fidelity.approvedSnapshot.sha256) throw Error('Approved semantic snapshot changed between Functional Design and implementation');
+          if (fd.fidelity?.elementRuleMatrix?.sha256 !== c.fidelity.elementRuleMatrix.sha256) throw Error('Element rule matrix changed after Functional Design approval');
+          if (fidelity.canonical(fd.fidelity?.dispositions || []) !== fidelity.canonical(dispositions)) throw Error('UI dispositions changed after Functional Design approval');
+          if (JSON.stringify(fd.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Functional Design mapping inventory differs');
+          const fdPath = fs.realpathSync(path.join(root, fdRef.path));
+          const inheritedFd = check({stage:'functional-design',outputPath:fdPath,approvalLedger,imageFeatures,allowLegacySchema1}, new Set(seen), path.basename(fdPath), depth + 1);
+          if (!inheritedFd.pass) throw Error('Invalid Functional Design evidence: ' + inheritedFd.findings.join('; '));
+          requireApproval(approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings});
+        }
+        if (stage === 'build-and-test') {
+          const testRef = boundAsset(c.fidelity.elementTestMatrix, 'element-level Build and Test matrix (fidelity.elementTestMatrix)');
+          const actual = readAsset(boundAsset(c.fidelity.actualSnapshot, 'measured implementation semantic snapshot'));
+          const ledger = approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+          const result = matrix.checkTestMatrix({ matrix: readAsset(testRef), approved, actual, ruleMatrix, dispositions, ledger });
+          if (!result.pass) throw Error('Element test matrix failed: ' + result.findings.map(f => `${f.code}${f.elementKey ? ' ' + f.elementKey : ''}`).join('; '));
+        }
       }
       if (stage === 'build-and-test') {
         if (!c.fidelity.actualSnapshot || !assets.has(c.fidelity.actualSnapshot.path) || c.fidelity.actualSnapshot.sha256 !== assets.get(c.fidelity.actualSnapshot.path).sha256) throw Error('Missing measured implementation semantic snapshot');
@@ -92,7 +146,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     }
     // Producer gates do not fabricate a pre-existing approval for their new draft.
     // Consumers require an independently captured approval of the upstream contract.
-    const prior = {'code-generation':'refined-mockups','build-and-test':'code-generation'}[stage];
+    const prior = {'functional-design':'refined-mockups','code-generation':'refined-mockups','build-and-test':'code-generation'}[stage];
     if (prior) {
       if (!c.upstream || c.upstream.stage !== prior || !/^[a-f0-9]{64}$/.test(c.upstream.sha256)) throw Error('Missing approved upstream contract reference');
       const upstreamBytes = boundedFile(root, c.upstream.path);
@@ -104,20 +158,25 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       if (c.schema === 2) {
         if (parent.fidelity?.approvedSnapshot?.sha256 !== c.fidelity?.approvedSnapshot?.sha256) throw Error('Approved semantic snapshot changed across the handoff');
         if (stage === 'build-and-test' && fidelity.canonical(parent.fidelity?.dispositions || []) !== fidelity.canonical(c.fidelity?.dispositions || [])) throw Error('Approved UI dispositions changed after code-generation approval');
+        if (stage === 'build-and-test' && parent.fidelity?.elementRuleMatrix?.sha256 !== c.fidelity?.elementRuleMatrix?.sha256) throw Error('Element rule matrix changed after code-generation approval');
       }
       const upstreamPath = fs.realpathSync(path.join(root, c.upstream.path));
-      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures,allowLegacySchema1}, seen, path.basename(upstreamPath), depth + 1);
+      const inherited = check({stage:prior,outputPath:upstreamPath,approvalLedger,imageFeatures,allowLegacySchema1}, new Set(seen), path.basename(upstreamPath), depth + 1);
       if (!inherited.pass) throw Error('Invalid upstream evidence: ' + inherited.findings.join('; '));
-      if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
-      const ledgerReal = fs.realpathSync(approvalLedger), rootReal = fs.realpathSync(root);
-      if (ledgerReal === rootReal || ledgerReal.startsWith(rootReal + path.sep)) throw Error('Approval ledger must be detached from evidence directory');
-      const ledger = JSON.parse(fs.readFileSync(ledgerReal, 'utf8'));
-      const approved = ledger.approvals?.find(a => a.contractSha256 === c.upstream.sha256 && a.stage === prior && a.arm === c.arm && a.status === 'approved' && typeof a.source === 'string' && a.source.trim() && typeof a.reviewer === 'string' && a.reviewer.trim());
-      if (!approved) throw Error('Upstream contract has no matching explicit approval receipt');
-      if (JSON.stringify(approved.requiredMappings) !== JSON.stringify(c.requiredMappings)) throw Error('Approved mapping inventory differs');
+      requireApproval(approvalLedger, root, {sha256:c.upstream.sha256,stage:prior,arm:c.arm,requiredMappings:c.requiredMappings});
     }
   } catch (e) { findings.push(e.message); }
   return {pass: findings.length === 0, findings_count: findings.length, findings};
+}
+/** One owner for "this upstream contract carries the person's recorded approval". */
+function requireApproval(approvalLedger, root, {sha256, stage, arm, requiredMappings}) {
+  if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
+  const ledgerReal = fs.realpathSync(approvalLedger), rootReal = fs.realpathSync(root);
+  if (ledgerReal === rootReal || ledgerReal.startsWith(rootReal + path.sep)) throw Error('Approval ledger must be detached from evidence directory');
+  const ledger = JSON.parse(fs.readFileSync(ledgerReal, 'utf8'));
+  const approved = ledger.approvals?.find(a => a.contractSha256 === sha256 && a.stage === stage && a.arm === arm && a.status === 'approved' && typeof a.source === 'string' && a.source.trim() && typeof a.reviewer === 'string' && a.reviewer.trim());
+  if (!approved) throw Error(stage === 'functional-design' ? 'Functional Design contract has no matching explicit approval receipt' : 'Upstream contract has no matching explicit approval receipt');
+  if (JSON.stringify(approved.requiredMappings) !== JSON.stringify(requiredMappings)) throw Error('Approved mapping inventory differs');
 }
 function main(argv) {
   const args = {};

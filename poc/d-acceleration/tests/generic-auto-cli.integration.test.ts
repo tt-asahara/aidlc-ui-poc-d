@@ -19,6 +19,22 @@ process.stdout.write(JSON.stringify({ kind: "ask", ask_type: "scope-confirm", ga
 `);
   return root;
 }
+const STAGES = "- [ ] intent-capture — EXECUTE\n- [ ] scope-definition — EXECUTE\n- [ ] requirements-analysis — EXECUTE\n- [ ] units-generation — EXECUTE\n- [ ] code-generation — EXECUTE\n";
+// Simulates the record upstream `intent create` builds: state plus a WORKFLOW_STARTED audit row.
+function intentRecord(root: string, intent: string, startedAt: string, activate = true) {
+  const intents = join(root, "aidlc", "spaces", "default", "intents");
+  mkdirSync(join(intents, intent, "audit"), { recursive: true });
+  writeFileSync(join(intents, intent, "aidlc-state.md"), STAGES);
+  writeFileSync(join(intents, intent, "audit", "host-clone.md"), `# AI-DLC Audit Log\n\n## Workflow Started\n**Timestamp**: ${startedAt}\n**Event**: WORKFLOW_STARTED\n\n---\n`);
+  if (activate) writeFileSync(join(intents, "active-intent"), `${intent}\n`);
+}
+function policyTools(root: string) {
+  writeFileSync(join(root, ".claude", "tools", "aidlc-orchestrate.ts"), `process.stdout.write(JSON.stringify({kind:"run-stage",stage:"intent-capture",receipt:"first"}));\n`);
+  writeFileSync(join(root, ".claude", "tools", "aidlc-state.ts"), `
+import { appendFileSync } from "node:fs"; import { join } from "node:path";
+const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at+1]; appendFileSync(join(root,"policy-calls"),args.slice(0,at).join(" ")+"\\n"); process.stdout.write(JSON.stringify({updated:true}));
+`);
+}
 const run = (root: string, args: string[]) => spawnSync(process.execPath, [cli, ...args, "--project-dir", root], { cwd: root, encoding: "utf8" });
 
 describe("generic /aidlc --auto controller", () => {
@@ -59,42 +75,71 @@ describe("generic /aidlc --auto controller", () => {
     expect(JSON.parse(replay.stdout)).toMatchObject({ action: "stop", reason: "no-progress", initialized: false });
   });
 
-  test("bootstraps typed intent creation through official state into the first checkpoint", () => {
+  test("bootstraps the Intent the host created from the official print into the first checkpoint", () => {
     const root = fixture({ auto: { enabled: true, sessionOnly: false, through: "inception", maxSteps: 4, deadlineMs: 60000 }, constructionDefaults: { iteration: "stage-major", execution: "swarm" } });
-    writeFileSync(join(root, ".claude", "tools", "aidlc.ts"), `
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const args = process.argv.slice(2), at = args.indexOf("--project-dir"), root = args[at + 1];
-if (JSON.stringify(args.slice(0, at)) !== JSON.stringify(["engine","intent","create","--scope","ui-poc-application","--request","1234abcd"])) process.exit(91);
-const intents = join(root,"aidlc","spaces","default","intents"), intent = "261017-budget-app";
-mkdirSync(join(intents,intent), { recursive: true }); writeFileSync(join(intents,"active-intent"), intent+"\\n");
-writeFileSync(join(intents,intent,"aidlc-state.md"), "- [ ] intent-capture — EXECUTE\\n- [ ] scope-definition — EXECUTE\\n- [ ] requirements-analysis — EXECUTE\\n- [ ] units-generation — EXECUTE\\n- [ ] code-generation — EXECUTE\\n");
-`);
-    writeFileSync(join(root, ".claude", "tools", "aidlc-orchestrate.ts"), `process.stdout.write(JSON.stringify({kind:"run-stage",stage:"intent-capture",receipt:"first"}));\n`);
-    writeFileSync(join(root, ".claude", "tools", "aidlc-state.ts"), `
-import { appendFileSync } from "node:fs"; import { join } from "node:path";
-const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at+1]; appendFileSync(join(root,"policy-calls"),args.slice(0,at).join(" ")+"\\n"); process.stdout.write(JSON.stringify({updated:true}));
-`);
-    writeFileSync(join(root, "creation.json"), JSON.stringify({ kind: "print", message: "human readable", machine_action: { kind: "intent-create", argv: ["intent","create","--scope","ui-poc-application","--request","1234abcd"] } }));
+    writeFileSync(join(root, "request.txt"), "Build a budget web app");
+    expect(run(root, ["start", "--description-file", "request.txt"]).status).toBe(0);
+    // No Intent exists yet: bootstrap never creates one itself.
+    const early = run(root, ["bootstrap"]);
+    expect(early.status).not.toBe(0);
+    expect(early.stderr).toContain("no new official Intent since generic auto start");
+    // The host ran the official print's intent-create exactly (simulated here).
+    intentRecord(root, "261017-budget-app", new Date().toISOString());
+    policyTools(root);
 
-    const result = run(root, ["bootstrap", "--directive-file", "creation.json"]);
+    const result = run(root, ["bootstrap"]);
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ action: "continue", initialized: true, activeStages: ["intent-capture", "scope-definition", "requirements-analysis", "units-generation", "code-generation"], directive: { stage: "intent-capture" }, state: { steps: 1, through: "units-generation" } });
     expect(readFileSync(join(root, "policy-calls"), "utf8")).toBe("set-construction-iteration stage-major\nset-construction-execution swarm\n");
-    const replay = run(root, ["bootstrap", "--directive-file", "creation.json"]);
+    const replay = run(root, ["bootstrap"]);
     expect(replay.status, replay.stderr).toBe(0);
     expect(JSON.parse(replay.stdout)).toMatchObject({ action: "continue", initialized: false, reason: "already-bootstrapped", state: { steps: 1 } });
   });
 
-  test("rejects untyped or extra intent-create flags", () => {
+  test("bootstrap never rewrites the Construction policy of an Intent not created after start", () => {
+    const config = { auto: { enabled: true, sessionOnly: false, through: "inception", maxSteps: 4, deadlineMs: 60000 }, constructionDefaults: { iteration: "stage-major", execution: "swarm" } };
+    // Intent B existed (inactive) before start; the person then switches to / resumes it.
+    const switched = fixture(config);
+    intentRecord(switched, "260901-intent-a", "2026-09-01T00:00:00Z");
+    intentRecord(switched, "260902-intent-b", "2026-09-02T00:00:00Z", false);
+    writeFileSync(join(switched, "request.txt"), "Build a budget web app");
+    expect(run(switched, ["start", "--description-file", "request.txt"]).status).toBe(0);
+    expect(JSON.parse(readFileSync(join(switched, ".aidlc-engine", "d-auto-start.json"), "utf8")).preIntents).toEqual(["260901-intent-a", "260902-intent-b"]);
+    writeFileSync(join(switched, "aidlc", "spaces", "default", "intents", "active-intent"), "260902-intent-b\n");
+    policyTools(switched);
+    const refused = run(switched, ["bootstrap"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("active Intent 260902-intent-b was not created after generic auto start");
+    expect(existsSync(join(switched, "policy-calls"))).toBeFalse();
+    expect(existsSync(join(switched, ".aidlc-engine", "d-autopilot-session.json"))).toBeFalse();
+
+    // A record that appears after start but whose WORKFLOW_STARTED predates it (e.g. pulled from git).
+    const pulled = fixture(config);
+    writeFileSync(join(pulled, "request.txt"), "Build a budget web app");
+    expect(run(pulled, ["start", "--description-file", "request.txt"]).status).toBe(0);
+    intentRecord(pulled, "250101-old-work", "2025-01-01T00:00:00Z");
+    policyTools(pulled);
+    expect(run(pulled, ["bootstrap"]).stderr).toContain("was not created after generic auto start");
+    expect(existsSync(join(pulled, "policy-calls"))).toBeFalse();
+
+    // A start journal from before the inventory existed cannot prove creation.
+    const legacy = fixture(config);
+    writeFileSync(join(legacy, ".aidlc-engine", "d-auto-start.json"), JSON.stringify({ version: 1, space: "default", preActive: null, descriptionSha256: "0".repeat(64), startedAt: "2026-01-01T00:00:00.000Z" }));
+    intentRecord(legacy, "261017-new", new Date().toISOString());
+    policyTools(legacy);
+    expect(run(legacy, ["bootstrap"]).stderr).toContain("start journal predates the Intent inventory");
+    expect(existsSync(join(legacy, "policy-calls"))).toBeFalse();
+  });
+
+  test("bootstrap refuses a directive handoff and a missing start", () => {
     const root = fixture({ auto: { enabled: true, sessionOnly: false } });
-    for (const action of [
-      { kind: "intent-create", argv: ["intent", "create", "--scope", "feature"] },
-      { kind: "intent-create", argv: ["intent", "create", "--scope", "feature", "--request", "1234abcd", "--project-dir", "/tmp/escape"] },
-    ]) {
-      writeFileSync(join(root, "creation.json"), JSON.stringify({ kind: "print", message: "x", machine_action: action }));
-      expect(run(root, ["bootstrap", "--directive-file", "creation.json"]).status).not.toBe(0);
-    }
+    writeFileSync(join(root, "creation.json"), JSON.stringify({ kind: "print", message: "x", machine_action: { kind: "intent-create", argv: ["intent", "create", "--scope", "feature", "--request", "1234abcd"] } }));
+    const typed = run(root, ["bootstrap", "--directive-file", "creation.json"]);
+    expect(typed.status).not.toBe(0);
+    expect(typed.stderr).toContain("bootstrap takes no directive");
+    const unstarted = run(root, ["bootstrap"]);
+    expect(unstarted.status).not.toBe(0);
+    expect(unstarted.stderr).toContain("requires a generic auto start");
   });
 
   test("routes arbitrary description as one official argv value without leaking --auto", () => {
@@ -107,6 +152,21 @@ const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at
     expect(JSON.parse(readFileSync(join(root, "official-argv.json"), "utf8"))).toEqual(["next", description]);
     expect(readFileSync(join(root, ".aidlc-engine", "request.txt"), "utf8")).toBe(description);
     expect(existsSync(join(root, "nope"))).toBeFalse();
+  });
+
+  test("consumes only the skill's request handoff file, in every outcome", () => {
+    for (const auto of [{ enabled: true, sessionOnly: false }, { enabled: false, sessionOnly: false }]) {
+      const root = fixture({ auto });
+      const handoff = join(root, ".aidlc-engine", "d-auto-request-a1B2_c3.txt");
+      writeFileSync(handoff, "Build a tiny todo CLI");
+      const result = run(root, ["start", "--description-file", ".aidlc-engine/d-auto-request-a1B2_c3.txt"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(handoff)).toBeFalse();
+      const lookalike = join(root, ".aidlc-engine", "d-auto-request-x.txt.keep");
+      writeFileSync(lookalike, "Build it");
+      run(root, ["start", "--description-file", ".aidlc-engine/d-auto-request-x.txt.keep"]);
+      expect(existsSync(lookalike)).toBeTrue();
+    }
   });
 
   test("fails closed when auto is disabled or session-only", () => {

@@ -97,7 +97,13 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
 
   test("T5: permissions.allow has project edits and AI-DLC's own commands one by one [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
-    expect(allow.length).toBe(4 + copyChannelDispatcherCommands().length + 2 * copyChannelToolScripts().length);
+    // Arm D's host-run controllers that the ordinary /aidlc skill invokes; the
+    // network-facing Issue/summary CLIs deliberately keep Claude Code's prompt.
+    const dControllers = ["generic-auto-cli.ts", "run.ts", "host-stage-boundary.ts", "ai-question-controller.ts", "ai-question-answers.ts", "ai-approval-controller.ts"]
+      .map((script) => `Bash(bun .claude/tools/d-acceleration/${script} *)`);
+    expect(allow.length).toBe(4 + dControllers.length + copyChannelDispatcherCommands().length + 2 * copyChannelToolScripts().length);
+    for (const entry of dControllers) expect(allow).toContain(entry);
+    expect(allow.some((entry) => /issue-autopilot-cli|decision-issue-summary/.test(entry))).toBe(false);
     expect(allow).toContain("Edit(/**)");
     expect(allow).toContain("Bash(bun .claude/tools/aidlc.ts engine *)");
     expect(allow).toContain("Bash(bun .claude/tools/aidlc-log.ts *)");

@@ -3,10 +3,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { adaptOfficialNext } from "./official-next-adapter.ts";
+import { CLEF_REMOVED } from "./d-config.ts";
 import { execute } from "./scheduler.ts";
+import { currentDParallelEnabled, enforceParallelOff, type ParallelGuardResult } from "./parallel-guard.ts";
 import type { WorkerKind } from "./worker-adapters.ts";
 
-type ConductOptions = { projectDir: string; engineDir: string; workerKind: WorkerKind; requestedClaudeModels?: Record<string, string | undefined>; requestedClaudeEffort?: string; disposableTestMode?: boolean; clefUrl?: string; clefLowRiskUnits?: string[]; timeoutMs?: number; env?: Record<string, string | undefined> };
+type ConductOptions = { projectDir: string; engineDir: string; workerKind: WorkerKind; requestedClaudeModels?: Record<string, string | undefined>; requestedClaudeEffort?: string; disposableTestMode?: boolean; timeoutMs?: number; env?: Record<string, string | undefined> };
 export const DEFAULT_CLAUDE_MODEL = "opus";
 export function withDefaultClaudeModels(models: ConductOptions["requestedClaudeModels"]): Record<string, string> {
   return { fast: models?.fast?.trim() || DEFAULT_CLAUDE_MODEL, balanced: models?.balanced?.trim() || DEFAULT_CLAUDE_MODEL, judgment: models?.judgment?.trim() || DEFAULT_CLAUDE_MODEL };
@@ -20,9 +22,16 @@ function invoke(tool: string, args: string[], options: ConductOptions): any {
 export async function conduct(options: ConductOptions) {
   const requestedClaudeModels = options.workerKind === "claude" ? withDefaultClaudeModels(options.requestedClaudeModels) : options.requestedClaudeModels;
   const orchestrate = join(options.engineDir, "aidlc-orchestrate.ts"); const state = join(options.engineDir, "aidlc-state.ts"); const history: any[] = []; const workerRuns: any[] = []; const dispatchedBuildWaves = new Set<string>();
+  // D parallel snapshot for this run: it can only narrow (see parallel-guard.ts).
+  const runParallel = currentDParallelEnabled(options.projectDir); const parallelGuards: ParallelGuardResult[] = [];
   for (let step = 0; step < 100; step++) {
     const directive = invoke(orchestrate, ["next"], options); history.push(directive);
-    if (!directive || directive.kind !== "run-stage" || !directive.wave || directive.gate === true) return { status: "official-host-action-required", directive, history, workerRuns };
+    if (!(runParallel && currentDParallelEnabled(options.projectDir))) {
+      const guard = enforceParallelOff({ projectDir: options.projectDir, engineDir: options.engineDir, directive, env: options.env, parallelEnabled: false }); parallelGuards.push(guard);
+      if (guard.action === "stop") return { status: "parallel-off-action-required", reason: guard.reason, recovery: guard.recovery, directive, history, workerRuns, parallelGuards };
+      if (guard.action === "refresh") continue;
+    }
+    if (!directive || directive.kind !== "run-stage" || !directive.wave || directive.gate === true) return { status: "official-host-action-required", directive, history, workerRuns, parallelGuards };
     const entries = directive.wave.entries as any[]; const build = entries.filter((entry) => entry.build_required === true);
     if (build.length) {
       const buildWaveKey = JSON.stringify({ stage: directive.stage, batch_index: directive.wave.batch_index, entries: build.map((entry) => ({ unit: entry.unit, required_produces: entry.required_produces })).sort((a, b) => a.unit.localeCompare(b.unit)) });
@@ -30,11 +39,11 @@ export async function conduct(options: ConductOptions) {
       dispatchedBuildWaves.add(buildWaveKey);
       let adapted;
       try {
-        adapted = adaptOfficialNext(directive, { clefLowRiskUnits: options.clefLowRiskUnits, clef: options.clefUrl ? { enabled: true, url: options.clefUrl } : undefined });
+        adapted = adaptOfficialNext(directive);
       } catch (error) {
         return { status: "official-host-action-required", reason: "c-ui-baseline-not-composed", error: error instanceof Error ? error.message : String(error), directive, history, workerRuns };
       }
-      const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs });
+      const result = await execute(adapted, { projectDir: options.projectDir, workerKind: options.workerKind, requestedClaudeModels, requestedClaudeEffort: options.requestedClaudeEffort, disposableTestMode: options.disposableTestMode, timeoutMs: options.timeoutMs, parallelEnabled: runParallel });
       workerRuns.push({ stage: directive.stage, batchIndex: directive.wave.batch_index, result });
       if (result.status !== "completed") return { status: "worker-action-required", directive, result, history, workerRuns };
       const missing = adapted.tasks.flatMap((task) => task.writeSet).filter((path) => !existsSync(isAbsolute(path) ? path : join(options.projectDir, path)));
@@ -52,6 +61,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2); const value = (flag: string) => { const index = args.indexOf(flag); return index < 0 ? undefined : args[index + 1]; };
   const projectDir = value("--project-dir"); const engineDir = value("--engine-dir"); const worker = value("--worker") as WorkerKind | undefined;
   if (!projectDir || !engineDir || !worker || !["fake", "claude"].includes(worker)) throw new Error("--project-dir, --engine-dir, and --worker fake|claude are required");
-  const result = await conduct({ projectDir, engineDir, workerKind: worker, requestedClaudeModels: { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") }, requestedClaudeEffort: value("--claude-effort"), disposableTestMode: args.includes("--disposable-test-mode"), clefUrl: value("--clef-url"), clefLowRiskUnits: value("--clef-low-risk-units")?.split(",").filter(Boolean), timeoutMs: value("--timeout-ms") ? Number(value("--timeout-ms")) : undefined });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (result.status === "worker-action-required" || result.reason === "c-ui-baseline-not-composed") process.exitCode = 2; else if (result.status === "limit-reached") process.exitCode = 4;
+  if (args.includes("--clef-url") || args.includes("--clef-low-risk-units")) throw new Error(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units`);
+  const result = await conduct({ projectDir, engineDir, workerKind: worker, requestedClaudeModels: { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") }, requestedClaudeEffort: value("--claude-effort"), disposableTestMode: args.includes("--disposable-test-mode"), timeoutMs: value("--timeout-ms") ? Number(value("--timeout-ms")) : undefined });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (result.status === "worker-action-required" || result.status === "parallel-off-action-required" || result.reason === "c-ui-baseline-not-composed") process.exitCode = 2; else if (result.status === "limit-reached") process.exitCode = 4;
 }

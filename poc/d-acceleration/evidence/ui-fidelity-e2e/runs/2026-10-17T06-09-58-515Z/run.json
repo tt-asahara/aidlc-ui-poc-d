@@ -1,0 +1,303 @@
+{
+  "schema": 1,
+  "runId": "2026-10-17T06-09-58-515Z",
+  "project": "/var/folders/3y/j7j38w0x5gl61zxfhy40m0b80000gn/T/ui-fidelity-dogfood-9XkqWr",
+  "requestedModel": "sonnet",
+  "synthetic": {
+    "approvals": "SYNTHETIC operator ledger entries written by this script; no human approved anything",
+    "engine": "official /aidlc engine not exercised"
+  },
+  "steps": [
+    {
+      "step": "refined-mockups-gate",
+      "result": {
+        "pass": true,
+        "findings_count": 0,
+        "findings": []
+      }
+    },
+    {
+      "step": "functional-design-attempt-1",
+      "kind": "model",
+      "requestedModel": "sonnet",
+      "runtimeModels": [
+        "claude-sonnet-5-5"
+      ],
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 8659,
+        "cache_read_input_tokens": 649,
+        "output_tokens": 5807,
+        "output_tokens_details": {
+          "thinking_tokens": 903
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 8659,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 5807,
+            "cache_read_input_tokens": 649,
+            "cache_creation_input_tokens": 8659,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 8659
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "totalCostUsd": 0.0927749,
+      "durationMs": 36955,
+      "exitStatus": 0,
+      "isError": false
+    },
+    {
+      "step": "functional-design-matrix-check-1",
+      "result": {
+        "pass": true,
+        "findings_count": 0,
+        "findings": [],
+        "rows": 26,
+        "mapped": 19,
+        "unimplemented": 0
+      }
+    },
+    {
+      "step": "functional-design-gate",
+      "result": {
+        "pass": true,
+        "findings_count": 0,
+        "findings": []
+      }
+    },
+    {
+      "step": "code-generation",
+      "kind": "model",
+      "requestedModel": "sonnet",
+      "runtimeModels": [
+        "claude-sonnet-5-5"
+      ],
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 11878,
+        "cache_read_input_tokens": 2113,
+        "output_tokens": 5057,
+        "output_tokens_details": {
+          "thinking_tokens": 1051
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 11878,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 5057,
+            "cache_read_input_tokens": 2113,
+            "cache_creation_input_tokens": 11878,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 11878
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "totalCostUsd": 0.09829729999999999,
+      "durationMs": 32089,
+      "exitStatus": 0,
+      "isError": false
+    },
+    {
+      "step": "code-generation-gate",
+      "result": {
+        "pass": true,
+        "findings_count": 0,
+        "findings": []
+      }
+    },
+    {
+      "step": "build-and-test-capture-errors",
+      "captureErrors": [
+        {
+          "state": "STATE-CONFIRM-DELETE",
+          "error": "SETUP_CONTROL_NOT_FOUND: DELETE-NOTE"
+        }
+      ]
+    },
+    {
+      "step": "build-and-test-gate",
+      "summary": {
+        "total": 26,
+        "pass": 20,
+        "fail": 6,
+        "deviated": 0
+      },
+      "semantics": {
+        "deletion-confirmation-details": [
+          {
+            "key": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL",
+            "result": "fail"
+          },
+          {
+            "key": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE",
+            "result": "fail"
+          }
+        ],
+        "completion-wording": [
+          {
+            "key": "SCREEN-NOTES/STATE-SAVED/SAVE-COMPLETE",
+            "result": "pass"
+          },
+          {
+            "key": "SCREEN-NOTES/STATE-DELETED/DELETE-COMPLETE",
+            "result": "pass"
+          }
+        ],
+        "long-note-truncation-expansion": [
+          {
+            "key": "SCREEN-NOTES/STATE-LIST/MEMO-BODY",
+            "result": "pass"
+          },
+          {
+            "key": "SCREEN-NOTES/STATE-LIST/EXPAND-MEMO",
+            "result": "pass"
+          }
+        ],
+        "private-mode-guidance": [
+          {
+            "key": "SCREEN-NOTES/STATE-PRIVATE-MODE/PRIVATE-MODE-GUIDANCE",
+            "result": "pass"
+          }
+        ],
+        "storage-read-failure-text": [
+          {
+            "key": "SCREEN-NOTES/STATE-STORAGE-ERROR/STORAGE-READ-ERROR",
+            "result": "pass"
+          }
+        ]
+      },
+      "failedRows": [
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e",
+          "ruleIds": [],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        },
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CANCEL-DELETE",
+          "ruleIds": [
+            "BR-DELETE-CANCEL-01"
+          ],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role",
+            "exact-copy",
+            "action"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        },
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/CONFIRM-DELETE",
+          "ruleIds": [
+            "BR-DELETE-EXEC-01"
+          ],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role",
+            "exact-copy",
+            "action"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        },
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL",
+          "ruleIds": [
+            "BR-DELETE-CONFIRM-DETAIL-01"
+          ],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role",
+            "exact-copy"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        },
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE",
+          "ruleIds": [
+            "BR-DELETE-CONFIRM-TITLE-01"
+          ],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role",
+            "exact-copy"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        },
+        {
+          "elementKey": "SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-DIALOG",
+          "ruleIds": [],
+          "unimplementedReason": null,
+          "checks": [
+            "presence",
+            "role"
+          ],
+          "differences": [
+            "missing"
+          ],
+          "result": "fail"
+        }
+      ],
+      "result": {
+        "pass": false,
+        "findings_count": 1,
+        "findings": [
+          "Element test matrix failed: ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/AUTO-821a485e; ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/CANCEL-DELETE; ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/CONFIRM-DELETE; ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-DETAIL; ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-CONFIRM-TITLE; ELEMENT_FAILED SCREEN-NOTES/STATE-CONFIRM-DELETE/DELETE-DIALOG"
+        ]
+      }
+    }
+  ],
+  "verdict": "NOT-READY"
+}

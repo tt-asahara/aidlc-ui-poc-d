@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>メモ帳 (synthetic implementation fixture)</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+  .memo-body { width: 18rem; line-height: 1.4em; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; }
+  .memo-body.expanded { display: block; -webkit-line-clamp: none; }
+  .toolbar button { margin-right: .5rem; }
+  .dialog { border: 1px solid #888; padding: 1rem; max-width: 28rem; }
+</style>
+<body>
+<div id="app" data-ui-screen="SCREEN-NOTES" data-ui-state="STATE-LIST"></div>
+<script>
+'use strict';
+// COPY-* constants come from functional-spec.md; the implementation never re-words them.
+const COPY = {
+  heading: 'メモ',
+  expand: '全文を表示', save: '保存', remove: '削除',
+  confirmTitle: 'メモを削除しますか？',
+  confirmDetail: note => `「${note.title}」（${note.updated} 更新）を削除します。この操作は取り消せません。`,
+  confirm: '削除する', cancel: 'キャンセル',
+  deleted: 'メモを削除しました',
+  saved: '✓ 保存しました',
+  storageReadError: '保存データを読み込めませんでした。ブラウザのストレージ設定を確認してから、再読み込みしてください。',
+  retry: '再読み込み',
+  privateMode: 'プライベートモードでは、メモはこのタブを閉じると消えます。残したいメモは通常モードで保存してください。',
+};
+const app = document.getElementById('app');
+const scenario = new URLSearchParams(location.search).get('scenario');
+const seed = { title: '買い物リスト', updated: '2026/10/01', body: '牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。' };
+function loadNote() {
+  if (scenario === 'storage-error') throw new Error('simulated storage read failure');
+  try { const raw = localStorage.getItem('note'); return raw ? JSON.parse(raw) : seed; } catch { return seed; }
+}
+const el = (tag, attrs = {}, text) => { const node = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v); if (text !== undefined) node.textContent = text; return node; };
+const ui = (id, extra = {}) => ({ 'data-ui-id': id, 'data-ui-important': '', 'data-ui-exact-copy': '', ...extra });
+const action = (id, actionId, next, extra = {}) => ui(id, { 'data-ui-action-id': actionId, 'data-ui-expected-state': next, ...extra });
+let state = 'STATE-LIST', note;
+function go(next) { state = next; render(); }
+function render() {
+  app.dataset.uiState = state; app.replaceChildren(el('h1', {}, COPY.heading));
+  if (state === 'STATE-STORAGE-ERROR') {
+    app.append(el('p', ui('STORAGE-READ-ERROR', { role: 'alert' }), COPY.storageReadError));
+    const retry = el('button', ui('RETRY-LOAD'), COPY.retry); retry.onclick = () => location.reload(); app.append(retry); return;
+  }
+  if (state === 'STATE-PRIVATE-MODE') app.append(el('p', ui('PRIVATE-MODE-GUIDANCE', { role: 'note' }), COPY.privateMode));
+  if (['STATE-LIST', 'STATE-EXPANDED', 'STATE-PRIVATE-MODE'].includes(state)) {
+    app.append(el('h2', ui('NOTE-TITLE-1'), note.title));
+    const body = el('div', { 'data-ui-id': 'MEMO-BODY', 'data-ui-important': '', 'data-ui-require-truncation': '', class: state === 'STATE-EXPANDED' ? 'memo-body expanded' : 'memo-body' }, note.body);
+    const bar = el('div', { class: 'toolbar' });
+    const expand = el('button', action('EXPAND-MEMO', 'EXPAND', 'STATE-EXPANDED', { 'data-ui-action-target': 'MEMO-BODY' }), COPY.expand); expand.onclick = () => go('STATE-EXPANDED');
+    const save = el('button', action('SAVE-NOTE', 'SAVE', 'STATE-SAVED'), COPY.save); save.onclick = () => { try { localStorage.setItem('note', JSON.stringify(note)); } catch {} go('STATE-SAVED'); };
+    const remove = el('button', action('DELETE-NOTE', 'DELETE', 'STATE-CONFIRM-DELETE'), COPY.remove); remove.onclick = () => go('STATE-CONFIRM-DELETE');
+    bar.append(expand, save, remove); app.append(body, bar); return;
+  }
+  if (state === 'STATE-CONFIRM-DELETE') {
+    const dialog = el('div', { class: 'dialog', role: 'alertdialog', 'data-ui-id': 'DELETE-DIALOG', 'data-ui-region': '' });
+    const confirm = el('button', action('CONFIRM-DELETE', 'CONFIRM-DELETE', 'STATE-DELETED'), COPY.confirm); confirm.onclick = () => go('STATE-DELETED');
+    const cancel = el('button', action('CANCEL-DELETE', 'CANCEL-DELETE', 'STATE-LIST'), COPY.cancel); cancel.onclick = () => go('STATE-LIST');
+    dialog.append(el('h2', ui('DELETE-CONFIRM-TITLE'), COPY.confirmTitle), el('p', ui('DELETE-CONFIRM-DETAIL'), COPY.confirmDetail(note)), confirm, cancel);
+    app.append(dialog); return;
+  }
+  if (state === 'STATE-DELETED') { app.append(el('p', ui('DELETE-COMPLETE', { role: 'status' }), COPY.deleted)); return; }
+  if (state === 'STATE-SAVED') app.append(el('p', ui('SAVE-COMPLETE', { role: 'status' }), COPY.saved));
+}
+try { note = loadNote(); state = scenario === 'private' ? 'STATE-PRIVATE-MODE' : 'STATE-LIST'; } catch { state = 'STATE-STORAGE-ERROR'; }
+render();
+</script>
+</body>
+</html>

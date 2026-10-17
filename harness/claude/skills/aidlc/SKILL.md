@@ -12,7 +12,7 @@ description: >
   --summary-confirmation on|off, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and the scope will be auto-detected.
-argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --version | --help]"
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full] | --version | --help]"
 user-invocable: true
 ---
 
@@ -43,8 +43,10 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 ## The Forwarding Loop
 
 Before the ordinary forwarding loop, route D Issue arguments when the installed
-controller exists. `/aidlc --next-intent --from-issue <number>` runs
-`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir "$PWD" <number>`.
+controller exists. In every D command below, `<PRODUCT>` is the absolute project directory written out literally (the
+session's working directory); never `$PWD` or any other shell expansion, which
+Claude Code's permission check cannot pre-approve. `/aidlc --next-intent --from-issue <number>` runs
+`bun {{HARNESS_DIR}}/tools/d-acceleration/issue-autopilot-cli.ts --project-dir <PRODUCT> <number>`.
 `/aidlc --auto status` and `/aidlc --auto stop` pass `status` or `stop`;
 `/aidlc --auto --through <stage> --from-issue <number>` first requires the same
 official stage value in D configuration and then runs that Issue. Never treat an
@@ -53,92 +55,128 @@ this ordinary loop for all stage work. The dedicated recurring entry is
 `/aidlc-issue-autopilot`; Claude Code's standard `/loop` remains untouched and
 may schedule it as `/loop 15m /aidlc-issue-autopilot <required-label>`.
 
+When `$ARGUMENTS` leads with `--doc` and the installed
+`{{HARNESS_DIR}}/tools/d-acceleration/design-document.ts` exists, generate the
+product-level design document instead of calling official `orchestrate next`;
+never pass `--doc` to the engine. Read
+`{{HARNESS_DIR}}/tools/d-acceleration/design-document-guide.md` first: it owns
+the chapter layout, incremental rules, and input-scope rule. Then run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-manifest --json --project-dir "$PWD"`
+and read only inside each listed `record_root` (plus source files an artifact
+cites by resolvable path). Plain `--doc` merges into the existing space-level
+`design_document_root`; `--doc --full` regenerates from every intent and first runs
+`bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-snapshot --project-dir "$PWD"`.
+If the snapshot fails, do not regenerate: say what failed and stop. A non-empty
+`warnings[]` names excluded records: continue, tell the person, and point to
+`/aidlc --doctor`. This is read-only with respect to the workflow: write only
+under `design_document_root` and the manifest's `design_summary` paths, never
+advance a stage, emit audit, or touch state. Name the generated root in one
+line and stop.
+
 When the request is `/aidlc --auto <description>` and the installed generic
 controller exists, remove only the leading `--auto`, write the complete remaining
 description with the file tool to a fresh project-confined
 `.aidlc-engine/d-auto-request-<random>.txt`, and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts start --project-dir "$PWD" --description-file <that-file>`.
-Delete only that freshly created request file after the controller returns; the
-controller deliberately never deletes a caller-supplied project file.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts start --project-dir <PRODUCT> --description-file <that-file>`.
+The controller reads and then removes a request file with exactly that
+`.aidlc-engine/d-auto-request-<random>.txt` name, so never run `rm` for it; it
+never deletes any other caller-supplied project file.
 Never pass the literal `--auto` to official `orchestrate next`, interpolate the
 description into shell text, or infer its scope. Act on the returned official
 directive exactly as below. An official `ask`, including scope confirmation,
 approval, or sensor recovery, is a human gate and ends the turn; auto mode never
-answers it. When the returned official `print` carries the typed
-`machine_action.kind: "intent-create"`, save that exact directive JSON to a
-project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir "$PWD" --directive-file <directive-json>`.
-The controller executes only that fixed-argv action, derives active stages from
-the created Intent's official state, initializes the bounded session, obtains
-the first stage directive, and checkpoints it before returning. Never parse or
-execute the print's prose command, infer a stage list, or act on the first stage
-unless `bootstrap` returns `continue`.
+answers it. When an official `print` (the one `start` returned, or the one the
+person's scope choice returned on a later turn) names the run-then-continue
+`intent-create` mutation, run that named command as the ordinary `print` rule
+says (fill only the `--label` the message leaves to you, change nothing else);
+then, instead of `next`, run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`.
+The controller never creates an Intent itself: it binds only to an Intent the
+official command created since `start` (a switched-to or resumed Intent is
+refused in one line; relay it and stop), derives active stages from that
+Intent's official state, initializes the bounded session, obtains the first
+stage directive, and checkpoints it before returning. Never rebuild or alter
+the creation command, infer a stage list, or act on the first stage unless
+`bootstrap` returns `continue`.
 
+On every `/aidlc` entry when the installed generic controller exists (a new
+session, a restart after a crash, or a reply in a resumed one), first run
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts status --project-dir <PRODUCT>`;
+when it returns `active: true`, the session below applies to every directive of
+this turn, including the first `next --resume`.
 For an active generic auto session, save every fresh official directive JSON to
 a project-confined temporary file and run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts checkpoint --project-dir "$PWD" --directive-file <directive-json>`
-before acting on it. Stop when it returns `stop`; `human-gate` preserves the
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts checkpoint --project-dir <PRODUCT> --directive-file <directive-json>`
+before acting on it. When it returns `refresh`, D moved the Intent to serial
+Construction: obtain a fresh official `next` and checkpoint that instead. Stop when it returns `stop`; `human-gate` preserves the
 session for the person's next invocation, while boundary, deadline, step limit,
 no-progress, and completion are terminal. Any official directive that asks for
 approval or recovery is already a human gate and is never answered by auto. Immediately
 before each host action run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir "$PWD"`;
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir <PRODUCT>`;
 act only when it returns `continue`, retain its token, and immediately after the
 real action run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir "$PWD" --action-token <token>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token <token>`. When `action-finish` returns `humanWait: "stage-question"`, the questions file waits for the person and the deadline clock is paused: ask them and end the turn as the stage protocol says. Run `ai-question-controller.ts` inside its own `action-start`/`action-finish` pair like any other host action.
 On re-entry, `init` resumes a session waiting at a human gate. `/aidlc --auto
 status` and `/aidlc --auto stop` retain the shared status/stop route above. These
 controls bound host continuation; they never report a stage, approve a gate, or
 replace the official reviewer or sensors.
 
-When `aiApproval.mode` resolves to `stage-gates`, do not turn every `ask` into
-yes. Scope confirmation, composition/routing, intent selection, project type,
-Plan Approval, summary confirmation, walking skeleton, verification command,
-policy/autonomy, failure/recovery, and sensor override remain human stops. The
-only delegated seam is a fresh official `present-gate` for an ordinary stage.
-It is usable only after the person explicitly delegated stage decisions for
-this bounded request and the active Intent contains the grant produced by
-`ai-approval-controller.ts grant`; configuration alone is never authority.
+Every stage gate, `ask`, and approval stays the person's. Delegated AI
+stage-gate approval is not available: the upstream engine accepts a stage
+approval only from the person, so `ai-approval-controller.ts` has no `evaluate`
+path and never yields approval arguments. Scope confirmation,
+composition/routing, intent selection, project type, Plan Approval, summary
+confirmation, walking skeleton, verification command, policy/autonomy,
+failure/recovery, and sensor override are human stops too.
 
-Ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
-run the grant command with their message id and the same scope, through boundary,
-and stage slugs. Any mismatch is a stop. Delete only
-that temporary words file after a successful grant. For each `present-gate`,
-save the exact directive JSON and invoke `ai-approval-controller.ts evaluate`
-with the grant plus every declared stage artifact and the fresh reviewer/sensor
-evidence. If any required path cannot be enumerated, stop. A `block` result is
-a human stop. An `approve` result carries fixed `generatedCommandArgs`; run
-those arguments through `{{INVOKE}} engine state` without adding `--user-input`,
-then resume official `orchestrate next`. The core rechecks the
-state, grant, scope, stage, confidence, and every artifact hash immediately
-before settlement. The audit records `Decision Actor: AI`; never create a
+When `aiApproval.mode` resolves to `stage-gates`, the person may delegate
+ordinary low-risk stage questions (never gates) for named stages. Configuration
+alone is never authority: ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
+run `ai-approval-controller.ts grant` with their message id and the same scope, through boundary,
+and stage slugs, immediately after that turn: `grant` refuses unless the words are
+the person's latest host-recorded turn, so on that refusal ask them to type the
+command again and rerun. Any mismatch is a stop. Delete only
+that temporary words file after a successful grant. Never create a
 `HUMAN_TURN`, quote the model as the person's words, or use a human-presence
 break-glass switch. Set `AIDLC_UNATTENDED=1` for the automated driver so hooks
 cannot mint authority from its own prompts.
 
-The same grant may answer ordinary low-risk stage questions for an allowed
+The grant may answer ordinary low-risk stage questions for an allowed
 stage, but never a checkpoint, approval, material product choice, external
 send, credential/permission/authentication change, production/deployment,
 destructive action, legal/payment choice, security exception, failed check, or
 low-confidence result. Only questions explicitly classified with one
 `[AI-Autonomy]: low-risk-reversible` marker per blank answer are eligible;
-unmarked, mixed human/AI, and partially answered sets stop. After creating the canonical blank
-`<stage>-questions.md`, run `ai-question-controller.ts` with the exact questions
-file, grant, and every evidence file. On `block`, stop for the person. On
+unmarked, mixed human/AI, and partially answered sets stop. Write that marker
+only while a grant covers the stage, only on a `## Q<n>` question every option
+of which is reversible and none of the excluded kinds above, on its own line
+directly above that question's `[Answer]:`; never on a checkpoint or summary
+entry. After creating the canonical blank
+`<stage>-questions.md` (per-Unit Construction design stages:
+`<record>/construction/<unit>/<stage>/<stage>-questions.md`, and pass
+`--unit <unit>` to both commands below), run `ai-question-controller.ts` with the exact questions
+file, grant, and every evidence file. On `block`, stop for the person and show
+its per-question `classification`. On
 `answer`, copy each receipt answer into its corresponding blank `[Answer]:`
 slot and directly below it add `[Answer Source]: <receipt source>` and
 `[AI Decision ID]: <receipt decisionId>`. These are AI provenance, never a
 person's answers; do not change any other question-file bytes. Then run
-`{{HARNESS_DIR}}/tools/aidlc-ai-answers.ts --project-dir "$PWD" --stage <stage>
---ai-decision-file <receipt>`. Continue only when it emits
-`AI_QUESTION_ANSWERED`. This is a separate AI-authored receipt bound to the
-Intent state, delegation, question-template hash, answers, provenance and
-evidence; never pass `--on-instruction`, emit `QUESTION_ANSWERED`, or write a
-human answer on this path. A `researched-fact` must cite bound evidence; a
-`delegated-ai-assumption` must remain explicit, conservative, and reversible.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/ai-question-answers.ts --project-dir <PRODUCT>`
+followed by the receipt's `generatedCommandArgs` (`--stage <stage> [--unit <unit>] --ai-decision-file <receipt>`).
+Continue only when it returns `recorded: "d-ai-question-ledger"`. It rechecks
+the Intent state, delegation, question-template hash, answers, provenance and
+evidence, then appends to the Intent's D-owned
+`decisions/ai-question-answers.jsonl`, which is not the official audit; never
+run `{{INVOKE}} engine log answer`, pass `--on-instruction`, emit any audit
+event, or write a human answer on this path. A `researched-fact` must cite bound
+evidence; a `delegated-ai-assumption` must remain explicit, conservative, and
+reversible.
 
-The versioned Intent-local decision JSONL is the source of truth. Optional
-`decision-issue-summary.ts generate` produces one Issue payload per Intent.
+The Intent's D question-answer ledger `decisions/ai-question-answers.jsonl` is
+the source of truth. Optional `decision-issue-summary.ts generate` produces one
+Issue payload per Intent from it; a missing or empty ledger returns
+`nothing-to-publish`, so tell the person there is nothing to publish.
 Before `publish`, show the exact repository, Intent, and generated payload hash,
 then require the person's latest host-recorded words to equal `AI-DLC authorize-decision-summary --repository <owner/repo> --intent <relative-intent> --payload-sha256 <sha256>`. Never infer publication from auto or AI-approval mode, and never create separate Issues for each unresolved item.
 
@@ -225,7 +263,7 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 | `run-stage` | **Apply Construction routing below first when `construction_checkpoint`, `swarm_checkpoint`, `construction_policy`, or `unit_gate` is present.** Every substantive active-space rule arrives as content: in `directive.rules_content` on this directive (the ordinary case), or through the preceding `load-steering` parts when the bundle did not fit beside it; `directive.rules_in_context` is its ordered path manifest. When `rules_content` is present, apply it in array order and retain it as the active stage's rule bundle before anything else, without narrating it. When `directive.rules_held` is present instead, this chat already holds that exact bundle unchanged (the files `rules_in_context` names): apply it as the active stage's rule bundle without reading those files again, and paste nothing for it into agent briefs, which receive it on their own. **STOP: unless a Construction routing branch below handles the directive without its body, or `directive.swarm_settled === true`, the first tool calls after receiving `run-stage` are file reads for every path in `directive.inline_context_paths`; do not batch those reads with later stage reads.** When the directive carries `narration`, say it first, in the same message as those reads. Show any `context_warnings` verbatim, then read the required paths: lead + supports on `inline`, the lead's persona and every knowledge path listed on `mob`, and none on fully dispatched `subagent`/`pipeline`. Agent names alone are not loaded context. This is a **blocking context-load precondition**, not a path hint: wait for every read result before reading `stage_file` or `consumes`, keeping an enabled diary, running the stage body, dispatching mob supports, or writing artifacts. A mob MUST explicitly read its lead persona path first and then every knowledge path after it; the path's presence in `inline_context_paths` is not evidence that the persona is loaded. Then read `directive.stage_file` and `consumes`, use `directive.memory_path` only for diary writes when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, and **branch on `directive.swarm_settled` first, then `directive.single`, then `directive.wave` when present, otherwise `directive.gate`, before running the stage body or writing `produces`**. Each branch below defines when artifact generation may begin. When a branch runs a dispatched topology, paste the accumulated rule bundle verbatim and include `directive.ceremony` plus `directive.protocol_modules` in every agent brief. If `consumes_absent` is present, an entry with `expected: true` is absent by scope design or a recorded conditional skip; an entry with `expected: false` is a real gap to surface per the recovery protocol. |
 | `ask` | Every engine ask carries `ask_type` and `response_route`. Show `directive.question` with its meaning and choices unchanged: do not replace it, drop or add a choice, or add a recommendation; in a conversation that is not in English, say it in that language. Render it via `AskUserQuestion` (this harness's binding for the protocol's structured questions: see `question-rendering.md` beside this file), then branch on the typed response contract. When `directive.ask_type === "guard-recovery"` and `directive.agent_work` is true, the ways on are your own work: without showing the question or asking the person, carry out the first remedy whose `action` applies under **Guard-recovery execution** below, then run `next`. Otherwise present `directive.question` and only `directive.remedies` whose `executableNow` is true, each as its `label` with its `description` (a remedy's `action` is your instruction once it is picked, never shown or paraphrased), wait for the human's reply, record the remedy they picked with `{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint guard-recovery --details '<the remedy's op>'` (its `op`, such as `request-changes`, never its action text, which can hold commands a shell would run), then follow that remedy's `interaction` under **Guard-recovery execution** below; never invent a report, receipt, reset, or decision. When the person's last reply already asked for changes and said what should change, that is their choice of the `request-changes` remedy: follow it with their words instead of presenting the ask. When `directive.remedies` is empty the ask is terminal: render `directive.question` verbatim (it names the situation and, past the repetition cap, a state signature the human can report; `directive.detail` is the refusal as the tool told it, for you, never chat text), wait for the human, and take no engine action until they answer. When `directive.ask_type === "plan-approval"`, follow Code Generation Step 3: say `plan_approval.note` when present, show the question, each target's `summary` and `plan_path`, and the three `plan_approval.choices` with their labels exactly as given, in any language (the person's pick is matched on them), and end the turn; after the human replies, record their choice with `{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval --details '<their choice>'` (Code Generation Step 3), then run `next`; never `report` it. When `directive.ask_type === "new-work-routing"` and `response_route === "next"`, never call `report`. Without `available_intents`: part of the active work = run `directive.continue_command` (it asks again if another workflow is selected by then); separate work = run `directive.new_intent_command`, or, when the human corrects the scope, the `directive.scope_commands` entry whose `scope` equals their valid choice; reshape = run `directive.compose_command`. With `available_intents` (existing records, none selected): show the question and wait for the person's answer, even when it lists one piece of work; each value is an exact record-directory selector: part of existing work = run the chosen record's `directive.select_commands[].command`, act on its returned `print` (it selects that record and carries on with it); separate work = the same new-intent commands; reshape = run the chosen record's `directive.reshape_commands[].command` and follow its returned `print` (it selects that record, then reshapes it). If continuation or reshape is chosen without a record while more than one is listed, render only those `directive.available_intents` as a fresh chooser and END THE TURN; when exactly one is listed, use its sole select or reshape command. Never query for, shorten, or invent a selector. For `scope-confirm`, the options are the `directive.choices` labels, in order and in the conversation's language; run the chosen entry's `command`, and a reply that names another plan uses its `directive.scope_commands` entry. For `scope-confirm` and `compose-offer` (`response_route: "next"`), run `directive.confirm_command` to accept the proposed scope (scope-confirm only), `directive.compose_command` to compose, or the `directive.scope_commands` entry whose `scope` equals the human's chosen plan; a name with no entry is not a valid scope, so ask again. When you show the other plans as choices, give each the `stages` text its `directive.scope_commands` entry carries, as written; never count stages yourself. For `intent-pick` (`response_route: "next"`), run the `directive.select_commands` entry whose `selector` equals the chosen record, act on its returned `print`, and stop when it says to stop. For `unit-paused` (`response_route: "command"`), run `directive.resume_command` only when the human chooses to resume, then re-run `next`; otherwise take no engine action and wait for their direction. For `project-type` (`response_route: "command"`), read the person's reply: run `directive.existing_code_command` when they say the folder holds existing code to work on, or `directive.new_project_command` when they say it is a new project, and act on the directive it returns; when the reply says neither, ask again. Every supplied command is complete: run it verbatim, keep its `--request <8hex id>`, and never append the request text or interpolate a selector or scope into shell text. For `response_route: "claim"`, follow the Unit claim flow. Never send an engine ask's answer through `report`. When the person asks on re-entry to redo, jump to a stage, or start fresh (at an approval gate too, where it is that request and not the gate's answer), call `report --result resumed --choice <redo|jump|fresh>` with the choice you read from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` or `--every-unit` when they named a Unit or said every Unit), then act on the returned per-choice `print` (it names the exact command or follow-up for that choice). That request is not an engine ask, and is the only non-stage `report` round-trip. The engine never calls `AskUserQuestion` itself: it defers the human turn to you. |
 | `dispatch-subagent` | _(engine-future — not emitted today.)_ Run the named stage via `Task(directive.lead_agent)` with the stage body as the prompt, rather than inline. |
-| `invoke-swarm` | Load every module named in `directive.protocol_modules` before acting - including `reviewer` when emitted, plus `construction` and `swarm` - then follow the swarm module's subsection for this harness. The directive kind is the fallback trigger when the hint field is absent. |
+| `invoke-swarm` | When `{{HARNESS_DIR}}/tools/d-acceleration/parallel-guard.ts` exists, first save this exact directive JSON to a project-confined temporary file and run `bun {{HARNESS_DIR}}/tools/d-acceleration/parallel-guard.ts --project-dir <PRODUCT> --directive-file <directive-json>`: continue only when it returns `continue`; on `refresh` run `next` again and act on that directive instead; on `stop` say its `recovery` line in one line and stop (D `parallel.enabled: false` outranks `AIDLC_USE_SWARM` and `flags.swarm`). Load every module named in `directive.protocol_modules` before acting - including `reviewer` when emitted, plus `construction` and `swarm` - then follow the swarm module's subsection for this harness. The directive kind is the fallback trigger when the hint field is absent. |
 | `present-gate` | _(engine-future — not emitted today; folded into `run-stage`'s `gate` field for now.)_ Run the gate ritual described below. |
 
 **Recorded swarm choice.** Resolve `AIDLC_USE_SWARM` env-first. When it is unset, read the merged `flags.swarm` from `aidlc.settings.local.json`, project `aidlc.settings.json`, and the machine `aidlc.settings.json`; local wins over project, and project wins over machine. `true` behaves as `"1"`, while `false` or an absent value behaves as unset.
@@ -297,7 +335,7 @@ more genuinely independent evidence questions exist, write a bounded fanout JSON
 containing the exact current `directive`, `tasks` with unique `id`, official
 `agent`, focused `objective`, and project-confined existing `evidencePaths`, plus
 optional `maxParallel` from 1 through 4. Then run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir "$PWD" --worker claude --fanout-input <fanout-json>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude --fanout-input <fanout-json>`.
 The runner resolves configured D models itself, obtains a fresh official `next`,
 and refuses a stale, gated, non-inline, or topology-owned directive. If fewer
 than two independent tasks or trustworthy evidence paths exist, skip fanout and
@@ -310,9 +348,9 @@ worker failure, surface the uncertainty in lead synthesis rather than claiming
 success. Workers never write files, transition state, approve, review, or answer
 questions.
 
-**Per-unit batch waves (optional).** On a selected stage-major walk, `directive.wave` is the engine-owned parallel surface for functional-design, nfr-requirements, nfr-design, and infrastructure-design. Branch on it before the ordinary per-unit/gate path; parent Unit fields are only a projection of the first entry. **When `{{HARNESS_DIR}}/tools/d-acceleration/run.ts` exists, this is the ordinary D path: immediately run `bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir "$PWD" --worker claude`. Do not ask the person to run a separate runner.** D model routing is separate from official per-agent `config models` policy: explicit D CLI overrides win, then `.claude/d-acceleration.local.jsonc`, then `.claude/d-acceleration.jsonc`, and an unspecified tier defaults to the confirmed `opus` CLI alias. Legacy `.json` names remain readable, while both names in one layer are rejected as ambiguous. The D conductor obtains and validates the current official directive, gives each worker the complete official builder brief, restricts writes to the product, and leaves approvals, reviews, sensors, and state transitions with the official host. If it returns `official-host-action-required`, continue below with the returned directive. If it returns `worker-action-required` or fails, stop and surface its reason; never mark a Unit complete from worker exit alone. If the installed runtime is absent, use the host path below. Give every builder the parent `ceremony` and `protocol_modules`, `stage_file`, every `inline_context_paths` file, `context_warnings`, and the complete steering bundle verbatim, plus its entry paths, including `entry.unit_memory_path`. Process entries concurrently with independent workers where possible, or serially as the fallback. Builders do not call serial `unit start/pause/resume`; a blocked builder returns its question and withholds a path from `entry.required_produces`. After build work, run or resume the review named by `review_state`: `outstanding` uses `review_iteration`, `retry-required` repeats that request with `--retry-pending`, `repair-required` runs lead repair then the next iteration, and `recovery-required` runs the one stale-receipt recovery at `review_iteration`. `escalation-required` means recovery was already spent: do not request another review or complete the Unit; halt for a human Request Changes decision. Serialize reviews wherever the single reviewer-scope record is enforced; only an enforcement-free path may run foreground reviews in parallel. When build and review are settled and `completion_required` is true, run `aidlc-state.ts unit complete --wave --stage "<directive.stage>" --unit "<entry.unit>"`; that tool verifies the live entry, deduplicates its Unit diary into the parent diary, and emits `UNIT_COMPLETED`. Then re-run `next` without report-approve. Code Generation and unit-major iteration never carry a wave.
+**Per-unit batch waves (optional).** On a selected stage-major walk, `directive.wave` is the engine-owned parallel surface for functional-design, nfr-requirements, nfr-design, and infrastructure-design. Branch on it before the ordinary per-unit/gate path; parent Unit fields are only a projection of the first entry. **When `{{HARNESS_DIR}}/tools/d-acceleration/run.ts` exists, this is the ordinary D path: immediately run `bun {{HARNESS_DIR}}/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude`. Do not ask the person to run a separate runner.** D model routing is separate from official per-agent `config models` policy: explicit D CLI overrides win, then `.claude/d-acceleration.local.jsonc`, then `.claude/d-acceleration.jsonc`, and an unspecified tier defaults to the confirmed `opus` CLI alias. Legacy `.json` names remain readable, while both names in one layer are rejected as ambiguous. The D conductor obtains and validates the current official directive, gives each worker the complete official builder brief, restricts writes to the product, and leaves approvals, reviews, sensors, and state transitions with the official host. If it returns `official-host-action-required`, continue below with the returned directive. If it returns `parallel-off-action-required`, say its `recovery` line and stop. If it returns `worker-action-required` or fails, stop and surface its reason; never mark a Unit complete from worker exit alone. If the installed runtime is absent, use the host path below. Give every builder the parent `ceremony` and `protocol_modules`, `stage_file`, every `inline_context_paths` file, `context_warnings`, and the complete steering bundle verbatim, plus its entry paths, including `entry.unit_memory_path`. Process entries concurrently with independent workers where possible, or serially as the fallback. Builders do not call serial `unit start/pause/resume`; a blocked builder returns its question and withholds a path from `entry.required_produces`. After build work, run or resume the review named by `review_state`: `outstanding` uses `review_iteration`, `retry-required` repeats that request with `--retry-pending`, `repair-required` runs lead repair then the next iteration, and `recovery-required` runs the one stale-receipt recovery at `review_iteration`. `escalation-required` means recovery was already spent: do not request another review or complete the Unit; halt for a human Request Changes decision. Serialize reviews wherever the single reviewer-scope record is enforced; only an enforcement-free path may run foreground reviews in parallel. When build and review are settled and `completion_required` is true, run `aidlc-state.ts unit complete --wave --stage "<directive.stage>" --unit "<entry.unit>"`; that tool verifies the live entry, deduplicates its Unit diary into the parent diary, and emits `UNIT_COMPLETED`. Then re-run `next` without report-approve. Code Generation and unit-major iteration never carry a wave.
 
-**Optional D checks (default off).** Resolve `features` and `featureInputs` once from the same project/local D configuration immediately after stage work and before the existing reviewer, sensors, and approval gate. Do not import, read inputs for, or dispatch a worker for a disabled feature. When enabled, write a bounded input manifest naming the current stage, Unit, exact artifact paths, official traceability, C UI contract, and configured roots; save the exact executed official directive; then run `bun {{HARNESS_DIR}}/tools/d-acceleration/host-stage-boundary.ts --project-dir "$PWD" --directive-file <directive-json> --manifest <manifest>`. This executable obtains a fresh official `next`, requires an exact matching valid `run-stage` whose gate is resolved to boolean `false` or `true`, and invokes the installed feature checks; it rejects `gate: "unresolved"`, asks, and invented or stale directives. Run requirement/UI cross-validation at the refined-mockups handoff and functional-design handoff; run document discipline only on functional-design; run source grounding after domain-design; and run specification grounding after domain-design and per Unit after functional-design and code-generation. A NOT-READY exit stops advancement for correction. Pass the returned `evidencePath` to the already-required official reviewer as additional evidence; it is never a review receipt or approval. Grounding evidence is pre-collected from configured roots with symlinks rejected and strict file/byte bounds, then sent to a semantic worker with no filesystem tools. Missing or unverifiable grounding is uncertainty/NOT-READY, never success. These checks never replace, waive, or reorder the C HTML evidence sensor, official traceability sensor, reviewer, report, or human approval.
+**Optional D checks (default off).** Resolve `features` and `featureInputs` once from the same project/local D configuration immediately after stage work and before the existing reviewer, sensors, and approval gate. Do not import, read inputs for, or dispatch a worker for a disabled feature. When enabled, write a bounded input manifest naming the current stage, Unit, exact artifact paths, official traceability, C UI contract, and configured roots; save the exact executed official directive; then run `bun {{HARNESS_DIR}}/tools/d-acceleration/host-stage-boundary.ts --project-dir <PRODUCT> --directive-file <directive-json> --manifest <manifest>`. This executable obtains a fresh official `next`, requires an exact matching valid `run-stage` whose gate is resolved to boolean `false` or `true`, and invokes the installed feature checks; it rejects `gate: "unresolved"`, asks, and invented or stale directives. Run requirement/UI cross-validation at the refined-mockups handoff and functional-design handoff; run document discipline only on functional-design; run source grounding after domain-design; and run specification grounding after domain-design and per Unit after functional-design and code-generation. A NOT-READY exit stops advancement for correction. Pass the returned `evidencePath` to the already-required official reviewer as additional evidence; it is never a review receipt or approval. Grounding evidence is pre-collected from configured roots with symlinks rejected and strict file/byte bounds, then sent to a semantic worker with no filesystem tools. Missing or unverifiable grounding is uncertainty/NOT-READY, never success. These checks never replace, waive, or reorder the C HTML evidence sensor, official traceability sensor, reviewer, report, or human approval.
 
 `directive.mode` selects the communication topology. Load `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-ensemble.md` when the engine lists `ensemble` in `directive.protocol_modules` (or, as a fallback, when mode is `subagent`, `pipeline`, or `mob`, or support agents are present), then follow only this harness's topology subsection.
 

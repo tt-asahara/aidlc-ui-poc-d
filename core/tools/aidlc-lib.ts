@@ -11106,7 +11106,6 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
-  "AI_QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -13817,9 +13816,6 @@ export const DECISION_GATE_ANSWER_EVENTS: ReadonlySet<string> = new Set([
 export const DECISION_PAIRING_EVENTS: ReadonlySet<string> = new Set([
   "DECISION_RECORDED",
   ...DECISION_CLOSING_EVENTS,
-  // Provenance only: this event must never impersonate a person's answer or
-  // close an unrelated protected checkpoint.
-  "AI_QUESTION_ANSWERED",
   ...DECISION_GATE_ANSWER_EVENTS,
 ]);
 

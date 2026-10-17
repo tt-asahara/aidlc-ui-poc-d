@@ -26,6 +26,12 @@ async function main(argv) {
       let imageFeatures = {};
       const configModule = resolve(dirname(fileURLToPath(import.meta.url)), 'd-acceleration', 'd-config.ts');
       if (existsSync(configModule)) imageFeatures = (await import(pathToFileURL(configModule).href)).resolveDFeatureFlags(process.cwd());
+      else if (['d-acceleration.json', 'd-acceleration.jsonc', 'd-acceleration.local.json', 'd-acceleration.local.jsonc'].some(name => existsSync(resolve(process.cwd(), '.claude', name)))) {
+        // A D configuration exists but its resolver is not installed: image
+        // settings cannot be read, so fail closed instead of silently treating
+        // mockupPngGeneration/visualRegression as OFF.
+        throw Error('D configuration is present but the D config resolver is not installed beside this sensor; PNG/visual settings cannot be resolved');
+      }
       const evidence = check({stage, outputPath, approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,imageFeatures,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'});
       findings.push(...evidence.findings);
     }

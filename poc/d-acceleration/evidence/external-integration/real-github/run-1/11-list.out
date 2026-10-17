@@ -1,0 +1,25 @@
+{
+  "status": "selection-required",
+  "selectionStrategy": "issue-number-ascending",
+  "issues": [
+    {
+      "number": 1,
+      "title": "[aidlc-sandbox 20261017T064921Z] labelled task A",
+      "labels": [
+        "aidlc-auto"
+      ]
+    },
+    {
+      "number": 2,
+      "title": "[aidlc-sandbox 20261017T064921Z] labelled task B",
+      "labels": [
+        "aidlc-auto"
+      ]
+    },
+    {
+      "number": 3,
+      "title": "[aidlc-sandbox 20261017T064921Z] unlabelled task",
+      "labels": []
+    }
+  ]
+}

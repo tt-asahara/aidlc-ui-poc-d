@@ -5,6 +5,7 @@ adds:
   scopes:
     - ui-poc-comparison
     - ui-poc-application
+    - ui-poc-requirements
   produces:
     - ui-poc-rough-contract
   sensors:

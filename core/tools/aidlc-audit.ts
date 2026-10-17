@@ -94,7 +94,6 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
-  "AI_QUESTION_ANSWERED",
   // Hook-owned: a question box closed with no answer (Codex's runs out).
   "QUESTION_UNANSWERED",
   // Hook-owned: what a question box carried back, question by question.
@@ -306,7 +305,6 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
-  AI_QUESTION_ANSWERED: "AI Question Answered",
   QUESTION_UNANSWERED: "Question Unanswered",
   QUESTION_REPLIED: "Question Replied",
   REQUEST_ROUTED: "Request Routed",
@@ -485,7 +483,6 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
-  "AI_QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "PLAN_APPROVAL_SKIPPED",
@@ -583,7 +580,6 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
-  "AI_QUESTION_ANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",

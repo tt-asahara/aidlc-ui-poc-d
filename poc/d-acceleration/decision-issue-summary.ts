@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { resolveDAiApproval, resolveDDecisionIssueSummary } from "./d-config.ts";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { latestPersonTurn } from "../../core/tools/aidlc-lib.ts";
+import { AI_QUESTION_ANSWER_LEDGER } from "./ai-question-answers.ts";
+import { resolveDDecisionIssueSummary } from "./d-config.ts";
+import { ghAuthPreflight, githubHostFromRepository, type GhAuthResult } from "./gh-host.ts";
 
 export type DecisionIssueSummaryConfig = { enabled: boolean; repository?: string; send: boolean; maxRetries: number };
 export type GhResult = { status: number; stdout: string; stderr?: string };
@@ -11,13 +14,17 @@ export type PublicationPermissionVerifier = { verify(input: { projectDir: string
 export type DecisionIssueSummaryInput = {
   projectDir: string;
   intentDir: string;
-  decisionsFile: string;
+  /** Optional; when given it must be the Intent's D question-answer ledger. */
+  decisionsFile?: string;
   config: DecisionIssueSummaryConfig;
   gh?: GhAdapter;
   stateDir?: string;
+  /** gh login check for the repository's exact host; runs after permission, before any GitHub call. */
+  ghAuth?: (host: string) => Promise<GhAuthResult>;
 };
 
-type Decision = { schemaVersion: 1; decisionId: string; stage: string; outcome: "approve" | "block"; reason: string; evidence: Array<{ path: string; sha256: string }>; uncertainties: string[] };
+/** The fields of an `AiQuestionAnswerLedgerRow` the summary shows. */
+type Decision = { decisionId: string; stage: string; unit: string | null; questionId: string; answer: string; answerSource: string; reason: string; questionsFile: string; confidence: number };
 type Binding = { version: 1; key: string; repository: string; intent: string; state: "pending" | "bound"; receipt: string; issueNumber?: number };
 
 function inside(root: string, candidate: string): boolean {
@@ -25,9 +32,7 @@ function inside(root: string, candidate: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function confinedFile(project: string, input: string): string {
-  const requested = resolve(project, input);
-  if (!existsSync(requested)) throw new Error("decisions file must exist inside project");
+function confinedFile(project: string, requested: string): string {
   const stat = lstatSync(requested);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("decisions file must be a regular non-symlink file");
   const actual = realpathSync(requested);
@@ -49,30 +54,49 @@ function activeIntent(project: string): string {
   return resolved;
 }
 
+/** `[HOST/]owner/name`; validated here in D (core/ stays upstream). */
+export const DECISION_SUMMARY_REPOSITORY = /^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/)?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+
+/**
+ * Publication needs the person's exact permission words as the latest
+ * host-recorded human turn. The turn is read through the upstream engine's own
+ * read-only `latestPersonTurn` (the record-human-turn hook writes it); D never
+ * writes engine state or audit and never treats its own text as the person's.
+ */
 async function verifyPublicationPermission(input: { projectDir: string; repository: string; intent: string; payloadSha256: string }): Promise<{ authorized: boolean; receipt?: Record<string, unknown>; reason?: string }> {
-  const installed = join(import.meta.dir, "..", "aidlc-state.ts");
-  const stateTool = existsSync(installed) ? installed : join(import.meta.dir, "..", "..", "core", "tools", "aidlc-state.ts");
-  const child = spawnSync(process.execPath, [stateTool, "verify-decision-summary-permission", "--repository", input.repository, "--intent", input.intent, "--payload-sha256", input.payloadSha256, "--project-dir", input.projectDir], { cwd: input.projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024 });
-  if (child.status !== 0) return { authorized: false, reason: child.stderr || child.stdout || "host-permission-verification-failed" };
-  try { const receipt = JSON.parse(child.stdout) as Record<string, unknown>; return { authorized: receipt.authorized === true, receipt }; } catch { return { authorized: false, reason: "invalid-host-permission-receipt" }; }
+  if (!DECISION_SUMMARY_REPOSITORY.test(input.repository) || !/^[0-9a-f]{64}$/.test(input.payloadSha256)) return { authorized: false, reason: "Usage: --repository [HOST/]owner/name --intent RELATIVE_ACTIVE_INTENT --payload-sha256 SHA256" };
+  const project = realpathSync(input.projectDir);
+  const expectedIntent = relative(project, activeIntent(project)).split(sep).join("/");
+  if (input.intent !== expectedIntent) return { authorized: false, reason: "Decision summary permission does not target the active Intent" };
+  const expectedWords = `AI-DLC authorize-decision-summary --repository ${input.repository} --intent ${input.intent} --payload-sha256 ${input.payloadSha256}`;
+  const latestTurn = latestPersonTurn(project);
+  if (!latestTurn || latestTurn.words !== expectedWords) return { authorized: false, reason: "Decision summary publication lacks an exact latest host-recorded human permission" };
+  return { authorized: true, receipt: { authorized: true, schemaVersion: 1, repository: input.repository, intent: input.intent, payloadSha256: input.payloadSha256, humanTurnAt: latestTurn.at, userMessageSha256: createHash("sha256").update(expectedWords).digest("hex") } };
 }
 
+const text = (row: Record<string, unknown>, key: string, line: number): string => {
+  const value = row[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`invalid D question-answer row at line ${line}: ${key}`);
+  return value.trim();
+};
+
+/** Reads the D question-answer ledger (`AiQuestionAnswerLedgerRow`, written by ai-question-answers.ts). */
 function decisions(path: string, project: string): Decision[] {
-  const rows = readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim()).map((line, index) => {
+  return readFileSync(path, "utf8").split(/\r?\n/).filter((line) => line.trim()).map((line, index) => {
+    const at = index + 1;
     let value: unknown;
-    try { value = JSON.parse(line); } catch { throw new Error(`invalid decision JSONL at line ${index + 1}`); }
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid decision at line ${index + 1}`);
+    try { value = JSON.parse(line); } catch { throw new Error(`invalid D question-answer JSONL at line ${at}`); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid D question-answer row at line ${at}`);
     const row = value as Record<string, unknown>;
-    if (row.schemaVersion !== 1 || typeof row.decisionId !== "string" || !/^[0-9a-f]{64}$/.test(row.decisionId) || typeof row.stage !== "string" || !row.stage.trim() || !["approve", "block"].includes(String(row.outcome)) || typeof row.reason !== "string" || !row.reason.trim() || !Array.isArray(row.evidence) || !Array.isArray(row.uncertainties) || !row.uncertainties.every((item) => typeof item === "string")) throw new Error(`invalid versioned decision at line ${index + 1}`);
-    const evidence = row.evidence.map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`invalid decision evidence at line ${index + 1}`);
-      const value = item as Record<string, unknown>;
-      if (typeof value.path !== "string" || !value.path.trim() || isAbsolute(value.path) || !inside(project, resolve(project, value.path)) || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)) throw new Error(`invalid decision evidence at line ${index + 1}`);
-      return { path: value.path, sha256: value.sha256 };
-    });
-    return { schemaVersion: 1, decisionId: row.decisionId, stage: row.stage.trim(), outcome: row.outcome as "approve" | "block", reason: row.reason.trim(), evidence, uncertainties: row.uncertainties as string[] } satisfies Decision;
+    if (row.schemaVersion !== 1 || row.kind !== "d-delegated-question-answer" || row.actor !== "ai") throw new Error(`invalid versioned D question-answer row at line ${at}`);
+    const decisionId = text(row, "decisionId", at);
+    if (!/^[0-9a-f]{64}$/.test(decisionId)) throw new Error(`invalid D question-answer row at line ${at}: decisionId`);
+    if (row.unit !== null && (typeof row.unit !== "string" || !row.unit.trim())) throw new Error(`invalid D question-answer row at line ${at}: unit`);
+    if (typeof row.confidence !== "number" || !Number.isFinite(row.confidence)) throw new Error(`invalid D question-answer row at line ${at}: confidence`);
+    const questionsFile = text(row, "questionsFile", at);
+    if (isAbsolute(questionsFile) || !inside(project, resolve(project, questionsFile))) throw new Error(`invalid D question-answer row at line ${at}: questionsFile`);
+    return { decisionId, stage: text(row, "stage", at), unit: row.unit === null ? null : String(row.unit).trim(), questionId: text(row, "questionId", at), answer: text(row, "answer", at), answerSource: text(row, "answerSource", at), reason: text(row, "reason", at), questionsFile, confidence: row.confidence };
   });
-  return rows;
 }
 
 const SECRET = /(-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:gh[opusr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})\b|(?:password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\s,;]{8,})/i;
@@ -117,23 +141,28 @@ async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput,
   if (intent !== activeIntent(project)) throw new Error("intent directory must be the active Intent");
   const repository = input.config.repository?.trim();
   if (!repository) return { status: "stopped", reason: "repository-required" };
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error("repository must be owner/name");
+  if (!DECISION_SUMMARY_REPOSITORY.test(repository)) throw new Error("repository must be [HOST/]owner/name");
+  const host = githubHostFromRepository(repository);
   if (!Number.isSafeInteger(input.config.maxRetries) || input.config.maxRetries < 0 || input.config.maxRetries > 10) throw new Error("maxRetries must be an integer from 0 to 10");
 
   const intentRelative = relative(project, intent);
   const key = createHash("sha256").update(`decision-issue-summary\0${repository}\0${intentRelative}`).digest("hex");
   const marker = `aidlc-decision-summary:${key}`;
-  const decisionFile = confinedFile(project, input.decisionsFile);
-  const canonicalDecisionFile = resolve(intent, resolveDAiApproval(project).decisionRecordPath);
-  if (decisionFile !== canonicalDecisionFile) throw new Error("decisions file must be the configured canonical Intent ledger");
-  const selected = decisions(decisionFile, project);
+  const canonicalLedger = join(intent, AI_QUESTION_ANSWER_LEDGER);
+  const supplied = input.decisionsFile === undefined ? undefined : resolve(project, input.decisionsFile);
+  const suppliedReal = supplied && existsSync(dirname(supplied)) ? join(realpathSync(dirname(supplied)), basename(supplied)) : supplied;
+  if (suppliedReal !== undefined && suppliedReal !== canonicalLedger) throw new Error(`decisions file must be the Intent's D question-answer ledger ${AI_QUESTION_ANSWER_LEDGER}`);
+  const ledgerRelative = relative(project, canonicalLedger).split(sep).join("/");
+  const nothing = { status: "nothing-to-publish", published: false, reason: `no settled delegated AI answers in ${ledgerRelative}; nothing to summarize` };
+  if (!existsSync(canonicalLedger)) return nothing;
+  const selected = decisions(confinedFile(project, canonicalLedger), project);
+  if (!selected.length) return nothing;
   const lines = selected.map((row) => {
-    const link = row.evidence[0]?.path ? ` ([source](${encodeURI(row.evidence[0].path)}))` : "";
-    const unresolved = row.outcome === "block" || row.uncertainties.length > 0;
-    return `- **${row.decisionId.slice(0, 12)}** · ${row.stage} · ${row.outcome}: ${row.reason}${link}${unresolved ? " _(unresolved)_" : ""}`;
+    const where = row.unit ? `${row.stage} / ${row.unit}` : row.stage;
+    return `- **${row.decisionId.slice(0, 12)}** · ${where} · ${row.questionId}: ${row.answer} — ${row.reason} (${row.answerSource}, confidence ${row.confidence}) ([questions](${encodeURI(row.questionsFile)}))`;
   });
   const title = `AI-DLC decisions: ${intentRelative}`;
-  const body = [`<!-- ${marker} -->`, `# Decision summary`, "", ...(!lines.length ? ["No important decisions recorded."] : lines), "", "Unresolved items above remain in this one intent summary; no separate Issues are created."].join("\n");
+  const body = [`<!-- ${marker} -->`, `# Decision summary`, "", "AI answers to delegated low-risk stage questions, from the D ledger `" + AI_QUESTION_ANSWER_LEDGER.split(sep).join("/") + "` (not the official AI-DLC audit). Every stage gate was approved by the person.", "", ...lines, "", "Each answer stays reviewable in its questions file; no separate Issues are created."].join("\n");
   rejectSecrets(`${title}\n${body}`);
   const payload = { key, repository, intent: intentRelative, title, body };
   const payloadSha256 = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -141,6 +170,10 @@ async function runDecisionIssueSummaryInternal(input: DecisionIssueSummaryInput,
   const permission = await permissionVerifier({ projectDir: project, repository, intent: intentRelative, payloadSha256 });
   if (!permission.authorized) return { status: "stopped", reason: permission.reason ?? "publish-authorization-required", payload };
   if (!input.gh) throw new Error("GitHub adapter is required when send is enabled");
+  if (input.ghAuth) {
+    const auth = await input.ghAuth(host);
+    if (!auth.ok) return { status: "stopped", reason: auth.reason, host: auth.host, nextStep: auth.nextStep, detail: auth.detail, payload };
+  }
 
   const stateRoot = resolve(project, input.stateDir ?? ".aidlc-engine/d-decision-issue-summary");
   if (!inside(project, stateRoot)) throw new Error("state directory escapes project");
@@ -196,17 +229,22 @@ if (import.meta.main) {
   try {
     const argv = process.argv.slice(2), command = argv[0];
     const one = (flag: string) => { const indexes = argv.flatMap((value, index) => value === flag ? [index] : []); if (indexes.length !== 1 || !argv[indexes[0] + 1]) throw new Error(`${flag} is required exactly once`); return argv[indexes[0] + 1]; };
-    const projectDir = one("--project-dir"), intentDir = one("--intent-dir"), decisionsFile = one("--decisions-file");
+    const projectDir = one("--project-dir"), intentDir = one("--intent-dir"), decisionsFile = argv.includes("--decisions-file") ? one("--decisions-file") : undefined;
     if (!isAbsolute(projectDir) || !isAbsolute(intentDir)) throw new Error("--project-dir and --intent-dir must be absolute");
     if (command !== "generate" && command !== "publish") throw new Error("mode must be generate or publish");
     const resolvedConfig = resolveDDecisionIssueSummary(projectDir);
     const executable = command === "publish" && resolvedConfig.send
       ? pinnedExecutable(projectDir, process.env.AIDLC_GH_EXECUTABLE_PATH, process.env.AIDLC_GH_EXECUTABLE_SHA256)
       : undefined;
+    // GH_HOST is pinned to the repository host so a host-less owner/name can
+    // never be silently resolved against an inherited, different gh host.
+    const ghHost = resolvedConfig.repository ? githubHostFromRepository(resolvedConfig.repository) : undefined;
+    const ghAdapter: GhAdapter | undefined = executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", ...(ghHost ? { GH_HOST: ghHost } : {}) } }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined;
     const result = await runDecisionIssueSummary({
       projectDir, intentDir, decisionsFile,
       config: command === "generate" ? { ...resolvedConfig, send: false } : resolvedConfig,
-      gh: executable ? { run: async (args) => { const child = spawnSync(executable, [...args], { cwd: projectDir, encoding: "utf8", timeout: 30_000, maxBuffer: 256 * 1024, env: { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" } }); return { status: child.status ?? 1, stdout: child.stdout ?? "", stderr: child.stderr ?? child.error?.message }; } } : undefined,
+      gh: ghAdapter,
+      ghAuth: ghAdapter ? (host) => ghAuthPreflight(host, (args) => ghAdapter.run(args).then((r) => ({ status: r.status, stdout: r.stdout, stderr: r.stderr ?? "" }))) : undefined,
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(result.status === "stopped" ? 2 : 0);

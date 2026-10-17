@@ -9,7 +9,8 @@ The source plugin is named `ui-poc`. The original foundation was shared; this re
 ## Local verification
 
 ```
-node --test tests/evidence.test.cjs
+node --test tests/evidence.test.cjs tests/fidelity.test.cjs tests/visual.test.cjs tests/fidelity-e2e.test.cjs
+UI_POC_REQUIRE_BROWSER=1 node --test tests/fidelity-e2e-browser.test.cjs   # real Chrome/Edge capture; skipped (not passed) without a renderer
 python3 tests/check-source-contract.py --source-root /path/to/pinned-source --tree /path/to/tree.json
 node tools/ui-poc-evidence.cjs --stage refined-mockups --output-path /actual/stage/mockups.md
 ```
@@ -17,7 +18,17 @@ node tools/ui-poc-evidence.cjs --stage refined-mockups --output-path /actual/sta
 ## Ordinary D dogfooding start
 
 Start the same way as any normal project; describe the application, not the
-internal workflow:
+internal workflow. A short ASCII request (five words or fewer) that names a UI
+keyword (`web app`, `dashboard`, `website`, `frontend`, `user interface`,
+`mobile app`) is proposed `ui-poc-application` automatically:
+
+```text
+/aidlc
+Build a budget web app
+```
+
+A long or Japanese request gets the standard scope proposal instead, for
+example:
 
 ```text
 /aidlc
@@ -25,13 +36,50 @@ Build a household budget web app with monthly planning, transaction tracking,
 category summaries, and a responsive user interface.
 ```
 
-With no explicit scope, reproducible UI keywords propose `ui-poc-application`,
-which retains the C rough/refined HTML evidence handoff. Explicit scopes,
-explicit serial execution, and non-UI requests keep their normal meaning.
-Delivery Planning evaluates the actual Unit DAG and write conflicts before it
-proposes stage-major execution and official Code Generation swarm; the person
-still decides at the official gate. Opus defaults, routing evidence, and D's
-four automatic design waves do not depend on wording them into this prompt.
+```text
+/aidlc
+家計管理のWebアプリを作りたい
+```
+
+Both show the stock proposal (or the compose offer) at the official scope
+confirmation. Select `ui-poc-application` there, or name it up front with
+`/aidlc --scope ui-poc-application`; either way the rest of the run is the same.
+
+Why: scope inference is the unmodified upstream resolver, because core/ stays
+byte-identical to AI-DLC v2.11.0 (`6a378b53`). For requests longer than five
+words that resolver accepts only its own built-in high-specificity keywords,
+which a plugin scope cannot extend, and its keyword match uses ASCII word
+boundaries, so `Webアプリ` and other Japanese text never match a plugin keyword.
+Changing either would be a core change, which this PoC does not make.
+
+`ui-poc-application` retains the C rough/refined HTML evidence handoff.
+Explicit scopes, explicit serial execution, and non-UI requests keep their
+normal meaning. Delivery Planning evaluates the actual Unit DAG and write
+conflicts before it proposes stage-major execution and official Code
+Generation swarm (the proposal is spliced in just before the official
+Construction iteration choice); the person still decides at the official gate.
+Opus defaults, routing evidence, and D's four automatic design waves do not
+depend on wording them into this prompt.
+
+## Requirements-only loop
+
+To grow requirements and the `/aidlc --doc` design document set without
+building, select the requirements loop explicitly (the `requirements-loop`
+keyword routes only short ASCII requests):
+
+```text
+/aidlc --scope ui-poc-requirements
+```
+
+`ui-poc-requirements` runs intent-capture, scope-definition, rough-mockups,
+reverse-engineering (brownfield only), practices-discovery,
+requirements-analysis, user-stories and refined-mockups with the same HTML
+evidence handoffs and official gates, and nothing after them. One round is one
+intent: start the next round as a new intent, or reopen the current one with
+`/aidlc --stage requirements-analysis`. Run `/aidlc --doc` after each round; it
+merges every intent into the product-level design set. Basic and detailed
+design chapters stay "未検討" because this scope runs no design stage. To build,
+start a new intent under `ui-poc-application`.
 
 Arm C's full 33-stage matrix is `docs/c-stage-skill-matrix.md`; routing is `tools/ui-poc-c-routing.cjs` over `tools/ui-poc/c-stage-routing.json`. The verifier binds routing evidence to engine state and pinned files. It cannot prove model cognition or distinguish different attempts whose official engine state bytes are identical.
 

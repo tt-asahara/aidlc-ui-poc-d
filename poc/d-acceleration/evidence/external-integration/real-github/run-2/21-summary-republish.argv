@@ -1,0 +1,1 @@
+bun <sandbox>/product/.claude/tools/d-acceleration/decision-issue-summary.ts publish --project-dir <sandbox>/product --intent-dir <sandbox>/product/aidlc/spaces/default/intents/261017-aidlc-sandbox-20261017t0-2 --decisions-file <sandbox>/product/aidlc/spaces/default/intents/261017-aidlc-sandbox-20261017t0-2/decisions/ai-approval-decisions.jsonl 

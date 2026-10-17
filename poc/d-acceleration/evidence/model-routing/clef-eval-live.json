@@ -1,0 +1,216 @@
+{
+  "recordedAt": "2026-10-17T06:26:55.272Z",
+  "endpoint": "http://127.0.0.1:18742",
+  "healthy": true,
+  "health": {
+    "status": "ok",
+    "model": "clef"
+  },
+  "repeat": 3,
+  "routes": 15,
+  "clefApplied": 9,
+  "fallbacks": 6,
+  "outcomes": {
+    "selected": 9,
+    "low-confidence": 6
+  },
+  "accuracyWhenApplied": 0.6666666666666666,
+  "designBelowBalanced": 0,
+  "throughputRoutesPerSec": 0.828563439348109,
+  "routingMsP50": 1308.9435830000002,
+  "routingMsP95": 1526.6727499999997,
+  "clefWallMs": 18103.622833999998,
+  "noClefWallMs": 0.4475830000010319,
+  "routingOverheadVsNoClefMs": 18103.175250999997,
+  "protectedRoutes": [
+    {
+      "id": "protected-approval",
+      "tier": "judgment",
+      "source": "rule",
+      "attempted": false
+    },
+    {
+      "id": "protected-security",
+      "tier": "judgment",
+      "source": "rule",
+      "attempted": false
+    },
+    {
+      "id": "protected-compliance",
+      "tier": "judgment",
+      "source": "rule",
+      "attempted": false
+    },
+    {
+      "id": "policy-never-approval-handoff",
+      "tier": "judgment",
+      "source": "fallback",
+      "attempted": false
+    },
+    {
+      "id": "policy-never-code-generation",
+      "tier": "judgment",
+      "source": "fallback",
+      "attempted": false
+    },
+    {
+      "id": "design-type",
+      "tier": "balanced",
+      "source": "rule",
+      "attempted": false
+    }
+  ],
+  "protectedSentToClef": 0,
+  "detail": [
+    {
+      "round": 0,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.928,
+      "routingMs": 455.90887499999997
+    },
+    {
+      "round": 0,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.9357,
+      "routingMs": 583.939083
+    },
+    {
+      "round": 0,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1332.3742920000002
+    },
+    {
+      "round": 0,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "balanced",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.7511,
+      "routingMs": 1175.5170829999997
+    },
+    {
+      "round": 0,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1348.9051250000002
+    },
+    {
+      "round": 1,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.928,
+      "routingMs": 1206.0136249999996
+    },
+    {
+      "round": 1,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.9357,
+      "routingMs": 1304.409834
+    },
+    {
+      "round": 1,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1228.0895830000009
+    },
+    {
+      "round": 1,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "balanced",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.7511,
+      "routingMs": 1335.7286670000012
+    },
+    {
+      "round": 1,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1308.9435830000002
+    },
+    {
+      "round": 2,
+      "id": "rename-constant",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.928,
+      "routingMs": 1309.277709
+    },
+    {
+      "round": 2,
+      "id": "fix-typo-docs",
+      "expected": "fast",
+      "tier": "fast",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.9357,
+      "routingMs": 1526.6727499999997
+    },
+    {
+      "round": 2,
+      "id": "add-pagination",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1334.694625
+    },
+    {
+      "round": 2,
+      "id": "cache-consistency",
+      "expected": "judgment",
+      "tier": "balanced",
+      "source": "clef",
+      "outcome": "selected",
+      "confidence": 0.7511,
+      "routingMs": 1358.305375
+    },
+    {
+      "round": 2,
+      "id": "fd-unit",
+      "expected": "balanced",
+      "tier": "judgment",
+      "source": "fallback",
+      "outcome": "low-confidence",
+      "confidence": null,
+      "routingMs": 1292.4690420000006
+    }
+  ]
+}
