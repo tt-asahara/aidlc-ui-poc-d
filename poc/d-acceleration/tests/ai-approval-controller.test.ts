@@ -27,7 +27,7 @@ function fixture(options: { mode?: "human" | "stage-gates"; stage?: string; dire
   writeFileSync(join(intent, "aidlc-state.md"), "- **State Version**: 7\n- **Scope**: feature\n- **Current Stage**: domain-design\n");
   writeFileSync(join(root, ".claude/d-acceleration.jsonc"), JSON.stringify({
     models: { judgment: "fixture-judgment" },
-    aiApproval: { mode: options.mode ?? "stage-gates", minConfidence: options.minConfidence ?? 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" },
+    aiApproval: { mode: options.mode ?? "stage-gates", minConfidence: options.minConfidence ?? 0.9 },
   }));
   const directive = {
     kind: "present-gate",

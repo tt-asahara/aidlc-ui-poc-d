@@ -133,7 +133,9 @@ When `aiApproval.mode` resolves to `stage-gates`, the person may delegate
 ordinary low-risk stage questions (never gates) for named stages. Configuration
 alone is never authority: ask the person to submit exactly `AI-DLC delegate-ai-approvals --scope <scope> --through <phase-or-stage> --stages <comma-separated-stage-slugs>`; prose consent is not a grant. Save those exact host-recorded words to a fresh project-confined file and
 run `ai-approval-controller.ts grant` with their message id and the same scope, through boundary,
-and stage slugs. Any mismatch is a stop. Delete only
+and stage slugs, immediately after that turn: `grant` refuses unless the words are
+the person's latest host-recorded turn, so on that refusal ask them to type the
+command again and rerun. Any mismatch is a stop. Delete only
 that temporary words file after a successful grant. Never create a
 `HUMAN_TURN`, quote the model as the person's words, or use a human-presence
 break-glass switch. Set `AIDLC_UNATTENDED=1` for the automated driver so hooks
@@ -170,8 +172,10 @@ event, or write a human answer on this path. A `researched-fact` must cite bound
 evidence; a `delegated-ai-assumption` must remain explicit, conservative, and
 reversible.
 
-The versioned Intent-local decision JSONL is the source of truth. Optional
-`decision-issue-summary.ts generate` produces one Issue payload per Intent.
+The Intent's D question-answer ledger `decisions/ai-question-answers.jsonl` is
+the source of truth. Optional `decision-issue-summary.ts generate` produces one
+Issue payload per Intent from it; a missing or empty ledger returns
+`nothing-to-publish`, so tell the person there is nothing to publish.
 Before `publish`, show the exact repository, Intent, and generated payload hash,
 then require the person's latest host-recorded words to equal `AI-DLC authorize-decision-summary --repository <owner/repo> --intent <relative-intent> --payload-sha256 <sha256>`. Never infer publication from auto or AI-approval mode, and never create separate Issues for each unresolved item.
 

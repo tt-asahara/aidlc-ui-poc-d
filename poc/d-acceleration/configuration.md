@@ -47,8 +47,8 @@ hash-bound grantとしてactive Intentへ保存した場合に限り、`[AI-Auto
 `decisions/ai-question-answers.jsonl`（Dの台帳。公式auditではない）と質問ファイルの
 `[Answer Source]`/`[AI Decision ID]` にだけ記録され、`HUMAN_TURN`・`QUESTION_ANSWERED`・
 人間の `User Input` を作りません。`minConfidence` は質問回答の最低confidenceです。
-`decisionRecordPath` はdecision summaryが読む台帳のpathとしてだけ残ります（AI承認が廃止
-されたため、新しい行は書かれません）。
+旧 `aiApproval.decisionRecordPath` は削除しました（AI承認の廃止で書き手がなくなったため）。
+設定に残っていると1行の削除案内を出して設定エラーで停止します。
 `stage-gates` の実モデル実行は通常、親processの `PATH` から絶対directoryだけを調べ、
 realpath化したproject外のnative `claude` だけを使用します。相対/CWD、project内実体、
 script、別名dispatcherは拒否します。より厳格な固定が必要な環境だけ、host process環境の
@@ -56,8 +56,9 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 片方だけ、またはdigest不一致はfail-closedです。通常起動で実体自身からdigestを再計算して
 信頼扱いすることはしません。
 
-`decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
-既定OFFの機能です。外部送信にはrepository・active Intent・生成payload hashを完全一致で
+`decisionIssueSummary.enabled` は、active IntentのD台帳 `decisions/ai-question-answers.jsonl`
+（委任された低risk質問へのAI回答。公式auditではない）からIntent単位のGitHub Issue要約payloadを
+生成する既定OFFの機能です。台帳がない・空の場合は `nothing-to-publish` を返して何も送信しません。外部送信にはrepository・active Intent・生成payload hashを完全一致で
 指定した最新のhost記録済み人間permissionが必要です（D側で、engine自身の読み取り専用
 `latestPersonTurn` を使って照合します）。許可後もpending receiptを検索・照合してから同じIssueを更新し、
 未解決事項の別Issueを自動作成しません。

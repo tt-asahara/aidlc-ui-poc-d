@@ -43,8 +43,9 @@ settler `ai-question-answers.ts`. Settled answers carry `[Answer Source]` /
 Intent's D-owned `decisions/ai-question-answers.jsonl`, which is not the
 official audit. The file grammar, per-Unit binding, marker decision, and
 real-model evidence are in `delegated-questions.md`. The optional GitHub seam
-generates one summary payload per Intent from the configured
-`aiApproval.decisionRecordPath` ledger and is default-off; publication requires
+generates one summary payload per Intent from the D question-answer ledger
+`decisions/ai-question-answers.jsonl` (missing or empty → `nothing-to-publish`)
+and is default-off; publication requires
 the person's exact permission words as the latest host-recorded human turn
 (read through the engine's own read-only `latestPersonTurn`), binding
 repository, Intent, and payload hash, and it never replaces the repository record.

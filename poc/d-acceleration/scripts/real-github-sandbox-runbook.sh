@@ -140,9 +140,9 @@ autopilot 16-explicit-rerun-no-duplicate "${N_A:-<A>}"
 autopilot 17-stop stop
 
 say "Decision summary: generate, publish without a host-recorded permission (must stop)"
-need_human summary-config "set decisionIssueSummary {enabled:true, repository:\"$REPO\", send:true}; the active Intent must hold decisions/ai-approval-decisions.jsonl; AIDLC_GH_EXECUTABLE_PATH/AIDLC_GH_EXECUTABLE_SHA256 must name the native gh"
+need_human summary-config "set decisionIssueSummary {enabled:true, repository:\"$REPO\", send:true}; the active Intent must hold settled delegated answers in decisions/ai-question-answers.jsonl; AIDLC_GH_EXECUTABLE_PATH/AIDLC_GH_EXECUTABLE_SHA256 must name the native gh"
 INTENT_DIR="$PRODUCT/aidlc/spaces/$(cat "$PRODUCT/aidlc/active-space" 2>/dev/null || echo default)/intents/$(cat "$PRODUCT/aidlc/spaces/$(cat "$PRODUCT/aidlc/active-space" 2>/dev/null || echo default)/intents/active-intent" 2>/dev/null || echo '<intent>')"
-LEDGER="$INTENT_DIR/decisions/ai-approval-decisions.jsonl"
+LEDGER="$INTENT_DIR/decisions/ai-question-answers.jsonl"
 run 18-summary-generate bun "$D_DIR/decision-issue-summary.ts" generate --project-dir "$PRODUCT" --intent-dir "$INTENT_DIR" --decisions-file "$LEDGER"
 run 19-summary-publish-unauthorized bun "$D_DIR/decision-issue-summary.ts" publish --project-dir "$PRODUCT" --intent-dir "$INTENT_DIR" --decisions-file "$LEDGER"
 need_human summary-permission "ONLY the person types, in the host session: AI-DLC authorize-decision-summary --repository $REPO --intent <relative intent> --payload-sha256 <sha256 of the payload JSON from 18>. Skip to leave 20/21 fail-closed."
