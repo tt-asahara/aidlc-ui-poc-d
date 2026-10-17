@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
-import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { grantHumanTurnRefusal } from "./ai-approval-controller.ts";
 
@@ -111,13 +110,73 @@ function activeIntent(root: string) { const spaceFile = join(root, "aidlc", "act
 export const AI_QUESTION_ANSWER_LEDGER = join("decisions", "ai-question-answers.jsonl");
 export type AiQuestionAnswerLedgerRow = { schemaVersion: 1; kind: "d-delegated-question-answer"; ledger: "d-acceleration (not the official AI-DLC audit)"; actor: "ai"; decisionId: string; stage: string; unit: string | null; questionId: string; answer: string; answerSource: string; reason: string; questionsFile: string; questionsTemplateSha256: string; delegationSha256: string; confidence: number; requestedModel: string; runtimeReportedModel: string; settledAt: string };
 
-function appendLedger(path: string, rows: AiQuestionAnswerLedgerRow[]): void {
+const LOCK_WAIT_MS = 10_000;
+const LOCK_STALE_MS = 30_000;
+const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function lockHolderAlive(lockPath: string): boolean {
+  try {
+    const { pid } = JSON.parse(readFileSync(lockPath, "utf8")) as { pid?: unknown };
+    if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS || typeof pid !== "number") return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the pid exists under another user; anything else (ESRCH, an
+    // unreadable or half-written lock past its grace period) is stale.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") return true;
+    if (code === "ESRCH") return false;
+    try { return Date.now() - statSync(lockPath).mtimeMs < 1_000; } catch { return true; }
+  }
+}
+
+/**
+ * Runs `body` holding an exclusive `<path>.lock` (O_CREAT|O_EXCL). A lock whose
+ * holder process is gone, or that is older than LOCK_STALE_MS, is removed and
+ * retaken; a live holder is waited for up to LOCK_WAIT_MS, then this refuses.
+ */
+export function withLedgerLock<T>(path: string, body: () => T): T {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error("AI question answer ledger must not be a symlink");
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const fd = openSync(temporary, "wx", 0o600);
-  try { writeFileSync(fd, `${existsSync(path) ? readFileSync(path, "utf8") : ""}${rows.map((row) => JSON.stringify(row)).join("\n")}\n`); fsyncSync(fd); } finally { closeSync(fd); }
-  renameSync(temporary, path);
+  const lockPath = `${path}.lock`, deadline = Date.now() + LOCK_WAIT_MS;
+  let fd: number | undefined;
+  while (fd === undefined) {
+    try { fd = openSync(lockPath, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (!lockHolderAlive(lockPath)) { try { unlinkSync(lockPath); } catch { /* another waiter removed it */ } continue; }
+      if (Date.now() > deadline) throw new Error(`D ledger is busy (${lockPath}); rerun the same command`);
+      sleep(5 + Math.floor(Math.random() * 20));
+    }
+  }
+  try {
+    writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    return body();
+  } finally {
+    closeSync(fd);
+    try { unlinkSync(lockPath); } catch { /* already gone */ }
+  }
+}
+
+/** Appends JSONL rows with one O_APPEND write plus fsync. Callers hold the ledger lock. */
+export function appendJsonl(path: string, rows: readonly unknown[]): void {
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error(`D ledger must not be a symlink: ${path}`);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const fd = openSync(path, "a", 0o600);
+  try { writeSync(fd, rows.map((row) => `${JSON.stringify(row)}\n`).join("")); fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+const ledgerHas = (path: string, decisionId: string) => existsSync(path) && readFileSync(path, "utf8").split(/\r?\n/).some((line) => { if (!line.trim()) return false; try { return JSON.parse(line).decisionId === decisionId; } catch { return false; } });
+
+/**
+ * Settles one decision's rows exactly once: the replay check and the append
+ * run under the same exclusive ledger lock, so concurrent settlers neither
+ * lose rows nor duplicate a decisionId. Returns false when already recorded.
+ */
+export function appendLedgerOnce(path: string, decisionId: string, rows: () => AiQuestionAnswerLedgerRow[]): boolean {
+  return withLedgerLock(path, () => {
+    if (ledgerHas(path, decisionId)) return false;
+    appendJsonl(path, rows());
+    return true;
+  });
 }
 
 export function settleAiAnswers(projectDir: string, stage: string, decisionFile: string, unit: string | null = null) {
@@ -155,12 +214,10 @@ export function settleAiAnswers(projectDir: string, stage: string, decisionFile:
   const { decisionId: _id, createdAt: _created, ...payload } = decision;
   if (hash(canonical(payload)) !== decision.decisionId) throw new Error("AI decision ID does not bind its inputs");
   const ledgerPath = join(active.dir, AI_QUESTION_ANSWER_LEDGER);
-  const replayed = existsSync(ledgerPath) && readFileSync(ledgerPath, "utf8").split(/\r?\n/).some((line) => { if (!line.trim()) return false; try { return JSON.parse(line).decisionId === decision.decisionId; } catch { return false; } });
   const result = { recorded: "d-ai-question-ledger", ledger: relative(root, ledgerPath).split(sep).join("/"), stage, ...(unit === null ? {} : { unit }), count: decision.answers.length, decisionId: decision.decisionId };
-  if (replayed) return { ...result, reused: true };
   const settledAt = new Date().toISOString();
-  appendLedger(ledgerPath, decision.answers.map((answer: any) => ({ schemaVersion: 1, kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId: decision.decisionId, stage, unit, questionId: answer.questionId, answer: answer.answer, answerSource: answer.source, reason: answer.reason, questionsFile: decision.questions.path, questionsTemplateSha256: decision.questions.templateSha256, delegationSha256: decision.delegation.sha256, confidence: decision.confidence, requestedModel: decision.model.requested, runtimeReportedModel: decision.model.runtimeReported ?? "unreported", settledAt })));
-  return result;
+  const appended = appendLedgerOnce(ledgerPath, decision.decisionId, () => decision.answers.map((answer: any) => ({ schemaVersion: 1, kind: "d-delegated-question-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId: decision.decisionId, stage, unit, questionId: answer.questionId, answer: answer.answer, answerSource: answer.source, reason: answer.reason, questionsFile: decision.questions.path, questionsTemplateSha256: decision.questions.templateSha256, delegationSha256: decision.delegation.sha256, confidence: decision.confidence, requestedModel: decision.model.requested, runtimeReportedModel: decision.model.runtimeReported ?? "unreported", settledAt })));
+  return appended ? result : { ...result, reused: true };
 }
 
 if (import.meta.main) { try { const args = process.argv.slice(2), one = (flag: string) => { const at = args.indexOf(flag); return at < 0 ? undefined : args[at + 1]; }; const project = one("--project-dir"); if (!project || !isAbsolute(project)) throw new Error("--project-dir must be absolute"); process.stdout.write(`${JSON.stringify(settleAiAnswers(project, one("--stage") ?? "", one("--ai-decision-file") ?? "", one("--unit") ?? null))}\n`); } catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(2); } }

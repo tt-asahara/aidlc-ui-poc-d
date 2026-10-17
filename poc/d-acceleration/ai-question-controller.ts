@@ -7,7 +7,7 @@ import { runWorker, type ModelIdentity, type ModelIdentityStatus, type WorkerLau
 import { grantHumanTurnRefusal, productionClaudeExecutable } from "./ai-approval-controller.ts";
 import stagePolicy from "./stage-policy.json";
 
-import { questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility } from "./ai-question-answers.ts";
+import { appendJsonl, questionSections, questionTemplate, resolveAiQuestionTarget, sectionEligibility, withLedgerLock } from "./ai-question-answers.ts";
 
 const SHA = /^[a-f0-9]{64}$/;
 const HUMAN_ONLY = /(approve|approval|deploy|deployment|production|publish|external send|credential|permission|authorization|authentication|delete|destructive|payment|legal|security exception|release|pricing|personal data|target user|承認|本番|公開|外部送信|認証|権限|削除|破壊|支払|法務|セキュリティ|対象利用者|成功基準|決定権|対象ユーザ|ターゲット|価格|料金|課金|個人情報|契約|リリース|デプロイ)/i;
@@ -112,7 +112,7 @@ function recordQuestionBlock(options: AiQuestionOptions, reason: string): void {
     if (!inside(intent, questions.absolute)) return;
     const record: AiQuestionBlockRecord = { schemaVersion: 1, kind: "delegated-stage-question-block", stage: options.stage, unit: options.unit ?? null, questions: { path: questions.path, sha256: questions.sha256 }, reason, createdAt: new Date().toISOString() };
     const ledger = join(intent, AI_QUESTION_BLOCKS);
-    atomic(ledger, `${existsSync(ledger) ? readFileSync(ledger, "utf8") : ""}${JSON.stringify(record)}\n`);
+    withLedgerLock(ledger, () => appendJsonl(ledger, [record]));
   } catch { /* the clock keeps running; never mask the block itself */ }
 }
 
@@ -152,7 +152,7 @@ async function evaluateAiQuestionsOnce(options: AiQuestionOptions): Promise<AiQu
   const decision: AiQuestionDecision = { ...payload, decisionId: hash(canonical(payload)), createdAt: new Date().toISOString() };
   for (const item of [questions, delegation, state, ...configs, ...evidence]) if (hash(readFileSync(item.absolute)) !== item.sha256) throw new Error(`bound input changed: ${item.path}`);
   const directory = join(intent, "decisions", "ai-question-decisions"), decisionPath = join(directory, `${decision.decisionId}.json`), ledger = join(intent, "decisions", "ai-question-decisions.jsonl");
-  atomic(decisionPath, `${JSON.stringify(decision, null, 2)}\n`); atomic(ledger, `${existsSync(ledger) ? readFileSync(ledger, "utf8") : ""}${JSON.stringify(decision)}\n`);
+  atomic(decisionPath, `${JSON.stringify(decision, null, 2)}\n`); withLedgerLock(ledger, () => appendJsonl(ledger, [decision]));
   const relativeDecision = relative(root, decisionPath).split(sep).join("/");
   return { status: "answer", reason: decision.reason, decision, decisionFilePath: relativeDecision, generatedCommandArgs: ["--stage", options.stage, ...(unit === null ? [] : ["--unit", unit]), "--ai-decision-file", relativeDecision], classification, telemetry };
 }

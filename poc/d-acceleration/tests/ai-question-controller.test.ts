@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { classifyQuestions, evaluateAiQuestions, modelResult } from "../ai-question-controller.ts";
 import { createAiApprovalGrant } from "../ai-approval-controller.ts";
 import { recordHumanTurn } from "./human-turn.ts";
-import { AI_QUESTION_ANSWER_LEDGER, questionSections, settleAiAnswers } from "../ai-question-answers.ts";
+import { AI_QUESTION_ANSWER_LEDGER, appendLedgerOnce, questionSections, settleAiAnswers } from "../ai-question-answers.ts";
 
 const T = 30_000;
 const IDEATION_STATE = "- **Scope**: greenfield\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: intent-capture\n- [-] intent-capture — EXECUTE\n";
@@ -363,4 +363,55 @@ describe("per-Unit Construction questions", () => {
     writeFileSync(join(f.intent, "aidlc-state.md"), unitState({ unitStage: "nfr-design" }));
     expect(() => settleAiAnswers(f.root, "nfr-requirements", result.decisionFilePath!, "notes-core")).toThrow("state hash or path changed");
   }, T);
+});
+
+describe("concurrent ledger settlement", () => {
+  const answersModule = join(import.meta.dir, "..", "ai-question-answers.ts");
+  // Starts every child, then releases them together through a go-file barrier.
+  async function race(root: string, scripts: string[]) {
+    const go = join(root, "go");
+    const children = scripts.map((source, index) => {
+      const path = join(root, `child-${index}.ts`);
+      writeFileSync(path, `import { existsSync } from "node:fs";\nwhile (!existsSync(${JSON.stringify(go)})) await Bun.sleep(2);\n${source}`);
+      return Bun.spawn([process.execPath, path], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    });
+    await Bun.sleep(400); writeFileSync(go, "");
+    return Promise.all(children.map(async (child) => ({ code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() })));
+  }
+
+  test("parallel appends lose no rows and record each decisionId once", async () => {
+    const root = mkdtempSync(join(tmpdir(), "d-ledger-race-")), ledger = join(root, "decisions", "ledger.jsonl");
+    const row = (id: string) => ({ decisionId: id, questionId: "Q1" }) as any;
+    const scripts = Array.from({ length: 8 }, (_, worker) => `import { appendLedgerOnce } from ${JSON.stringify(answersModule)};
+for (let i = 0; i < 10; i++) appendLedgerOnce(${JSON.stringify(ledger)}, "w${worker}-" + i, () => [${JSON.stringify(row("x"))}].map((r) => ({ ...r, decisionId: "w${worker}-" + i })));
+for (let i = 0; i < 5; i++) appendLedgerOnce(${JSON.stringify(ledger)}, "shared", () => [${JSON.stringify(row("shared"))}, ${JSON.stringify(row("shared"))}]);`);
+    const results = await race(root, scripts);
+    for (const result of results) expect(result.code, result.stderr).toBe(0);
+    const ids = readFileSync(ledger, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line).decisionId);
+    expect(ids.filter((id) => id !== "shared").sort()).toEqual(Array.from({ length: 8 }, (_, w) => Array.from({ length: 10 }, (_, i) => `w${w}-${i}`)).flat().sort());
+    expect(ids.filter((id) => id === "shared")).toHaveLength(2);
+    expect(existsSync(`${ledger}.lock`)).toBeFalse();
+  }, T);
+
+  test("concurrent CLI settlements of one decision append it exactly once", async () => {
+    const f = fixture(JA_SIX, { stage: "requirements-analysis", state: "- **Scope**: greenfield\n- **Lifecycle Phase**: INCEPTION\n- **Current Stage**: requirements-analysis\n- [-] requirements-analysis — EXECUTE\n", questionsPath: "inception/requirements-analysis/requirements-analysis-questions.md" });
+    const result = await evaluate(f, model(f.root, ok(6)), { stage: "requirements-analysis" });
+    expect(result.status).toBe("answer"); applyDecision(f.root, f.questions, result);
+    const scripts = Array.from({ length: 6 }, () => `import { settleAiAnswers } from ${JSON.stringify(answersModule)};
+process.stdout.write(JSON.stringify(settleAiAnswers(${JSON.stringify(f.root)}, "requirements-analysis", ${JSON.stringify(result.decisionFilePath)})));`);
+    const outcomes = await race(f.root, scripts);
+    for (const outcome of outcomes) expect(outcome.code, outcome.stderr).toBe(0);
+    expect(outcomes.filter((outcome) => !JSON.parse(outcome.stdout).reused)).toHaveLength(1);
+    const rows = ledgerRows(f.intent);
+    expect(rows).toHaveLength(6);
+    expect(new Set(rows.map((row) => row.decisionId))).toEqual(new Set([result.decision!.decisionId]));
+    expect(rows.map((row) => row.questionId)).toEqual(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"]);
+  }, 60_000);
+
+  test("a stale lock left by a dead process is retaken", () => {
+    const root = mkdtempSync(join(tmpdir(), "d-ledger-stale-")), ledger = join(root, "ledger.jsonl");
+    writeFileSync(`${ledger}.lock`, JSON.stringify({ pid: 2 ** 22 + 12345, at: "2020-01-01T00:00:00Z" }));
+    expect(appendLedgerOnce(ledger, "d1", () => [{ decisionId: "d1" } as any])).toBeTrue();
+    expect(appendLedgerOnce(ledger, "d1", () => [{ decisionId: "d1" } as any])).toBeFalse();
+  });
 });

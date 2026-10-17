@@ -8,7 +8,11 @@ answers to the Intent's D-owned ledger `decisions/ai-question-answers.jsonl`
 (each row says `ledger: "d-acceleration (not the official AI-DLC audit)"`). It
 never writes the official audit or engine state and never emits
 `QUESTION_ANSWERED` or `HUMAN_TURN`. The answer is AI provenance and is never
-treated as the person's answer.
+treated as the person's answer. The replay check and the append run under one
+exclusive `<ledger>.lock` (O_EXCL, a dead holder's or 30 s old lock is
+retaken), and rows land in a single O_APPEND write, so concurrent settlers
+neither lose rows nor record a decisionId twice. The controller's own
+`ai-question-decisions.jsonl` and `ai-question-blocks.jsonl` use the same lock.
 
 Before the core restore this settler lived in `core/tools/aidlc-ai-answers.ts`
 and emitted a D-added `AI_QUESTION_ANSWERED` audit event. `core/` is now
