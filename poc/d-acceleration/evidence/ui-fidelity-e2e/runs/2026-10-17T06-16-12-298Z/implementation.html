@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang='ja'>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>メモ帳</title>
+<style>
+:root{color-scheme:light}
+body{font-family:system-ui,-apple-system,'Hiragino Sans','Noto Sans JP',sans-serif;margin:0;padding:24px;background:#f6f7f9;color:#1a1a1a;line-height:1.6}
+main{max-width:480px;margin:0 auto;background:#fff;border:1px solid #c9ced6;border-radius:12px;padding:20px 24px}
+h1{font-size:1.25rem;margin:0 0 16px}
+h2{font-size:1.1rem;margin:0 0 8px}
+p{margin:0 0 12px}
+.memo-body{max-width:100%;max-height:1.4em;line-height:1.4em;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;margin-bottom:12px}
+[data-ui-state='STATE-EXPANDED'] .memo-body{max-height:none;white-space:normal;overflow:visible}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+button{font:inherit;min-height:44px;padding:8px 16px;border-radius:8px;border:1px solid #0b4f8a;background:#0b4f8a;color:#fff;cursor:pointer}
+button.secondary{background:#fff;color:#0b4f8a}
+button.danger{background:#9b1c1c;border-color:#9b1c1c}
+button:focus-visible{outline:3px solid #f5a300;outline-offset:2px}
+.note-guide{background:#eef4fb;border-left:4px solid #0b4f8a;padding:8px 12px;margin-bottom:16px;color:#12263a}
+.status{background:#e8f5ec;color:#124a24;padding:10px 12px;border-radius:8px}
+.alert{background:#fdecec;color:#7a1212;padding:10px 12px;border-radius:8px;border:1px solid #d9a0a0}
+.dialog{border:2px solid #9b1c1c;border-radius:10px;padding:16px}
+</style>
+<main id='app' data-ui-screen='SCREEN-NOTES' data-ui-state='STATE-LIST'></main>
+<script>
+(function(){
+  var KEY='memo-app.notes.v1';
+  var root=document.getElementById('app');
+  var params=new URLSearchParams(location.search);
+  var scenario=params.get('scenario');
+  var mode=scenario==='private'?'private':'normal';
+  var forceError=scenario==='storage-error';
+  var notes=[];
+  var current=null;
+
+  function store(){return mode==='private'?window.sessionStorage:window.localStorage;}
+  function seed(){
+    return [{id:'note-1',title:'買い物リスト',body:'牛乳、卵、食パン、トマト、玉ねぎ、鶏むね肉、ヨーグルト、コーヒー豆、洗剤、ティッシュペーパーを週末までに買う。',updatedAt:'2026-10-01T00:00:00'}];
+  }
+  function load(){
+    if(forceError){throw new Error('storage unavailable');}
+    var raw=store().getItem(KEY);
+    if(raw===null){return seed();}
+    var data=JSON.parse(raw);
+    if(!Array.isArray(data)){throw new Error('invalid data');}
+    return data;
+  }
+  function persist(){store().setItem(KEY,JSON.stringify(notes));}
+  function pad(n){return n<10?'0'+n:''+n;}
+  function fmtDate(v){
+    var d=new Date(v);
+    if(isNaN(d.getTime())){return '';}
+    return d.getFullYear()+'/'+pad(d.getMonth()+1)+'/'+pad(d.getDate());
+  }
+  function deleteDetail(n){
+    return '「'+n.title+'」（'+fmtDate(n.updatedAt)+' 更新）を削除します。この操作は取り消せません。';
+  }
+
+  function el(tag,text,attrs){
+    var e=document.createElement(tag);
+    if(text!==null&&text!==undefined){e.textContent=text;}
+    if(attrs){
+      Object.keys(attrs).forEach(function(k){
+        var v=attrs[k];
+        if(v===true){e.setAttribute(k,'');}
+        else if(v!==false&&v!==null){e.setAttribute(k,v);}
+      });
+    }
+    return e;
+  }
+  function actionButton(id,label,actionId,expected,extra){
+    var attrs={type:'button','data-ui-id':id,'data-ui-important':true,'data-ui-exact-copy':true,'data-ui-action-id':actionId,'data-ui-expected-state':expected};
+    if(extra){Object.keys(extra).forEach(function(k){attrs[k]=extra[k];});}
+    var b=el('button',label,attrs);
+    b.addEventListener('click',function(){handle(actionId,expected);});
+    return b;
+  }
+
+  function noteView(state){
+    var n=current;
+    if(state==='STATE-PRIVATE-MODE'){
+      root.appendChild(el('p','プライベートモードでは、メモはこのタブを閉じると消えます。残したいメモは通常モードで保存してください。',{role:'note',class:'note-guide','data-ui-id':'PRIVATE-MODE-GUIDANCE','data-ui-important':true,'data-ui-exact-copy':true}));
+    }
+    if(!n){return;}
+    var sec=el('section');
+    sec.appendChild(el('h2',n.title,{'data-ui-id':'NOTE-TITLE-1','data-ui-important':true,'data-ui-exact-copy':true}));
+    sec.appendChild(el('div',n.body,{id:'MEMO-BODY',class:'memo-body','data-ui-id':'MEMO-BODY','data-ui-important':true,'data-ui-require-truncation':true}));
+    var row=el('div',null,{class:'actions'});
+    row.appendChild(actionButton('EXPAND-MEMO','全文を表示','EXPAND','STATE-EXPANDED',{'data-ui-action-target':'MEMO-BODY',class:'secondary'}));
+    row.appendChild(actionButton('SAVE-NOTE','保存','SAVE','STATE-SAVED'));
+    row.appendChild(actionButton('DELETE-NOTE','削除','DELETE','STATE-CONFIRM-DELETE',{class:'secondary'}));
+    sec.appendChild(row);
+    root.appendChild(sec);
+  }
+
+  function render(state){
+    root.setAttribute('data-ui-state',state);
+    root.textContent='';
+    root.appendChild(el('h1','メモ'));
+    var focusTarget=null;
+    if(state==='STATE-LIST'||state==='STATE-EXPANDED'||state==='STATE-PRIVATE-MODE'){
+      noteView(state);
+    }else if(state==='STATE-CONFIRM-DELETE'){
+      var dlg=el('section',null,{role:'alertdialog','aria-labelledby':'confirm-title',class:'dialog','data-ui-id':'DELETE-DIALOG','data-ui-region':true});
+      dlg.appendChild(el('h2','メモを削除しますか？',{id:'confirm-title','data-ui-id':'DELETE-CONFIRM-TITLE','data-ui-important':true,'data-ui-exact-copy':true}));
+      dlg.appendChild(el('p',current?deleteDetail(current):'',{'data-ui-id':'DELETE-CONFIRM-DETAIL','data-ui-important':true,'data-ui-exact-copy':true}));
+      var row=el('div',null,{class:'actions'});
+      row.appendChild(actionButton('CONFIRM-DELETE','削除する','CONFIRM-DELETE','STATE-DELETED',{class:'danger'}));
+      var cancel=actionButton('CANCEL-DELETE','キャンセル','CANCEL-DELETE','STATE-LIST',{class:'secondary'});
+      row.appendChild(cancel);
+      dlg.appendChild(row);
+      root.appendChild(dlg);
+      focusTarget=cancel;
+    }else if(state==='STATE-DELETED'){
+      root.appendChild(el('p','メモを削除しました',{role:'status',class:'status','data-ui-id':'DELETE-COMPLETE','data-ui-important':true,'data-ui-exact-copy':true}));
+    }else if(state==='STATE-SAVED'){
+      root.appendChild(el('p','✓ 保存しました',{role:'status',class:'status','data-ui-id':'SAVE-COMPLETE','data-ui-important':true,'data-ui-exact-copy':true}));
+    }else if(state==='STATE-STORAGE-ERROR'){
+      root.appendChild(el('p','保存データを読み込めませんでした。ブラウザのストレージ設定を確認してから、再読み込みしてください。',{role:'alert',class:'alert','data-ui-id':'STORAGE-READ-ERROR','data-ui-important':true,'data-ui-exact-copy':true}));
+      var retry=el('button','再読み込み',{type:'button','data-ui-id':'RETRY-LOAD','data-ui-important':true,'data-ui-exact-copy':true,'data-ui-interactive':true});
+      retry.addEventListener('click',retryLoad);
+      root.appendChild(retry);
+    }
+    if(focusTarget){focusTarget.focus();}
+  }
+
+  function tryLoad(){
+    try{
+      notes=load();
+      current=notes[0]||null;
+      return true;
+    }catch(e){
+      notes=[];
+      current=null;
+      return false;
+    }
+  }
+  function retryLoad(){
+    if(tryLoad()){render('STATE-LIST');}else{render('STATE-STORAGE-ERROR');}
+  }
+
+  function handle(actionId,expected){
+    if(actionId==='SAVE'){
+      try{persist();}catch(e){render('STATE-STORAGE-ERROR');return;}
+    }else if(actionId==='CONFIRM-DELETE'){
+      if(current){
+        notes=notes.filter(function(n){return n.id!==current.id;});
+        try{persist();}catch(e){render('STATE-STORAGE-ERROR');return;}
+        current=notes[0]||null;
+      }
+    }
+    render(expected);
+  }
+
+  if(tryLoad()){
+    render(mode==='private'?'STATE-PRIVATE-MODE':'STATE-LIST');
+  }else{
+    render('STATE-STORAGE-ERROR');
+  }
+})();
+</script>
+</html>
