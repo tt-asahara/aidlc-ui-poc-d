@@ -67,6 +67,7 @@ describe("ordinary /aidlc D integration", () => {
       "host-stage-boundary.ts",
       "official-next-adapter.ts",
       "parallel-guard.ts",
+      "question-wait.ts",
       "read-only-fanout.ts",
       "run.ts",
       "scheduler.ts",
@@ -76,6 +77,7 @@ describe("ordinary /aidlc D integration", () => {
     expect(readFileSync(join(root, "read-only-fanout.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
     expect(readFileSync(join(root, "host-stage-boundary.ts"), "utf8")).toContain('from "../aidlc-directive.ts"');
     expect(readFileSync(join(root, "ai-question-controller.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
+    expect(readFileSync(join(root, "question-wait.ts"), "utf8")).toContain('from "../aidlc-ai-answers.ts"');
     expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(true);
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');

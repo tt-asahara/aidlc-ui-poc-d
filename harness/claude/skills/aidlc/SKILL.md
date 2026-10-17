@@ -112,7 +112,7 @@ before each host action run
 `bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir <PRODUCT>`;
 act only when it returns `continue`, retain its token, and immediately after the
 real action run
-`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token <token>`.
+`bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-finish --project-dir <PRODUCT> --action-token <token>`. When `action-finish` returns `humanWait: "stage-question"`, the questions file waits for the person and the deadline clock is paused: ask them and end the turn as the stage protocol says. Run `ai-question-controller.ts` inside its own `action-start`/`action-finish` pair like any other host action.
 On re-entry, `init` resumes a session waiting at a human gate. `/aidlc --auto
 status` and `/aidlc --auto stop` retain the shared status/stop route above. These
 controls bound host continuation; they never report a stage, approve a gate, or

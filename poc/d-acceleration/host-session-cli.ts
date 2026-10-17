@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { activeElapsedMs, checkpointHostSession, leaveHumanWait, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
+import { activeElapsedMs, checkpointHostSession, enterHumanWait, leaveHumanWait, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
 import { createFileClaimStore, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
 import type { ParallelGuardResult } from "./parallel-guard.ts";
 
@@ -235,10 +235,18 @@ if (mode === "action-finish") {
     if (reason) return { action: "stop", reason, state: await terminalize(current, reason) };
     // Persist the completed transition before deleting the stopping record. If
     // cleanup crashes, recovery recognizes status=stopping as harmless debris.
-    const finishedState: HostSessionState = { ...current, hostAction: undefined };
+    let finishedState: HostSessionState = { ...current, hostAction: undefined };
+    // An action that left the stage's questions file waiting for the person
+    // (a recorded fact, see question-wait.ts) pauses the unattended clock until
+    // D resumes. A claimed Issue session keeps wall-clock semantics.
+    if (!current.claim) {
+      const { pendingHumanQuestion } = await import("./question-wait.ts");
+      const pending = pendingHumanQuestion(projectDir, current.lastStage);
+      if (pending) finishedState = enterHumanWait(finishedState, "stage-question", Date.now(), { stage: current.lastStage ?? null, ...pending });
+    }
     save(finishedState);
     remove(heartbeat); remove(heartbeatStop); remove(heartbeatFailed);
-    return { action: "continue", state: finishedState };
+    return { action: "continue", humanWait: finishedState.waitKind ?? null, state: finishedState };
   });
   process.stdout.write(`${JSON.stringify(finished ?? { action: "stop", reason: "lifecycle-busy", state })}\n`); process.exit(0);
 }

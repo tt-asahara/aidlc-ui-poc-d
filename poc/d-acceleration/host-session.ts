@@ -38,21 +38,45 @@ export function directiveProgressFingerprint(directive: Readonly<OfficialDirecti
 }
 
 export type HostSessionClaim = { issueNumber: number; owner: string; leaseMs: number };
-export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; activeStages?: string[]; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; waitingSince?: number; pausedMs?: number; endedAt?: number; terminalReason?: string };
+export type HumanWaitKind = "official-ask" | "stage-question";
+/**
+ * One entry per pause, appended when the wait starts and closed when D resumes
+ * (the next checkpoint or action-start). `creditedMs` is what the deadline
+ * gave back; a claimed session records its waits with `creditedMs: 0`.
+ */
+export type HumanWaitRecord = { kind: HumanWaitKind; startedAt: number; endedAt?: number; creditedMs?: number; evidence?: Record<string, unknown> };
+export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; activeStages?: string[]; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; waitingSince?: number; waitKind?: HumanWaitKind; humanWaits?: HumanWaitRecord[]; pausedMs?: number; endedAt?: number; terminalReason?: string };
 
-// The deadline bounds unattended continuation, not the person's think time.
-// For an unclaimed generic-auto session, time spent waiting at an official
-// human gate (`ask`) is credited back. A claimed Issue session keeps wall-clock
-// semantics because its lease heartbeat must not outlive the deadline.
+// The single owner of deadline accounting. The deadline bounds D's unattended
+// working time, not the person's think time. For an unclaimed generic-auto
+// session, time spent waiting for the person is credited back, whether the wait
+// is an official human gate (`ask`) or an in-stage questions file the person
+// must answer (`stage-question`, detected from recorded files by
+// `question-wait.ts`). The open wait is persisted as `waitingSince` in the
+// session journal, so a crash or restart mid-wait neither loses the pause nor
+// counts it twice: `leaveHumanWait` folds it into `pausedMs` and closes the
+// `humanWaits` entry in the same atomic save. A claimed Issue session keeps
+// wall-clock semantics because its lease heartbeat must not outlive the
+// deadline. There is no separate wall-clock ceiling for unclaimed sessions;
+// active time, `maxSteps`, the `through` boundary and no-progress still bound
+// runaway work.
 export function activeElapsedMs(state: HostSessionState, now = Date.now()): number {
   const waiting = !state.claim && state.awaitingHuman && state.waitingSince !== undefined ? Math.max(0, now - state.waitingSince) : 0;
   return now - state.startedAt - (state.pausedMs ?? 0) - waiting;
 }
+export function enterHumanWait(state: HostSessionState, kind: HumanWaitKind, now = Date.now(), evidence?: Record<string, unknown>): HostSessionState {
+  // A wait already open keeps its original start; restarting it would lose time.
+  if (state.waitingSince !== undefined) return state;
+  return { ...state, awaitingHuman: true, waitingSince: now, waitKind: kind, humanWaits: [...(state.humanWaits ?? []), { kind, startedAt: now, ...(evidence ? { evidence } : {}) }] };
+}
 export function leaveHumanWait(state: HostSessionState, now = Date.now()): HostSessionState {
   if (state.waitingSince === undefined) return state;
   const credited = !state.claim && state.awaitingHuman ? Math.max(0, now - state.waitingSince) : 0;
-  const { waitingSince: _ignored, ...rest } = state;
-  return { ...rest, pausedMs: (state.pausedMs ?? 0) + credited };
+  const { waitingSince: _ignored, waitKind: _kind, ...rest } = state;
+  const waits = [...(state.humanWaits ?? [])];
+  const open = waits.length - 1;
+  if (open >= 0 && waits[open].endedAt === undefined && waits[open].startedAt === state.waitingSince) waits[open] = { ...waits[open], endedAt: now, creditedMs: credited };
+  return { ...rest, pausedMs: (state.pausedMs ?? 0) + credited, ...(state.humanWaits ? { humanWaits: waits } : {}) };
 }
 export function checkpointHostSession(state: HostSessionState, directive: Readonly<OfficialDirective>, now = Date.now()): { action: "continue" | "stop"; reason?: string; state: HostSessionState } {
   state = leaveHumanWait(state, now);
@@ -72,6 +96,6 @@ export function checkpointHostSession(state: HostSessionState, directive: Readon
   if (directive.completed || directive.kind === "complete") return { action: "stop", reason: "complete", state: next };
   // run-stage gate:true means execute the stage and then enter its approval
   // protocol. Only an actual ask is already waiting on the human.
-  if (directive.kind === "ask") return { action: "stop", reason: "human-gate", state: { ...next, waitingSince: now } };
+  if (directive.kind === "ask") return { action: "stop", reason: "human-gate", state: enterHumanWait(next, "official-ask", now, { stage: directive.stage ?? null, gate: directive.gate ?? null }) };
   return { action: "continue", state: next };
 }

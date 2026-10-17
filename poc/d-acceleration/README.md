@@ -120,6 +120,39 @@ remain authoritative.
 - A failed fast/balanced attempt escalates to the next tier; a judgment failure
   stops for human review. The planner does not execute models itself.
 
+## Bounded-run deadline (`auto.deadlineMs`)
+
+`host-session.ts` is the single owner of deadline accounting for the generic
+`/aidlc --auto` session (`activeElapsedMs`, `enterHumanWait`,
+`leaveHumanWait`). The deadline measures D's working time, not the person's
+think time. An unclaimed session pauses the clock while it waits for the
+person, in two cases:
+
+- `official-ask`: a checkpoint received an official `ask` (human gate).
+- `stage-question`: `action-finish` found that the current stage's canonical
+  `<stage>-questions.md` (or the active Unit's per-Unit file) has a blank
+  `[Answer]:` slot that the delegated AI path cannot answer
+  (`question-wait.ts`). That holds when there is no `stage-gates` grant for the
+  stage, when the deterministic precheck shared with `ai-question-controller.ts`
+  refuses the set, or when the Intent's `decisions/ai-question-blocks.jsonl`
+  records a delegated-path stop on those exact bytes. A set the delegated path
+  may still answer is D work, so the clock keeps running.
+
+Both waits are decided from recorded files, never from prose. Each wait is
+persisted in the session journal (`waitingSince`, `waitKind`, and a
+`humanWaits[]` entry with `startedAt` and evidence). The next checkpoint or
+`action-start` closes the entry (`endedAt`, `creditedMs`) and adds the credit
+to `pausedMs` in the same atomic save. A crash or restart mid-wait therefore
+neither loses the pause nor counts it twice. Active time keeps counting, so
+runaway work still stops with `deadline-exceeded`. There is no separate
+wall-clock ceiling for unclaimed sessions. `maxSteps`, the `through` boundary,
+and no-progress detection remain the other hard stops. A claimed Issue session
+keeps wall-clock semantics, because the claim lease must not outlive the
+deadline: its official-ask waits are journaled with `creditedMs: 0`, and it
+does not detect stage-question waits. A wait is detected only
+at `action-finish`, so the host runs `ai-question-controller.ts` inside an
+`action-start`/`action-finish` bracket like every other host action.
+
 ## Run
 
 ```bash

@@ -20,6 +20,15 @@ session/claim/heartbeatを変更しない観測専用で、回復処理はstop�
 同じ `auto.enabled` は generic `/aidlc --auto <description>` の親スイッチでもあります。
 `sessionOnly: true` では generic と Issue のどちらもIntent作成後に停止し、bounded継続には
 明示的な `sessionOnly: false` と `through` / `maxSteps` / `deadlineMs` の上限が必要です。
+`deadlineMs` はDの作業時間を測り、人の考える時間は含めません。claimなしのgeneric autoでは、
+公式human gate（`ask`）で待つ時間に加えて、stage内の質問待ちも除外します。質問待ちとは、
+現在stageの正規 `<stage>-questions.md` に空の `[Answer]:` が残り、委任AI経路が答えられない
+状態です（grantなし、決定的precheckで対象外、または同じbytesへのblock記録あり）。
+AI委任で答えられる質問は時計を止めません。待ちは開始/終了時刻付きでsession journal
+（`humanWaits[]`）に記録されるため、待機中のcrashやresumeでも二重計上や消失は起きません。
+作業時間は数え続けるので、暴走は引き続き `deadline-exceeded` で停止します。claimなしsessionに
+別の壁時計上限はなく、`maxSteps`・`through`・no-progressが残りの上限です。Issue claim付き
+sessionは壁時計のままです。詳細はREADMEの「Bounded-run deadline」を参照してください。
 Feature 11のIssue判定は`models.judgment`を使う固定argvのClaude subprocessです。
 session永続化、MCP、slash command、全toolを無効化し、入力・出力・実行時間を制限します。
 `halt`は未解決点を残し、`assume`は低riskの仮定だけを台帳へ渡し、`research`は与えられた

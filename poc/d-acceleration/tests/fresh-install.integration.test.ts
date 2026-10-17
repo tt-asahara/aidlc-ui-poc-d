@@ -56,13 +56,14 @@ describe("clean-target D install, parity, and update", () => {
     const runtime = join(product, ".claude", "tools", "d-acceleration");
     const original = readFileSync(join(runtime, "host-session.ts"));
     writeFileSync(join(runtime, "host-session.ts"), `${original}\n// drift\n`);
-    unlinkSync(join(runtime, "ai-question-controller.ts"));
+    // A leaf no other runtime module imports, so the module graph still builds.
+    unlinkSync(join(runtime, "decision-issue-summary.ts"));
     writeFileSync(join(runtime, "stray.ts"), "export {};\n");
     appendFileSync(join(product, ".claude", "tools", "ui-poc-c-routing.cjs"), "\n// stale plugin copy\n");
     const report = await parity(SRC, product);
     expect(report.pluginPayload.changed).toEqual([".claude/tools/ui-poc-c-routing.cjs"]);
     expect(report.ok).toBeFalse();
-    expect(report.dAccelerationTree).toMatchObject({ missing: ["ai-question-controller.ts"], extra: ["stray.ts"], changed: ["host-session.ts"] });
+    expect(report.dAccelerationTree).toMatchObject({ missing: ["decision-issue-summary.ts"], extra: ["stray.ts"], changed: ["host-session.ts"] });
     expect(report.changedFromDist).toContain(".claude/tools/d-acceleration/host-session.ts");
     git("checkout", "--", ".claude"); unlinkSync(join(runtime, "stray.ts"));
     expect((await parity(SRC, product)).ok).toBeTrue();
