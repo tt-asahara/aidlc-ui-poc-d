@@ -33,10 +33,12 @@ hash-bound grantとしてactive Intentへ保存した限定実行でだけ通常
 workflow state、委任証拠、成果物のSHA-256を結合します。scope/route/Plan Approval、
 summary/skeleton、operation、sensor/reviewer不合格、未検証・不確実・外部/公開/認証/権限/
 破壊操作は委任対象外で停止します。AI判定は `HUMAN_TURN` や人間の `User Input` を作りません。
-`stage-gates` の実モデル実行には、projectから変更できないhost process環境の
-`AIDLC_CLAUDE_EXECUTABLE_PATH` と `AIDLC_CLAUDE_EXECUTABLE_SHA256` の両方が必要です。
-実行直前に実体digestを再照合し、PATH探索、project内実体、script、digest不一致は
-fail-closedです。CLI更新後はhost側でdigestを更新してください。
+`stage-gates` の実モデル実行は通常、親processの `PATH` から絶対directoryだけを調べ、
+realpath化したproject外のnative `claude` だけを使用します。相対/CWD、project内実体、
+script、別名dispatcherは拒否します。より厳格な固定が必要な環境だけ、host process環境の
+`AIDLC_CLAUDE_EXECUTABLE_PATH` と `AIDLC_CLAUDE_EXECUTABLE_SHA256` を両方指定できます。
+片方だけ、またはdigest不一致はfail-closedです。通常起動で実体自身からdigestを再計算して
+信頼扱いすることはしません。
 
 `decisionIssueSummary.enabled` は正本からIntent単位のGitHub Issue要約payloadを生成する
 既定OFFの機能です。外部送信にはrepository・active Intent・生成payload hashを完全一致で

@@ -14,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveDAiApproval, resolveDModels } from "./d-config.ts";
 import stagePolicy from "./stage-policy.json";
 import { runWorker, type WorkerLaunch } from "./worker-adapters.ts";
@@ -117,16 +117,31 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function pinnedExecutable(projectRoot: string, requested: string | undefined, expectedSha256: string | undefined): string {
-  if (!requested || !expectedSha256) throw new Error("host-pinned Claude executable path and sha256 are required");
+function checkedClaudeExecutable(projectRoot: string, requested: string, expectedSha256?: string): string {
   const actual = realpathSync(requested);
   const metadata = lstatSync(actual);
   const bytes = readFileSync(actual);
   if (!metadata.isFile() || within(projectRoot, actual)) throw new Error("host-pinned Claude executable must be a file outside the project");
   if (basename(actual) !== "claude") throw new Error("host-pinned Claude executable must be named claude");
   if (!isNativeExecutable(bytes)) throw new Error("host-pinned Claude executable must be a native binary, not a script");
-  if (sha256(bytes) !== expectedSha256) throw new Error("host-pinned Claude executable digest mismatch");
+  if (expectedSha256 && sha256(bytes) !== expectedSha256) throw new Error("host-pinned Claude executable digest mismatch");
   return actual;
+}
+
+function productionClaudeExecutable(projectRoot: string): string {
+  const requested = process.env.AIDLC_CLAUDE_EXECUTABLE_PATH;
+  const expectedSha256 = process.env.AIDLC_CLAUDE_EXECUTABLE_SHA256;
+  if (requested || expectedSha256) {
+    if (!requested || !expectedSha256) throw new Error("strict Claude executable pin requires both path and sha256");
+    return checkedClaudeExecutable(projectRoot, requested, expectedSha256);
+  }
+  for (const entry of (process.env.PATH ?? "").split(delimiter)) {
+    if (!entry || !isAbsolute(entry)) continue;
+    const candidate = join(entry, "claude");
+    if (!existsSync(candidate)) continue;
+    try { return checkedClaudeExecutable(projectRoot, candidate); } catch { /* Ignore untrusted PATH entries and continue. */ }
+  }
+  throw new Error("no trusted native Claude executable was found on PATH");
 }
 
 function isNativeExecutable(bytes: Buffer): boolean {
@@ -535,7 +550,7 @@ export async function evaluateAiApproval(options: AiApprovalOptions): Promise<Ai
           // path never supplies one and resolves an absolute trusted binary.
           executable: options.claudeExecutable
             ? (existsSync(options.claudeExecutable) ? realpathSync(options.claudeExecutable) : resolve(options.claudeExecutable))
-            : pinnedExecutable(projectRoot, process.env.AIDLC_CLAUDE_EXECUTABLE_PATH, process.env.AIDLC_CLAUDE_EXECUTABLE_SHA256),
+            : productionClaudeExecutable(projectRoot),
           requestedModel: model,
           requestedEffort: "high",
           environment: options.claudeExecutable ? undefined : { ...process.env, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },

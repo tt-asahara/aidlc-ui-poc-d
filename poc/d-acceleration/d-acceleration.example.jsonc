@@ -70,7 +70,7 @@
     // 対象: AI工程承認判定。役割: approveに必要な最低confidence。値未満はblockして人間停止。既定値: 0.9。利用場面: stage-gates時のみ。
     "minConfidence": 0.9,
     "decisionRecordPath": "decisions/ai-approval-decisions.jsonl",
-    // stage-gates の実行CLIはproject設定ではなくhost process環境の AIDLC_CLAUDE_EXECUTABLE_PATH / AIDLC_CLAUDE_EXECUTABLE_SHA256 で固定する。
+    // 通常は親PATH上のproject外native claudeを安全に解決する。厳格固定が必要な場合だけhost process環境の AIDLC_CLAUDE_EXECUTABLE_PATH / AIDLC_CLAUDE_EXECUTABLE_SHA256 を両方指定する。
   },
   "decisionIssueSummary": {
     // 対象: IntentごとのAI判断要約。役割: リポジトリ内正本へのリンクを持つGitHub Issue要約を生成する。ON時: ローカルpayload/同期状態を生成、OFF時: GitHub処理なし。既定値: OFF。境界: 正本は常にリポジトリ内記録で、別Issueは自動作成しない。利用場面: チーム共有用のIntent単位要約。

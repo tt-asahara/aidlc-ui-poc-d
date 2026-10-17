@@ -69,11 +69,12 @@ describe("delegated AI stage approval", () => {
     expect(refused.status).not.toBe(0);
   });
 
-  test("fails closed without a host-pinned native assessor and never mints a human reply", () => {
+  test("rejects a project-local PATH assessor and never mints a human reply", () => {
     const project = createTestProject(); projects.push(project);
     seedStateFile(project, "state-mid-ideation.md");
     mkdirSync(join(project, ".claude"), { recursive: true });
     writeFileSync(join(project, ".claude/d-acceleration.jsonc"), JSON.stringify({ aiApproval: { mode: "stage-gates", minConfidence: 0.9, decisionRecordPath: "decisions/ai-approval-decisions.jsonl" } }));
+    const fakeClaude = join(project, "claude"); writeFileSync(fakeClaude, "#!/bin/sh\nexit 0\n"); chmodSync(fakeClaude, 0o755);
     // This fixture deliberately omits the stage question artifact that gate-start
     // validates; seed only the already-open gate so this test isolates approval
     // authority and the normal approve transition.
@@ -100,9 +101,9 @@ describe("delegated AI stage approval", () => {
     const decision = { schemaVersion: 1, decisionId: sha(canonical(binding)), actor: "ai", ledgerPath: relative(project, ledgerPath), outcome: "approve", stage: binding.stage, reason: "All declared evidence is verified and the bounded PoC has no external effects.", confidence: 0.98, directive: { path: relative(project, directivePath), sha256: binding.directiveSha256 }, directiveSha256: binding.directiveSha256, stateSha256: binding.stateSha256, delegation: { path: relative(project, grantPath), sha256: binding.delegationSha256, messageId: grant.messageId }, evidence: binding.evidence, riskFlags: [], uncertainties: [], createdAt: "2026-10-17T00:00:00Z" };
     writeFileSync(ledgerPath, `${JSON.stringify(decision)}\n`);
     const decisionPath = join(decisions, "decision.json"); writeFileSync(decisionPath, JSON.stringify(decision));
-    const approved = spawnSync(process.execPath, [stateTool, "approve", "feasibility", "--ai-decision-file", relative(project, decisionPath), "--project-dir", project], { cwd: project, encoding: "utf8", env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" } });
+    const approved = spawnSync(process.execPath, [stateTool, "approve", "feasibility", "--ai-decision-file", relative(project, decisionPath), "--project-dir", project], { cwd: project, encoding: "utf8", env: { ...process.env, PATH: project, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" } });
     expect(approved.status).not.toBe(0);
-    expect(`${approved.stdout}${approved.stderr}`).toContain("host-pinned Claude executable path and sha256 are required");
+    expect(`${approved.stdout}${approved.stderr}`).toContain("no trusted native Claude executable was found on PATH");
     const audit = readFileSync(seededAuditShard(project), "utf8");
     expect(audit).not.toContain("**Decision Actor**: AI");
     expect(audit).not.toContain("**User Input**:");
