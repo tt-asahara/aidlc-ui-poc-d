@@ -64,6 +64,39 @@ decision summary送信は、GitHubへ触れる前に固定argvの `gh auth statu
 配布する `.claude/tools/d-acceleration/d-acceleration.example.jsonc` はこのひな形と
 byte-identicalです。機能7の永続化前secret scanは必須で、無効化スイッチはありません。
 
+## Grounding snapshot上限 (`featureInputs.groundingLimits`)
+
+機能27 `sourceGrounding` / 機能28 `specGrounding` は、worker起動前にtoolが作る
+snapshot（成果物と証拠rootの全file、hash付き）を1つのpromptへ埋め込みます。上限は
+laneごとに次の2つで、未設定時は従来どおり200 file・1,000,000 byteです。
+
+```jsonc
+"featureInputs": {
+  "groundingLimits": { "maxEvidenceFiles": 200, "maxInputBytes": 1000000 }
+}
+```
+
+| key | 既定値 | 許容範囲 |
+| --- | --- | --- |
+| `maxEvidenceFiles` | 200 | 1〜5000の整数 |
+| `maxInputBytes`（成果物+証拠の合計） | 1,000,000 | 1〜4,000,000の整数 |
+
+- local がproject よりfield単位で優先します（片方のkeyだけ上書き可能）。
+- 0・負数・小数・文字列・未知key・上限超過は丸めずにfail-closedです。D入口
+  （`d-feature-checks.ts`、`run.ts --preflight`）は終了コード2で、keyと許容範囲を
+  示す1行 `D configuration invalid: invalid featureInputs.groundingLimits.<key>: <値> (allowed: integer 1..<上限>) in <path>`
+  を出して停止します。
+- 上限の根拠: snapshot全体が1つのworker promptに入るため、byte数がpromptサイズと
+  費用を直接決めます。4,000,000 byteは最大worker modelの1M token context
+  （約4 byte/token）相当で、これを超えるsnapshotは1 promptに収まらず費用を払った後に
+  失敗するだけです。5,000 fileはwalk/hash時間とfileごとのprompt見出しをその範囲内に
+  抑えます。引上げは各grounding stageの費用増に直結するため、先にrootを絞ってください。
+- 実効値は `run.ts --preflight` の `optional.featureInputs.groundingLimits` と、
+  証拠JSONの各lane結果の `limits` に記録されます。上限超過時の `grounding-failed`
+  のerrorも該当keyと上限を示します。
+- promptはworkerのstdinで渡します（argvはmacOSで1 MiB、Linuxで1引数128 KiBが上限）。
+  詳細は `grounding-integration.md` を参照してください。
+
 ## 並列実行の親スイッチ (`parallel.enabled`)
 
 既定はONです。OFFはD全体の同時worker数を1にします。対象は、公式engineが発行済みの

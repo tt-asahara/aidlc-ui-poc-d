@@ -62,7 +62,7 @@ function workerExecutable(control: string, plan: { findings: unknown[]; uncertai
   writeFileSync(script, `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const control = ${JSON.stringify(control)};
 const plan = JSON.parse(readFileSync(control + "/plan.json", "utf8"));
-appendFileSync(control + "/calls.log", JSON.stringify({ argv: process.argv.slice(2) }) + "\\n");
+appendFileSync(control + "/calls.log", JSON.stringify({ argv: process.argv.slice(2), stdin: readFileSync(0, "utf8") }) + "\\n");
 if (plan.mutate) writeFileSync(plan.mutate.path, plan.mutate.content);
 process.stdout.write(JSON.stringify({ findings: plan.findings, uncertainty: plan.uncertainty ?? [] }));
 `);
@@ -70,7 +70,7 @@ process.stdout.write(JSON.stringify({ findings: plan.findings, uncertainty: plan
   writeFileSync(wrapper, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)} "$@"\n`); chmodSync(wrapper, 0o755);
   return wrapper;
 }
-const calls = (control: string) => existsSync(join(control, "calls.log")) ? readFileSync(join(control, "calls.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { argv: string[] }) : [];
+const calls = (control: string) => existsSync(join(control, "calls.log")) ? readFileSync(join(control, "calls.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { argv: string[]; stdin: string }) : [];
 
 function runEntry(root: string, manifest: Record<string, unknown>) {
   writeFileSync(join(root, "aidlc-d-input.json"), JSON.stringify({ stage: "domain-design", artifactPaths: [ARTIFACT], ...manifest }));
@@ -110,7 +110,8 @@ describe("brownfield grounding through the installed D feature-check entry", () 
     expect(source.artifacts[0]).toMatchObject({ path: join(root, ARTIFACT), sha256: sha(join(root, ARTIFACT)) });
     expect(source.git).toEqual({ head: git(root, "rev-parse", "HEAD"), uncommittedCitedPaths: [] });
     // The model only saw the bounded snapshot: modules under src/, never README, docs, tests, or .git.
-    const prompt = calls(control)[0]!.argv[1]!;
+    const prompt = calls(control)[0]!.stdin;
+    expect(calls(control)[0]!.argv).toEqual(["-p", "--allowedTools", "", "--permission-mode", "dontAsk"]);
     for (const shown of ["src/orders/service.ts", "src/billing/invoice.ts", "src/shared/money.ts", "order not found: ' + id + '"]) expect(prompt).toContain(shown);
     for (const hidden of ["README.md", "docs/spec/orders-api.md", "tests/orders.service.test.ts", ".git/"]) expect(prompt).not.toContain(hidden);
     expect(existsSync(run.output.evidencePath)).toBe(true);
@@ -213,6 +214,50 @@ describe("brownfield grounding through the installed D feature-check entry", () 
     expect(calls(many.control)).toHaveLength(0);
   });
 
+  test("default caps are recorded in evidence; raised caps let the previously capped fixture pass with a >1 MiB stdin prompt", () => {
+    const DEFAULTS = { maxEvidenceFiles: 200, maxInputBytes: 1_000_000 };
+    const capped = brownfield({ sourceGrounding: true }, ROOTS);
+    for (let index = 0; index < 201; index++) put(capped.root, `src/migrations/${String(index).padStart(4, "0")}.ts`, `export const id = ${index};\n`);
+    put(capped.root, "src/generated/schema.ts", `export const blob = "${"x".repeat(1_100_000)}";\n`);
+    const exe = workerExecutable(capped.control, { findings: [confirmed("shipped orders cannot be cancelled", "src/orders/service.ts")] });
+    let run = runEntry(capped.root, { workerExecutable: exe });
+    expect(run.status).toBe(2);
+    expect(run.output.results.sourceGrounding).toMatchObject({ action: "grounding-failed", limits: DEFAULTS, error: expect.stringContaining("exceeds 200 files (featureInputs.groundingLimits.maxEvidenceFiles; ceiling 5000)") });
+    expect(calls(capped.control)).toHaveLength(0);
+
+    // Project raises only the file cap: the byte cap (default) now trips, still before any worker call.
+    writeFileSync(join(capped.root, ".claude", "d-acceleration.json"), JSON.stringify({ features: { sourceGrounding: true }, featureInputs: { ...ROOTS, groundingLimits: { maxEvidenceFiles: 500 } } }));
+    run = runEntry(capped.root, { workerExecutable: exe });
+    expect(run.output.results.sourceGrounding).toMatchObject({ action: "grounding-failed", limits: { maxEvidenceFiles: 500, maxInputBytes: 1_000_000 }, error: expect.stringContaining("exceed 1000000 bytes before read (featureInputs.groundingLimits.maxInputBytes; ceiling 4000000)") });
+    expect(calls(capped.control)).toHaveLength(0);
+
+    // Local layer raises the byte cap field-by-field over the project file cap.
+    writeFileSync(join(capped.root, ".claude", "d-acceleration.local.json"), JSON.stringify({ featureInputs: { groundingLimits: { maxInputBytes: 2_000_000 } } }));
+    run = runEntry(capped.root, { workerExecutable: exe });
+    expect(run.status).toBe(0);
+    expect(run.output.results.sourceGrounding).toMatchObject({ action: "grounding-findings", verdict: "READY", workerCalls: 1, limits: { maxEvidenceFiles: 500, maxInputBytes: 2_000_000 } });
+    expect(JSON.parse(readFileSync(run.output.evidencePath, "utf8")).results.sourceGrounding.limits).toEqual({ maxEvidenceFiles: 500, maxInputBytes: 2_000_000 });
+    // The whole snapshot (larger than macOS ARG_MAX) reached the worker through stdin, not argv.
+    const [call] = calls(capped.control);
+    expect(call!.argv).toEqual(["-p", "--allowedTools", "", "--permission-mode", "dontAsk"]);
+    expect(call!.stdin.length).toBeGreaterThan(1_100_000);
+    expect(call!.stdin).toContain("src/migrations/0200.ts");
+  });
+
+  test("an out-of-range grounding cap fails closed before any read or worker call", () => {
+    for (const [groundingLimits, message] of [
+      [{ maxInputBytes: 4_000_001 }, "invalid featureInputs.groundingLimits.maxInputBytes: 4000001 (allowed: integer 1..4000000)"],
+      [{ maxEvidenceFiles: 0 }, "invalid featureInputs.groundingLimits.maxEvidenceFiles: 0 (allowed: integer 1..5000)"],
+    ] as const) {
+      const fixture = brownfield({ sourceGrounding: true }, { ...ROOTS, groundingLimits });
+      const run = runEntry(fixture.root, { workerExecutable: workerExecutable(fixture.control, { findings: [] }) });
+      expect(run.status).toBe(2);
+      expect(run.output).toBeNull();
+      expect(run.stderr).toBe(`D configuration invalid: ${message} in ${join(fixture.root, ".claude", "d-acceleration.json")}\n`);
+      expect(calls(fixture.control)).toHaveLength(0);
+    }
+  });
+
   test("path traversal in roots and citations fails closed", () => {
     for (const roots of [["../outside"], ["src/../../outside"], ["/etc"], ["src", "../outside"]]) {
       const fixture = brownfield({ sourceGrounding: true }, { sourceRoots: roots });
@@ -236,7 +281,7 @@ describe("brownfield grounding through the installed D feature-check entry", () 
       const run = runEntry(fixture.root, { workerExecutable: workerExecutable(fixture.control, { findings: [confirmed("x", "src/orders/service.ts")] }) });
       expect(run.status).toBe(2);
       expect(run.output).toMatchObject({ verdict: "NOT-READY", notReady: ["sourceGrounding"], approvalRecorded: false });
-      expect(run.output.results.sourceGrounding).toMatchObject({ action: "off-no-valid-roots", verdict: "NOT-READY", compliance: "not-claimed", workerCalls: 0, approvalRecorded: false });
+      expect(run.output.results.sourceGrounding).toMatchObject({ action: "off-no-valid-roots", verdict: "NOT-READY", compliance: "not-claimed", workerCalls: 0, approvalRecorded: false, limits: { maxEvidenceFiles: 200, maxInputBytes: 1_000_000 } });
       expect(JSON.stringify(run.output)).not.toContain('"grounded"');
       expect(calls(fixture.control)).toHaveLength(0);
       // Rechecking an OFF result is never "fresh": there is no citation to vouch for.

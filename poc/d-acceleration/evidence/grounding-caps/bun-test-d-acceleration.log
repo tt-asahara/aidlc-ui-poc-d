@@ -1,0 +1,4 @@
+ 359 pass
+ 0 fail
+Ran 359 tests across 36 files. [274.32s]
+package --check: deterministic across two independent build(s) for claude, codex, copilot, cursor, kiro, kiro-ide, opencode.

@@ -6,16 +6,16 @@ import { createClaudeGroundingWorker, persistGroundingEvidence } from "../ground
 import { snapshotGroundingInputs } from "../grounding.ts";
 
 describe("grounding production worker adapter", () => {
-  test("uses fixed argv with read-only tools and persists reviewer evidence", async () => {
+  test("uses fixed argv with read-only tools, sends the snapshot on stdin, and persists reviewer evidence", async () => {
     const root = mkdtempSync(join(tmpdir(), "d-ground-runtime-"));
     const evidence = join(root, "src"); mkdirSync(evidence); writeFileSync(join(evidence, "a.ts"), "export const a = 1;");
     const artifact = join(root, "design.md"); writeFileSync(artifact, "# Design claim");
-    let observed: readonly string[] = [];
-    const worker = createClaudeGroundingWorker({ cwd: root, runner: async (_exe, argv) => { observed = argv; return { status: 0, stderr: "", stdout: JSON.stringify({ findings: [{ code: "confirmed", severity: "info", claim: "x", evidencePaths: [], detail: "ok" }], uncertainty: [] }) }; } });
-    const result = await worker({ lane: "source", stage: "domain-design", objective: "x", artifactPaths: [artifact], evidenceRoots: [evidence], ...snapshotGroundingInputs([artifact], [evidence]), prompt: "inspect", tools: ["Read", "Grep", "Glob"], writesAllowed: false });
-    expect(observed[observed.indexOf("--allowedTools") + 1]).toBe("");
-    expect(observed.join(" ")).toContain("export const a = 1");
-    expect(observed.join(" ")).toContain("# Design claim");
+    let observed: readonly string[] = [], stdin = "";
+    const worker = createClaudeGroundingWorker({ cwd: root, runner: async (_exe, argv, _cwd, input) => { observed = argv; stdin = input; return { status: 0, stderr: "", stdout: JSON.stringify({ findings: [{ code: "confirmed", severity: "info", claim: "x", evidencePaths: [], detail: "ok" }], uncertainty: [] }) }; } });
+    const result = await worker({ lane: "source", stage: "domain-design", objective: "x", artifactPaths: [artifact], evidenceRoots: [evidence], ...snapshotGroundingInputs([artifact], [evidence]), limits: { maxEvidenceFiles: 200, maxInputBytes: 1_000_000 }, prompt: "inspect", tools: ["Read", "Grep", "Glob"], writesAllowed: false });
+    expect(observed).toEqual(["-p", "--allowedTools", "", "--permission-mode", "dontAsk"]);
+    expect(stdin).toContain("export const a = 1");
+    expect(stdin).toContain("# Design claim");
     expect(observed.join(" ")).not.toContain("Bash");
     expect(result.findings[0]?.code).toBe("confirmed");
     const path = join(root, "evidence", "result.json");

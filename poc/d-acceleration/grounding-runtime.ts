@@ -3,9 +3,12 @@ import { dirname, relative } from "node:path";
 import { spawn } from "node:child_process";
 import { sha256, type GroundingSnapshotEntry, type GroundingTask, type GroundingWorker, type GroundingWorkerResult } from "./grounding.ts";
 
-export type GroundingCommandRunner = (executable: string, argv: readonly string[], cwd: string) => Promise<{ status: number; stdout: string; stderr: string }>;
-export const groundingSpawnRunner: GroundingCommandRunner = (executable, argv, cwd) => new Promise((resolve, reject) => {
-  const child = spawn(executable, [...argv], { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+/** `stdin` carries the prompt: a snapshot of up to the configured byte cap would overflow argv (macOS ARG_MAX is 1 MiB, Linux limits one argument to 128 KiB). */
+export type GroundingCommandRunner = (executable: string, argv: readonly string[], cwd: string, stdin: string) => Promise<{ status: number; stdout: string; stderr: string }>;
+export const groundingSpawnRunner: GroundingCommandRunner = (executable, argv, cwd, stdin) => new Promise((resolve, reject) => {
+  const child = spawn(executable, [...argv], { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin.on("error", () => { /* surfaced through the exit status */ });
+  child.stdin.end(stdin);
   let stdout = "", stderr = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => stdout += chunk);
   child.stderr.setEncoding("utf8").on("data", (chunk) => stderr += chunk);
@@ -29,7 +32,9 @@ export function createClaudeGroundingWorker(options: { cwd: string; executable?:
     const artifactSnapshot = render(task.artifactFiles, "STAGE ARTIFACT");
     const evidenceSnapshot = render(task.evidenceFiles, "EVIDENCE");
     const schema = '{"findings":[{"code":"confirmed|refuted|grounding-unavailable","severity":"info|warn|error","claim":"...","evidencePaths":["..."],"detail":"..."}],"uncertainty":["..."]}';
-    const result = await runner(options.executable ?? "claude", ["-p", `${task.prompt}\nBounded stage artifact snapshot:\n${artifactSnapshot}\nBounded evidence snapshot:\n${evidenceSnapshot}\nReturn JSON only matching ${schema}`, "--allowedTools", "", "--permission-mode", "dontAsk"], options.cwd);
+    const prompt = `${task.prompt}\nBounded stage artifact snapshot:\n${artifactSnapshot}\nBounded evidence snapshot:\n${evidenceSnapshot}\nReturn JSON only matching ${schema}`;
+    // Fixed argv; the prompt (the whole bounded snapshot) goes through stdin.
+    const result = await runner(options.executable ?? "claude", ["-p", "--allowedTools", "", "--permission-mode", "dontAsk"], options.cwd, prompt);
     if (result.status !== 0) throw new Error(`grounding worker failed (${result.status}): ${result.stderr.trim()}`);
     try { return JSON.parse(result.stdout) as GroundingWorkerResult; } catch { throw new Error("grounding worker returned non-JSON output"); }
   };
