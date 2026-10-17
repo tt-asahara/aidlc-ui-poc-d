@@ -4,8 +4,9 @@ import { existsSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { plan, type Input, type Tier } from "./aidlc-acceleration-plan.ts";
 import { claudeWorkerLaunch, fakeWorkerLaunch, runWorker, type WorkerKind } from "./worker-adapters.ts";
+import { createWorkerGate, currentDParallelEnabled } from "./parallel-guard.ts";
 const escalate = (tier: Tier): Tier | null => tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : null;
-type Options = { failOnce?: string[]; workerKind?: WorkerKind; ledgerPath?: string; projectDir: string; requestedClaudeModels?: Partial<Record<Tier, string>>; requestedClaudeEffort?: string; claudeExecutable?: string; disposableTestMode?: boolean; timeoutMs?: number };
+type Options = { failOnce?: string[]; workerKind?: WorkerKind; ledgerPath?: string; projectDir: string; requestedClaudeModels?: Partial<Record<Tier, string>>; requestedClaudeEffort?: string; claudeExecutable?: string; disposableTestMode?: boolean; timeoutMs?: number; parallelEnabled?: boolean };
 
 function readProjectContext(projectDir: string, path: unknown): { path: string; text: string } | null {
   if (typeof path !== "string" || !path.trim()) return null;
@@ -30,6 +31,13 @@ export function buildClaudeBuilderPrompt(input: Input, task: Input["tasks"][numb
 export async function execute(input: Input, options: Options) {
   if (options.workerKind && !["fake", "claude"].includes(options.workerKind)) throw new Error(`unsupported worker: ${options.workerKind}`);
   const planned = await plan(input); const failOnce = new Set(options.failOnce ?? []); const records: any[] = []; const started = performance.now();
+  // parallel.enabled=false: one worker at a time. The run's snapshot can only
+  // narrow; the live configuration is re-read before every worker launch, so
+  // OFF takes effect inside a wave already issued, including retries.
+  const runParallel = options.parallelEnabled ?? currentDParallelEnabled(options.projectDir);
+  let waveParallel = runParallel;
+  const gate = createWorkerGate(() => waveParallel && currentDParallelEnabled(options.projectDir) ? Number.POSITIVE_INFINITY : 1);
+  const parallelEvidence = () => ({ enabledAtStart: runParallel, maxConcurrentWorkers: gate.maxActive });
   const root = realpathSync(options.projectDir);
   for (const task of input.tasks) for (const output of task.writeSet) {
     const target = isAbsolute(output) ? output : resolve(root, output); let parent = existsSync(target) ? target : dirname(target); while (!existsSync(parent) && parent !== dirname(parent)) parent = dirname(parent); const resolvedParent = realpathSync(parent);
@@ -38,7 +46,8 @@ export async function execute(input: Input, options: Options) {
   const directive = input.sourceDirective ?? input.directives;
   for (const wave of planned.waves) {
     const blocked = wave.map((id) => input.tasks.find((task) => task.id === id)!).find((task) => task.taskType === "approval");
-    if (blocked) return { status: "awaiting-official-approval", blockedTask: blocked.id, records, elapsedMs: performance.now() - started, plan: planned };
+    if (blocked) return { status: "awaiting-official-approval", blockedTask: blocked.id, records, elapsedMs: performance.now() - started, plan: planned, parallel: parallelEvidence() };
+    waveParallel = runParallel && currentDParallelEnabled(options.projectDir);
     // The latest official directive is the authority for resume. The ledger is
     // retained as audit evidence only and never suppresses issued work.
     const pending = wave;
@@ -50,7 +59,11 @@ export async function execute(input: Input, options: Options) {
         const launch = options.workerKind === "claude"
           ? claudeWorkerLaunch({ model: model!, effort: options.requestedClaudeEffort ?? (tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high"), prompt: buildClaudeBuilderPrompt(input, task, options.projectDir), executable: options.claudeExecutable })
           : fakeWorkerLaunch({ script: `${import.meta.dir}/fake-worker.ts`, task: id, stage: task.stage, unit: task.unit, tier, model, durationMs: task.estimatedMs, retryOrdinal, fail: failOnce.has(id) && retryOrdinal === 0, produces: options.disposableTestMode ? task.writeSet : [] });
-        const result = await runWorker(launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 30_000, maxStdoutBytes: 1_048_576, maxStderrBytes: 262_144 }); records.push({ task: id, tier, retryOrdinal, ...result });
+        await gate.acquire();
+        let result;
+        try { result = await runWorker(launch, { projectDir: options.projectDir, timeoutMs: options.timeoutMs ?? 30_000, maxStdoutBytes: 1_048_576, maxStderrBytes: 262_144 }); }
+        finally { gate.release(); }
+        records.push({ task: id, tier, retryOrdinal, ...result });
         // Worker completion is only candidate evidence. The official engine
         // must accept the Unit before a separate single writer records it in
         // the resume ledger.
@@ -60,9 +73,9 @@ export async function execute(input: Input, options: Options) {
       }
     }));
     const failures = settled.filter((item) => item.status === "rejected" || !item.value?.ok);
-    if (failures.length) return { status: "failed", failures, records, elapsedMs: performance.now() - started, plan: planned };
+    if (failures.length) return { status: "failed", failures, records, elapsedMs: performance.now() - started, plan: planned, parallel: parallelEvidence() };
   }
-  return { status: "completed", records, elapsedMs: performance.now() - started, plan: planned };
+  return { status: "completed", records, elapsedMs: performance.now() - started, plan: planned, parallel: parallelEvidence() };
 }
 
 if (import.meta.main) {

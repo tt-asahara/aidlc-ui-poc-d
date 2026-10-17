@@ -891,6 +891,7 @@ function buildTree(
       "issue-ambiguity-assessor.ts",
       "issue-autopilot-cli.ts",
       "official-next-adapter.ts",
+      "parallel-guard.ts",
       "read-only-fanout.ts",
       "requirement-ui-cross-validation.ts",
       "run.ts",
