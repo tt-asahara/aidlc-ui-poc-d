@@ -2,7 +2,7 @@
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
   "parallel": {
-    // 対象: D並列処理全体（read-only fanoutと新規IntentへのConstruction swarm既定適用）。役割: D並列処理の親スイッチ。ON時: 公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化する。OFF時: read-only fanoutを逐次化し、新規IntentへのConstruction swarm既定適用も抑止する。既定値: ON。run開始時にsnapshotされ、途中変更は次runから有効。利用場面: 通常はON、逐次実行で切り分けたい場合だけOFF。
+    // 対象: D設計wave・retry・read-only fanout・generic/Issue autoのcheckpoint・公式invoke-swarm前のguard。役割: D並列処理の親スイッチ。既定値: ON。ON時: 公式依存DAG、read-onlyまたは非重複write-set、wave barrierを満たす処理だけ並列化。OFF時: D worker同時数を1に制限し、新規IntentへのConstruction swarm既定適用を抑止、既存swarm Intentは公式setterでserialへ移す（拒否時は公式swarmへhand-offせず1行recoveryで停止）。OFFは即時反映（wave途中でも次のworker起動から）、ONは進行中を広げず次のD起動から有効。AIDLC_USE_SWARM / flags.swarm より優先。利用場面: 再現性・負荷・費用を優先し逐次で確認したいとき。
     "enabled": true,
   },
   "constructionDefaults": {

@@ -27,7 +27,8 @@ If the controller returns `session-resume`, use its persisted claim owner and
 session directly; do not run intake or generate a new owner. If it returns
 `host-action-busy`, stop this invocation because another host action is live.
 Before acting on every returned official directive, save that exact JSON and run
-`host-session-cli.ts checkpoint`; stop unless it returns `continue`. Then follow
+`host-session-cli.ts checkpoint`; on `refresh` obtain a fresh official `next` and
+checkpoint that instead, otherwise stop unless it returns `continue`. Then follow
 `action-start`, retain its token, and only then follow the embedded directive
 using the ordinary `/aidlc` forwarding loop: the Claude
 host performs the real stage body, report, reviewer, sensors, and approval. The

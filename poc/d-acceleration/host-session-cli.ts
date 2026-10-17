@@ -5,6 +5,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, s
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { activeElapsedMs, checkpointHostSession, leaveHumanWait, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
 import { createFileClaimStore, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
+import type { ParallelGuardResult } from "./parallel-guard.ts";
 
 const args = process.argv.slice(2);
 const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
@@ -250,6 +251,9 @@ if (relative(resolve(projectDir), directivePath).startsWith("..")) throw new Err
 const directive = JSON.parse(readFileSync(directivePath, "utf8"));
 if (state.hostAction || existsSync(heartbeat)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "host-action-busy", state })}\n`); process.exit(0); }
 const lock = `${path}.lock`;
+// Loaded only for checkpoints so the other modes keep their start-up cost.
+const { currentDParallelEnabled, enforceParallelOff } = await import("./parallel-guard.ts");
+let parallelGuard: ParallelGuardResult | null = null;
 let lockFd: number | undefined;
 try {
   try { lockFd = openSync(lock, "wx", 0o600); }
@@ -271,6 +275,13 @@ try {
   } else if (await renew(state) !== "renewed") {
     const ended = await finish(state, "claim-lost");
     process.stdout.write(`${JSON.stringify({ action: "stop", reason: "claim-lost", state: ended })}\n`);
+  } else if ((parallelGuard = currentDParallelEnabled(projectDir) ? null : enforceParallelOff({ projectDir, directive, parallelEnabled: false }))?.action === "refresh") {
+    // The official setter moved this Intent to serial; the swarm directive is
+    // stale. Not a step: the host obtains a fresh official next and checkpoints it.
+    process.stdout.write(`${JSON.stringify({ action: "refresh", reason: parallelGuard!.reason, parallelGuard, state })}\n`);
+  } else if (parallelGuard?.action === "stop") {
+    const ended = await finish(state, parallelGuard.reason);
+    process.stdout.write(`${JSON.stringify({ action: "stop", reason: parallelGuard.reason, recovery: parallelGuard.recovery, parallelGuard, state: ended })}\n`);
   } else {
     const result = checkpointHostSession(state, directive);
     let finalState: HostSessionState;
@@ -292,7 +303,7 @@ try {
       });
       finalState = guarded ?? await finish(result.state, "lifecycle-busy");
     } else { finalState = { ...result.state, awaitingHuman: result.reason === "human-gate" }; save(finalState); }
-    process.stdout.write(`${JSON.stringify({ ...result, state: finalState })}\n`);
+    process.stdout.write(`${JSON.stringify({ ...result, ...(parallelGuard ? { parallelGuard } : {}), state: finalState })}\n`);
   }
 } finally {
   if (lockFd !== undefined) closeSync(lockFd);

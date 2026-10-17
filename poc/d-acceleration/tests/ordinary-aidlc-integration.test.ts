@@ -65,6 +65,7 @@ describe("ordinary /aidlc D integration", () => {
       "host-session-cli.ts",
       "host-stage-boundary.ts",
       "official-next-adapter.ts",
+      "parallel-guard.ts",
       "read-only-fanout.ts",
       "run.ts",
       "scheduler.ts",
