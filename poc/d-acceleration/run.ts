@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConfig, resolveDModelContract, resolveDModels } from "./d-config.ts";
+import { CLEF_REMOVED, resolveDConfig, resolveDModelContract, resolveDModels } from "./d-config.ts";
 import { enforceParallelOff } from "./parallel-guard.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
@@ -10,9 +10,9 @@ const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projec
 const runtime = join(projectDir, ".claude"); const tools = join(runtime, "tools"); const orchestrate = join(tools, "aidlc-orchestrate.ts");
 const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.md"), join(tools, "ui-poc", "c-stage-routing.json"), join(tools, "data", "plugin-contrib-ui-poc.json"), join(tools, "data", "plugin-files-ui-poc.json")];
 const missing = required.filter((path) => !existsSync(path));
-const clef = resolveDClef(projectDir);
+if (args.some((arg) => arg === "--clef-url" || arg === "--clef-low-risk-units")) { process.stderr.write(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units\n`); process.exit(2); }
 const optional = resolveDConfig(projectDir);
-const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, clef: { configured: clef.enabled, endpoint: clef.url, explicitLowRiskUnits: clef.lowRiskUnits }, unsupported: "all other stages return to official host", runtime: runtime, missing };
+const enabled = { uiBaseline: missing.length ? "missing" : "C-composed", acceleration: "D-automatic-for-supported-waves", supportedDesignWaves: ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"], supportedReadOnlyFanout: ["feasibility", "market-research", "performance-validation"], modelContract: resolveDModelContract(projectDir, process.env.AIDLC_PARENT_MODEL), constructionContract: { default: "unit-major/serial", safeParallel: "stage-major/swarm only after the official Unit DAG proves independent ready Units and disjoint writes, using the person's recorded request" }, optional, unsupported: "all other stages return to official host", runtime: runtime, missing };
 if (args.includes("--preflight")) { process.stdout.write(`${JSON.stringify(enabled, null, 2)}\n`); process.exit(missing.length ? 2 : 0); }
 if (missing.length) { process.stderr.write(`D preflight failed; compose C first: ${missing.join(", ")}\n`); process.exit(2); }
 const stageCheckInput = value("--stage-check-input");
@@ -55,8 +55,7 @@ const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
 const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
 for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);
-command.push(...clefRunnerArgs(clef));
-for (const flag of ["--claude-effort", "--clef-url", "--clef-low-risk-units", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
+for (const flag of ["--claude-effort", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
 if (args.includes("--disposable-test-mode")) command.push("--disposable-test-mode");
 const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

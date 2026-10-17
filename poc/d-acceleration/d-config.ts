@@ -2,9 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 
+/** One owner for the fail-closed notice used by config, planner input, and runner flags. */
+export const CLEF_REMOVED = "Clef routing support was removed from D (owner decision 2026-10-17)";
 export type DModelTier = "fast" | "balanced" | "judgment";
 export type DModelCatalog = Record<DModelTier, string>;
-export type DClefConfig = { enabled: boolean; url: string; lowRiskUnits: string[] };
 export type DGitPersistenceConfig = { enabled: boolean; push: boolean; remote: string; branch?: string };
 export type DFeatureFlags = { requirementIdValidation: boolean; functionalDesignDocumentDiscipline: boolean; sourceGrounding: boolean; specGrounding: boolean; mockupPngGeneration: boolean; visualRegression: boolean };
 export type DAmbiguityPolicy = "halt" | "assume" | "research";
@@ -17,9 +18,8 @@ export type DParallelConfig = { enabled: boolean };
 export type DFeatureInputs = { requirementIdBridges: Array<{ uiAc: string; officialId: string }>; functionalDesignBudgets: { artifactBytes: number; unitBytes: number; metadataBytes: number }; sourceRoots: string[]; specRoots: string[] };
 export type DResolvedConfig = { features: DFeatureFlags; featureInputs: DFeatureInputs; auto: DAutomationConfig; issueAutopilot: DIssueAutopilotConfig; aiApproval: DAiApprovalConfig; decisionIssueSummary: DDecisionIssueSummaryConfig; parallel: DParallelConfig; constructionDefaults: DConstructionDefaults };
 export const DEFAULT_D_MODEL = "opus";
-export const DEFAULT_CLEF_URL = "http://127.0.0.1:18742";
 
-type DFileConfig = { models: Partial<DModelCatalog>; clef?: Partial<DClefConfig>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults> };
+type DFileConfig = { models: Partial<DModelCatalog>; gitPersistence?: Partial<DGitPersistenceConfig>; features?: Partial<DFeatureFlags>; featureInputs?: Partial<DFeatureInputs>; auto?: Partial<DAutomationConfig>; issueAutopilot?: Partial<DIssueAutopilotConfig>; aiApproval?: Partial<DAiApprovalConfig>; decisionIssueSummary?: Partial<DDecisionIssueSummaryConfig>; parallel?: Partial<DParallelConfig>; constructionDefaults?: Partial<DConstructionDefaults> };
 
 /** Parse JSONC without changing comment-like text inside strings. */
 export function parseDJsonc(source: string, path = "D configuration"): unknown {
@@ -75,8 +75,7 @@ function readConfig(path: string): DFileConfig {
   const models = object(value.models, "models", path) ?? value;
   const result: Partial<DModelCatalog> = {};
   for (const tier of ["fast", "balanced", "judgment"] as const) { const model = models[tier]; if (model !== undefined && (typeof model !== "string" || !model.trim())) throw new Error(`invalid D ${tier} model in ${path}`); if (typeof model === "string") result[tier] = model.trim(); }
-  const clef = object(value.clef, "Clef", path);
-  if (clef) { bool(clef.enabled, "Clef enabled", path); if (clef.url !== undefined) { if (typeof clef.url !== "string") throw new Error(`invalid D Clef URL in ${path}`); const url = new URL(clef.url); if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password) throw new Error(`D Clef URL must be loopback http://127.0.0.1 in ${path}`); } strings(clef.lowRiskUnits, "Clef lowRiskUnits", path); }
+  if (value.clef !== undefined) throw new Error(`${CLEF_REMOVED}; delete the "clef" key from ${path}`);
   const gitPersistence = object(value.gitPersistence, "Git persistence", path);
   if (gitPersistence) { for (const key of Object.keys(gitPersistence)) if (!["enabled", "push", "remote", "branch"].includes(key)) throw new Error(`unknown D Git persistence key ${key} in ${path}`); for (const key of ["enabled", "push"] as const) bool(gitPersistence[key], `Git persistence ${key}`, path); for (const key of ["remote", "branch"] as const) if (gitPersistence[key] !== undefined && (typeof gitPersistence[key] !== "string" || !gitPersistence[key].trim())) throw new Error(`invalid D Git persistence ${key} in ${path}`); }
   const features = object(value.features, "features", path);
@@ -112,7 +111,7 @@ function readConfig(path: string): DFileConfig {
   }
   const parallel = object(value.parallel, "parallel", path);
   if (parallel) { for (const key of Object.keys(parallel)) if (key !== "enabled") throw new Error(`unknown D parallel key ${key} in ${path}`); bool(parallel.enabled, "parallel enabled", path); }
-  return { models: result, clef: clef as Partial<DClefConfig>, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults> };
+  return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults> };
 }
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
   const directory = join(projectDir, ".claude");
@@ -127,7 +126,6 @@ function layers(projectDir: string) { return { project: readConfig(configPath(pr
 
 export function resolveDGitPersistence(projectDir: string): DGitPersistenceConfig { const { project, local } = layers(projectDir), base = project.gitPersistence ?? {}, override = local.gitPersistence ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, push: override.push ?? base.push ?? false, remote: (override.remote ?? base.remote ?? "origin").trim(), branch: override.branch?.trim() ?? base.branch?.trim() }; }
 export function resolveDModels(projectDir: string, cli: Partial<DModelCatalog> = {}): { models: DModelCatalog; sources: Record<DModelTier, "cli" | "local" | "project" | "default"> } { const { project, local } = layers(projectDir), models = {} as DModelCatalog, sources = {} as Record<DModelTier, "cli" | "local" | "project" | "default">; for (const tier of ["fast", "balanced", "judgment"] as const) { const choices = [[cli[tier], "cli"], [local.models[tier], "local"], [project.models[tier], "project"], [DEFAULT_D_MODEL, "default"]] as const, selected = choices.find(([model]) => typeof model === "string" && model.trim())!; models[tier] = selected[0]!.trim(); sources[tier] = selected[1]; } return { models, sources }; }
-export function resolveDClef(projectDir: string): DClefConfig { const { project, local } = layers(projectDir), base = project.clef ?? {}, override = local.clef ?? {}; return { enabled: override.enabled ?? base.enabled ?? false, url: override.url ?? base.url ?? DEFAULT_CLEF_URL, lowRiskUnits: [...new Set((override.lowRiskUnits ?? base.lowRiskUnits ?? []).map((unit) => unit.trim()))] }; }
 export function resolveDFeatureFlags(projectDir: string): DFeatureFlags { const { project, local } = layers(projectDir), base = project.features ?? {}, override = local.features ?? {}; return { requirementIdValidation: override.requirementIdValidation ?? base.requirementIdValidation ?? false, functionalDesignDocumentDiscipline: override.functionalDesignDocumentDiscipline ?? base.functionalDesignDocumentDiscipline ?? false, sourceGrounding: override.sourceGrounding ?? base.sourceGrounding ?? false, specGrounding: override.specGrounding ?? base.specGrounding ?? false, mockupPngGeneration: override.mockupPngGeneration ?? base.mockupPngGeneration ?? false, visualRegression: override.visualRegression ?? base.visualRegression ?? false }; }
 export function effectivePngGeneration(features: DFeatureFlags): boolean { return features.mockupPngGeneration || features.visualRegression; }
 export function resolveDFeatureInputs(projectDir: string): DFeatureInputs { const { project, local } = layers(projectDir), base = project.featureInputs ?? {}, override = local.featureInputs ?? {}, baseBudget = base.functionalDesignBudgets ?? {}, overrideBudget = override.functionalDesignBudgets ?? {}; return { requirementIdBridges: override.requirementIdBridges ?? base.requirementIdBridges ?? [], functionalDesignBudgets: { artifactBytes: overrideBudget.artifactBytes ?? baseBudget.artifactBytes ?? 60_000, unitBytes: overrideBudget.unitBytes ?? baseBudget.unitBytes ?? 160_000, metadataBytes: overrideBudget.metadataBytes ?? baseBudget.metadataBytes ?? 30_000 }, sourceRoots: override.sourceRoots ?? base.sourceRoots ?? [], specRoots: override.specRoots ?? base.specRoots ?? [] }; }
@@ -138,7 +136,6 @@ export function resolveDDecisionIssueSummary(projectDir: string): DDecisionIssue
 export function resolveDParallel(projectDir: string): DParallelConfig { const { project, local } = layers(projectDir); return { enabled: local.parallel?.enabled ?? project.parallel?.enabled ?? true }; }
 export function resolveDConstructionDefaults(projectDir: string): DConstructionDefaults { const { project, local } = layers(projectDir), base = project.constructionDefaults ?? {}, override = local.constructionDefaults ?? {}; const resolved: DConstructionDefaults = { iteration: override.iteration ?? base.iteration ?? "official", execution: override.execution ?? base.execution ?? "official" }; if (resolved.execution === "swarm" && resolved.iteration !== "stage-major") throw new Error("D constructionDefaults.execution=swarm requires constructionDefaults.iteration=stage-major"); return resolveDParallel(projectDir).enabled ? resolved : { iteration: "official", execution: "official" }; }
 export function resolveDConfig(projectDir: string): DResolvedConfig { return { features: resolveDFeatureFlags(projectDir), featureInputs: resolveDFeatureInputs(projectDir), auto: resolveDAutomation(projectDir), issueAutopilot: resolveDIssueAutopilot(projectDir), aiApproval: resolveDAiApproval(projectDir), decisionIssueSummary: resolveDDecisionIssueSummary(projectDir), parallel: resolveDParallel(projectDir), constructionDefaults: resolveDConstructionDefaults(projectDir) }; }
-export function clefRunnerArgs(config: DClefConfig): string[] { return config.enabled ? ["--clef-url", config.url, ...(config.lowRiskUnits.length ? ["--clef-low-risk-units", config.lowRiskUnits.join(",")] : [])] : []; }
 
 if (import.meta.main) {
   const [command, projectDir] = process.argv.slice(2);

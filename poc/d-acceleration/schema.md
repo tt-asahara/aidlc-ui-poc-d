@@ -1,7 +1,8 @@
 # Planner contract
 
 Input is JSON with `tasks`, engine-issued `directives`, and optional
-`modelCatalog`, `clef`, and `maxParallel`. Task identity is separate from its
+`modelCatalog` and `maxParallel`. A `clef` key is rejected: Clef routing
+was removed on 2026-10-17. Task identity is separate from its
 official stage and Unit:
 
 - `id`, `stage`, optional `unit`, `dependsOn`, `estimatedMs`
@@ -35,11 +36,13 @@ entries carry the assessor's `modelIdentity`.
 
 Each route records `tier`, `effort` (fast=low, balanced=medium,
 judgment=high), `reason`, and `source`. Scheduler records repeat the route
-reason, or the escalation reason on retries. The planner owns two
-safeguards that callers cannot override. Official design-wave stages and
-`design` tasks never route below `balanced`, even when Clef answers `fast` or
-a caller supplies `fallbackTier: "fast"`. `approval`/`security`/`compliance`
-tasks and every stage whose policy says `clef: "never"` are never sent to Clef.
+reason, or the escalation reason on retries. The planner owns a quality
+floor that callers cannot override. Official design-wave stages and `design`
+tasks never route below `balanced`, even with `fallbackTier: "fast"`.
+`approval`/`security`/`compliance` tasks always route at `judgment` with
+`human-review` escalation. A raised route says so in its `reason`, and
+`routingMetrics.floorRaised` counts such routes. Routing is deterministic and
+makes no network call.
 
 Output contains per-task `route`, ordered `waves`, routing metrics, and enforced
 constraints. A wave contains only entries from one issued directive: the official engine
@@ -47,11 +50,3 @@ still owns directive issuance, approvals, audit events, review scope, and swarm
 settlement. Code Generation swarm execution remains unsupported by the
 executable harness until those official worktree and settlement records can be
 verified.
-
-Each route also contains bounded Clef evidence. `attempted: false` means the
-task was not eligible or Clef was disabled. `available: false` means the local
-transport or HTTP endpoint failed. `available: true, used: false` means a
-response arrived but was invalid or below the confidence threshold, so the
-conservative fallback was used. `outcome: "timeout"` (with `available: null`)
-means the request was aborted at `timeoutMs`. No route claims Clef was used unless
-`used: true` and `outcome: selected`.

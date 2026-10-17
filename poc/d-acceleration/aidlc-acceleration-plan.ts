@@ -1,39 +1,40 @@
 #!/usr/bin/env bun
 import { readFileSync, writeFileSync } from "node:fs";
-import stagePolicy from "./stage-policy.json";
+import { CLEF_REMOVED } from "./d-config.ts";
 
 export type Tier = "fast" | "balanced" | "judgment";
 export type TaskType = "templated" | "implementation" | "review" | "design" | "security" | "compliance" | "approval" | "ambiguous";
 export type Execution = "serial" | "official-wave" | "official-swarm";
-export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; builderBrief?: unknown; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier; assessmentState?: unknown };
+export type Task = { id: string; stage: string; unit?: string; dependsOn: string[]; inputSet?: string[]; builderBrief?: unknown; estimatedMs: number; taskType: TaskType; difficulty: "low" | "medium" | "high"; risk: "low" | "medium" | "high"; execution: Execution; writeSet: string[]; isolatedWorktree?: boolean; minimumTier?: Tier; fallbackTier?: Tier };
 export type Directive = { kind: "wave" | "swarm"; stage: string; entries: string[] };
-export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>>; clef?: { enabled?: boolean; url?: string; timeoutMs?: number; confidenceThreshold?: number } };
-type ClefEvidence = { attempted: boolean; available: boolean | null; used: boolean; endpoint: string; outcome: "not-eligible" | "selected" | "unavailable" | "timeout" | "invalid-response" | "low-confidence" };
+export type Input = { tasks: Task[]; directives?: Directive[]; sourceDirective?: unknown; maxParallel?: number; modelCatalog?: Partial<Record<Tier, string>> };
 type Effort = "low" | "medium" | "high";
-type Route = { tier: Tier; effort: Effort; model?: string; reason: string; source: "rule" | "clef" | "fallback"; escalation: Tier | "human-review"; confidence?: number; routingMs: number; clef: ClefEvidence };
+type Route = { tier: Tier; effort: Effort; model?: string; reason: string; source: "rule" | "fallback"; escalation: Tier | "human-review"; routingMs: number };
 
 const TASK_TYPES = new Set(["templated", "implementation", "review", "design", "security", "compliance", "approval", "ambiguous"]);
 const EXECUTIONS = new Set(["serial", "official-wave", "official-swarm"]);
 const OFFICIAL_WAVE_STAGES = new Set(["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"]);
 const LEVELS = new Set(["low", "medium", "high"]);
 const ORDER: Tier[] = ["fast", "balanced", "judgment"];
-/** Task types that represent human-only or protected decisions; Clef never sees them. */
+/** Task types that represent human-only or protected decisions; never routed below judgment. */
 const PROTECTED_TASK_TYPES = new Set(["approval", "security", "compliance"]);
-/** Stages whose policy forbids Clef outright (`clef: "never"`). Unknown/custom stages are not listed. */
-const CLEF_FORBIDDEN_STAGES = new Set(stagePolicy.stages.filter((entry) => entry.clef === "never").map((entry) => entry.stage));
 export const effortForTier = (tier: Tier): Effort => tier === "fast" ? "low" : tier === "balanced" ? "medium" : "high";
 const maxTier = (a: Tier, b: Tier): Tier => ORDER.indexOf(a) >= ORDER.indexOf(b) ? a : b;
 /**
- * Quality floor owned by the planner, not by callers: official design-wave
+ * Quality floor owned by the planner, not by callers: protected decisions
+ * (approval/security/compliance) stay at judgment, and official design-wave
  * stages and design tasks never route below balanced, whatever a caller's
- * minimumTier/fallbackTier or Clef says.
+ * minimumTier/fallbackTier says.
  */
 export function qualityFloor(task: Pick<Task, "stage" | "taskType" | "minimumTier">): Tier {
-  const designFloor: Tier = OFFICIAL_WAVE_STAGES.has(task.stage) || task.taskType === "design" ? "balanced" : "fast";
-  return maxTier(designFloor, task.minimumTier ?? "fast");
+  const floor: Tier = PROTECTED_TASK_TYPES.has(task.taskType) ? "judgment" : OFFICIAL_WAVE_STAGES.has(task.stage) || task.taskType === "design" ? "balanced" : "fast";
+  return maxTier(floor, task.minimumTier ?? "fast");
 }
 
+
+
 function validate(input: Input): void {
+  if (input && typeof input === "object" && "clef" in input) throw new Error(`${CLEF_REMOVED}; delete the "clef" key from the planner input`);
   if (!input || !Array.isArray(input.tasks) || input.tasks.length === 0) throw new Error("tasks must be a non-empty array");
   const ids = new Set<string>();
   for (const task of input.tasks) {
@@ -58,10 +59,7 @@ function validate(input: Input): void {
   for (const [tier, model] of Object.entries(input.modelCatalog ?? {})) if (!(["fast", "balanced", "judgment"].includes(tier)) || typeof model !== "string" || !model.trim()) throw new Error(`invalid model catalog entry: ${tier}`);
 }
 
-function clefEndpoint(input: Input): string { return input.clef?.url ?? "http://127.0.0.1:18742"; }
-function notEligible(input: Input): ClefEvidence { return { attempted: false, available: null, used: false, endpoint: clefEndpoint(input), outcome: "not-eligible" }; }
-
-function deterministicRoute(task: Task): Omit<Route, "routingMs" | "clef" | "effort"> | null {
+function deterministicRoute(task: Task): Omit<Route, "routingMs" | "effort"> | null {
   if (["security", "compliance", "approval"].includes(task.taskType) || task.risk === "high" || task.difficulty === "high") return { tier: "judgment", reason: "high-risk, approval, or high-difficulty work cannot be downgraded", source: "rule", escalation: "human-review" };
   if (task.taskType === "review" || task.taskType === "design" || task.risk === "medium" || task.difficulty === "medium") return { tier: "balanced", reason: "review/design or medium complexity requires balanced reasoning", source: "rule", escalation: "judgment" };
   if (task.taskType === "templated") return { tier: "fast", reason: "explicit low-risk templated work", source: "rule", escalation: "balanced" };
@@ -69,48 +67,19 @@ function deterministicRoute(task: Task): Omit<Route, "routingMs" | "clef" | "eff
   return null;
 }
 
-class ClefRouteError extends Error { constructor(readonly outcome: "unavailable" | "timeout" | "invalid-response" | "low-confidence", message: string) { super(message); } }
-const isTimeout = (error: unknown) => error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-
-async function clefRoute(task: Task, config: NonNullable<Input["clef"]>): Promise<{ tier: Tier; confidence: number; ms: number }> {
-  const url = config.url ?? "http://127.0.0.1:18742";
-  const parsed = new URL(url);
-  if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") throw new Error("Clef URL must be local http://127.0.0.1");
-  const started = performance.now();
-  let response: Response;
-  try {
-    response = await fetch(`${url.replace(/\/$/, "")}/v1/systemone`, { method: "POST", redirect: "error", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(config.timeoutMs ?? 1500), body: JSON.stringify({ model: "clef", state: task.assessmentState ?? { stage: task.stage, unit: task.unit, outputs: task.writeSet }, questions: { tier: { type: "choice", instructions: "Classify only the reasoning effort for this explicitly low-risk task.", criteria: { fast: "deterministic or templated", balanced: "moderate reasoning", judgment: "complex or uncertain" } } } }) });
-  } catch (error) { throw isTimeout(error) ? new ClefRouteError("timeout", "Clef timed out") : new ClefRouteError("unavailable", "Clef transport unavailable"); }
-  if (!response.ok) throw new ClefRouteError("unavailable", `Clef HTTP ${response.status}`);
-  let body: any;
-  try { body = await response.json(); } catch (error) { throw isTimeout(error) ? new ClefRouteError("timeout", "Clef timed out") : new ClefRouteError("invalid-response", "Clef returned malformed JSON"); }
-  const answer = body?.answers?.tier;
-  if (!answer || !["fast", "balanced", "judgment"].includes(answer.choice) || typeof answer.confidence !== "number") throw new ClefRouteError("invalid-response", "invalid Clef response");
-  if (answer.confidence < (config.confidenceThreshold ?? 0.75)) throw new ClefRouteError("low-confidence", "low-confidence Clef response");
-  return { tier: answer.choice, confidence: answer.confidence, ms: performance.now() - started };
-}
-
 const escalationFor = (tier: Tier): Tier | "human-review" => tier === "fast" ? "balanced" : tier === "balanced" ? "judgment" : "human-review";
 
-async function route(task: Task, input: Input): Promise<Route> {
+function route(task: Task): Route {
   const started = performance.now();
   const ruled = deterministicRoute(task);
-  if (ruled) return { ...ruled, effort: effortForTier(ruled.tier), routingMs: performance.now() - started, clef: notEligible(input) };
-  const floor = qualityFloor(task);
-  const fallback = maxTier(task.fallbackTier ?? "judgment", floor);
-  const clefEligible = task.risk === "low" && !PROTECTED_TASK_TYPES.has(task.taskType) && !CLEF_FORBIDDEN_STAGES.has(task.stage);
-  if (clefEligible && input.clef?.enabled) {
-    try {
-      const selected = await clefRoute(task, input.clef);
-      const tier = maxTier(selected.tier, floor);
-      const reason = tier === selected.tier ? "local Clef classified an explicitly low-risk task" : `local Clef chose ${selected.tier}; raised to the ${floor} quality floor`;
-      return { tier, effort: effortForTier(tier), reason, source: "clef", escalation: escalationFor(tier), confidence: selected.confidence, routingMs: performance.now() - started, clef: { attempted: true, available: true, used: true, endpoint: clefEndpoint(input), outcome: "selected" } };
-    } catch (error) {
-      const outcome = error instanceof ClefRouteError ? error.outcome : "unavailable";
-      return { tier: fallback, effort: effortForTier(fallback), reason: `Clef ${outcome}; used the task's conservative fallback`, source: "fallback", escalation: escalationFor(fallback), routingMs: performance.now() - started, clef: { attempted: true, available: outcome === "unavailable" ? false : outcome === "timeout" ? null : true, used: false, endpoint: clefEndpoint(input), outcome } };
-    }
+  if (ruled) {
+    const tier = maxTier(ruled.tier, qualityFloor(task));
+    const reason = tier === ruled.tier ? ruled.reason : `${ruled.reason}; raised to the ${tier} quality floor`;
+    return { ...ruled, tier, reason, effort: effortForTier(tier), escalation: escalationFor(tier), routingMs: performance.now() - started };
   }
-  return { tier: fallback, effort: effortForTier(fallback), reason: clefEligible ? "ambiguous classification used the task's conservative fallback" : "ambiguous task is not Clef-eligible (protected type or stage policy clef=never); used the conservative fallback", source: "fallback", escalation: escalationFor(fallback), routingMs: performance.now() - started, clef: notEligible(input) };
+  const floor = qualityFloor(task); const requested = task.fallbackTier ?? "judgment"; const fallback = maxTier(requested, floor);
+  const reason = fallback === requested ? "ambiguous classification used the task's conservative fallback" : `ambiguous classification fallback ${requested} raised to the ${floor} quality floor`;
+  return { tier: fallback, effort: effortForTier(fallback), reason, source: "fallback", escalation: escalationFor(fallback), routingMs: performance.now() - started };
 }
 
 function normalizedPath(value: string): string { return value.replaceAll("\\", "/").split("/").reduce<string[]>((parts, part) => part === ".." ? parts.slice(0, -1) : part && part !== "." ? [...parts, part] : parts, []).join("/"); }
@@ -142,11 +111,11 @@ function buildWaves(tasks: Task[], input: Input, maxParallel: number): string[][
 export async function plan(input: Input) {
   validate(input);
   const started = performance.now();
-  const routes: Record<string, Route> = {}; const routingCap = input.maxParallel ?? 4;
-  for (let index = 0; index < input.tasks.length; index += routingCap) for (const [id, value] of await Promise.all(input.tasks.slice(index, index + routingCap).map(async (task) => [task.id, await route(task, input)] as const))) routes[id] = value;
+  const routes: Record<string, Route> = {};
+  for (const task of input.tasks) routes[task.id] = route(task);
   const waves = buildWaves(input.tasks, input, input.maxParallel ?? 4);
   const routeValues = Object.values(routes);
-  return { schemaVersion: 1, routes, waves, routingMetrics: { plannerWallMs: performance.now() - started, clefAttempts: routeValues.filter((r) => r.clef.attempted).length, clefSuccesses: routeValues.filter((r) => r.clef.used).length, clefUnavailable: routeValues.filter((r) => r.clef.outcome === "unavailable").length, clefTimeouts: routeValues.filter((r) => r.clef.outcome === "timeout").length, clefInvalid: routeValues.filter((r) => r.clef.outcome === "invalid-response" || r.clef.outcome === "low-confidence").length, floorRaised: routeValues.filter((r) => r.source === "clef" && r.reason.includes("quality floor")).length, fallbackCount: routeValues.filter((r) => r.source === "fallback").length, costObservable: Object.values(routes).every((r) => r.model !== undefined) ? "runtime-usage-required" : "unavailable-without-runtime-model-catalog" }, constraints: { deterministicRulesFirst: true, humanApprovalTasksSerial: true, securityTasksSerial: true, officialDirectiveEntriesOnly: true } };
+  return { schemaVersion: 1, routes, waves, routingMetrics: { plannerWallMs: performance.now() - started, floorRaised: routeValues.filter((r) => r.reason.includes("quality floor")).length, fallbackCount: routeValues.filter((r) => r.source === "fallback").length, costObservable: Object.values(routes).every((r) => r.model !== undefined) ? "runtime-usage-required" : "unavailable-without-runtime-model-catalog" }, constraints: { deterministicRulesFirst: true, humanApprovalTasksSerial: true, securityTasksSerial: true, officialDirectiveEntriesOnly: true } };
 }
 
 async function main() {

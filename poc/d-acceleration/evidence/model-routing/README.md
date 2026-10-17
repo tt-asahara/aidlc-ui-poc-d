@@ -1,5 +1,15 @@
 # Model identity and routing evidence (2026-10-17)
 
+> **Clef declined (2026-10-17).** Based on the live evaluation in section 4, the
+> owner decided not to integrate Clef into D. Section 4 found a 0.67 agreement
+> rate, a judgment task under-routed to balanced, about 1.3 s per serialized
+> route, and no speed-up. Clef routing support was removed in
+> `refactor(d): remove Clef routing support`. `clef-eval.ts` and
+> `tests/clef-routing.test.ts`, which section 4 cites, exist only in git
+> history. The Clef records below are kept as decision evidence. Model-identity
+> verification, the planner-owned quality floor, and effort/route-reason
+> recording remain.
+
 Claude Code CLI `2.1.302`, already-authenticated local terminal, synthetic
 non-confidential prompts only. 35 real model calls in total, CLI-reported
 list-price cost about USD 0.62. Reproduce with
