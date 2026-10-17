@@ -78,28 +78,61 @@ both arms. The prompts are tiny, and official stage context, reviews, and gates
 are excluded. Cost is the CLI `costUSD` at list price. Process start-up
 dominates wall time, at about 2-3 s per call.
 
-## 4. Clef (`clef-health.txt`, `clef-eval-real-endpoint.json`)
+## 4. Clef
 
-`curl --fail http://127.0.0.1:18742/health` exited with 7 (connection
-refused). Per the workstream rule, Clef was **not started**. Real Clef
-availability, routing accuracy, throughput, and speed-up are therefore
-**未検証**.
-Against the stopped endpoint, all 15 labeled routes fell back. The outcome was
-`unavailable` 15/15, and no design Unit routed below balanced. The
-enabled, disabled, unavailable, HTTP-error, malformed, missing-choice,
-low-confidence, and timeout cases, plus the balanced floor and the
-protected-decision exclusion, are covered against a real loopback fixture
-server in `poc/d-acceleration/tests/clef-routing.test.ts`.
+### 4a. Stopped (`clef-health.txt`, `clef-eval-real-endpoint.json`)
 
-Procedure to close the Clef item. It needs explicit authorization to start a
-process that uses about 16 GB:
+At first, `curl --fail http://127.0.0.1:18742/health` exited with 7. All 15
+labeled routes fell back with `unavailable`, and no design Unit routed below
+balanced.
 
-```bash
-cd /Users/cb-329/work/cloudflare/clef/local && ./start.sh && ./test.sh
-curl --fail http://127.0.0.1:18742/health
-cd <D worktree>
-bun poc/d-acceleration/clef-eval.ts --url http://127.0.0.1:18742 --repeat 5 \
-  --out poc/d-acceleration/evidence/model-routing/clef-eval-live.json
-# Record accuracyWhenApplied, fallbacks, outcomes, designBelowBalanced (must be 0),
-# throughputRoutesPerSec, routingMsP50/P95. Stop Clef with ./stop.sh only if this run started it.
-```
+### 4b. Live service (`clef-health-live.txt`, `clef-eval-live.json`, `clef-live-concurrency-timeout.json`)
+
+After the person authorized it, the coordinator started Clef (PID 19559,
+`./test.sh` ALL PASSED). This workstream did not start or stop it. `/health`
+returned `{"status":"ok","model":"clef"}`. The evaluation ran
+`clef-eval.ts --repeat 3 --timeout-ms 10000` with threshold 0.75.
+
+| Metric | Value |
+|---|---|
+| Routes / Clef applied / fallbacks | 15 / 9 / 6 (all 6 `low-confidence`) |
+| Accuracy when applied, against reviewer labels | 0.67 (6/9) |
+| Determinism | Same answer and confidence every round |
+| Design Unit below balanced | 0 (fd-unit fell back as low-confidence) |
+| Protected tasks sent to Clef | 0 of 6 (approval, security, compliance, approval-handoff, code-generation, design) |
+| Routing latency p50 / p95 | 1309 / 1527 ms per route |
+| Throughput | 0.83 routes/s |
+| Routing wall time, 15 routes: Clef vs no Clef | 18.1 s vs 0.45 ms |
+
+Per-task results:
+- `rename-constant` and `fix-typo-docs` were routed to fast correctly, with
+  confidence 0.93-0.94.
+- `cache-consistency`, labeled judgment, was routed to **balanced** at
+  confidence 0.7511, just above the 0.75 threshold. This is an
+  under-route.
+- `add-pagination` and `fd-unit` were low-confidence and fell back to
+  judgment, which is conservative.
+
+At `confidenceThreshold: 0.9`, only `rename-constant` was applied.
+
+Serialization: with `maxParallel: 5`, the per-route latencies were
+1.3/2.6/3.8/5.0/6.1 s, and total wall time was 6.1 s against 7.0 s serial.
+The service processes one request at a time. The default `timeoutMs: 1500`
+would therefore time out most routes when they run concurrently.
+
+Misbehavior on the live service: `timeoutMs: 50` produced `timeout` on 5/5
+routes, each falling back to judgment in about 55 ms. On the next run, one
+request returned `unavailable` and fell back, probably because the aborted
+requests were still queued. The fixture-server cases (malformed, HTTP 500,
+missing choice, low confidence) remain in `tests/clef-routing.test.ts`.
+
+Speed-up: none on this set. Clef adds about 1.3 s of routing per eligible task
+to save model cost only when it chooses fast. On the routed set it chose fast
+for 2 of 5 tasks. A worker call takes about 2-5 s (section 3). Clef pays off
+only when it moves a task from judgment to fast or balanced, and then it adds
+the under-route risk shown above.
+
+Suggested follow-ups:
+- Raise the threshold to at least 0.8.
+- Scale `timeoutMs` with queue depth, or route serially.
+- Keep Clef limited to explicitly named low-risk Units (the current default).

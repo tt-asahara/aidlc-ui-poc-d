@@ -19,6 +19,14 @@ export const LABELED: Array<{ task: Task; expected: Tier }> = [
   { expected: "balanced", task: { id: "fd-unit", stage: "functional-design", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [], assessmentState: { summary: "Functional design for a read-only settings page Unit." } } },
 ];
 
+/** Must never reach Clef even when it is enabled and healthy. */
+export const PROTECTED: Task[] = [
+  ...(["approval", "security", "compliance"] as const).map((taskType) => ({ id: `protected-${taskType}`, stage: "custom", dependsOn: [], estimatedMs: 1, taskType, difficulty: "low" as const, risk: "low" as const, execution: "serial" as const, writeSet: [] })),
+  { id: "policy-never-approval-handoff", stage: "approval-handoff", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] },
+  { id: "policy-never-code-generation", stage: "code-generation", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] },
+  { id: "design-type", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "design", difficulty: "low", risk: "low", execution: "serial", writeSet: [] },
+];
+
 export async function evaluateClef(url: string, repeat = 3, timeoutMs = 1500) {
   let health: unknown = null; let healthy = false;
   try { const response = await fetch(`${url.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(1000) }); healthy = response.ok; health = await response.json().catch(() => null); } catch (error) { health = String(error); }
@@ -27,7 +35,14 @@ export async function evaluateClef(url: string, repeat = 3, timeoutMs = 1500) {
     const result = await plan({ tasks: LABELED.map(({ task }) => task), maxParallel: 1, clef: { enabled: true, url, timeoutMs } });
     for (const { task, expected } of LABELED) { const route = result.routes[task.id]!; routes.push({ round, id: task.id, expected, tier: route.tier, source: route.source, outcome: route.clef.outcome, confidence: route.confidence ?? null, routingMs: route.routingMs }); }
   }
-  const wallMs = performance.now() - started; const used = routes.filter((route) => route.source === "clef");
+  const wallMs = performance.now() - started;
+  // Same labeled tasks with Clef disabled: the routing-cost baseline.
+  const noClefStarted = performance.now();
+  for (let round = 0; round < repeat; round++) await plan({ tasks: LABELED.map(({ task }) => task), maxParallel: 1 });
+  const noClefWallMs = performance.now() - noClefStarted;
+  const guarded = await plan({ tasks: PROTECTED, clef: { enabled: true, url, timeoutMs } });
+  const protectedRoutes = PROTECTED.map((task) => ({ id: task.id, tier: guarded.routes[task.id]!.tier, source: guarded.routes[task.id]!.source, attempted: guarded.routes[task.id]!.clef.attempted }));
+  const used = routes.filter((route) => route.source === "clef");
   const sorted = routes.map((route) => route.routingMs).sort((a, b) => a - b); const pct = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))] ?? null;
   return {
     endpoint: url, healthy, health, repeat, routes: routes.length,
@@ -36,6 +51,8 @@ export async function evaluateClef(url: string, repeat = 3, timeoutMs = 1500) {
     accuracyWhenApplied: used.length ? used.filter((route) => route.tier === route.expected).length / used.length : null,
     designBelowBalanced: routes.filter((route) => route.id === "fd-unit" && route.tier === "fast").length,
     throughputRoutesPerSec: routes.length / (wallMs / 1000), routingMsP50: pct(0.5), routingMsP95: pct(0.95),
+    clefWallMs: wallMs, noClefWallMs, routingOverheadVsNoClefMs: wallMs - noClefWallMs,
+    protectedRoutes, protectedSentToClef: protectedRoutes.filter((route) => route.attempted).length,
     detail: routes,
   };
 }
