@@ -26,8 +26,16 @@ Build a household budget web app with monthly planning, transaction tracking,
 category summaries, and a responsive user interface.
 ```
 
-With no explicit scope, reproducible UI keywords propose `ui-poc-application`,
-which retains the C rough/refined HTML evidence handoff. Explicit scopes,
+Scope inference is the unmodified upstream resolver (core/ is byte-identical
+to AI-DLC v2.11.0). The plugin's UI keywords (`web app`, `dashboard`,
+`frontend`, ...) propose `ui-poc-application` only for short requests of five
+words or fewer, such as `Build a budget web app`. Longer prose like the example
+above, and Japanese text such as `家計管理のWebアプリを作りたい`, get the stock
+proposal or compose offer: pick `ui-poc-application` among the plans offered
+at the official scope confirmation (or name it explicitly). Teaching the core
+resolver plugin-declared high-specificity or CJK keywords would need a core
+change and is out of scope. `ui-poc-application` retains the C rough/refined
+HTML evidence handoff. Explicit scopes,
 explicit serial execution, and non-UI requests keep their normal meaning.
 Delivery Planning evaluates the actual Unit DAG and write conflicts before it
 proposes stage-major execution and official Code Generation swarm; the person
@@ -37,8 +45,8 @@ four automatic design waves do not depend on wording them into this prompt.
 ## Requirements-only loop
 
 To grow requirements and the `/aidlc --doc` design document set without
-building, select the requirements loop explicitly (UI keywords such as
-`Webアプリ` otherwise propose `ui-poc-application` first):
+building, select the requirements loop explicitly (the `requirements-loop`
+keyword routes only short ASCII requests):
 
 ```text
 /aidlc --scope ui-poc-requirements

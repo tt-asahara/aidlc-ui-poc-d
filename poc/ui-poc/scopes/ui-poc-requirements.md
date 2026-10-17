@@ -4,7 +4,6 @@ plugin: ui-poc
 depth: Standard
 keywords:
   - requirements-loop
-  - 要件定義ループ
 description: Requirements-only loop with rough and refined HTML evidence that grows the --doc design set
 skeleton: off
 runner: true

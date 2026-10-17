@@ -10,7 +10,6 @@ keywords:
   - frontend
   - user interface
   - mobile app
-  - Webアプリ
 description: UI application lifecycle with rough and refined HTML evidence handoffs
 skeleton: on
 runner: true
