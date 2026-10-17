@@ -88,7 +88,7 @@ describe("D JSONC configuration", () => {
     for (const id of ["機能21", "機能22", "機能27", "機能28"]) expect(featureComments).toContain(id);
     expect(featureComments.match(/既定値: OFF/g)).toHaveLength(6);
     expect(featureComments.match(/依存関係:/g)).toHaveLength(6);
-    expect(featureComments).toContain("sourceRoots必須で空なら停止");
-    expect(featureComments).toContain("specRoots必須で空なら停止");
+    expect(featureComments).toContain("sourceRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない");
+    expect(featureComments).toContain("specRoots必須。空・不在・project外・symlink経由のrootが1つでもあればOFF扱いでNOT-READYを記録し準拠主張はしない");
   });
 });
