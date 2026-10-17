@@ -198,7 +198,8 @@ describe("parallel.enabled=false: host checkpoints and generic auto", () => {
     writeFileSync(join(dir, ".claude", "tools", "aidlc.ts"), `import { mkdirSync, writeFileSync } from "node:fs"; import { join } from "node:path";
 const args = process.argv.slice(2), root = args[args.indexOf("--project-dir") + 1], intents = join(root, "aidlc", "spaces", "default", "intents");
 mkdirSync(join(intents, "i1"), { recursive: true }); writeFileSync(join(intents, "active-intent"), "i1\\n");
-writeFileSync(join(intents, "i1", "aidlc-state.md"), "- [ ] intent-capture — EXECUTE\\n- [ ] units-generation — EXECUTE\\n- [ ] code-generation — EXECUTE\\n");\n`);
+writeFileSync(join(intents, "i1", "aidlc-state.md"), "- [ ] intent-capture — EXECUTE\\n- [ ] units-generation — EXECUTE\\n- [ ] code-generation — EXECUTE\\n");
+mkdirSync(join(intents, "i1", "audit"), { recursive: true }); writeFileSync(join(intents, "i1", "audit", "host-clone.md"), "## Workflow Started\\n**Timestamp**: " + new Date().toISOString() + "\\n**Event**: WORKFLOW_STARTED\\n");\n`);
     writeFileSync(join(dir, ".claude", "tools", "aidlc-orchestrate.ts"), `process.stdout.write(JSON.stringify({ kind: "run-stage", stage: "intent-capture", receipt: "first" }));\n`);
     writeFileSync(join(dir, ".claude", "tools", "aidlc-state.ts"), `import { appendFileSync } from "node:fs"; const args = process.argv.slice(2); appendFileSync(args[args.indexOf("--project-dir") + 1] + "/policy-calls", args.join(" ") + "\\n"); process.stdout.write("serial\\n");\n`);
     writeFileSync(join(dir, "request.txt"), "Build a feature");
