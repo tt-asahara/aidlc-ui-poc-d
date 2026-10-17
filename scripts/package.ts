@@ -901,6 +901,7 @@ function buildTree(
       "read-only-fanout.ts",
       "requirement-ui-cross-validation.ts",
       "resume-ledger.ts",
+      "reviewer-dispatch-cleanup-hook.ts",
       "run.ts",
       "scheduler.ts",
       "stage-policy.json",
@@ -919,7 +920,7 @@ function buildTree(
         throw new Error(`[claude] D acceleration runtime would overwrite a projected core file: ${destination}`);
       }
       mkdirSync(dirname(destination), { recursive: true });
-      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "decision-issue-summary.ts") {
+      if (file === "read-only-fanout.ts" || file === "host-stage-boundary.ts" || file === "cross-stage-speculation.ts" || file === "design-document.ts" || file === "decision-issue-summary.ts" || file === "reviewer-dispatch-cleanup-hook.ts") {
         const projected = readFileSync(source, "utf8")
           .replace('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
           .replace('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
