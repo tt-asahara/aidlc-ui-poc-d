@@ -1,0 +1,478 @@
+{
+  "meta": {
+    "cli": "2.1.302 (Claude Code)",
+    "recordedAt": "2026-10-17T05:53:50.253Z",
+    "observedParentSessionModel": "not-observable",
+    "parentEffortEnv": "medium"
+  },
+  "kind": "model-identity",
+  "rows": [
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11697,
+        "cacheCreationInputTokens": 8183,
+        "costUSD": 0.00175577,
+        "costBasis": "list",
+        "durationMs": 1446,
+        "durationApiMs": 1118
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3342,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "read-only-fanout-worker",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 213,
+        "cacheReadInputTokens": 4221,
+        "cacheCreationInputTokens": 777,
+        "costUSD": 0.00030431,
+        "costBasis": "list",
+        "durationMs": 3620,
+        "durationApiMs": 3245
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 5248,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "issue-ambiguity-assessor",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 2368,
+        "cacheCreationInputTokens": 363,
+        "costUSD": 0.00009848,
+        "costBasis": "list",
+        "durationMs": 1240,
+        "durationApiMs": 814
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3003,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-question-assessor",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 2368,
+        "cacheCreationInputTokens": 363,
+        "costUSD": 0.00009848,
+        "costBasis": "list",
+        "durationMs": 1436,
+        "durationApiMs": 1045
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3140,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-approval-assessor",
+      "requestedModel": "claude-haiku-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-haiku-5-5",
+        "runtimeReported": "claude-haiku-5-5",
+        "runtimeReportedModels": [
+          "claude-haiku-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 2731,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.00002951,
+        "costBasis": "list",
+        "durationMs": 936,
+        "durationApiMs": 700
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 2665,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11697,
+        "cacheCreationInputTokens": 7406,
+        "costUSD": 0.030837700000000003,
+        "costBasis": "list",
+        "durationMs": 1711,
+        "durationApiMs": 1267
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3300,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "read-only-fanout-worker",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 5000,
+        "costUSD": 0.020044,
+        "costBasis": "list",
+        "durationMs": 1234,
+        "durationApiMs": 992
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 2690,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "issue-ambiguity-assessor",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 649,
+        "cacheCreationInputTokens": 1304,
+        "costUSD": 0.0053249000000000005,
+        "costBasis": "list",
+        "durationMs": 2653,
+        "durationApiMs": 2222
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4182,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-question-assessor",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1588,
+        "cacheCreationInputTokens": 365,
+        "costUSD": 0.0016627999999999999,
+        "costBasis": "list",
+        "durationMs": 1875,
+        "durationApiMs": 1684
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3601,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-approval-assessor",
+      "requestedModel": "claude-sonnet-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-sonnet-5-5",
+        "runtimeReported": "claude-sonnet-5-5",
+        "runtimeReportedModels": [
+          "claude-sonnet-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1953,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.00023930000000000002,
+        "costBasis": "list",
+        "durationMs": 1290,
+        "durationApiMs": 1031
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 2911,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "design-wave-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 11304,
+        "cacheCreationInputTokens": 7400,
+        "costUSD": 0.0615488,
+        "costBasis": "list",
+        "durationMs": 2813,
+        "durationApiMs": 2380
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 4854,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "read-only-fanout-worker",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "medium",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 4996,
+        "costUSD": 0.040055999999999994,
+        "costBasis": "list",
+        "durationMs": 1905,
+        "durationApiMs": 1557
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3704,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "issue-ambiguity-assessor",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "low",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1383,
+        "cacheCreationInputTokens": 566,
+        "costUSD": 0.0048925999999999996,
+        "costBasis": "list",
+        "durationMs": 2095,
+        "durationApiMs": 1893
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3996,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-question-assessor",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1588,
+        "cacheCreationInputTokens": 361,
+        "costUSD": 0.0032936,
+        "costBasis": "list",
+        "durationMs": 1864,
+        "durationApiMs": 1519
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3464,
+      "resultText": "OK",
+      "stderrHead": ""
+    },
+    {
+      "workerType": "delegated-approval-assessor",
+      "requestedModel": "claude-opus-5-5",
+      "requestedEffort": "high",
+      "effectiveEffort": "unverified (the CLI JSON result does not report effort)",
+      "modelIdentity": {
+        "requested": "claude-opus-5-5",
+        "runtimeReported": "claude-opus-5-5",
+        "runtimeReportedModels": [
+          "claude-opus-5-5"
+        ],
+        "status": "verified-match",
+        "source": "claude-modelUsage"
+      },
+      "usage": {
+        "inputTokens": 2,
+        "outputTokens": 4,
+        "cacheReadInputTokens": 1949,
+        "cacheCreationInputTokens": 0,
+        "costUSD": 0.0004778,
+        "costBasis": "list",
+        "durationMs": 1651,
+        "durationApiMs": 1480
+      },
+      "ok": true,
+      "failure": null,
+      "exitCode": 0,
+      "wallMs": 3333,
+      "resultText": "OK",
+      "stderrHead": ""
+    }
+  ],
+  "mismatches": [],
+  "unverified": []
+}

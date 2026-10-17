@@ -50,45 +50,16 @@ describe("D acceleration harness", () => {
     const result = await execute(input, { projectDir, workerKind: "claude", requestedClaudeModels: { balanced: "requested-balanced" }, claudeExecutable: "/definitely/missing/claude" });
     expect(result.status).toBe("failed"); expect(result.records[0]?.requestedModel).toBe("requested-balanced"); expect(result.records[0]?.failure).toBe("unavailable");
   });
-  test("falls back when Clef is unavailable", async () => {
-    const input: Input = { clef: { enabled: true, url: "http://127.0.0.1:1", timeoutMs: 25 }, tasks: [{ id: "x", stage: "custom", dependsOn: [], estimatedMs: 1, taskType: "ambiguous", difficulty: "low", risk: "low", execution: "serial", writeSet: [] }] };
-    const result = await plan(input); expect(result.routes.x?.source).toBe("fallback");
-    expect(result.routes.x?.clef).toMatchObject({ attempted: true, available: false, used: false, outcome: "unavailable" });
-    expect(result.routingMetrics).toMatchObject({ clefAttempts: 1, clefSuccesses: 0, clefUnavailable: 1 });
+  test("rejects a leftover clef planner input instead of ignoring it", async () => {
+    const input = { ...(structuredClone(fixture) as Input), clef: { enabled: false } } as Input;
+    await expect(plan(input)).rejects.toThrow("Clef routing support was removed");
   });
-  test("native design keeps balanced baseline when Clef is disabled, times out, or is low confidence", async () => {
-    const directive = { kind: "run-stage", stage: "functional-design", rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
-    const disabled = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"] });
-    expect((await plan(disabled)).routes["functional-design:alpha"]?.tier).toBe("balanced");
-    const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "fast", confidence: 0.2 } } });
-    try {
-      const low = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742", confidenceThreshold: 0.8 } });
-      const result = await plan(low); expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced"); expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
-      expect(result.routes["functional-design:alpha"]?.clef).toMatchObject({ attempted: true, available: true, used: false, outcome: "low-confidence" });
-    } finally { globalThis.fetch = originalFetch; }
-  });
-  test("native design actually aborts a slow Clef call and falls back to balanced", async () => {
-    const directive = { kind: "run-stage", stage: "functional-design", rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } };
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (_input, init) => await new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
-    });
-    try {
-      const input = adaptOfficialNext(directive, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742", timeoutMs: 5 } });
-      const result = await plan(input);
-      expect(result.routes["functional-design:alpha"]?.tier).toBe("balanced");
-      expect(result.routes["functional-design:alpha"]?.source).toBe("fallback");
-    } finally { globalThis.fetch = originalFetch; }
-  });
-  test("Clef judgment reaches the tier-specific worker model argument", async () => {
-    const originalFetch = globalThis.fetch; globalThis.fetch = async () => Response.json({ answers: { tier: { choice: "judgment", confidence: 0.95 } } });
-    try {
-      const input = adaptOfficialNext({ kind: "run-stage", stage: "functional-design", rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } }, { clefLowRiskUnits: ["alpha"], clef: { enabled: true, url: "http://127.0.0.1:18742" } });
-      input.modelCatalog = { judgment: "fixture-judgment" };
-      const result = await execute(input, { projectDir, workerKind: "fake" });
-      expect(result.records[0]?.tier).toBe("judgment"); expect(result.records[0]?.requestedModel).toBe("fixture-judgment");
-      expect((await plan(input)).routes["functional-design:alpha"]?.clef).toMatchObject({ attempted: true, available: true, used: true, outcome: "selected" });
-    } finally { globalThis.fetch = originalFetch; }
+  test("official design-wave Units route at balanced and reach the tier-specific worker model", async () => {
+    const input = adaptOfficialNext({ kind: "run-stage", stage: "functional-design", rules_in_context: [], wave: { batch_index: 0, entries: [{ unit: "alpha", unit_kind: "service", build_required: true, produces: [], required_produces: [], consumes: ["ui-poc-refined-contract"], consumes_absent: [] }] } });
+    input.modelCatalog = { balanced: "fixture-balanced" };
+    expect((await plan(input)).routes["functional-design:alpha"]).toMatchObject({ tier: "balanced", effort: "medium", source: "rule" });
+    const result = await execute(input, { projectDir, workerKind: "fake" });
+    expect(result.records[0]).toMatchObject({ tier: "balanced", requestedModel: "fixture-balanced", route: { source: "rule", plannedTier: "balanced", plannedEffort: "medium" } });
   });
   test("rejects false directives, invalid levels, and unsafe swarm", async () => {
     const bad = structuredClone(fixture) as Input; bad.directives![0]!.stage = "nfr-design";

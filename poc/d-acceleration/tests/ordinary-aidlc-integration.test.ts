@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { clefRunnerArgs, resolveDClef, resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
+import { resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -180,15 +180,15 @@ describe("ordinary /aidlc D integration", () => {
     expect(resolveDConstructionDefaults(project)).toEqual({ iteration: "official", execution: "official" });
   });
 
-  test("ordinary routing forwards only explicitly enabled loopback Clef and named low-risk Units", () => {
-    const project = mkdtempSync(join(tmpdir(), "aidlc-d-clef-"));
+  test("ordinary routing refuses removed Clef config and flags instead of ignoring them", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-d-noclef-"));
     mkdirSync(join(project, ".claude"), { recursive: true });
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web", "api"] } }));
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual(["--clef-url", "http://127.0.0.1:18742", "--clef-low-risk-units", "web,api"]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: false } }));
-    expect(clefRunnerArgs(resolveDClef(project))).toEqual([]);
-    writeFileSync(join(project, ".claude", "d-acceleration.local.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://example.com:18742" } }));
-    expect(() => resolveDClef(project)).toThrow("loopback");
+    writeFileSync(join(project, ".claude", "d-acceleration.jsonc"), JSON.stringify({ clef: { enabled: true, url: "http://127.0.0.1:18742", lowRiskUnits: ["web"] } }));
+    expect(() => resolveDModels(project)).toThrow("Clef routing support was removed");
+    const fresh = mkdtempSync(join(tmpdir(), "aidlc-d-noclef-"));
+    const flagged = spawnSync(process.execPath, [join(import.meta.dir, "..", "run.ts"), "--project-dir", fresh, "--clef-url", "http://127.0.0.1:18742"], { cwd: fresh, encoding: "utf8" });
+    expect(flagged.status).toBe(2);
+    expect(flagged.stderr.trim().split("\n")).toHaveLength(1);
+    expect(flagged.stderr).toContain("Clef routing support was removed");
   });
 });

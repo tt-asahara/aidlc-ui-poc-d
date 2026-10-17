@@ -13,8 +13,7 @@ seam so AI decisions cannot masquerade as human replies. An install must opt in
 before dispatching work through the existing engine directives.
 
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
-surfaces and [`clef-local-contract.md`](clef-local-contract.md) for the observed
-local service contract.
+surfaces.
 
 The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
 exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
@@ -90,12 +89,14 @@ remain authoritative.
 
 ## Safety contract
 
-- Deterministic rules win. Clef is consulted only for ambiguous, low-risk task
-  classification. Security, compliance, approval, and review decisions never
-  go to Clef.
-- Clef is optional and local-only (`127.0.0.1`). Timeout, transport failure,
-  malformed output, an unknown choice, or confidence below the configured
-  threshold falls back to the conservative `judgment` tier.
+- Deterministic rules decide every tier, and routing makes no network call.
+  The planner owns a quality floor: security, compliance, and approval stay at
+  `judgment`, and design-wave stages and design tasks stay at `balanced` or
+  above, whatever a caller's `minimumTier`/`fallbackTier` says. Ambiguous work
+  falls back to the conservative `judgment` tier.
+- Clef routing was evaluated and then declined on 2026-10-17 (see
+  `evidence/model-routing/README.md`). A leftover `clef` config key, planner
+  input key, or `--clef-*` flag fails closed with a one-line removal notice.
 - Parallel output is limited to official execution seams: `official-wave` for
   engine-emitted design-stage waves, and `official-swarm` for isolated
   Code-Generation worktrees. `unit-major`, approval barriers, reviewers, and
@@ -125,9 +126,7 @@ bun poc/d-acceleration/scheduler.ts \
   --ledger /tmp/d-resume.json --output /tmp/d-scheduler.json
 ```
 
-Set `clef.enabled` in the input only when the existing local service is already
-running. The planner never starts or stops it. See `schema.md` for the input and
-output contract.
+See `schema.md` for the input and output contract.
 
 The scheduler requires an explicit, existing absolute project directory and
 checks output paths against its real path, including symlink ancestors. It
@@ -149,7 +148,13 @@ must only be used with a throwaway fixture project.
 separately. D can request Opus for its own workers, but it cannot silently
 change an already-running parent Claude session; when the parent model is not
 observable, preflight gives the exact session action instead of claiming the
-worker request applies to inline stages. It likewise reports that safe
+worker request applies to inline stages. The parent model comes only from a
+caller's `AIDLC_PARENT_MODEL` report, labelled `unverified-caller-report`.
+`modelContract.dWorkers` lists the requested worker models with their sources
+(`cli`/`local`/`project`/`default`) and the per-tier effort. Every D worker
+passes an explicit `--model`, so a parent default such as `ANTHROPIC_MODEL` or
+`CLAUDE_CODE_SUBAGENT_MODEL` never selects a worker model. Each worker result
+carries its own `modelIdentity` (see `schema.md`). It likewise reports that safe
 Construction parallelism remains `stage-major/swarm` only after the official
 Unit DAG proves independent ready Units with disjoint writes and the person's
 recorded request authorizes the policy change.
@@ -205,12 +210,9 @@ never moves an Intent back to `swarm` when ON returns; use the official setter.
 The generic-auto bootstrap journal keeps the value seen at bootstrap as
 evidence only.
 
-The conductor accepts `--clef-url http://127.0.0.1:18742` and an explicit
-comma-separated `--clef-low-risk-units`. Only those Unit summaries are sent to
-Clef. Design waves retain `balanced` as their minimum and failure fallback, so
-Clef can escalate uncertain work to `judgment` but cannot downgrade design to
-`fast`. This PoC therefore does not claim universal fast-tier coverage across
-all AI-DLC stages.
+Design waves route at `balanced`. Escalation after a worker failure can raise
+them to `judgment`, but nothing lowers design to `fast`. This PoC therefore
+does not claim universal fast-tier coverage across all AI-DLC stages.
 
 While an official stage waits at its human gate, `cross-stage-speculation.ts`
 can run independent, no-tool, read-only pre-research for a later analysis stage.
@@ -257,9 +259,11 @@ model quality, or speed.
 `benchmark.ts` compares the same synthetic task durations under serial order and
 the generated dependency waves. Those durations are fixture estimates, not
 measured LLM latency or cost. The output separately reports planner wall time,
-Clef routing time, retries, model/cost observability, critical-path estimate,
+retries, model/cost observability, critical-path estimate,
 and safety/quality invariants. Real-model evidence requires the procedure in
 `verification.md` with runtime-reported model IDs and usage records.
+`model-routing-probe.ts` produces that evidence. The
+2026-10-17 results are in `evidence/model-routing/README.md`.
 
 The A/B/C/D lineage, the adopted-number ledger (items 7, 9–17, 21, 22, 27,
 28), stage-to-skill invocation evidence, and the pr-lens record are in

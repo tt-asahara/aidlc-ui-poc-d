@@ -3,11 +3,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { adaptOfficialNext } from "./official-next-adapter.ts";
+import { CLEF_REMOVED } from "./d-config.ts";
 import { execute } from "./scheduler.ts";
 import { currentDParallelEnabled, enforceParallelOff, type ParallelGuardResult } from "./parallel-guard.ts";
 import type { WorkerKind } from "./worker-adapters.ts";
 
-type ConductOptions = { projectDir: string; engineDir: string; workerKind: WorkerKind; requestedClaudeModels?: Record<string, string | undefined>; requestedClaudeEffort?: string; disposableTestMode?: boolean; clefUrl?: string; clefLowRiskUnits?: string[]; timeoutMs?: number; env?: Record<string, string | undefined> };
+type ConductOptions = { projectDir: string; engineDir: string; workerKind: WorkerKind; requestedClaudeModels?: Record<string, string | undefined>; requestedClaudeEffort?: string; disposableTestMode?: boolean; timeoutMs?: number; env?: Record<string, string | undefined> };
 export const DEFAULT_CLAUDE_MODEL = "opus";
 export function withDefaultClaudeModels(models: ConductOptions["requestedClaudeModels"]): Record<string, string> {
   return { fast: models?.fast?.trim() || DEFAULT_CLAUDE_MODEL, balanced: models?.balanced?.trim() || DEFAULT_CLAUDE_MODEL, judgment: models?.judgment?.trim() || DEFAULT_CLAUDE_MODEL };
@@ -38,7 +39,7 @@ export async function conduct(options: ConductOptions) {
       dispatchedBuildWaves.add(buildWaveKey);
       let adapted;
       try {
-        adapted = adaptOfficialNext(directive, { clefLowRiskUnits: options.clefLowRiskUnits, clef: options.clefUrl ? { enabled: true, url: options.clefUrl } : undefined });
+        adapted = adaptOfficialNext(directive);
       } catch (error) {
         return { status: "official-host-action-required", reason: "c-ui-baseline-not-composed", error: error instanceof Error ? error.message : String(error), directive, history, workerRuns };
       }
@@ -60,6 +61,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2); const value = (flag: string) => { const index = args.indexOf(flag); return index < 0 ? undefined : args[index + 1]; };
   const projectDir = value("--project-dir"); const engineDir = value("--engine-dir"); const worker = value("--worker") as WorkerKind | undefined;
   if (!projectDir || !engineDir || !worker || !["fake", "claude"].includes(worker)) throw new Error("--project-dir, --engine-dir, and --worker fake|claude are required");
-  const result = await conduct({ projectDir, engineDir, workerKind: worker, requestedClaudeModels: { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") }, requestedClaudeEffort: value("--claude-effort"), disposableTestMode: args.includes("--disposable-test-mode"), clefUrl: value("--clef-url"), clefLowRiskUnits: value("--clef-low-risk-units")?.split(",").filter(Boolean), timeoutMs: value("--timeout-ms") ? Number(value("--timeout-ms")) : undefined });
+  if (args.includes("--clef-url") || args.includes("--clef-low-risk-units")) throw new Error(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units`);
+  const result = await conduct({ projectDir, engineDir, workerKind: worker, requestedClaudeModels: { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") }, requestedClaudeEffort: value("--claude-effort"), disposableTestMode: args.includes("--disposable-test-mode"), timeoutMs: value("--timeout-ms") ? Number(value("--timeout-ms")) : undefined });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (result.status === "worker-action-required" || result.status === "parallel-off-action-required" || result.reason === "c-ui-baseline-not-composed") process.exitCode = 2; else if (result.status === "limit-reached") process.exitCode = 4;
 }
