@@ -13,6 +13,13 @@
       "Bash(bun .claude/tools/d-acceleration/ai-question-controller.ts *)",
       "Bash(bun .claude/tools/d-acceleration/ai-question-answers.ts *)",
       "Bash(bun .claude/tools/d-acceleration/ai-approval-controller.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/host-session-cli.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/parallel-guard.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/design-document.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/pr-lens-gate.ts *)",
+      "Bash(bun .claude/tools/pr-lens-review.ts *)",
+      "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
       "Task",
       "WebSearch"
     ]
