@@ -19,13 +19,31 @@ if (directive.kind !== "run-stage") throw new Error("host boundary requires an a
 if (typeof directive.gate !== "boolean") throw new Error("host boundary requires a resolved boolean run-stage gate");
 if (directive.stage !== manifest.stage) throw new Error(`host boundary stage mismatch: ${directive.stage} != ${manifest.stage}`);
 if ((directive.unit ?? null) !== (manifest.unit ?? null)) throw new Error(`host boundary unit mismatch: ${directive.unit ?? "<stage>"} != ${manifest.unit ?? "<stage>"}`);
-const fresh = spawnSync(process.execPath, [resolve(engineDir, "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
-if (fresh.status !== 0) throw new Error(`host boundary could not obtain a fresh official directive: ${(fresh.stderr || fresh.stdout).trim()}`);
-let freshValue: any;
-try { freshValue = JSON.parse(fresh.stdout); } catch { throw new Error("host boundary fresh official directive was not JSON"); }
-const freshDirective = freshValue?.directive ?? freshValue;
-const freshValidation = validateDirective(freshDirective);
-if (!freshValidation.valid) throw new Error(`host boundary fresh official directive is invalid: ${freshValidation.errors.join("; ")}`);
+const orchestrate = (argv: string[]) => {
+  const run = spawnSync(process.execPath, [resolve(engineDir, "aidlc-orchestrate.ts"), ...argv, "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`host boundary could not obtain a fresh official directive: ${(run.stderr || run.stdout).trim()}`);
+  let parsed: any;
+  try { parsed = JSON.parse(run.stdout); } catch { throw new Error("host boundary fresh official directive was not JSON"); }
+  const value = parsed?.directive ?? parsed;
+  const check = validateDirective(value);
+  if (!check.valid) throw new Error(`host boundary fresh official directive is invalid: ${check.errors.join("; ")}`);
+  return value;
+};
+// A fresh `next` restarts the stage's rule delivery at part one. When the
+// active memory no longer fits beside the run-stage (for example after
+// practices-promote filled team.md/project.md), the engine sends it as
+// load-steering parts first. Follow the official continuation receipts exactly
+// as the conductor does until the run-stage comes back; this also leaves the
+// engine's active-directive marker on the run-stage the host is executing,
+// instead of on steering part one.
+const MAX_STEERING_PARTS = 32;
+let freshDirective = orchestrate(["next"]);
+for (let followed = 0; freshDirective?.kind === "load-steering"; followed++) {
+  if (followed >= MAX_STEERING_PARTS) throw new Error(`host boundary followed ${MAX_STEERING_PARTS} steering parts without reaching the run-stage`);
+  if (freshDirective.stage !== directive.stage) throw new Error(`host boundary steering belongs to another stage: ${freshDirective.stage} != ${directive.stage}`);
+  if (typeof freshDirective.receipt !== "string" || !freshDirective.receipt) throw new Error("host boundary steering part has no continuation receipt");
+  freshDirective = orchestrate(["continue", freshDirective.receipt]);
+}
 // Exact equality binds the active stage's gate, Unit/wave, attempt/review state,
 // ceremony, paths, and engine-resolved execution surface. A stale saved copy or
 // a hand-built {kind, stage} object cannot authorize an optional check.
