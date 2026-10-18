@@ -88,3 +88,20 @@ test('schema 2 refined evidence binds the rendered semantic snapshot to its HTML
  c.assets[0].sha256='0'.repeat(64);fs.writeFileSync(outputPath,render(c));
  assert.equal(check({stage:'refined-mockups',outputPath}).pass,false);
 });
+test('refined contract carries official story AC IDs verbatim and keeps the legacy AC- form',t=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-ac-'));t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ const html=Buffer.from('<main data-ui-screen="SCREEN-HOME" data-ui-state="STATE-READY">Ready</main>');fs.writeFileSync(path.join(temp,'screen.html'),html);
+ const snapshot={schema:1,kind:'ui-semantic-snapshot',source:{path:'screen.html',sha256:hash(html)},captures:[{screen:'SCREEN-HOME',state:'STATE-READY',rendered:true,elements:[{key:'AUTO-ready',explicitId:false,kind:'text',text:'Ready'}]}]};
+ fs.writeFileSync(path.join(temp,'snapshot.json'),JSON.stringify(snapshot));
+ const snap={path:'snapshot.json',sha256:hash(fs.readFileSync(path.join(temp,'snapshot.json')))};
+ const outputPath=path.join(temp,'ui-poc-refined-contract.md');
+ const run=ac=>{const c={schema:2,stage:'refined-mockups',arm:'C',assets:[{path:'screen.html',sha256:hash(html)},snap],mappings:[{screen:'SCREEN-HOME',state:'STATE-READY',ac,asset:'screen.html',check:'Ready text'}],requiredMappings:[`SCREEN-HOME/STATE-READY/${ac}`],fidelity:{approvedSnapshot:snap,dispositions:[]}};fs.writeFileSync(outputPath,render(c));return check({stage:'refined-mockups',outputPath});};
+ // Official core grammar AC{story-group}.{story-seq}.{criterion-seq}, verbatim.
+ for (const ac of ['AC1.1.1','AC12.3.45']) assert.equal(run(ac).pass,true,ac);
+ // Legacy provisional/existing form stays valid at the C level.
+ for (const ac of ['AC-001','AC-ISSUE-1','AC-1-2-3']) assert.equal(run(ac).pass,true,ac);
+ // Lookalikes are never normalized: full-width, lower-case, wrong segment counts, separators.
+ for (const ac of ['ＡＣ１.１.１','AC1．1．1','ac1.1.1','AC1.1','AC1.1.1.1','AC1-1-1','AC 1.1.1','AC1.1.1 ','AC-1.1.1','AC.1.1.1']) {
+  const result=run(ac);assert.equal(result.pass,false,ac);assert.deepEqual(result.findings,['Invalid screen/state/AC mapping'],ac);
+ }
+});

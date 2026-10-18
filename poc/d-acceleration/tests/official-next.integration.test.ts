@@ -227,12 +227,19 @@ describe("official next adapter integration", () => {
       const contractPath = join(project, missing.path);
       mkdirSync(join(contractPath, ".."), { recursive: true });
       writeFileSync(contractPath, "# Refined UI contract fixture\n");
+      // The C functional-design contribution adds the official stories artifact
+      // as an optional consume, so feature 21's storiesPath is a declared input.
+      const storiesPath = missing.path.replace(/\/refined-mockups\/ui-poc-refined-contract\.md$/, "/user-stories/stories.md");
+      expect(storiesPath).not.toBe(missing.path);
+      mkdirSync(join(project, storiesPath, ".."), { recursive: true });
+      writeFileSync(join(project, storiesPath), "# Stories\n\n- **AC1.1.1** Given x When y Then z\n");
 
       const composed = runOrchestrateNext(orchestrate, project, [], {
         env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
       });
       expect(composed.status, `${composed.stdout}\n${composed.stderr}`).toBe(0);
       expect(composed.directive.wave.entries[0].consumes).toContain(missing.path);
+      expect(composed.directive.wave.entries[0].consumes).toContain(storiesPath);
       expect(adaptOfficialNext(composed.directive).tasks[0]?.inputSet).toContain(missing.path);
 
       const run = spawnSync(

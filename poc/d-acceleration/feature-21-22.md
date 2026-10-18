@@ -6,14 +6,80 @@ ledger, or engine transitions.
 
 ## Feature 21 — requirement/UI cross-validation (default: off)
 
-At refined-mockups and functional-design handoff, compare every C
-`screen/state/ac` mapping with the IDs already present in the official
-`traceability.json`. An exact ID is accepted directly. A C-style `AC-…` ID may
-point to a differently-shaped official `AC1.…` ID only through an explicit
-`{uiAc, officialId}` bridge. IDs are never inferred, rewritten, or renumbered.
-The check also confirms that `requiredMappings` and `mappings`
-describe the same triples. An unknown AC is a finding; it is not silently added
-to official traceability.
+At the refined-mockups and functional-design handoff, compare every C
+`screen/state/ac` mapping with the **official acceptance-criteria IDs**.
+
+**Official ID form.** The official user-stories stage gives each criterion a
+three-segment `AC{story-group}.{story-seq}.{criterion-seq}` ID, for example
+`AC1.1.1` (core `aidlc-common/stages/inception/user-stories.md` Step 8; the core
+traceability sensor uses the same grammar). The check accepts exactly the ASCII
+grammar `^AC[0-9]+\.[0-9]+\.[0-9]+$`. Nothing is normalized: full-width
+(`ＡＣ１.１.１`, `AC1．1．1`), lower-case, two- or four-segment, and `AC-1-1-1`
+spellings are never official IDs.
+
+**Official ID source.** The set is parsed deterministically from the official
+`stories.md` (manifest `storiesPath`) by the one owner
+`official-acceptance-criteria.ts`, which reads block structure through the
+engine's single Markdown interpreter (`markdownBlocks`). An ID is *defined*
+when it is the first token of a list item, a heading, or the first cell of a
+table row. Mentions in prose, continuation lines, code, and HTML comments are
+references and are ignored, so a cross-reference such as "US6.2 の AC6.2.6 は…"
+is not a second definition. The parser does not read heading wording, so
+English ("Acceptance Criteria") and Japanese ("受入条件") stories parse the same.
+A lookalike at a definition position is a `MALFORMED_OFFICIAL_AC` finding, not
+an ID. An official `traceability.json` (manifest `traceabilityPath`) is an
+optional extra source: its AC-grammar IDs are unioned in. The user-stories
+traceability carries only FR/NFR IDs, so it adds nothing there; the
+functional-design traceability carries the Unit's ACs.
+
+**Matching.** A contract AC in the official form must be in that set verbatim;
+no bridge is needed or allowed for it. A legacy C `AC-…` ID (provisional
+rough-mockups IDs, existing contracts) is accepted only through an explicit
+`featureInputs.requirementIdBridges` entry `{uiAc, officialId}` whose `uiAc` is
+not itself an official ID and whose `officialId` is in the set. IDs are never
+inferred, rewritten, or renumbered. The check also confirms that
+`requiredMappings` and `mappings` describe the same triples.
+
+**Fail closed.** Each of these is recorded NOT-READY evidence with exact
+findings, never a pass: `MISSING_STORIES_INPUT` (no `storiesPath`),
+`STORIES_NOT_FOUND`, `NO_OFFICIAL_AC` (zero IDs parsed),
+`DUPLICATE_OFFICIAL_AC` (with its stories line), `MALFORMED_OFFICIAL_AC`,
+`UNKNOWN_AC`, `INVALID_BRIDGE`, `DUPLICATE_BRIDGE`, `DUPLICATE_MAPPING`,
+`MISSING_REQUIRED_MAPPING`, and `UNDECLARED_REQUIRED_MAPPING`. An unknown AC is
+not silently added to official traceability. A path outside the project, or a
+manifest artifact the fresh official directive does not declare, is refused by
+the host boundary before any check runs.
+
+**Declared inputs.** `host-stage-boundary.ts` binds `storiesPath`,
+`traceabilityPath`, `uiContractPath`, and every other manifest artifact to the
+fresh directive's `consumes`/`produces`:
+
+| Stage | `storiesPath` | `uiContractPath` | `traceabilityPath` |
+| --- | --- | --- | --- |
+| refined-mockups | core `consumes: stories` | C plugin `produces: ui-poc-refined-contract` | not declared here: omit it |
+| functional-design | C plugin `consumes: stories` (`required: false`) | C plugin `consumes: ui-poc-refined-contract` | the Unit's own `produces: traceability` (optional union) |
+
+Core functional-design does not consume `stories`; the ui-poc
+functional-design contribution adds that optional consume through the
+supported plugin `adds.consumes` seam so the official stories artifact is a
+declared input there too (core stays untouched).
+
+Manifests for an intent `<I>` = `aidlc/spaces/<space>/intents/<intent>`:
+
+```json
+{"stage": "refined-mockups", "unit": null,
+ "storiesPath": "<I>/inception/user-stories/stories.md",
+ "uiContractPath": "<I>/inception/refined-mockups/ui-poc-refined-contract.md"}
+```
+
+```json
+{"stage": "functional-design", "unit": "<unit>",
+ "storiesPath": "<I>/inception/user-stories/stories.md",
+ "uiContractPath": "<I>/inception/refined-mockups/ui-poc-refined-contract.md",
+ "traceabilityPath": "<I>/construction/<unit>/functional-design/traceability.json"}
+```
+
+The C contract is read from its single fenced `ui-poc-contract` block.
 
 ## Feature 22 — functional-design document discipline (default: off)
 

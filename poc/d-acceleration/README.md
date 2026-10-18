@@ -65,7 +65,8 @@ extension surfaces:
 | Decision summary permission and `HOST/owner/name` check | Re-homed into `decision-issue-summary.ts` (the `aidlc-state.ts verify-decision-summary-permission` verb was core-only). |
 | Delegated AI stage-gate approval | Dropped: the upstream engine accepts a stage approval only from the person, and an extension cannot add an approval authority or authenticated `present-gate` receipt. `ai-approval-controller.ts` keeps only `grant`; `evaluate`/`verify` fail closed with one line. |
 
-Four independent checks are also default off: requirement/UI ID validation,
+Four independent checks are also default off: requirement/UI ID validation
+(official `AC1.1.1` acceptance-criteria IDs parsed from `stories.md`),
 functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.

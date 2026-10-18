@@ -21,11 +21,12 @@ function project(features: Flags, valid: boolean) {
   const root = mkdtempSync(join(tmpdir(), "d-ui-flags-"));
   mkdirSync(join(root, ".claude"));
   writeFileSync(join(root, ".claude", "d-acceleration.json"), JSON.stringify({ features }));
-  writeFileSync(join(root, "trace.json"), JSON.stringify({ upstream_ids: ["AC-NOTE-001"], coverage: [] }));
-  writeFileSync(join(root, "ui.json"), JSON.stringify({ schema: 2, mappings: [{ screen: "SCREEN-NOTES", state: "STATE-LIST", ac: valid ? "AC-NOTE-001" : "AC-UNKNOWN" }], requiredMappings: [valid ? "SCREEN-NOTES/STATE-LIST/AC-NOTE-001" : "SCREEN-NOTES/STATE-LIST/AC-UNKNOWN"] }));
+  writeFileSync(join(root, "trace.json"), JSON.stringify({ upstream_ids: ["AC1.1.1"], coverage: [] }));
+  writeFileSync(join(root, "stories.md"), "# Stories\n\n- **AC1.1.1** Given notes When listed Then shown\n");
+  writeFileSync(join(root, "ui.json"), JSON.stringify({ schema: 2, mappings: [{ screen: "SCREEN-NOTES", state: "STATE-LIST", ac: valid ? "AC1.1.1" : "AC9.9.9" }], requiredMappings: [valid ? "SCREEN-NOTES/STATE-LIST/AC1.1.1" : "SCREEN-NOTES/STATE-LIST/AC9.9.9"] }));
   writeFileSync(join(root, "functional-spec.md"), "# Functional\n\n## Sources\n\nrefined mockup\n");
   writeFileSync(join(root, "frontend-components.md"), valid ? "# Components\n\nSee functional-spec.md.\n" : "# Components\n\n## Sources\n\nduplicated metadata\n");
-  writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", traceabilityPath: "trace.json", uiContractPath: "ui.json", functionalArtifacts: { "functional-spec.md": "functional-spec.md", "frontend-components.md": "frontend-components.md" } }));
+  writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", storiesPath: "stories.md", traceabilityPath: "trace.json", uiContractPath: "ui.json", functionalArtifacts: { "functional-spec.md": "functional-spec.md", "frontend-components.md": "frontend-components.md" } }));
   return root;
 }
 const run = (root: string) => spawnSync(process.execPath, [cli, "--project-dir", root, "--input", "input.json"], { cwd: root, encoding: "utf8" });
