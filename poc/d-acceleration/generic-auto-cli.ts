@@ -249,11 +249,11 @@ if (command === "bootstrap") {
   process.exit(0);
 }
 
-if (["status", "stop", "checkpoint", "action-start", "action-finish"].includes(command)) {
+if (["status", "stop", "checkpoint", "action-start", "action-finish", "rescope"].includes(command)) {
   const forwarded: string[] = [command, "--session-file", sessionFile];
-  for (const flag of ["--directive-file", "--action-token"]) { const supplied = value(flag); if (supplied) forwarded.push(flag, supplied); }
+  for (const flag of ["--directive-file", "--action-token", "--active-stages", "--through"]) { const supplied = value(flag); if (supplied) forwarded.push(flag, supplied); }
   process.stdout.write(`${JSON.stringify(runJson(hostCli, forwarded), null, 2)}\n`);
   process.exit(0);
 }
 
-throw new Error("mode must be start, init, bootstrap, resume, status, stop, checkpoint, action-start, or action-finish");
+throw new Error("mode must be start, init, bootstrap, resume, status, stop, checkpoint, action-start, action-finish, or rescope");

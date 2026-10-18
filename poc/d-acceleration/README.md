@@ -227,7 +227,15 @@ to `pausedMs` in the same atomic save. A crash or restart mid-wait therefore
 neither loses the pause nor counts it twice. Active time keeps counting, so
 runaway work still stops with `deadline-exceeded`. There is no separate
 wall-clock ceiling for unclaimed sessions. `maxSteps`, the `through` boundary,
-and no-progress detection remain the other hard stops. A claimed Issue session
+and no-progress detection remain the other hard stops. No-progress means
+the same official directive came back with neither a finished host action
+(`action-finish`) nor the person's reply to a wait since the last checkpoint: a
+gated `run-stage` legitimately repeats across turns while one stage attempt runs
+before it reports awaiting-approval. `MAX_IDENTICAL_REPEATS` (8) consecutive
+identical directives still stop a loop that keeps acting without the engine
+moving. After a scope change the person asked for, `host-session-cli.ts rescope`
+(or `generic-auto-cli.ts rescope`) re-binds the running session to the new
+stage list and re-resolves `through`; the change is kept in `scopeChanges`. A claimed Issue session
 keeps wall-clock semantics, because the claim lease must not outlive the
 deadline: its official-ask waits are journaled with `creditedMs: 0`, and it
 does not detect stage-question waits. A wait is detected only

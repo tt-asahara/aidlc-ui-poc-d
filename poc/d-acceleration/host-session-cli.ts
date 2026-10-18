@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { activeElapsedMs, checkpointHostSession, enterHumanWait, leaveHumanWait, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
+import { activeElapsedMs, checkpointHostSession, enterHumanWait, leaveHumanWait, recordHostActionFinished, rescopeHostSession, resolveThroughBoundary, type HostSessionClaim, type HostSessionState } from "./host-session.ts";
 import { createFileClaimStore, issueAutopilotRuntimePaths } from "./issue-autopilot-runtime.ts";
 import type { ParallelGuardResult } from "./parallel-guard.ts";
 
@@ -146,7 +146,7 @@ if (mode === "init") {
     if (!existing.endedAt && existing.awaitingHuman) existing = await resumeWaitingHuman(existing);
     const sameClaim = JSON.stringify(existing.claim ?? null) === JSON.stringify(claim ?? null);
     if (!existing.endedAt) {
-      if (existing.through !== through || JSON.stringify(existing.activeStages ?? []) !== JSON.stringify(active) || !sameClaim) throw new Error("active host session does not match requested scope/boundary/claim");
+      if (existing.through !== through || JSON.stringify(existing.activeStages ?? []) !== JSON.stringify(active) || !sameClaim) throw new Error(sameClaim ? "active host session does not match requested scope/boundary; after a scope change the person asked for, run host-session-cli.ts rescope --active-stages <new list> --through <boundary>" : "active host session does not match requested claim");
       if (existing.hostAction || existsSync(heartbeat)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "host-action-busy", state: existing })}\n`); process.exit(0); }
       process.stdout.write(`${JSON.stringify({ action: "continue", resumed: true, state: existing })}\n`); process.exit(0);
     }
@@ -154,6 +154,18 @@ if (mode === "init") {
   const state = { startedAt: Date.now(), deadlineMs: Number(value("--deadline-ms") ?? 900000), maxSteps: Number(value("--max-steps") ?? 64), steps: 0, through, activeStages: active, ...(claim ? { claim } : {}) };
   if (claim && !claimIsOwned(state)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "claim-lost", state })}\n`); process.exit(0); }
   save(state); process.stdout.write(`${JSON.stringify({ action: "continue", state })}\n`); process.exit(0);
+}
+
+if (mode === "rescope") {
+  // A scope change the person asked for (official `scope change`) changes the
+  // active stage list; re-bind the running session instead of ending it.
+  const active = (value("--active-stages") ?? "").split(",").filter(Boolean);
+  if (!existsSync(path)) { process.stdout.write(`${JSON.stringify({ action: "stop", reason: "no-session", state: null })}\n`); process.exit(0); }
+  const rescoped = await withLifecycleLock(async () => {
+    const next = rescopeHostSession(readState(), active, value("--through"));
+    save(next); return next;
+  });
+  process.stdout.write(`${JSON.stringify(rescoped ? { action: "continue", rescoped: true, state: rescoped } : { action: "stop", reason: "lifecycle-busy", state: null })}\n`); process.exit(0);
 }
 
 if (mode === "status") {
@@ -235,7 +247,7 @@ if (mode === "action-finish") {
     if (reason) return { action: "stop", reason, state: await terminalize(current, reason) };
     // Persist the completed transition before deleting the stopping record. If
     // cleanup crashes, recovery recognizes status=stopping as harmless debris.
-    let finishedState: HostSessionState = { ...current, hostAction: undefined };
+    let finishedState: HostSessionState = recordHostActionFinished({ ...current, hostAction: undefined });
     // An action that left the stage's questions file waiting for the person
     // (a recorded fact, see question-wait.ts) pauses the unattended clock until
     // D resumes. A claimed Issue session keeps wall-clock semantics.
@@ -251,7 +263,7 @@ if (mode === "action-finish") {
   process.stdout.write(`${JSON.stringify(finished ?? { action: "stop", reason: "lifecycle-busy", state })}\n`); process.exit(0);
 }
 
-if (mode !== "checkpoint") throw new Error("mode must be init, status, stop, checkpoint, action-start, or action-finish");
+if (mode !== "checkpoint") throw new Error("mode must be init, status, stop, rescope, checkpoint, action-start, or action-finish");
 const directiveFile = value("--directive-file");
 if (!directiveFile) throw new Error("checkpoint requires --directive-file");
 const directivePath = resolve(projectDir, directiveFile);

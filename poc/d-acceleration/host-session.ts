@@ -45,7 +45,36 @@ export type HumanWaitKind = "official-ask" | "stage-question";
  * gave back; a claimed session records its waits with `creditedMs: 0`.
  */
 export type HumanWaitRecord = { kind: HumanWaitKind; startedAt: number; endedAt?: number; creditedMs?: number; evidence?: Record<string, unknown> };
-export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; activeStages?: string[]; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; waitingSince?: number; waitKind?: HumanWaitKind; humanWaits?: HumanWaitRecord[]; pausedMs?: number; endedAt?: number; terminalReason?: string };
+export type ScopeChangeRecord = { at: number; from: { through: string | null; activeStages: string[] }; to: { through: string | null; activeStages: string[] } };
+export type HostSessionState = { startedAt: number; deadlineMs: number; maxSteps: number; steps: number; through: string | null; activeStages?: string[]; lastFingerprint?: string; lastStage?: string; claim?: HostSessionClaim; hostAction?: { token: string; startedAt: number }; awaitingHuman?: boolean; waitingToken?: string; waitingSince?: number; waitKind?: HumanWaitKind; humanWaits?: HumanWaitRecord[]; pausedMs?: number; endedAt?: number; terminalReason?: string; actionsSinceCheckpoint?: number; identicalRepeats?: number; scopeChanges?: ScopeChangeRecord[] };
+
+// A gated run-stage legitimately comes back unchanged across turns while one
+// stage attempt runs (questions, summary, artifacts, review, learnings) until
+// the stage reports awaiting-approval. Repeating the same directive is
+// therefore progress when D finished a host action since the last checkpoint,
+// or the person replied to a wait. Without either it is a true replay. A cap
+// on consecutive identical directives still bounds a loop that keeps acting
+// without the engine ever moving.
+export const MAX_IDENTICAL_REPEATS = 8;
+
+/** Records that a host action finished; the next identical directive is then not a replay. */
+export function recordHostActionFinished(state: HostSessionState): HostSessionState {
+  return { ...state, actionsSinceCheckpoint: (state.actionsSinceCheckpoint ?? 0) + 1 };
+}
+
+/**
+ * Re-binds an active session to the stage list and boundary of a scope the
+ * person changed mid-run. The boundary is re-resolved against the new list
+ * (a phase name maps to that phase's last active stage). Steps, deadline,
+ * claim and waits are kept; the change is appended to `scopeChanges`.
+ */
+export function rescopeHostSession(state: HostSessionState, activeStages: readonly string[], throughValue: string | undefined, now = Date.now(), policyPath?: string): HostSessionState {
+  if (state.endedAt) throw new Error("rescope needs an active host session; this one has ended");
+  if (!activeStages.length) throw new Error("rescope requires --active-stages");
+  const through = resolveThroughBoundary(throughValue, activeStages, policyPath);
+  const change: ScopeChangeRecord = { at: now, from: { through: state.through, activeStages: [...(state.activeStages ?? [])] }, to: { through, activeStages: [...activeStages] } };
+  return { ...state, through, activeStages: [...activeStages], scopeChanges: [...(state.scopeChanges ?? []), change] };
+}
 
 // The single owner of deadline accounting. The deadline bounds D's unattended
 // working time, not the person's think time. For an unclaimed generic-auto
@@ -79,6 +108,7 @@ export function leaveHumanWait(state: HostSessionState, now = Date.now()): HostS
   return { ...rest, pausedMs: (state.pausedMs ?? 0) + credited, ...(state.humanWaits ? { humanWaits: waits } : {}) };
 }
 export function checkpointHostSession(state: HostSessionState, directive: Readonly<OfficialDirective>, now = Date.now()): { action: "continue" | "stop"; reason?: string; state: HostSessionState } {
+  const repliedSinceCheckpoint = state.waitingSince !== undefined;
   state = leaveHumanWait(state, now);
   if (state.endedAt) return { action: "stop", reason: "session-ended", state };
   // Report the ordinary crossing as boundary-reached; already-passed is only
@@ -91,8 +121,14 @@ export function checkpointHostSession(state: HostSessionState, directive: Readon
   if (activeElapsedMs(state, now) >= state.deadlineMs) return { action: "stop", reason: "deadline-exceeded", state };
   if (state.steps >= state.maxSteps) return { action: "stop", reason: "max-steps-exceeded", state };
   const fingerprint = directiveProgressFingerprint(directive);
-  if (fingerprint === state.lastFingerprint) return { action: "stop", reason: "no-progress", state };
-  const next = { ...state, steps: state.steps + 1, lastFingerprint: fingerprint, lastStage: directive.stage ?? state.lastStage };
+  let identicalRepeats = 0;
+  if (fingerprint === state.lastFingerprint) {
+    const worked = (state.actionsSinceCheckpoint ?? 0) > 0 || repliedSinceCheckpoint;
+    if (!worked) return { action: "stop", reason: "no-progress", state };
+    identicalRepeats = (state.identicalRepeats ?? 0) + 1;
+    if (identicalRepeats >= MAX_IDENTICAL_REPEATS) return { action: "stop", reason: "no-progress", state: { ...state, identicalRepeats } };
+  }
+  const next = { ...state, steps: state.steps + 1, lastFingerprint: fingerprint, lastStage: directive.stage ?? state.lastStage, actionsSinceCheckpoint: 0, identicalRepeats };
   if (directive.completed || directive.kind === "complete") return { action: "stop", reason: "complete", state: next };
   // run-stage gate:true means execute the stage and then enter its approval
   // protocol. Only an actual ask is already waiting on the human.
