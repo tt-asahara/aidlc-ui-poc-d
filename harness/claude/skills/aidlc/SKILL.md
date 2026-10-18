@@ -110,7 +110,7 @@ a project-confined temporary file and run
 before acting on it. When it returns `refresh`, D moved the Intent to serial
 Construction: obtain a fresh official `next` and checkpoint that instead. Stop when it returns `stop`; `human-gate` preserves the
 session for the person's next invocation, while boundary, deadline, step limit,
-no-progress, and completion are terminal. Any official directive that asks for
+no-progress (the same directive with no finished host action or reply since the last checkpoint), and completion are terminal; after a scope change the person asked for, run `generic-auto-cli.ts rescope --project-dir <PRODUCT> --active-stages <new list> --through <boundary>`. Any official directive that asks for
 approval or recovery is already a human gate and is never answered by auto. Immediately
 before each host action run
 `bun {{HARNESS_DIR}}/tools/d-acceleration/generic-auto-cli.ts action-start --project-dir <PRODUCT>`;

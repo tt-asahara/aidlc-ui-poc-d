@@ -34,6 +34,10 @@ using the ordinary `/aidlc` forwarding loop: the Claude
 host performs the real stage body, report, reviewer, sensors, and approval. The
 controller never simulates stage execution. Run `action-finish` with the exact
 token after that host action and stop immediately unless it returns `continue`.
+A gated `run-stage` may come back unchanged while one stage attempt runs; that
+is progress after a finished host action. After a scope change the person asked
+for, run `host-session-cli.ts rescope --active-stages <new list> --through <boundary>`
+before the next checkpoint instead of re-running `init`.
 The detached guard renews the owner-bound claim at most every lease/3 while the
 host action is running and records operator-stop, deadline, or claim loss as a
 fail-closed result. After completing the inclusive
