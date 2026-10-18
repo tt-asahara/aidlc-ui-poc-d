@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -15,6 +15,28 @@ function officialDirective(stage = "functional-design", unit?: string) {
 function installFreshEngine(root: string, directive: unknown) {
   const engine = join(root, "engine"); mkdirSync(engine, { recursive: true });
   writeFileSync(join(engine, "aidlc-orchestrate.ts"), `process.stdout.write(${JSON.stringify(`${JSON.stringify({ directive })}\n`)});\n`);
+  return engine;
+}
+
+// Multi-part rule delivery: `next` restarts at steering part one, each
+// `continue <receipt>` returns the following part, and the last continuation
+// returns the run-stage (as the official engine does once team memory no
+// longer fits beside the run-stage). Records every call it receives.
+function installSteeringEngine(root: string, directive: Record<string, unknown>, parts = 2) {
+  const engine = join(root, "steering-engine"); mkdirSync(engine, { recursive: true });
+  const steering = (part: number) => ({ kind: "load-steering", stage: directive.stage, bundle: `sha256:${"0".repeat(64)}`, part, parts, receipt: `rcpt000${part}`, next: `bun aidlc-orchestrate.ts continue rcpt000${part}`, rules_content: [{ path: "memory/team.md", text: `rules part ${part}` }] });
+  const script = `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2).filter((a, i, all) => a !== "--project-dir" && all[i - 1] !== "--project-dir");
+appendFileSync(${JSON.stringify(join(root, "engine-calls.log"))}, JSON.stringify(args) + "\\n");
+const steering = ${JSON.stringify(Array.from({ length: parts }, (_, i) => steering(i + 1)))};
+const runStage = ${JSON.stringify(directive)};
+let out;
+if (args[0] === "next") out = steering[0];
+else if (args[0] === "continue") { const i = steering.findIndex((s) => s.receipt === args[1]); out = i < 0 ? null : (steering[i + 1] ?? runStage); }
+if (!out) { process.stderr.write("bad call " + JSON.stringify(args)); process.exit(1); }
+process.stdout.write(JSON.stringify({ directive: out }) + "\\n");
+`;
+  writeFileSync(join(engine, "aidlc-orchestrate.ts"), script);
   return engine;
 }
 
@@ -34,6 +56,30 @@ describe("installed D feature-check entry", () => {
     const result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installFreshEngine(root, directive)], { cwd: root, encoding: "utf8" });
     expect(result.status).toBe(2); const output = JSON.parse(result.stdout); expect(output.verdict).toBe("NOT-READY"); expect(output.notReady).toContain("requirementIdValidation"); expect(existsSync(output.evidencePath)).toBe(true);
   });
+  test("follows multi-part load-steering to the run-stage before binding the boundary", () => {
+    const root = project({ features: { requirementIdValidation: true } });
+    writeFileSync(join(root, "trace.json"), JSON.stringify({ upstream_ids: ["AC1"], coverage: [] }));
+    writeFileSync(join(root, "ui.json"), JSON.stringify({ schema: 1, mappings: [{ screen: "s", state: "x", ac: "AC1" }], requiredMappings: ["s/x/AC1"] }));
+    writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design", traceabilityPath: "trace.json", uiContractPath: "ui.json" }));
+    const directive = { ...officialDirective(), gate: true, consumes: ["trace.json", "ui.json"] }; writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
+    const result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installSteeringEngine(root, directive, 3)], { cwd: root, encoding: "utf8" });
+    expect(result.stderr).not.toContain("host boundary");
+    expect(result.status).toBe(0);
+    const calls = readFileSync(join(root, "engine-calls.log"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    // The engine's active marker ends on the run-stage the host is executing.
+    expect(calls).toEqual([["next"], ["continue", "rcpt0001"], ["continue", "rcpt0002"], ["continue", "rcpt0003"]]);
+  });
+
+  test("refuses steering for another stage and a run-stage that differs from the executed one", () => {
+    const root = project({ features: { requirementIdValidation: true } });
+    writeFileSync(join(root, "input.json"), JSON.stringify({ stage: "functional-design" }));
+    const directive = { ...officialDirective(), gate: true }; writeFileSync(join(root, "directive.json"), JSON.stringify(directive));
+    let result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installSteeringEngine(root, { ...directive, stage: "code-generation" })], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("steering belongs to another stage");
+    result = spawnSync(process.execPath, [boundary, "--project-dir", root, "--directive-file", "directive.json", "--manifest", "input.json", "--engine-dir", installSteeringEngine(join(root, "b"), { ...directive, unit: "beta" })], { cwd: root, encoding: "utf8" });
+    expect(result.status).not.toBe(0); expect(result.stderr).toContain("stale or does not match");
+  });
+
   test("runs requirement ID validation at the official refined-mockups handoff", () => {
     const root = project({ features: { requirementIdValidation: true } });
     writeFileSync(join(root, "trace.json"), JSON.stringify({ upstream_ids: ["AC1"], coverage: [] }));
