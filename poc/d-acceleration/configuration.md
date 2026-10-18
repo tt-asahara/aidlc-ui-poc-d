@@ -173,6 +173,24 @@ setupはこのスイッチを変更しません。ONにするかどうかは利�
 
 前提が未充足のときは、他のswitchと同じくexit 3です。
 
+## 要件ID照合 (`features.requirementIdValidation`)
+
+既定OFFです。ONにすると、refined-mockupsとfunctional-designの成果物作成後、公式のreview・sensor・承認の前に、
+C UI契約の `screen/state/ac` を公式の受入条件IDと照合します。
+
+- **公式ID:** user-storiesステージが `stories.md` に付ける `AC{群}.{番号}.{連番}`（例 `AC1.1.1`）です。
+  ASCIIの `^AC[0-9]+\.[0-9]+\.[0-9]+$` だけを受け付け、全角・小文字・`AC-1-1-1` などは変換しません。
+- **IDの出どころ:** manifestの `storiesPath`（公式 `stories.md`）を決定的に解析します（LLMや類似度は使いません）。
+  `traceabilityPath` は任意の追加元で、AC形式のIDだけを合わせます。
+- **bridge:** 公式形式のIDにはbridgeは不要で、指定もできません。旧形式（`AC-…`）の既存契約だけ
+  `featureInputs.requirementIdBridges` の `{uiAc, officialId}` で明示的に対応づけます。
+- **NOT-READY:** `storiesPath` なし、ファイルなし、AC 0件、AC重複、形の崩れたAC、契約の不明AC、無効・重複bridge。
+- **宣言済みの入力だけ:** `host-stage-boundary.ts` は、manifestの各パスが新しい公式directiveの
+  `consumes`/`produces` にあることを確かめます。refined-mockupsではuser-storiesの `traceability.json` は
+  宣言されないため指定しません。functional-designの `stories` はui-pocプラグインが追加する任意のconsumeです。
+
+manifestの例と段階ごとの宣言元は `feature-21-22.md` にあります。
+
 ## 詳細モックアップのデザインスキル (`uiDesign.refinedMockupSkill`)
 
 refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザインスキルを1つ選びます。

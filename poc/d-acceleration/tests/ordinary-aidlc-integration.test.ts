@@ -72,6 +72,7 @@ describe("ordinary /aidlc D integration", () => {
       "host-session.ts",
       "host-session-cli.ts",
       "host-stage-boundary.ts",
+      "official-acceptance-criteria.ts",
       "official-next-adapter.ts",
       "parallel-guard.ts",
       "question-wait.ts",
@@ -93,6 +94,8 @@ describe("ordinary /aidlc D integration", () => {
     expect(existsSync(join(root, "..", "aidlc-ai-answers.ts"))).toBe(false);
     expect(readFileSync(join(root, "reviewer-dispatch-cleanup-hook.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
     expect(readFileSync(join(root, "blocking-sensor-override-hook.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
+    // Feature 21's official AC parser uses the one Markdown interpreter from the installed engine.
+    expect(readFileSync(join(root, "official-acceptance-criteria.ts"), "utf8")).toContain('from "../aidlc-lib.ts"');
     const publicRunner = readFileSync(join(root, "run.ts"), "utf8");
     expect(publicRunner).toContain('join(import.meta.dir, "host-stage-boundary.ts")');
     expect(publicRunner).toContain('requires --directive-file');

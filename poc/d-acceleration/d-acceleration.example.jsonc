@@ -18,7 +18,7 @@
     "remote": "origin",
   },
   "features": {
-    // 機能21 / 対象: refined-mockupsとfunctional-designの成果物作成後、既存review/sensor/approval前。役割: 公式traceabilityとCのSCREEN/STATE/ACを照合。ON時: 明示bridgeだけ許可し不一致をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: CのUI契約と公式traceability（機能22/27/28には非依存）。利用場面: C UI契約を使う案件。
+    // 機能21 / 対象: refined-mockupsとfunctional-designの成果物作成後、既存review/sensor/approval前。役割: 公式stories.mdが定義する受入条件ID（AC1.1.1形式、変換なし）とCのSCREEN/STATE/ACを照合（公式traceability.jsonは任意の追加元）。ON時: 公式形式IDはそのまま照合、旧AC-形式は明示bridgeだけ許可し、stories欠落・AC 0件・AC重複・不明ACをNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: CのUI契約と公式stories.md（manifestのstoriesPath。機能22/27/28には非依存）。利用場面: C UI契約を使う案件。
     "requirementIdValidation": false,
     // 機能22 / 対象: functional-design成果物作成後、既存review/sensor/approval前。役割: 文書量と重複metadataを検査。ON時: 上限超過等をNOT-READY、OFF時: 読込も検査もしない。既定値: OFF。依存関係: 機能21/27/28には非依存、functionalDesignBudgetsだけを使用。利用場面: 大規模Unitの設計文書を統制するとき。
     "functionalDesignDocumentDiscipline": false,
@@ -34,7 +34,7 @@
     "prLensReview": false,
   },
   "featureInputs": {
-    // 機能21: CのAC-形式と公式AC形式が異なる場合だけ明示する。暗黙変換や再採番はしない。
+    // 機能21: 旧形式のC契約（AC-…）だけに使う。公式形式（AC1.1.1）はbridge不要・指定不可。暗黙変換や再採番はしない。
     "requirementIdBridges": [],
     // 機能22: byte上限。ON時だけFunctional Design成果物を検査する。
     "functionalDesignBudgets": { "artifactBytes": 60000, "unitBytes": 160000, "metadataBytes": 30000 },

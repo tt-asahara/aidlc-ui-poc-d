@@ -23,6 +23,21 @@ Example shape (placeholders below are deliberately not valid runtime evidence):
 }
 ```
 
+Acceptance-criterion IDs (`ac`, and the last segment of each `requiredMappings`
+entry) take one of two forms, compared exactly and never normalized:
+
+- **Official (use this from refined-mockups on):** the story criterion ID from
+  the official `stories.md`, verbatim, in the core user-stories grammar
+  `AC{story-group}.{story-seq}.{criterion-seq}` (`^AC[0-9]+\.[0-9]+\.[0-9]+$`,
+  for example `AC1.2.3`). Do not rewrite it as `AC-1-2-3`.
+- **Legacy:** `^AC-[A-Z0-9-]+$` (for example `AC-001`, `AC-ISSUE-1`). It stays
+  valid for provisional rough-mockups IDs, written before user stories exist,
+  and for existing contracts. The optional D requirement-ID check accepts a
+  legacy ID only through an explicit `featureInputs.requirementIdBridges` entry.
+
+Full-width (`ＡＣ１.１.１`), lower-case, two- or four-segment, and mixed
+spellings such as `AC1-1-1` or `AC-1.1.1` fail the checker.
+
 Schema 1 is accepted only for an explicit migration of an existing evidence
 chain, by an operator setting `UI_POC_SCHEMA1_MIGRATION=1` for that migration
 run. New/default work uses schema 2

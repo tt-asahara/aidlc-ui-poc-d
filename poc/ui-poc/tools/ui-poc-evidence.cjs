@@ -15,6 +15,15 @@ const contracts = {
   'code-generation': 'ui-poc-implementation-contract.md',
   'build-and-test': 'ui-poc-test-contract.md'
 };
+// Acceptance-criterion IDs. The official form is the core user-stories
+// grammar `AC{story-group}.{story-seq}.{criterion-seq}` (for example AC1.1.1),
+// carried verbatim. The legacy `AC-…` form stays valid so provisional
+// rough-mockups IDs (written before user stories exist) and existing contracts
+// keep validating; mapping a legacy ID onto an official one is the optional D
+// requirement-ID check's explicit bridge, never an inference here.
+const OFFICIAL_AC_ID = /^AC[0-9]+\.[0-9]+\.[0-9]+$/;
+const LEGACY_AC_ID = /^AC-[A-Z0-9-]+$/;
+const isAcId = value => typeof value === 'string' && (OFFICIAL_AC_ID.test(value) || LEGACY_AC_ID.test(value));
 function boundedFile(root, rel) {
   if (typeof rel !== 'string' || !rel || path.isAbsolute(rel) || rel.includes('\\') || rel.split('/').includes('..')) throw Error('Unsafe evidence path');
   const rootReal = fs.realpathSync(root), resolved = fs.realpathSync(path.join(root, rel));
@@ -80,7 +89,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     }
     const ids = new Set();
     for (const m of c.mappings) {
-      if (!/^SCREEN-[A-Z0-9-]+$/.test(m.screen) || !/^STATE-[A-Z0-9-]+$/.test(m.state) || !/^AC-[A-Z0-9-]+$/.test(m.ac) || !assets.has(m.asset) || !m.asset.endsWith('.html') || typeof m.check !== 'string' || !m.check.trim()) throw Error('Invalid screen/state/AC mapping');
+      if (!/^SCREEN-[A-Z0-9-]+$/.test(m.screen) || !/^STATE-[A-Z0-9-]+$/.test(m.state) || !isAcId(m.ac) || !assets.has(m.asset) || !m.asset.endsWith('.html') || typeof m.check !== 'string' || !m.check.trim()) throw Error('Invalid screen/state/AC mapping');
       const key = [m.screen,m.state,m.ac].join('/');
       if (ids.has(key)) throw Error('Duplicate screen/state/AC mapping');
       ids.add(key);
@@ -236,4 +245,4 @@ function main(argv) {
   console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {check, hash, contracts, scopePolicy, engineFor, main};
+module.exports = {check, hash, contracts, scopePolicy, engineFor, main, isAcId};

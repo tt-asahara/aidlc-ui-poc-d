@@ -42,6 +42,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "issue-autopilot-runtime.ts",
   "issue-ambiguity-assessor.ts",
   "issue-autopilot-cli.ts",
+  "official-acceptance-criteria.ts",
   "official-next-adapter.ts",
   "parallel-guard.ts",
   "pr-lens-gate.ts",

@@ -69,6 +69,7 @@ function declaredArtifactPaths(value: any): string[] {
 const normalized = (path: string) => relative(resolve(projectDir), resolve(projectDir, path));
 const declared = new Set(declaredArtifactPaths(freshDirective).map(normalized));
 const manifestArtifacts = [
+  manifest.storiesPath,
   manifest.traceabilityPath,
   manifest.uiContractPath,
   ...(manifest.artifactPaths ?? []),

@@ -2,12 +2,13 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveDConfig } from "./d-config.ts";
-import { runRequirementUiCrossValidation } from "./requirement-ui-cross-validation.ts";
+import { parseUiContract, runRequirementUiCrossValidation, type OfficialAcInput } from "./requirement-ui-cross-validation.ts";
+import { parseOfficialAcceptanceCriteria } from "./official-acceptance-criteria.ts";
 import { runFunctionalDesignDiscipline } from "./functional-design-discipline.ts";
 import { recheckGroundingResult, runGrounding, type GroundingRunResult, type GroundingStage } from "./grounding.ts";
 import { createClaudeGroundingWorker, persistGroundingEvidence } from "./grounding-runtime.ts";
 
-type Manifest = { stage: string; unit?: string; traceabilityPath?: string; uiContractPath?: string; artifactPaths?: string[]; functionalArtifacts?: Record<string, string>; groundingOutputPath?: string; workerExecutable?: string };
+type Manifest = { stage: string; unit?: string; storiesPath?: string; traceabilityPath?: string; uiContractPath?: string; artifactPaths?: string[]; functionalArtifacts?: Record<string, string>; groundingOutputPath?: string; workerExecutable?: string };
 const args = process.argv.slice(2), get = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = get("--project-dir"), inputPath = get("--input"), recheckPath = get("--recheck-evidence");
 if (!projectDir || !isAbsolute(projectDir) || (!inputPath && !recheckPath)) throw new Error("--project-dir absolute path and --input (or --recheck-evidence) are required");
@@ -42,8 +43,20 @@ const applicableEnabled =
 if (!applicableEnabled) { process.stdout.write(`${JSON.stringify({ status: "disabled-or-not-applicable", stage: manifest.stage, reads: 0, workerCalls: 0, artifactsWritten: 0 })}\n`); process.exit(0); }
 
 if (config.features.requirementIdValidation && ["refined-mockups", "functional-design"].includes(manifest.stage)) {
-  if (!manifest.traceabilityPath || !manifest.uiContractPath) throw new Error("enabled requirement ID validation requires traceabilityPath and uiContractPath");
-  const result = runRequirementUiCrossValidation(true, () => ({ traceability: readJson(manifest.traceabilityPath!), contract: readJson(manifest.uiContractPath!), bridges: config.featureInputs.requirementIdBridges }));
+  if (!manifest.uiContractPath) throw new Error("enabled requirement ID validation requires uiContractPath (and storiesPath)");
+  // The official AC set comes from the official stories artifact; a missing
+  // input or file is recorded NOT-READY evidence, never a pass. An official
+  // traceability.json is an optional extra source.
+  const official = (): OfficialAcInput => {
+    const traceability = manifest.traceabilityPath ? readJson(manifest.traceabilityPath) : undefined;
+    if (!manifest.storiesPath) return { storiesIds: null, storiesUnavailable: { code: "MISSING_STORIES_INPUT", value: "manifest.storiesPath is required (the official stories.md)" }, traceability };
+    const lexical = isAbsolute(manifest.storiesPath) ? manifest.storiesPath : resolve(root, manifest.storiesPath), lexicalRel = relative(root, lexical);
+    if (lexicalRel.startsWith("..") || isAbsolute(lexicalRel)) throw new Error(`D feature path escapes project: ${manifest.storiesPath}`);
+    if (!existsSync(lexical)) return { storiesIds: null, storiesUnavailable: { code: "STORIES_NOT_FOUND", value: manifest.storiesPath }, traceability };
+    const parsed = parseOfficialAcceptanceCriteria(readFileSync(bounded(manifest.storiesPath), "utf8"));
+    return { storiesIds: parsed.ids, storiesFindings: parsed.findings, traceability };
+  };
+  const result = runRequirementUiCrossValidation(true, () => ({ official: official(), contract: parseUiContract(readFileSync(bounded(manifest.uiContractPath!), "utf8"), manifest.uiContractPath!), bridges: config.featureInputs.requirementIdBridges }));
   results.requirementIdValidation = result; if (!result.pass) notReady.push("requirementIdValidation");
 }
 if (config.features.functionalDesignDocumentDiscipline && manifest.stage === "functional-design") {
