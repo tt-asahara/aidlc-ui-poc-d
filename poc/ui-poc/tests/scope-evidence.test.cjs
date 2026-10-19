@@ -21,6 +21,9 @@ function fixture(t, scope, unitMappings = [HOME]) {
   const unitDir = path.join(record, 'construction', 'u1', 'code-generation');
   for (const dir of [refinedDir, unitDir]) { fs.mkdirSync(dir, {recursive:true}); fs.writeFileSync(path.join(dir, 'screen.html'), '<!doctype html><title>fixture</title>'); }
   fs.writeFileSync(path.join(record, 'aidlc-state.md'), '# State\n\n- **Scope**: ' + scope + '\n');
+  // The engine audit records the person's official approval of refined-mockups.
+  fs.mkdirSync(path.join(record, 'audit'));
+  fs.writeFileSync(path.join(record, 'audit', 'shard.md'), '# Audit\n\n## Gate Approved\n**Timestamp**: 2026-10-19T00:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: refined-mockups\n**User Input**: Approve\n');
   const asset = {path:'screen.html', sha256:hash(fs.readFileSync(path.join(refinedDir, 'screen.html')))};
   const refined = {schema:1, stage:'refined-mockups', arm:'C', assets:[asset], mappings:[HOME, LIST].map(mapping), requiredMappings:[HOME, LIST]};
   fs.writeFileSync(path.join(refinedDir, 'ui-poc-refined-contract.md'), render(refined));
@@ -47,6 +50,15 @@ test('scope policy: application and requirements use the engine record, comparis
 test('engine-record scope: a Unit slice of the approved refined contract passes without a ledger', t => {
   const f = fixture(t, 'ui-poc-application');
   assert.deepEqual(f.run(undefined).findings, []);
+});
+
+test('engine-record scope: byte equality without the official gate approval fails; a later reopen withdraws it', t => {
+  const f = fixture(t, 'ui-poc-application');
+  const shard = path.join(f.record, 'audit', 'shard.md');
+  fs.appendFileSync(shard, '\n---\n\n## Stage Revising\n**Timestamp**: 2026-10-19T00:01:00Z\n**Event**: STAGE_REVISING\n**Stage**: refined-mockups\n');
+  assert.match(f.run(undefined).findings.join('\n'), /no official gate approval of refined-mockups \(latest gate status: open\)/);
+  fs.rmSync(path.join(f.record, 'audit'), {recursive:true});
+  assert.match(f.run(undefined).findings.join('\n'), /no official gate approval of refined-mockups \(latest gate status: none\)/);
 });
 
 test('engine-record scope: an upstream copy that differs from the engine record artifact fails', t => {

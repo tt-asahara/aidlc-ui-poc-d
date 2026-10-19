@@ -82,7 +82,41 @@ function elementDifferences(expected, observed, { observedIsApproved = false } =
 }
 const elementDeltaSha256 = (elementKey, differences) => hashJson({elementKey,differences});
 
+const DISPOSITION_STATUSES = ['upstream-revised','approved-deviation','intentionally-omitted'];
+const UNIT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/**
+ * Disposition trust has two sources and one owner (this file). A detached
+ * operator ledger ({approvals:[...]}) for ledger-scoped runs, or the official
+ * engine record ({engineRecord:'pending'|'approved'}) for engine-record scopes.
+ * Only the evidence checker builds an engine-record trust: 'pending' at and
+ * before the gate that approves the recording Functional Design, 'approved'
+ * once it verified that gate's GATE_APPROVED and the approved bytes. An
+ * engine-record disposition carries no receipt of its own; the person's
+ * official approval of the Functional Design that states it is the approval.
+ */
+const engineRecordTrust = state => { if (!['pending','approved'].includes(state)) throw new Error(`Invalid engine-record trust state ${state}`); return Object.freeze({ engineRecord: state }); };
+const isEngineTrust = trust => Boolean(trust) && Object.hasOwn(trust, 'engineRecord');
+/** Structural findings for an engine-record disposition (no ledger, no AI-written receipt). */
+function engineDispositionFindings(disposition) {
+  const findings = [];
+  const d = disposition || {};
+  if (!DISPOSITION_STATUSES.includes(d.status)) findings.push(`status must be one of ${DISPOSITION_STATUSES.join(', ')}`);
+  if (typeof d.reason !== 'string' || !d.reason.trim()) findings.push('reason is empty');
+  if (d.approvalReceipt !== undefined) findings.push('an engine-record disposition carries no approvalReceipt; the official gate of the recording Functional Design approves it');
+  if (!/^[a-f0-9]{64}$/.test(d.deltaSha256 || '')) findings.push('deltaSha256 is missing or invalid');
+  if (!d.source || typeof d.source.path !== 'string' || !d.source.path.trim() || typeof d.source.heading !== 'string' || !d.source.heading.trim()) findings.push('source {path, heading} must name the Functional Design section that states this decision');
+  if (d.status === 'intentionally-omitted') {
+    if (d.deltaSha256 !== elementDeltaSha256(d.elementKey, ['missing'])) findings.push('an omission binds the "missing" delta');
+  } else if (DISPOSITION_STATUSES.includes(d.status)) {
+    if (!Array.isArray(d.differences) || !d.differences.length || d.differences.some(x => typeof x !== 'string' || !x.trim())) findings.push('a deviation or revision describes the difference in differences[]');
+    else if (d.deltaSha256 !== elementDeltaSha256(d.elementKey, d.differences)) findings.push('deltaSha256 does not bind the declared differences');
+  }
+  if (d.deferredTo !== undefined && (d.status !== 'intentionally-omitted' || typeof d.deferredTo !== 'string' || !UNIT_ID.test(d.deferredTo))) findings.push('deferredTo names the later Unit that implements an intentionally-omitted element');
+  return findings;
+}
+
 function dispositionReceipt(disposition, ledger, approvedSnapshotHash, observedDeltaSha256 = disposition?.deltaSha256) {
+  if (isEngineTrust(ledger)) return ['pending','approved'].includes(ledger.engineRecord) && engineDispositionFindings(disposition).length === 0 && disposition.deltaSha256 === observedDeltaSha256;
   if (!disposition || !['upstream-revised','approved-deviation','intentionally-omitted'].includes(disposition.status) || typeof disposition.reason !== 'string' || !disposition.reason.trim() || typeof disposition.approvalReceipt !== 'string' || !disposition.approvalReceipt.trim() || !/^[a-f0-9]{64}$/.test(disposition.deltaSha256 || '') || disposition.deltaSha256 !== observedDeltaSha256) return false;
   const dispositionSha256=hashJson({elementKey:disposition.elementKey,status:disposition.status,reason:disposition.reason});
   return Boolean(ledger?.approvals?.find(entry => entry.decisionId === disposition.approvalReceipt && entry.stage === 'functional-design' && entry.status === 'approved' && entry.snapshotSha256 === approvedSnapshotHash && entry.dispositionSha256 === dispositionSha256 && entry.deltaSha256 === observedDeltaSha256 && Array.isArray(entry.elementKeys) && entry.elementKeys.includes(disposition.elementKey) && typeof entry.source === 'string' && entry.source.trim() && typeof entry.reviewer === 'string' && entry.reviewer.trim()));
@@ -106,7 +140,7 @@ function compareSnapshots(approved, actual, dispositions = [], ledger = {}) {
   const known = new Set(results.map(row => row.elementKey));
   for (const disposition of dispositions) {
     if (!known.has(disposition.elementKey)) findings.push(`Disposition names an unknown approved element: ${disposition.elementKey}`);
-    else if (!dispositionReceipt(disposition, ledger, approvedHash)) findings.push(`Disposition has no matching detached approval receipt: ${disposition.elementKey}`);
+    else if (!dispositionReceipt(disposition, ledger, approvedHash)) findings.push(isEngineTrust(ledger) ? `Disposition is not a valid engine-record disposition: ${disposition.elementKey}: ${engineDispositionFindings(disposition).join('; ')}` : `Disposition has no matching detached approval receipt: ${disposition.elementKey}`);
   }
   return { pass: findings.length === 0, findings_count: findings.length, findings, checked: results.filter(row => !row.addition).length, deviated };
 }
@@ -397,4 +431,4 @@ async function main(argv) {
   } catch(error) { console.log(JSON.stringify({pass:false,findings_count:1,findings:[error.message]})); process.exitCode=1; }
 }
 if(require.main===module) main(process.argv.slice(2));
-module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,snapshotElements,elementDifferences,elementDeltaSha256,elementResults,compareSnapshots,compareImages,dispositionReceipt,browserExecutable,capture,mergeSnapshots,main};
+module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,snapshotElements,elementDifferences,elementDeltaSha256,elementResults,compareSnapshots,compareImages,dispositionReceipt,engineRecordTrust,isEngineTrust,engineDispositionFindings,DISPOSITION_STATUSES,browserExecutable,capture,mergeSnapshots,main};

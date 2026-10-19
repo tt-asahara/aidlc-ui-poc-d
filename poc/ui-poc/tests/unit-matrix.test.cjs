@@ -10,7 +10,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { hashJson, elementDeltaSha256 } = require('../tools/ui-poc-fidelity.cjs');
+const fidelity = require('../tools/ui-poc-fidelity.cjs');
+const { hashJson, elementDeltaSha256 } = fidelity;
 const M = require('../tools/ui-poc-element-matrix.cjs');
 const { check, hash } = require('../tools/ui-poc-evidence.cjs');
 
@@ -48,6 +49,10 @@ function snapshot() {
       { key: 'TAB-EQUIPMENT', explicitId: true, kind: 'control', text: '設備', role: 'button', exactCopy: false, important: false },
       { key: `${screen.slice(7)}-TITLE`, explicitId: true, kind: 'text', text: `${screen} ${state} の見出し`, exactCopy: true, important: true },
     ];
+    // EQUIPMENT-DETAIL carries a bottom action a later Unit (U2) implements through U1's slot;
+    // EQUIPMENT-LIST shows a status that only later-Unit data (an open anomaly, U3) triggers.
+    if (screen === 'SCREEN-EQUIPMENT-DETAIL') elements.push({ key: 'BTN-START-INSPECTION', explicitId: true, kind: 'control', text: '点検を始める', role: 'button', exactCopy: false, important: false });
+    if (screen === 'SCREEN-EQUIPMENT-LIST' && state === 'STATE-DEFAULT') elements.push({ key: 'EQ-102-STATUS', explicitId: true, kind: 'text', text: '異常あり', exactCopy: false, important: false });
     if (screen === 'SCREEN-HOME') elements.push({ key: 'HOME-VALUE-UNINSPECTED', explicitId: true, kind: 'business-value', text: '3', exactCopy: false, important: true });
     if (screen === 'SCREEN-HOME' && BANNERS[state]) elements.push({ key: BANNERS[state][0], explicitId: true, kind: 'text', text: BANNERS[state][1], exactCopy: true, important: true });
     captures.push({ rendered: true, screen, state, elements });
@@ -329,21 +334,202 @@ test('evidence: Build and Test refuses a hand-edited union, mismatched dispositi
   assert.match(unapproved.run('build-and-test').findings.join('\n'), /no matching explicit approval receipt/);
 });
 
-test('engine-record scope: Unit FD/code-generation and intent-level Build and Test resolve approvals from the record without a ledger', t => {
-  const f = chain(t);
+/**
+ * Mirror a chain into a real engine record (state + audit + stage directories).
+ * `rows` are engine audit rows [event, stage, unit, extraFields]; refined-mockups
+ * is always gate-approved first.
+ */
+function engineRecordOf(t, f, { checkpoints = false } = {}) {
   const project = fs.realpathSync(f.temp), record = path.join(project, 'aidlc', 'intents', 'x');
   fs.mkdirSync(record, { recursive: true });
-  fs.writeFileSync(path.join(record, 'aidlc-state.md'), '# State\n\n- **Scope**: ui-poc-application\n');
+  fs.writeFileSync(path.join(record, 'aidlc-state.md'), `# State\n\n- **Scope**: ui-poc-application\n${checkpoints ? '- **Construction Checkpoints**: enabled\n' : ''}`);
   fs.cpSync(path.join(project, 'refined'), path.join(record, 'inception', 'refined-mockups'), { recursive: true });
-  for (const unit of Object.keys(UNITS)) for (const stage of ['functional-design', 'code-generation']) fs.cpSync(f.unitDirs[unit], path.join(record, 'construction', unit, stage), { recursive: true });
+  for (const unit of Object.keys(f.unitDirs)) for (const stage of ['functional-design', 'code-generation']) fs.cpSync(f.unitDirs[unit], path.join(record, 'construction', unit, stage), { recursive: true });
   fs.cpSync(f.btDir, path.join(record, 'construction', 'build-and-test'), { recursive: true });
   const old = process.cwd(); process.chdir(project); t.after(() => process.chdir(old));
   const at = (...parts) => path.join(record, 'construction', ...parts);
+  const audit = rows => {
+    fs.mkdirSync(path.join(record, 'audit'), { recursive: true });
+    const all = [['GATE_APPROVED', 'refined-mockups'], ...rows];
+    const blocks = all.map(([event, stage, unit, extra = {}], i) => [`## ${event}`, `**Timestamp**: 2026-10-19T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, `**Event**: ${event}`, ...(stage ? [`**Stage**: ${stage}`] : []), ...(unit ? [`**Unit**: ${unit}`] : []), ...Object.entries(extra).map(([k, v]) => `**${k}**: ${v}`)].join('\n'));
+    fs.writeFileSync(path.join(record, 'audit', 'synthetic-shard.md'), `# Audit\n\n${blocks.join('\n\n---\n\n')}\n`);
+  };
+  audit([]);
+  const run = (stage, unit) => check({ stage, outputPath: stage === 'build-and-test' ? at('build-and-test', 'ui-poc-test-contract.md') : at(unit, stage, stage === 'functional-design' ? 'ui-poc-functional-contract.md' : 'ui-poc-implementation-contract.md') });
+  return { record, at, audit, run };
+}
+const perStageApprovals = units => units.flatMap(unit => [['GATE_APPROVED', 'functional-design', unit], ['GATE_APPROVED', 'code-generation', unit]]);
+
+test('engine-record scope: Unit FD/code-generation and intent-level Build and Test resolve approvals from the record without a ledger', t => {
+  const f = chain(t);
+  const { at, audit } = engineRecordOf(t, f);
+  assert.match(check({ stage: 'build-and-test', outputPath: at('build-and-test', 'ui-poc-test-contract.md') }).findings.join('\n'), /no official gate approval of functional-design for Unit u1-foundation-equipment/, 'byte equality alone is not the person\'s approval');
+  audit(perStageApprovals(Object.keys(UNITS)));
   assert.deepEqual(check({ stage: 'functional-design', outputPath: at(U1, 'functional-design', 'ui-poc-functional-contract.md') }).findings, []);
   assert.deepEqual(check({ stage: 'code-generation', outputPath: at(U1, 'code-generation', 'ui-poc-implementation-contract.md') }).findings, []);
   assert.deepEqual(check({ stage: 'build-and-test', outputPath: at('build-and-test', 'ui-poc-test-contract.md') }).findings, []);
   fs.appendFileSync(at('u4-work-order', 'code-generation', 'ui-poc-implementation-contract.md'), '\nedited after the Build and Test copy\n');
   assert.match(check({ stage: 'build-and-test', outputPath: at('build-and-test', 'ui-poc-test-contract.md') }).findings.join('\n'), /differs from the engine record artifact construction\/u4-work-order\/code-generation/);
+});
+
+// ---------- engine-record dispositions (dogfood-3 U1 shapes) ----------
+const { engineRecordTrust } = require('../tools/ui-poc-fidelity.cjs');
+const U2 = 'u2-inspection';
+const DETAIL_CLAIM = 'SCREEN-EQUIPMENT-DETAIL/STATE-UNINSPECTED/AC2.3.1';
+const BANNER = 'SCREEN-HOME/STATE-OFFLINE/MSG-OFFLINE';
+const BTN = 'SCREEN-EQUIPMENT-DETAIL/STATE-UNINSPECTED/BTN-START-INSPECTION';
+const STATUS = 'SCREEN-EQUIPMENT-LIST/STATE-DEFAULT/EQ-102-STATUS';
+const Q6 = '6. 承認済みの見た目からの違い（Q6）', LATER = '7. 後の Unit が実装する要素';
+const PLACEMENT = ['placement: the shell banner area below the header on every screen, not only on SCREEN-HOME'];
+/** An engine-record disposition: no approvalReceipt, a cited Functional Design section, a described difference. */
+function decision(key, status, reason, { heading, deferredTo, differences } = {}) {
+  const diff = status === 'intentionally-omitted' ? ['missing'] : differences;
+  return { elementKey: key, status, reason, deltaSha256: elementDeltaSha256(key, diff), ...(status === 'intentionally-omitted' ? {} : { differences: diff }), source: { path: 'functional-spec.md', heading: heading || (status === 'intentionally-omitted' ? LATER : Q6) }, ...(deferredTo ? { deferredTo } : {}) };
+}
+const section = (heading, keys) => `\n## ${heading}\n\n${keys.map(key => `- ${key}`).join('\n')}\n`;
+/** U1 claims the shared offline home state (Q1/Q6) and renders EQUIPMENT-DETAIL whose bottom action U2 registers in slot S-08. */
+function u1Engine() {
+  const omittedHome = ['SCREEN-HOME/STATE-OFFLINE/HOME-TITLE', 'SCREEN-HOME/STATE-OFFLINE/HOME-VALUE-UNINSPECTED'];
+  const overrides = { [BANNER]: { ruleIds: ['SHELL-BANNER'] }, [BTN]: { ruleIds: [], unimplementedReason: 'S-08 の差し込み口に U2 が登録する' }, [STATUS]: { ruleIds: ['BR6.1'] } };
+  for (const key of omittedHome) overrides[key] = { ruleIds: [], unimplementedReason: 'ホームの件数は U6 が実装する' };
+  const matrix = unitMatrix(U1, [...UNITS[U1], OFFLINE_CLAIM], overrides);
+  const dispositions = [
+    decision(BANNER, 'approved-deviation', 'Q1/Q6: 状態の案内は骨組みの共通の場所に出す', { differences: PLACEMENT }),
+    ...omittedHome.map(key => decision(key, 'intentionally-omitted', 'ホームの件数は U6 が実装する', { deferredTo: U6 })),
+    decision(BTN, 'intentionally-omitted', 'S-08 の差し込み口に U2 が登録する', { deferredTo: U2 }),
+  ].sort((a, b) => a.elementKey.localeCompare(b.elementKey));
+  const text = fdText(matrix) + section(Q6, [BANNER]) + section(LATER, [...omittedHome, BTN]);
+  return { mappings: [...UNITS[U1], OFFLINE_CLAIM], matrix, dispositions, fdText: text };
+}
+/** U2 adds the DETAIL state to its slice and implements the action; U1 keeps the DETAIL title. */
+function u2Engine({ implementsButton = true } = {}) {
+  const title = 'SCREEN-EQUIPMENT-DETAIL/STATE-UNINSPECTED/EQUIPMENT-DETAIL-TITLE';
+  const mappings = implementsButton ? [...UNITS[U2], DETAIL_CLAIM] : UNITS[U2];
+  const overrides = implementsButton ? { [title]: { ruleIds: [], unimplementedReason: '設備詳細の見出しは U1 が実装する' }, [BTN]: { ruleIds: ['BR-U2-START-INSPECTION'] } } : {};
+  const matrix = unitMatrix(U2, mappings, overrides);
+  const dispositions = implementsButton ? [decision(title, 'intentionally-omitted', '設備詳細の見出しは U1 が実装する', { deferredTo: U1 })] : [];
+  return { mappings, matrix, dispositions, fdText: fdText(matrix) + section(LATER, implementsButton ? [title] : []) };
+}
+/** U6 implements the banner with U1's shell rule and carries the same Q6 decision. */
+function u6Engine() {
+  const matrix = unitMatrix(U6, UNITS[U6], { [BANNER]: { ruleIds: ['SHELL-BANNER'] } });
+  const dispositions = [decision(BANNER, 'approved-deviation', 'Q1/Q6: 状態の案内は骨組みの共通の場所に出す（U1 の機能設計 §6）', { differences: PLACEMENT })];
+  return { mappings: UNITS[U6], matrix, dispositions, fdText: fdText(matrix) + section(Q6, [BANNER]) };
+}
+const engineOverrides = (extra = {}) => ({ [U1]: u1Engine(), [U2]: u2Engine(), [U6]: u6Engine(), ...extra });
+
+test('engine-record dispositions: structure only, no receipt; a source section must name the element', () => {
+  const u1 = u1Engine();
+  const slice = M.unitSlice(U1, u1.mappings), fdTexts = { 'functional-spec.md': u1.fdText };
+  const pending = engineRecordTrust('pending');
+  assert.deepEqual(codes(M.checkRuleMatrix({ matrix: u1.matrix, approved: APPROVED, fdTexts, dispositions: u1.dispositions, ledger: pending, slice })), []);
+  assert.ok(codes(M.checkRuleMatrix({ matrix: u1.matrix, approved: APPROVED, fdTexts, dispositions: u1.dispositions, slice })).includes(`DISPOSITION_WITHOUT_RECEIPT ${BANNER}`), 'without the engine record the ledger is still the source');
+  const variant = mutate => { const d = clone(u1.dispositions); mutate(d.find(x => x.elementKey === BANNER)); return codes(M.checkRuleMatrix({ matrix: u1.matrix, approved: APPROVED, fdTexts, dispositions: d, ledger: pending, slice })); };
+  assert.ok(variant(d => { d.approvalReceipt = 'agent-written'; }).includes(`DISPOSITION_INVALID ${BANNER}`), 'an AI-written receipt is refused');
+  assert.ok(variant(d => { delete d.differences; }).includes(`DISPOSITION_INVALID ${BANNER}`), 'a deviation describes its difference');
+  assert.ok(variant(d => { d.differences = ['copy']; }).includes(`DISPOSITION_INVALID ${BANNER}`), 'the delta binds the declared differences');
+  assert.ok(variant(d => { d.reason = ' '; }).includes(`DISPOSITION_INVALID ${BANNER}`));
+  assert.ok(variant(d => { d.status = 'waived'; }).includes(`DISPOSITION_INVALID ${BANNER}`));
+  assert.ok(variant(d => { d.source.heading = '8. 受入条件の受け持ち'; }).includes(`DISPOSITION_SOURCE_MISSING ${BANNER}`));
+  assert.ok(variant(d => { d.deferredTo = U6; }).includes(`DISPOSITION_DEFERRAL_INVALID ${BANNER}`), 'only an omission defers to another Unit');
+  const unnamed = codes(M.checkRuleMatrix({ matrix: u1.matrix, approved: APPROVED, fdTexts: { 'functional-spec.md': u1.fdText.replace(section(Q6, [BANNER]), `\n## ${Q6}\n\n案内の場所を変える。\n`) }, dispositions: u1.dispositions, ledger: pending, slice }));
+  assert.ok(unnamed.includes(`DISPOSITION_SOURCE_MISSING ${BANNER}`), unnamed.join(', '));
+  // The agent runs the same check from the CLI with --engine-record (no ledger, no receipt).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-engine-cli-'));
+  try {
+    const put = (name, value) => { const file = path.join(dir, name); fs.writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value)); return file; };
+    const contract = put('ui-poc-functional-contract.md', render({ requiredMappings: u1.mappings }));
+    const args = ['rule-matrix', 'check', '--approved', put('snapshot.json', APPROVED), '--matrix', put('matrix.json', u1.matrix), '--fd', put('functional-spec.md', u1.fdText), '--unit', U1, '--contract', contract, '--dispositions', put('dispositions.json', u1.dispositions)];
+    const cli = extra => spawnSync(process.execPath, [MATRIX_CLI, ...args, ...extra], { encoding: 'utf8' });
+    assert.equal(cli(['--engine-record']).status, 0, cli(['--engine-record']).stdout);
+    assert.match(cli([]).stdout, /DISPOSITION_WITHOUT_RECEIPT/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('engine-record FD gate: pending dispositions pass the sensor without a ledger', t => {
+  const f = chain(t, { override: engineOverrides() });
+  const e = engineRecordOf(t, f);
+  for (const unit of [U1, U2, U6]) assert.deepEqual(e.run('functional-design', unit).findings, [], `${unit} FD`);
+});
+
+test('engine-record per-stage gates: code-generation accepts dispositions only after the FD gate approval and with unchanged bytes', t => {
+  const f = chain(t, { override: engineOverrides() });
+  const e = engineRecordOf(t, f);
+  assert.match(e.run('code-generation', U1).findings.join('\n'), /no official gate approval of functional-design for Unit u1-foundation-equipment/);
+  e.audit([['GATE_APPROVED', 'functional-design', 'u2-inspection']]);
+  assert.match(e.run('code-generation', U1).findings.join('\n'), /no official gate approval of functional-design for Unit u1-foundation-equipment/, 'another Unit\'s approval is not this Unit\'s');
+  e.audit([['UNIT_STARTED', 'functional-design', U1], ['GATE_APPROVED', 'functional-design']]);
+  assert.deepEqual(e.run('code-generation', U1).findings, [], 'an unattributed gate row belongs to the Unit the walk started');
+  e.audit([['GATE_APPROVED', 'functional-design', U1], ['STAGE_REVISING', 'functional-design', U1]]);
+  assert.match(e.run('code-generation', U1).findings.join('\n'), /latest gate status: open/, 'a reopen withdraws the approval');
+  e.audit([['GATE_APPROVED', 'functional-design', U1]]);
+  assert.deepEqual(e.run('code-generation', U1).findings, []);
+  // Tampering after approval: the approved contract or the prose that states the decision.
+  const fdContract = e.at(U1, 'functional-design', 'ui-poc-functional-contract.md');
+  const original = fs.readFileSync(fdContract);
+  fs.writeFileSync(fdContract, original.toString('utf8').replace('Q1/Q6: 状態の案内は骨組みの共通の場所に出す"', 'Q1/Q6: 承認後に書き換えた理由"'));
+  assert.match(e.run('code-generation', U1).findings.join('\n'), /functional-design contract copy differs from the engine record artifact/);
+  fs.writeFileSync(fdContract, original);
+  fs.appendFileSync(e.at(U1, 'functional-design', 'functional-spec.md'), '\n承認後に足した違い\n');
+  assert.match(e.run('code-generation', U1).findings.join('\n'), /Functional Design copy functional-spec\.md differs from the engine record artifact construction\/u1-foundation-equipment\/functional-design\/functional-spec\.md approved at its gate/);
+});
+
+test('engine-record Unit-end checkpoints: code-generation sees pending dispositions; Build and Test needs every Unit approval by the person', t => {
+  const f = chain(t, { override: engineOverrides() });
+  const e = engineRecordOf(t, f, { checkpoints: true });
+  assert.deepEqual(e.run('code-generation', U1).findings, [], 'FD and code-generation share the Unit-end gate');
+  assert.match(e.run('build-and-test').findings.join('\n'), /no official gate approval of functional-design/);
+  const checkpoint = (unit, extra = {}) => ['GATE_APPROVED', 'code-generation', unit, { 'Gate Stages': 'functional-design, code-generation', 'Gate Scope': 'unit-end', 'User Input': 'Approve', ...extra }];
+  e.audit(Object.keys(UNITS).map(unit => checkpoint(unit)));
+  assert.deepEqual(e.run('build-and-test').findings, []);
+  e.audit(Object.keys(UNITS).map(unit => checkpoint(unit, unit === U1 ? { Autonomous: 'true' } : {})));
+  assert.match(e.run('build-and-test').findings.join('\n'), /UI dispositions of functional-design for Unit u1-foundation-equipment need the person's own gate approval/);
+  e.audit(Object.keys(UNITS).map(unit => checkpoint(unit, unit === 'u5-history' ? { Autonomous: 'true' } : {})));
+  assert.deepEqual(e.run('build-and-test').findings, [], 'an autonomous approval of a Unit without dispositions is the engine\'s approval');
+});
+
+test('ledger-scoped runs keep requiring the detached ledger for the same dispositions', t => {
+  const f = chain(t, { override: engineOverrides() });
+  const at = stage => path.join(f.unitDirs[U1], stage === 'functional-design' ? 'ui-poc-functional-contract.md' : 'ui-poc-implementation-contract.md');
+  assert.match(check({ stage: 'functional-design', outputPath: at('functional-design'), engine: ledgerEngine(U1) }).findings.join('\n'), /Trusted approval ledger is not configured for UI deviations/);
+  assert.match(check({ stage: 'functional-design', outputPath: at('functional-design'), approvalLedger: f.ledgerPath, engine: ledgerEngine(U1) }).findings.join('\n'), /no matching detached approval receipt/);
+  assert.match(check({ stage: 'code-generation', outputPath: at('code-generation'), approvalLedger: f.ledgerPath, engine: ledgerEngine(U1) }).findings.join('\n'), /no matching detached approval receipt/);
+});
+
+test('union: omitted by U1 for U2 and implemented by U2 is covered; a deferral nobody implements is NOT-READY', () => {
+  const entry = u => ({ matrix: u.matrix, dispositions: u.dispositions });
+  const others = Object.keys(UNITS).filter(u => ![U1, U2, U6].includes(u)).map(u => ({ matrix: unitMatrix(u), dispositions: [] }));
+  const union = M.unionRuleMatrix({ approved: APPROVED, units: [...others, entry(u1Engine()), entry(u2Engine()), entry(u6Engine())] });
+  assert.deepEqual(codes(union), []);
+  assert.deepEqual(union.matrix.rows.find(r => r.elementKey === BTN), { ...union.matrix.rows.find(r => r.elementKey === BTN), ruleIds: ['BR-U2-START-INSPECTION'], unimplementedReason: null, units: [U2] });
+  assert.deepEqual(union.matrix.rows.find(r => r.elementKey === BANNER).units, [U1, U6]);
+  assert.deepEqual(union.dispositions.map(d => [d.elementKey, d.status]), [[BANNER, 'approved-deviation']], 'only the shared Q6 decision reaches Build and Test');
+  assert.deepEqual(union.matrix.rows.find(r => r.elementKey === STATUS).ruleIds, ['BR6.1'], 'a data-dependent status is mapped by the Unit that renders it');
+  const missing = M.unionRuleMatrix({ approved: APPROVED, units: [...others, entry(u1Engine()), entry(u2Engine({ implementsButton: false })), entry(u6Engine())] });
+  assert.deepEqual(codes(missing), [`ELEMENT_DEFERRED_NOT_IMPLEMENTED ${BTN}`]);
+  const u6Plain = { matrix: unitMatrix(U6, UNITS[U6], { [BANNER]: { ruleIds: ['SHELL-BANNER'] } }), dispositions: [] };
+  assert.deepEqual(codes(M.unionRuleMatrix({ approved: APPROVED, units: [...others, entry(u1Engine()), entry(u2Engine()), u6Plain] })), [`ELEMENT_OWNER_CONFLICT ${BANNER}`], 'every Unit that implements the banner carries the same Q6 decision');
+  // The Q6 placement is not an observed snapshot field: the implementation passes; data the approved state shows must be reproduced at capture.
+  assert.equal(fidelity.compareSnapshots(APPROVED, ACTUAL, union.dispositions, engineRecordTrust('approved')).pass, true);
+  const noData = clone(ACTUAL); noData.captures.find(c => c.screen === 'SCREEN-EQUIPMENT-LIST' && c.state === 'STATE-DEFAULT').elements = noData.captures.find(c => c.screen === 'SCREEN-EQUIPMENT-LIST' && c.state === 'STATE-DEFAULT').elements.filter(el => el.key !== 'EQ-102-STATUS');
+  assert.match(fidelity.compareSnapshots(APPROVED, noData, union.dispositions, engineRecordTrust('approved')).findings.join('\n'), /Unapproved UI difference SCREEN-EQUIPMENT-LIST\/STATE-DEFAULT\/EQ-102-STATUS: missing/);
+});
+
+test('rule IDs resolve against rules.md as a Functional Design artifact, as whole tokens', () => {
+  const matrix = unitMatrix(U1, UNITS[U1], { [STATUS]: { ruleIds: ['BR6.2'] } });
+  const slice = M.unitSlice(U1, UNITS[U1]);
+  const spec = fdText(matrix).replace('- BR6.2\n', '');
+  assert.ok(codes(M.checkRuleMatrix({ matrix, approved: APPROVED, fdTexts: { 'functional-spec.md': spec }, slice })).includes(`RULE_ID_UNKNOWN ${STATUS}`));
+  assert.deepEqual(codes(M.checkRuleMatrix({ matrix, approved: APPROVED, fdTexts: { 'functional-spec.md': spec, 'rules.md': '# Rules\n\n## BR6.2 下部の操作\n' }, slice })), []);
+  assert.ok(codes(M.checkRuleMatrix({ matrix, approved: APPROVED, fdTexts: { 'functional-spec.md': spec, 'rules.md': '# Rules\n\n## BR6.2.1 別の規則\n' }, slice })).includes(`RULE_ID_UNKNOWN ${STATUS}`), 'BR6.2.1 does not define BR6.2');
+});
+
+test('engine-record Build and Test passes the dogfood shape end to end with the Q6 deviation', t => {
+  const f = chain(t, { override: engineOverrides() });
+  const e = engineRecordOf(t, f);
+  e.audit(perStageApprovals(Object.keys(UNITS)));
+  for (const unit of [U1, U2, U6]) assert.deepEqual(e.run('code-generation', unit).findings, [], `${unit} CG`);
+  assert.deepEqual(e.run('build-and-test').findings, []);
 });
 
 // ---------- CLI ----------
