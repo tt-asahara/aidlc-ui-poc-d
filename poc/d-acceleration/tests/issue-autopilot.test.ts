@@ -137,6 +137,25 @@ describe("D issue intake/autopilot", () => {
     expect(await runIssueAutopilot({ config: enabled({ sessionAuto: true }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: reconciled.deps })).toMatchObject({ reason: "intent-created", directive: { kind: "ask", gate: true } });
   });
 
+  test("resuming an Issue whose intent already exists never re-runs the ambiguity assessment", async () => {
+    // dogfood-3: a re-assessment of the unchanged Issue #1 (a model judgement
+    // that varies between runs) stranded the in-flight intent with "uncertainty".
+    const resumed = fixture({
+      assessor: { async assess() { throw new Error("assessor must not run for a bound in-flight intent"); } },
+      engine: { async createIntent() { throw new Error("must not create a second intent"); }, async reconcileIntent() { return { kind: "run-stage", stage: "nfr-design", gate: false }; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } },
+    });
+    const result = await runIssueAutopilot({ config: enabled({ uncertaintyPolicy: "assume" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: resumed.deps });
+    expect(result).toMatchObject({ reason: "intent-created", attempts: 0, directive: { stage: "nfr-design" } });
+    expect(resumed.calls.assessed).toBe(0);
+
+    // A new Issue (no intent yet) is still assessed and still stops on uncertainty.
+    const fresh = fixture({
+      assessor: { async assess(value) { return { unresolved: ["photo handling"], description: value.body }; } },
+      engine: { async createIntent() { throw new Error("must not create"); }, async reconcileIntent() { return null; }, async next() { throw new Error("unused"); }, async execute(value) { return value; } },
+    });
+    expect(await runIssueAutopilot({ config: enabled({ uncertaintyPolicy: "assume" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: fresh.deps })).toMatchObject({ reason: "uncertainty", detail: "photo handling" });
+  });
+
   test("session auto delegates exact official directives to the bounded host", async () => {
     const gated = fixture({ engine: { async createIntent() { return { kind: "ask", gate: true }; }, async next() { throw new Error("must not run"); }, async execute() { throw new Error("must not run"); } } });
     const result = await runIssueAutopilot({ config: enabled({ sessionAuto: true, through: "inception" }), selection: { issueNumber: 42 }, owner: "worker", scope: "feature", deps: gated.deps });

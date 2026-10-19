@@ -305,7 +305,15 @@ export async function runIssueAutopilot(input: {
 
   let retainClaim = false;
   try {
-    const assessment = await input.deps.assessor.assess(Object.freeze(structuredClone(issue)), config.uncertaintyPolicy);
+    // The ambiguity assessment gates only the creation of a new intent. An
+    // Issue whose intent already exists in durable official state passed intake
+    // when that intent was created; re-assessing it (a model judgement that
+    // varies between runs) must not strand an in-flight intent on resume.
+    const reconcile = () => input.deps.engine.reconcileIntent?.(issue.number) ?? Promise.resolve(null);
+    const existing = await reconcile();
+    const assessment = existing
+      ? { unresolved: [], assumptions: [], researchedFacts: [], description: issue.body }
+      : await input.deps.assessor.assess(Object.freeze(structuredClone(issue)), config.uncertaintyPolicy);
     if (assessment.unresolved.length > 0 && config.uncertaintyPolicy === "halt") {
       return { status: "stopped", reason: "uncertainty", issueNumber: issue.number, detail: assessment.unresolved.join("; ") };
     }
@@ -335,8 +343,6 @@ export async function runIssueAutopilot(input: {
     const binding = input.binding ? { ...input.binding, issueNumber: issue.number, intakeKey: intakeBindingKey(input.binding, issue.number) } : undefined;
     let reservation = binding && input.deps.bindings ? await input.deps.bindings.reserve(binding, input.owner) : "reserved";
     let created: { value?: OfficialDirective; attempts: number; error?: unknown } = { attempts: 0 };
-    const reconcile = () => input.deps.engine.reconcileIntent?.(issue.number) ?? Promise.resolve(null);
-    const existing = await reconcile();
     if (existing) {
       created = { value: existing, attempts: 0 };
       if (binding && input.deps.bindings) await input.deps.bindings.finalize(binding, input.owner);

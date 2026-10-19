@@ -35,6 +35,9 @@ session永続化、MCP、slash command、全toolを無効化し、入力・出�
 Issueと安定した一般知識だけから得た事実を台帳へ渡します。現在情報・外部情報・project証拠が
 必要な点は未解決のままです。モデル不可、timeout、余分なapproval fieldを含む不正schemaは
 intent作成前にfail-closedで停止し、approval recordを作成しません。
+この判定は新しいIntentを作る時だけ行います。公式状態に既存のIntentがあるIssue（番号指定での再開）は
+判定をやり直さず、そのIntentで再開します（判定はモデルの判断で実行ごとに揺れるため、
+進行中のIntentを再判定で止めないため）。
 
 `aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任
 （`AI-DLC delegate-ai-approvals ...` の完全一致文。host記録の最新human turn
