@@ -68,8 +68,10 @@ function engineRecord(outputPath, stage) {
   const rel = path.relative(recordRoot, output).split(path.sep);
   const stageIndex = rel.lastIndexOf(stage);
   if (stageIndex < 1) throw Error('Stage output path does not identify the dispatched stage');
+  // construction/<unit>/<stage>/ is a Unit stage; construction/<stage>/ is an
+  // intent-level Construction stage (Build and Test runs once per Intent).
   const unit = rel[0] === 'construction' && stageIndex === 2 ? rel[1] : null;
-  if (rel[0] === 'construction' && stageIndex !== 2) throw Error('Construction output path has no unambiguous Unit');
+  if (rel[0] === 'construction' && stageIndex !== 1 && stageIndex !== 2) throw Error('Construction output path has no unambiguous Unit');
   const stateBytes = fs.readFileSync(path.join(recordRoot, 'aidlc-state.md'));
   return {recordRoot,unit,stateBytes,scope:stateField(stateBytes.toString('utf8'), 'Scope')};
 }
