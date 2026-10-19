@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const fidelity = require('./ui-poc-fidelity.cjs');
-const { canonical, hashJson, snapshotElements, elementDifferences, elementDeltaSha256, elementResults, dispositionReceipt, validateSnapshot } = fidelity;
+const { canonical, hashJson, snapshotElements, elementDifferences, elementDeltaSha256, elementResults, dispositionReceipt, validateSnapshot, isEngineTrust, engineDispositionFindings, engineRecordTrust } = fidelity;
 
 const RULE_MATRIX_KIND = 'ui-element-rule-matrix';
 const TEST_MATRIX_KIND = 'ui-element-test-matrix';
@@ -114,7 +114,29 @@ function pickGenerated(row) {
   return out;
 }
 
-const tokenPattern = id => new RegExp(`(^|[^A-Za-z0-9_-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`);
+// A rule ID is a whole token: BR6.2 matches "BR6.2" and "BR6.2." but not BR6.21 or BR6.2.1.
+const tokenPattern = id => new RegExp(`(^|[^A-Za-z0-9_-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-]|\\.[A-Za-z0-9])`);
+
+/**
+ * The Functional Design section an engine-record disposition cites
+ * (source {path, heading}) must exist in a supplied Functional Design text and
+ * name the element key, so the person approves the decision where they read it.
+ */
+function sourceFinding(disposition, fdTexts) {
+  const source = disposition?.source;
+  if (!source || typeof source.path !== 'string' || typeof source.heading !== 'string') return 'source {path, heading} is missing';
+  const name = Object.keys(fdTexts).find(key => key === source.path || key.endsWith('/' + source.path));
+  if (name === undefined) return `source ${source.path} is not one of the Functional Design artifacts`;
+  const lines = String(fdTexts[name]).split(/\r?\n/);
+  const heading = line => /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+  const start = lines.findIndex(line => heading(line)?.[2] === source.heading.trim());
+  if (start < 0) return `source ${source.path} has no heading ${JSON.stringify(source.heading)}`;
+  const level = heading(lines[start])[1].length;
+  let end = start + 1;
+  while (end < lines.length && !(heading(lines[end]) && heading(lines[end])[1].length <= level)) end += 1;
+  if (!lines.slice(start + 1, end).join('\n').includes(disposition.elementKey)) return `section ${JSON.stringify(source.heading)} of ${source.path} does not name ${disposition.elementKey}`;
+  return null;
+}
 
 /**
  * Functional Design consumption check. Bidirectional: every approved element
@@ -147,7 +169,13 @@ function checkRuleMatrix({ matrix, approved, fdTexts = {}, dispositions = [], le
     if (byElement.has(disposition?.elementKey)) add('DISPOSITION_DUPLICATE', disposition.elementKey, 'more than one disposition for one element');
     byElement.set(disposition?.elementKey, disposition);
     if (!expected.has(disposition?.elementKey)) add('DISPOSITION_UNKNOWN_ELEMENT', disposition?.elementKey, slice ? 'disposition names no element of this Unit slice; claim the state through the slice first' : 'disposition names no approved element');
-    else if (!dispositionReceipt(disposition, ledger, approvedHash)) add('DISPOSITION_WITHOUT_RECEIPT', disposition?.elementKey, 'no matching detached Functional Design approval receipt');
+    else if (isEngineTrust(ledger)) {
+      // Engine-record scope: structure only; the official gate is the approval.
+      for (const finding of engineDispositionFindings(disposition)) add('DISPOSITION_INVALID', disposition.elementKey, finding);
+      const source = sourceFinding(disposition, fdTexts);
+      if (source) add('DISPOSITION_SOURCE_MISSING', disposition.elementKey, source);
+    } else if (!dispositionReceipt(disposition, ledger, approvedHash)) add('DISPOSITION_WITHOUT_RECEIPT', disposition?.elementKey, 'no matching detached Functional Design approval receipt');
+    if (disposition?.deferredTo !== undefined && (disposition.status !== 'intentionally-omitted' || typeof disposition.deferredTo !== 'string' || !UNIT_ID.test(disposition.deferredTo) || disposition.deferredTo === slice?.unit)) add('DISPOSITION_DEFERRAL_INVALID', disposition?.elementKey, 'deferredTo names another Unit that implements this intentionally-omitted element');
   }
   let mapped = 0, unimplemented = 0;
   for (const row of matrix.rows) {
@@ -230,6 +258,11 @@ function unionRuleMatrix({ approved, units }) {
       const first = owners[0], ids = u => canonical([...u.rows.get(key).ruleIds].sort());
       const differing = owners.filter(u => ids(u) !== ids(first) || canonical(decision(u, key)) !== canonical(decision(first, key)));
       if (differing.length) add('ELEMENT_OWNER_CONFLICT', key, `Units ${owners.map(u => u.unit).join(', ')} all implement this element with different rule IDs or dispositions; map it with the same rule IDs and disposition in every claiming Unit, or omit it (with a receipt) in all but one`);
+    }
+    // An omission deferred to a later Unit is covered only when that Unit implements the element.
+    for (const u of omitters) {
+      const deferredTo = u.dispositions.get(key)?.deferredTo;
+      if (deferredTo !== undefined && !owners.some(owner => owner.unit === deferredTo)) add('ELEMENT_DEFERRED_NOT_IMPLEMENTED', key, `${u.unit} omitted this element for ${deferredTo}, but ${deferredTo} does not implement it (claim the state in its slice and map the element)`);
     }
     if (generated.requiresRule && !owners.length && !omitters.length) add('ELEMENT_NO_OWNER', key, present.length ? `no Unit implements or omits this element (in the slice of ${present.map(u => u.unit).join(', ')})` : 'no Unit slice includes this screen/state');
     const deciding = owners.length ? owners : omitters.length ? omitters : present;
@@ -337,7 +370,8 @@ function main(argv) {
   try {
     const args = parse(argv), [group, verb] = args._;
     const dispositions = args.dispositions ? readJson(args.dispositions) : [];
-    const ledger = args['approval-ledger'] ? readJson(args['approval-ledger']) : {};
+    if (args['engine-record'] && args['approval-ledger']) throw new Error('--engine-record and --approval-ledger are two different approval sources; pass one');
+    const ledger = args['engine-record'] ? engineRecordTrust('pending') : args['approval-ledger'] ? readJson(args['approval-ledger']) : {};
     if (group === 'rule-matrix' && verb === 'generate') {
       if (!args.approved || !args.out) throw new Error('USAGE: rule-matrix generate --approved SNAPSHOT --out MATRIX [--previous MATRIX] [--unit UNIT --contract UNIT_CONTRACT]');
       const slice = sliceArg(args);
@@ -345,7 +379,7 @@ function main(argv) {
       write(args.out, matrix); console.log(JSON.stringify({ pass: true, rows: matrix.rows.length, requiresRule: matrix.rows.filter(row => row.requiresRule).length, snapshotSha256: matrix.snapshotSha256, ...(slice ? { slice } : {}) })); return;
     }
     if (group === 'rule-matrix' && verb === 'check') {
-      if (!args.approved || !args.matrix || !args.fd) throw new Error('USAGE: rule-matrix check --approved SNAPSHOT --matrix MATRIX --fd FILE[,FILE] [--unit UNIT --contract UNIT_CONTRACT] [--dispositions FILE] [--approval-ledger FILE]');
+      if (!args.approved || !args.matrix || !args.fd) throw new Error('USAGE: rule-matrix check --approved SNAPSHOT --matrix MATRIX --fd FILE[,FILE] [--unit UNIT --contract UNIT_CONTRACT] [--dispositions FILE] [--approval-ledger FILE | --engine-record]');
       const fdTexts = Object.fromEntries(String(args.fd).split(',').map(file => [file.trim(), fs.readFileSync(file.trim(), 'utf8')]));
       const result = checkRuleMatrix({ matrix: readJson(args.matrix), approved: readJson(args.approved), fdTexts, dispositions, ledger, slice: sliceArg(args) });
       console.log(JSON.stringify(result)); process.exitCode = result.pass ? 0 : 1; return;

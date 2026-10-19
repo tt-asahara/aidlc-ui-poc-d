@@ -6,7 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const fidelity = require('./ui-poc-fidelity.cjs');
 const matrix = require('./ui-poc-element-matrix.cjs');
-const {engineRecord} = require('./ui-poc-c-routing.cjs');
+const {engineRecord, engineGateStatus, stateField} = require('./ui-poc-c-routing.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const contracts = {
   'rough-mockups': 'ui-poc-rough-contract.md',
@@ -43,9 +43,26 @@ function scopePolicy(scope) {
 }
 /** Record facts for the dispatched output; outside an engine record the strict default applies. */
 function engineFor(outputPath, stage) {
-  let record = {recordRoot:null, unit:null, scope:null};
+  let record = {recordRoot:null, unit:null, scope:null, stateBytes:null};
   try { record = engineRecord(outputPath, stage); } catch {}
-  return {recordRoot:record.recordRoot, unit:record.unit, scope:record.scope, policy:scopePolicy(record.scope)};
+  // With Construction checkpoints a Unit's per-unit stages share one Unit-end
+  // gate, so Functional Design is approved together with code-generation.
+  const checkpoints = record.stateBytes ? stateField(record.stateBytes.toString('utf8'), 'Construction Checkpoints') === 'enabled' : false;
+  return {recordRoot:record.recordRoot, unit:record.unit, scope:record.scope, checkpoints, policy:scopePolicy(record.scope)};
+}
+/**
+ * The one owner of "who approves a UI disposition". Ledger scopes: the detached
+ * operator ledger (required as soon as there is a disposition). Engine-record
+ * scopes: the official gate of the Functional Design that records it; until
+ * that gate is verified (requireEngineRecord) the dispositions are pending and
+ * only their structure is checked. Build and Test (final) is reached only after
+ * every chain approval was verified, so it reads them as approved.
+ */
+function dispositionTrust(engine, approvalLedger, dispositions, {final = false} = {}) {
+  if (engine.policy.upstreamApproval === 'engine-record') return fidelity.engineRecordTrust(final ? 'approved' : 'pending');
+  if (!dispositions.length) return approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+  if (!approvalLedger) throw Error('Trusted approval ledger is not configured for UI deviations');
+  return JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8'));
 }
 function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false, engine}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
@@ -54,6 +71,8 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     if (!outputPath || !fs.statSync(outputPath).isFile()) throw Error('Declared deliverable is missing');
     const root = path.dirname(path.resolve(outputPath));
     engine ??= engineFor(outputPath, stage);
+    // Build and Test runs after every Unit gate: everything upstream must be approved, nothing pending.
+    if (stage === 'build-and-test' && depth === 0) engine = {...engine, final:true};
     if (engine.policy.sensor === 'off') return {pass:true, findings_count:0, findings:[], notApplicable:`UI evidence is off for scope ${engine.scope}`};
     // A Construction Unit carries the slice of the intent-level refined
     // inventory that its unit owns; everything else stays an exact handoff.
@@ -121,12 +140,8 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
         if (!revision.pass) throw Error('Artifact revision does not match the approved snapshot delta: ' + revision.findings.join('; '));
       }
       if (['functional-design','code-generation'].includes(stage)) {
-        let ledger = {};
-        if (dispositions.length) {
-          if (!approvalLedger) throw Error('Trusted approval ledger is not configured for UI deviations');
-          ledger = JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8'));
-        }
-        for (const disposition of dispositions) if (!fidelity.dispositionReceipt(disposition, ledger, fidelity.hashJson(approved))) throw Error(`UI disposition has no matching detached approval receipt: ${disposition?.elementKey || '?'}`);
+        const trust = dispositionTrust(engine, approvalLedger, dispositions);
+        for (const disposition of dispositions) if (!fidelity.dispositionReceipt(disposition, trust, fidelity.hashJson(approved))) throw Error(fidelity.isEngineTrust(trust) ? `UI disposition is not a valid engine-record disposition: ${disposition?.elementKey || '?'}: ${fidelity.engineDispositionFindings(disposition).join('; ')}` : `UI disposition has no matching detached approval receipt: ${disposition?.elementKey || '?'}`);
       }
       if (['functional-design','code-generation','build-and-test'].includes(stage)) {
         const ruleMatrix = readAsset(boundAsset(c.fidelity.elementRuleMatrix, 'element rule matrix (fidelity.elementRuleMatrix)'));
@@ -134,7 +149,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           if (!Array.isArray(c.fidelity.functionalDesign) || !c.fidelity.functionalDesign.length) throw Error('Missing Functional Design artifact copies (fidelity.functionalDesign)');
           const fdTexts = {};
           for (const ref of c.fidelity.functionalDesign) { boundAsset(ref, 'Functional Design artifact'); if (!ref.path.endsWith('.md')) throw Error('Functional Design artifact copies must be Markdown'); fdTexts[ref.path] = boundedFile(root, ref.path).toString('utf8'); }
-          const ledger = dispositions.length && approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+          const ledger = dispositionTrust(engine, approvalLedger, dispositions);
           // A Unit's denominator is exactly its contract slice (unit + screen/state
           // pairs of its requiredMappings); the matrix records that slice.
           const slice = unitSlice ? matrix.unitSlice(engine.unit, c.requiredMappings) : undefined;
@@ -155,13 +170,18 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           const fdPath = fs.realpathSync(path.join(root, fdRef.path));
           const inheritedFd = check({stage:'functional-design',outputPath:fdPath,approvalLedger,imageFeatures,allowLegacySchema1,engine}, new Set(seen), path.basename(fdPath), depth + 1);
           if (!inheritedFd.pass) throw Error('Invalid Functional Design evidence: ' + inheritedFd.findings.join('; '));
-          requireUpstreamApproval(engine, approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings});
+          // Engine-record scopes: the Functional Design that records the
+          // dispositions is approved by its official gate. Before Build and
+          // Test, a Unit-end checkpoint that approves Functional Design together
+          // with this stage leaves them pending; Build and Test needs the approval.
+          const fdApproval = requireUpstreamApproval(engine, approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings}, {allowPending:!engine.final && engine.checkpoints === true, dispositions:fd.fidelity?.dispositions || []});
+          if (engine.policy.upstreamApproval === 'engine-record') requireEngineFunctionalDesignText(engine, fd, path.dirname(fdPath), fdApproval);
         }
         if (stage === 'build-and-test' && multiUnit) verifyUnitUnion({c, root, engine, approved, ruleMatrix, dispositions, approvalLedger, imageFeatures, allowLegacySchema1, seen, depth});
         if (stage === 'build-and-test') {
           const testRef = boundAsset(c.fidelity.elementTestMatrix, 'element-level Build and Test matrix (fidelity.elementTestMatrix)');
           const actual = readAsset(boundAsset(c.fidelity.actualSnapshot, 'measured implementation semantic snapshot'));
-          const ledger = approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+          const ledger = dispositionTrust(engine, approvalLedger, dispositions, {final:true});
           const result = matrix.checkTestMatrix({ matrix: readAsset(testRef), approved, actual, ruleMatrix, dispositions, ledger });
           if (!result.pass) throw Error('Element test matrix failed: ' + result.findings.map(f => `${f.code}${f.elementKey ? ' ' + f.elementKey : ''}`).join('; '));
         }
@@ -169,7 +189,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       if (stage === 'build-and-test') {
         if (!c.fidelity.actualSnapshot || !assets.has(c.fidelity.actualSnapshot.path) || c.fidelity.actualSnapshot.sha256 !== assets.get(c.fidelity.actualSnapshot.path).sha256) throw Error('Missing measured implementation semantic snapshot');
         const actual = JSON.parse(boundedFile(root, c.fidelity.actualSnapshot.path).toString('utf8'));
-        const ledger = approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
+        const ledger = dispositionTrust(engine, approvalLedger, c.fidelity.dispositions || [], {final:true});
         const comparison = fidelity.compareSnapshots(approved, actual, dispositions, ledger);
         if (!comparison.pass) throw Error('Implementation fidelity failed: ' + comparison.findings.join('; '));
         if (imageFeatures.visualRegression === true) {
@@ -247,9 +267,10 @@ function verifyUnitUnion({c, root, engine, approved, ruleMatrix, dispositions, a
   if (fidelity.canonical(dispositions) !== fidelity.canonical(union.dispositions)) throw Error('Build and Test dispositions differ from the union of the approved Unit dispositions');
 }
 /** One owner for "this upstream contract carries the person's recorded approval". */
-function requireUpstreamApproval(engine, approvalLedger, root, approval) {
-  if (engine.policy.upstreamApproval === 'engine-record') requireEngineRecord(engine, approval);
-  else requireApproval(approvalLedger, root, approval);
+function requireUpstreamApproval(engine, approvalLedger, root, approval, options = {}) {
+  if (engine.policy.upstreamApproval === 'engine-record') return requireEngineRecord(engine, approval, options);
+  requireApproval(approvalLedger, root, approval);
+  return 'approved';
 }
 /**
  * In an engine-record scope the official stage gate owns approval, so the
@@ -257,7 +278,7 @@ function requireUpstreamApproval(engine, approvalLedger, root, approval) {
  * for that stage: refined mockups at the intent level, Construction stages in
  * this Unit's directory.
  */
-function requireEngineRecord(engine, {sha256, stage}) {
+function requireEngineRecord(engine, {sha256, stage}, {allowPending = false, dispositions = []} = {}) {
   if (!engine.recordRoot) throw Error('Upstream approval needs an engine record, and the stage output is not inside one');
   const name = contracts[stage];
   const candidates = stage === 'refined-mockups'
@@ -266,6 +287,32 @@ function requireEngineRecord(engine, {sha256, stage}) {
   const found = candidates.filter(file => fs.existsSync(file));
   if (found.length !== 1) throw Error(`Engine record holds ${found.length ? 'more than one' : 'no'} approved ${stage} contract (${name})`);
   if (hash(fs.readFileSync(found[0])) !== sha256) throw Error(`Upstream ${stage} contract copy differs from the engine record artifact ${path.relative(engine.recordRoot, found[0])}`);
+  // The person's recorded decision: the official gate (per stage, or the
+  // Unit-end checkpoint whose Gate Stages include it) approved this stage.
+  const unit = stage === 'refined-mockups' ? null : engine.unit;
+  const gate = engineGateStatus(engine.recordRoot, stage, unit);
+  const who = `${stage}${unit === null ? '' : ` for Unit ${unit}`}`;
+  if (gate.status !== 'approved') {
+    if (allowPending) return 'pending';
+    throw Error(`Engine record shows no official gate approval of ${who} (latest gate status: ${gate.status}); approve it at its gate first`);
+  }
+  if (gate.autonomous && dispositions.length) throw Error(`UI dispositions of ${who} need the person's own gate approval; the recorded approval was autonomous`);
+  return 'approved';
+}
+/**
+ * Engine-record scopes bind the approved Functional Design prose too: every
+ * Functional Design copy the contract carries must be byte-identical to the core
+ * Functional Design output of the same name in the engine record (the outputs
+ * the engine fingerprints at approval and invalidates when they change), so the
+ * decisions the dispositions cite are the ones the person approved.
+ */
+function requireEngineFunctionalDesignText(engine, fd, fdRoot, approval) {
+  const recordDir = path.join(engine.recordRoot, 'construction', ...(engine.unit === null ? [] : [engine.unit]), 'functional-design');
+  for (const ref of fd.fidelity?.functionalDesign || []) {
+    const recorded = path.join(recordDir, path.basename(ref.path));
+    if (!fs.existsSync(recorded)) throw Error(`Functional Design copy ${ref.path} has no engine record artifact ${path.relative(engine.recordRoot, recorded)}`);
+    if (hash(fs.readFileSync(recorded)) !== ref.sha256 || hash(boundedFile(fdRoot, ref.path)) !== ref.sha256) throw Error(`Functional Design copy ${ref.path} differs from the engine record artifact ${path.relative(engine.recordRoot, recorded)}${approval === 'approved' ? ' approved at its gate' : ''}`);
+  }
 }
 function requireApproval(approvalLedger, root, {sha256, stage, arm, requiredMappings}) {
   if (!approvalLedger) throw Error('Trusted approval ledger is not configured');
@@ -287,4 +334,4 @@ function main(argv) {
   console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {check, hash, contracts, scopePolicy, engineFor, main, isAcId};
+module.exports = {check, hash, contracts, scopePolicy, engineFor, dispositionTrust, main, isAcId};

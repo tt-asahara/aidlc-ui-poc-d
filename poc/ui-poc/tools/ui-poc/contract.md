@@ -90,7 +90,14 @@ judgement through detached receipts.
   `RULE_ID_UNKNOWN` (ID absent from the Functional Design text),
   `EXACT_COPY_NOT_PROPAGATED` (approved wording not verbatim in Functional
   Design and no approved deviation), `UNIMPLEMENTED_WITHOUT_DISPOSITION`,
-  `DISPOSITION_WITHOUT_RECEIPT`, `EMPTY_DENOMINATOR`.
+  `DISPOSITION_WITHOUT_RECEIPT` (ledger scopes), `DISPOSITION_INVALID` /
+  `DISPOSITION_SOURCE_MISSING` (engine-record scopes),
+  `DISPOSITION_DEFERRAL_INVALID`, `EMPTY_DENOMINATOR`. Rule IDs resolve as whole
+  tokens (`BR6.2` is not defined by `BR6.2.1`) against every Markdown copy in
+  `fidelity.functionalDesign`; when `rules.md` is the rule source, include it
+  there (the core drops `rules.md` from `ui` Units' produces, but a host that
+  keeps it for sensor traceability lists it like any other Functional Design
+  file).
 - **Element-level Build and Test matrix** (`ui-poc-element-test-matrix.json`,
   `test-matrix generate`). One row per approved element plus every important
   explicit-ID element the implementation added; each row lists its rule IDs,
@@ -128,8 +135,10 @@ matrices; record its output as `fidelity.elementRuleMatrix` and
 all Units name the same refined contract and that this contract carries its
 full inventory, recomputes the union, and refuses a different matrix or
 dispositions. Every approved element that requires a rule needs an owner (a
-Unit row with rule IDs) or, when no Unit implements it, a receipted
-`intentionally-omitted` row: otherwise `ELEMENT_NO_OWNER` names it. Two Units
+Unit row with rule IDs) or, when no Unit implements it, an approved
+`intentionally-omitted` row: otherwise `ELEMENT_NO_OWNER` names it. An omission
+with `deferredTo: <unit>` is covered only when that Unit implements the
+element; otherwise `ELEMENT_DEFERRED_NOT_IMPLEMENTED`. Two Units
 may own one element only with identical rule IDs and the same disposition
 (status and delta); otherwise `ELEMENT_OWNER_CONFLICT`. A Unit-local omission
 never excuses an element another Unit owns: only the owner's disposition
@@ -142,10 +151,33 @@ approved only on `SCREEN-HOME`) is not auto-allowed to another Unit. A Unit that
 also renders it claims the state by adding that state's approved
 screen/state/AC mapping to its own contract slice; the whole state then joins
 its denominator, so it maps the elements it implements with the same rule IDs
-as the other claiming Unit and records a receipted `intentionally-omitted`
-disposition for each rule-requiring element it does not implement. Rendering
-it in a different place than approved (another screen) is an approved
-deviation or an artifact revision of the refined mockup, never a silent pass.
+as the other claiming Unit and records an approved `intentionally-omitted`
+disposition (with `deferredTo` naming the implementing Unit) for each
+rule-requiring element it does not implement. Rendering it in a different place
+than approved (another screen) is an approved deviation or an artifact revision
+of the refined mockup, never a silent pass; every Unit that implements the
+element carries the same deviation (status and delta), or the union is an
+`ELEMENT_OWNER_CONFLICT`.
+
+**Later-Unit elements inside a Unit's own states (slots).** A Unit's slice is
+by screen/state pair, so every element of a state it owns is in its
+denominator, including elements a later Unit implements (for example the
+EQUIPMENT-DETAIL inspection status, open anomalies, recent history, and the
+bottom actions that U2/U3/U5 register in U1's slot). The owning Unit maps the
+elements it implements (the slot container's own rule, such as BR6.2, belongs
+in its Functional Design) and records each element a later Unit implements as
+`intentionally-omitted` with `deferredTo: <later unit>`; it does not cite rule
+IDs the later Unit has not designed yet. The later Unit adds that screen/state
+mapping to its own slice, maps the element with its rule, and omits (with
+`deferredTo` back to the owner) the elements it does not implement. The union
+at Build and Test then needs that implementer. An element whose rendering
+depends on data that only a later Unit creates (an "異常あり" status that needs
+an open anomaly) is still mapped by the Unit that implements its rendering rule,
+not omitted. The approved snapshot fixes the data each approved state shows:
+the Build and Test capture must reproduce that state's data through its setup
+(`--query`, `--setup-click`, or a state fixture the implementation exposes for
+capture), never through whatever sample data happens to ship; a state the
+capture cannot reproduce is NOT-READY, not a pass.
 
 Stage contracts:
 
@@ -157,8 +189,9 @@ Stage contracts:
 - code-generation additionally requires `fidelity.elementRuleMatrix` and
   `fidelity.functionalDesignContract`, a byte-identical copy of the approved
   Functional Design contract. The handoff is refused if that contract is
-  missing, unapproved in the ledger (`stage: "functional-design"`,
-  `contractSha256`), or if its snapshot, matrix, dispositions, or mapping
+  missing, unapproved (in the ledger with `stage: "functional-design"` and
+  `contractSha256`, or by the engine record's official gate in an
+  engine-record scope), or if its snapshot, matrix, dispositions, or mapping
   inventory differ from the implementation contract.
 - build-and-test additionally requires `fidelity.elementRuleMatrix` (unchanged
   from code-generation, or with several Units the deterministic union over
@@ -173,8 +206,10 @@ approval of the revised contract is the confirmation, and every downstream
 matrix bound to the old snapshot is stale until regenerated
 (`rule-matrix generate --previous` keeps mappings only for unchanged rows). (2)
 A **user-confirmed deviation**: an `approved-deviation`, `upstream-revised`, or
-`intentionally-omitted` disposition with a detached Functional Design receipt
-bound to the snapshot, element, reason, and exact delta. Any other wording or
+`intentionally-omitted` disposition bound to the snapshot, element, reason,
+and exact delta, approved by a detached Functional Design receipt (ledger
+scopes) or by the official gate of the Functional Design that states it
+(engine-record scopes, see the approval trust boundary). Any other wording or
 element change (in Functional Design text, the matrix, the implementation, or
 the snapshot) fails closed.
 
@@ -194,8 +229,37 @@ Each engine scope picks its upstream approval source in
 `ui-poc-requirements`) leaves approval to the official stage gate and reads no
 ledger for it: the upstream copy must be byte-identical to the contract the
 engine record holds for that stage, in the intent's refined-mockups directory or
-in this Unit's Construction stage directory. Deviation and omission dispositions
-need their detached receipts in either mode. `sensor: "off"` declares the sensor
+in this Unit's Construction stage directory, and the engine audit must show
+the official gate approval of that stage (the latest `STAGE_STARTED`,
+`STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `GATE_REJECTED` or `GATE_APPROVED`
+row whose `Gate Stages`/`Stage` include it, for that Unit, is `GATE_APPROVED`;
+a Unit-end checkpoint approves every stage in its `Gate Stages`). Byte identity
+alone is never an approval.
+
+Dispositions follow the same split, with one owner (`dispositionTrust` in
+`ui-poc-evidence.cjs`). In a ledger scope each deviation or omission needs its
+detached receipt exactly as above. In an engine-record scope there is no
+ledger and no receipt: the person's official approval of the Functional Design
+that records a disposition is its approval, so a disposition carries no
+`approvalReceipt` (one is refused as AI-written). It carries `elementKey`,
+`status`, a non-empty `reason`, `deltaSha256` (`missing` for an omission; for
+a deviation or revision the hash of its declared `differences[]`, which
+describe the difference, for example a placement), optional `deferredTo`, and
+`source: {path, heading}`, the Functional Design section (for example
+`functional-spec.md` "6. 承認済みの見た目からの違い（Q6）") that names the
+element key, so the reviewer and the gate read one source. At the Functional
+Design gate the dispositions are pending: the sensor checks only that
+structure and the element's place in the Unit slice. Code generation verifies
+the copied Functional Design contract and every `fidelity.functionalDesign`
+Markdown copy against the engine record (`construction/<unit>/functional-design/`,
+the outputs the engine fingerprints at approval and invalidates when they
+change) and the Functional Design gate approval; with Construction checkpoints
+enabled, where Functional Design and code generation share the Unit-end gate,
+code generation accepts them as still pending. Build and Test runs after every
+Unit gate and requires each Unit's Functional Design and code-generation
+approval, with the person's own (non-autonomous) approval wherever that Unit
+has dispositions. A disposition changed after approval changes those bytes and
+is refused. `sensor: "off"` declares the sensor
 not applicable to a scope; it then passes with `notApplicable` and checks neither
 contracts nor routing. Inside a Construction Unit, functional-design and
 code-generation contracts may carry the Unit's slice of the refined inventory:

@@ -76,6 +76,42 @@ function engineRecord(outputPath, stage) {
   return {recordRoot,unit,stateBytes,scope:stateField(stateBytes.toString('utf8'), 'Scope')};
 }
 
+const GATE_EVENTS = {STAGE_STARTED:'open', STAGE_AWAITING_APPROVAL:'open', STAGE_REVISING:'open', GATE_REJECTED:'rejected', GATE_APPROVED:'approved'};
+/**
+ * The official gate status of one stage (for a Construction Unit stage, of that
+ * Unit) as the engine audit records it: the latest STAGE_STARTED,
+ * STAGE_AWAITING_APPROVAL, STAGE_REVISING, GATE_REJECTED or GATE_APPROVED row
+ * whose Gate Stages (or Stage) include the stage, read in audit order since the
+ * last WORKFLOW_STARTED. A Unit-end checkpoint row approves every stage in its
+ * Gate Stages; a row without a Unit belongs to the Unit the latest
+ * UNIT_STARTED/UNIT_RESUMED named. Returns {status:'none'|'open'|'rejected'|
+ * 'approved', autonomous, timestamp}. This reads facts the engine wrote; it
+ * never decides an approval itself.
+ */
+function engineGateStatus(recordRoot, stage, unit = null) {
+  const dir = path.join(recordRoot, 'audit');
+  const rows = [];
+  if (fs.existsSync(dir)) fs.readdirSync(dir).filter(name => name.endsWith('.md')).sort().forEach((name, shard) => {
+    fs.readFileSync(path.join(dir, name), 'utf8').replace(/\r\n/g, '\n').split(/\n---\n/).forEach((block, position) => {
+      const field = key => stateField(block, key);
+      const event = field('Event');
+      if (event) rows.push({event, field, timestamp:field('Timestamp') || '', shard, position});
+    });
+  });
+  rows.sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : a.shard - b.shard || a.position - b.position);
+  let active = null, result = {status:'none', autonomous:false, timestamp:null};
+  for (const row of rows) {
+    if (row.event === 'WORKFLOW_STARTED') { active = null; result = {status:'none', autonomous:false, timestamp:null}; continue; }
+    if (row.event === 'UNIT_STARTED' || row.event === 'UNIT_RESUMED') { active = row.field('Unit'); continue; }
+    if (!Object.hasOwn(GATE_EVENTS, row.event)) continue;
+    const stages = (row.field('Gate Stages') ?? row.field('Stage') ?? '').split(',').map(value => value.trim()).filter(Boolean);
+    if (!stages.includes(stage)) continue;
+    if (unit !== null && (row.field('Unit') ?? active) !== unit) continue;
+    result = {status:GATE_EVENTS[row.event], autonomous:row.event === 'GATE_APPROVED' && row.field('Autonomous') === 'true', timestamp:row.timestamp};
+  }
+  return result;
+}
+
 function deriveEngineContext(outputPath, stage, cfg = load()) {
   const {recordRoot,unit,stateBytes,scope} = engineRecord(outputPath, stage);
   runtimeProfile(cfg, scope);
@@ -286,4 +322,4 @@ function main(argv) {
   } catch (e) { console.log(JSON.stringify(fail(e.message), null, 2)); process.exitCode = 1; }
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {plan, verify, load, lockedEntrypoint, lockedSource, engineRecord, deriveEngineContext, runtimeProfile, designChoice, resolveDesignSkill, designSkillStatus, gitBlobHash};
+module.exports = {plan, verify, load, lockedEntrypoint, lockedSource, engineRecord, engineGateStatus, stateField, deriveEngineContext, runtimeProfile, designChoice, resolveDesignSkill, designSkillStatus, gitBlobHash};
