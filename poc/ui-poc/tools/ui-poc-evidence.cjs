@@ -72,12 +72,13 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     for (const title of ['Artifact References','Screen State Acceptance Mapping','Approval Evidence','Testing Brief']) {
       if (!text.split(/\r?\n/).includes('## ' + title)) throw Error('Missing heading: ' + title);
     }
-    const blocks = [...text.matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
-    if (blocks.length !== 1) throw Error('Expected exactly one ui-poc-contract JSON block');
-    const c = JSON.parse(blocks[0][1]);
+    const c = matrix.contractBlock(text);
     if (![1,2].includes(c.schema) || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
     if (c.schema === 1 && allowLegacySchema1 !== true) throw Error('Schema 1 is legacy migration input only; new/default UI evidence requires schema 2');
     if (c.schema === 1 && stage === 'functional-design') throw Error('Functional Design UI evidence exists only in schema 2');
+    // Multi-Unit Build and Test (once per Intent) reads every Unit's approved
+    // implementation contract instead of one upstream contract.
+    const multiUnit = stage === 'build-and-test' && c.schema === 2 && c.fidelity?.unitContracts !== undefined;
     if (!Array.isArray(c.assets) || !c.assets.length || !Array.isArray(c.mappings) || !c.mappings.length) throw Error('Empty assets or mappings');
     const assets = new Map();
     for (const a of c.assets) {
@@ -104,7 +105,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       if (!htmlAsset || htmlAsset.sha256 !== approved.source.sha256) throw Error('Semantic snapshot is not bound to its approved HTML asset');
       const wantsPng = imageFeatures.mockupPngGeneration === true || imageFeatures.visualRegression === true;
       if (wantsPng && (!approved.png || !assets.has(approved.png.path) || assets.get(approved.png.path).sha256 !== approved.png.sha256)) throw Error('Enabled PNG evidence is missing or not bound to the approved snapshot');
-      const requiredStates = new Set(c.mappings.map(mapping => `${mapping.screen}/${mapping.state}`));
+      const requiredStates = new Set(matrix.sliceStates(c.requiredMappings));
       const capturedStates = new Set(approved.captures.map(capture => `${capture.screen}/${capture.state}`));
       if ((!unitSlice && requiredStates.size !== capturedStates.size) || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
       const dispositions = c.fidelity.dispositions || [];
@@ -134,7 +135,10 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           const fdTexts = {};
           for (const ref of c.fidelity.functionalDesign) { boundAsset(ref, 'Functional Design artifact'); if (!ref.path.endsWith('.md')) throw Error('Functional Design artifact copies must be Markdown'); fdTexts[ref.path] = boundedFile(root, ref.path).toString('utf8'); }
           const ledger = dispositions.length && approvalLedger ? JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8')) : {};
-          const result = matrix.checkRuleMatrix({ matrix: ruleMatrix, approved, fdTexts, dispositions, ledger });
+          // A Unit's denominator is exactly its contract slice (unit + screen/state
+          // pairs of its requiredMappings); the matrix records that slice.
+          const slice = unitSlice ? matrix.unitSlice(engine.unit, c.requiredMappings) : undefined;
+          const result = matrix.checkRuleMatrix({ matrix: ruleMatrix, approved, fdTexts, dispositions, ledger, slice });
           if (!result.pass) throw Error('Element rule matrix failed: ' + result.findings.map(f => `${f.code}${f.elementKey ? ' ' + f.elementKey : ''}`).join('; '));
         }
         if (stage === 'code-generation') {
@@ -142,9 +146,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           // contract, not merely a matrix file: a byte-identical copy with its
           // own approval receipt, the same frozen snapshot, matrix and dispositions.
           const fdRef = boundAsset(c.fidelity.functionalDesignContract, 'approved Functional Design UI contract (fidelity.functionalDesignContract)');
-          const fdBlocks = [...boundedFile(root, fdRef.path).toString('utf8').matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
-          if (fdBlocks.length !== 1) throw Error('Invalid Functional Design contract block');
-          const fd = JSON.parse(fdBlocks[0][1]);
+          const fd = matrix.contractBlock(boundedFile(root, fdRef.path).toString('utf8'), 'Invalid Functional Design contract block');
           if (fd.stage !== 'functional-design' || fd.arm !== c.arm || fd.schema !== 2) throw Error('Functional Design contract identity differs');
           if (fd.fidelity?.approvedSnapshot?.sha256 !== c.fidelity.approvedSnapshot.sha256) throw Error('Approved semantic snapshot changed between Functional Design and implementation');
           if (fd.fidelity?.elementRuleMatrix?.sha256 !== c.fidelity.elementRuleMatrix.sha256) throw Error('Element rule matrix changed after Functional Design approval');
@@ -155,6 +157,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
           if (!inheritedFd.pass) throw Error('Invalid Functional Design evidence: ' + inheritedFd.findings.join('; '));
           requireUpstreamApproval(engine, approvalLedger, root, {sha256:fdRef.sha256,stage:'functional-design',arm:c.arm,requiredMappings:c.requiredMappings});
         }
+        if (stage === 'build-and-test' && multiUnit) verifyUnitUnion({c, root, engine, approved, ruleMatrix, dispositions, approvalLedger, imageFeatures, allowLegacySchema1, seen, depth});
         if (stage === 'build-and-test') {
           const testRef = boundAsset(c.fidelity.elementTestMatrix, 'element-level Build and Test matrix (fidelity.elementTestMatrix)');
           const actual = readAsset(boundAsset(c.fidelity.actualSnapshot, 'measured implementation semantic snapshot'));
@@ -179,13 +182,11 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     // Producer gates do not fabricate a pre-existing approval for their new draft.
     // Consumers require an independently captured approval of the upstream contract.
     const prior = {'functional-design':'refined-mockups','code-generation':'refined-mockups','build-and-test':'code-generation'}[stage];
-    if (prior) {
+    if (prior && !multiUnit) {
       if (!c.upstream || c.upstream.stage !== prior || !/^[a-f0-9]{64}$/.test(c.upstream.sha256)) throw Error('Missing approved upstream contract reference');
       const upstreamBytes = boundedFile(root, c.upstream.path);
       if (hash(upstreamBytes) !== c.upstream.sha256) throw Error('Upstream contract hash mismatch');
-      const upstreamBlocks = [...upstreamBytes.toString('utf8').matchAll(/^```ui-poc-contract\r?\n([\s\S]*?)^```\s*$/gm)];
-      if (upstreamBlocks.length !== 1) throw Error('Invalid upstream contract block');
-      const parent = JSON.parse(upstreamBlocks[0][1]);
+      const parent = matrix.contractBlock(upstreamBytes.toString('utf8'), 'Invalid upstream contract block');
       if (![1,2].includes(parent.schema) || parent.schema !== c.schema || parent.stage !== prior || parent.arm !== c.arm || !Array.isArray(parent.requiredMappings)) throw Error('Upstream contract identity differs');
       const inventoryMatches = unitSlice && prior === 'refined-mockups'
         ? c.requiredMappings.every(key => parent.requiredMappings.includes(key))
@@ -203,6 +204,47 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     }
   } catch (e) { findings.push(e.message); }
   return {pass: findings.length === 0, findings_count: findings.length, findings};
+}
+/**
+ * Multi-Unit Build and Test: every listed Unit implementation contract is a
+ * byte-identical, approved copy whose own chain (Unit-scoped Functional Design
+ * -> implementation) is re-validated as that Unit; the Unit matrices' union
+ * (unionRuleMatrix, the one coverage owner) must give every approved element
+ * that requires a rule an owner, and this contract must carry exactly that
+ * union matrix and its merged dispositions.
+ */
+function verifyUnitUnion({c, root, engine, approved, ruleMatrix, dispositions, approvalLedger, imageFeatures, allowLegacySchema1, seen, depth}) {
+  if (c.upstream !== undefined) throw Error('Build and Test names either one upstream code-generation contract (upstream) or every Unit implementation contract (fidelity.unitContracts), not both');
+  if (engine.unit !== null) throw Error('Multi-Unit Build and Test runs once per Intent, not inside a Unit');
+  const refs = c.fidelity.unitContracts;
+  if (!Array.isArray(refs) || !refs.length) throw Error('fidelity.unitContracts must list every Unit implementation contract');
+  const listed = new Map(c.assets.map(a => [a.path, a]));
+  const entries = [], refinedShas = new Set();
+  let refinedInventory = null;
+  for (const ref of refs) {
+    if (!ref || typeof ref.path !== 'string' || !listed.has(ref.path) || listed.get(ref.path).sha256 !== ref.sha256 || !ref.path.endsWith('.md')) throw Error('Missing or unbound Unit implementation contract (fidelity.unitContracts)');
+    const unitPath = fs.realpathSync(path.join(root, ref.path)), unitRoot = path.dirname(unitPath);
+    const u = matrix.contractBlock(boundedFile(root, ref.path).toString('utf8'), 'Invalid Unit implementation contract block');
+    if (u.stage !== 'code-generation' || u.schema !== 2 || u.arm !== c.arm) throw Error('Unit implementation contract identity differs: ' + ref.path);
+    if (u.fidelity?.approvedSnapshot?.sha256 !== c.fidelity.approvedSnapshot.sha256) throw Error('Approved semantic snapshot changed across the Unit handoff: ' + ref.path);
+    const matrixBytes = boundedFile(unitRoot, u.fidelity?.elementRuleMatrix?.path);
+    if (hash(matrixBytes) !== u.fidelity.elementRuleMatrix.sha256) throw Error('Unit element rule matrix hash mismatch: ' + ref.path);
+    const unitMatrix = JSON.parse(matrixBytes.toString('utf8'));
+    if (!matrix.validSlice(unitMatrix.slice)) throw Error(`Unit implementation contract ${ref.path} carries no Unit-scoped element rule matrix`);
+    const unitEngine = {...engine, unit:unitMatrix.slice.unit};
+    const inherited = check({stage:'code-generation',outputPath:unitPath,approvalLedger,imageFeatures,allowLegacySchema1,engine:unitEngine}, new Set(seen), path.basename(unitPath), depth + 1);
+    if (!inherited.pass) throw Error(`Invalid Unit ${unitEngine.unit} implementation evidence: ` + inherited.findings.join('; '));
+    requireUpstreamApproval(unitEngine, approvalLedger, root, {sha256:ref.sha256,stage:'code-generation',arm:c.arm,requiredMappings:u.requiredMappings});
+    refinedShas.add(u.upstream?.sha256);
+    refinedInventory ??= matrix.contractBlock(boundedFile(unitRoot, u.upstream.path).toString('utf8'), 'Invalid upstream contract block').requiredMappings;
+    entries.push({matrix:unitMatrix, dispositions:u.fidelity.dispositions || []});
+  }
+  if (refinedShas.size !== 1) throw Error('Unit implementation contracts name different refined contracts');
+  if (JSON.stringify(refinedInventory) !== JSON.stringify(c.requiredMappings)) throw Error('Build and Test inventory differs from the approved refined inventory');
+  const union = matrix.unionRuleMatrix({approved, units:entries});
+  if (!union.pass) throw Error('Intent-level element coverage failed: ' + union.findings.map(f => `${f.code}${f.elementKey ? ' ' + f.elementKey : ''}${f.code === 'ELEMENT_NO_OWNER' || f.code === 'ELEMENT_OWNER_CONFLICT' ? '' : ' (' + f.detail + ')'}`).join('; '));
+  if (fidelity.canonical(ruleMatrix) !== fidelity.canonical(union.matrix)) throw Error('Build and Test element rule matrix is not the union of the approved Unit matrices; regenerate it with rule-matrix union');
+  if (fidelity.canonical(dispositions) !== fidelity.canonical(union.dispositions)) throw Error('Build and Test dispositions differ from the union of the approved Unit dispositions');
 }
 /** One owner for "this upstream contract carries the person's recorded approval". */
 function requireUpstreamApproval(engine, approvalLedger, root, approval) {

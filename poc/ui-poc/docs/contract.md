@@ -230,6 +230,54 @@ judgement through detached receipts.
   hand-edited row (`TEST_MATRIX_MISMATCH`), an empty denominator, or any
   `fail` row is NOT-READY.
 
+**Unit-scoped matrices (per-Unit Functional Design and Code Generation).**
+Inside a Construction Unit the denominator is exactly the Unit's contract
+slice: the screen/state pairs of its `requiredMappings` (the same slice the
+sensor already checks is a subset of the approved refined inventory). Generate
+and check with `--unit <unit> --contract <ui-poc-functional-contract.md>`
+(write the contract's `mappings`/`requiredMappings` first). The matrix records
+`slice = {unit, states, sha256}`; the gate recomputes it from the Unit and the
+contract, so a matrix for another Unit, a whole-snapshot matrix, or a matrix
+from before a slice change is `MATRIX_SLICE_STALE`. A slice state the approved
+snapshot never captured is `SLICE_STATE_UNKNOWN` (fail closed). Elements of
+other states are out of scope: not `ELEMENT_UNMAPPED`, no omission receipts,
+and no exact-copy propagation; a row or disposition for them is
+`MATRIX_ROW_EXTRA` / `DISPOSITION_UNKNOWN_ELEMENT`. Without a Unit (one
+intent-level Functional Design) the denominator stays the whole snapshot and a
+Unit-scoped matrix is refused.
+
+**Intent-level coverage at Build and Test.** With several Units, Build and
+Test (once per Intent) copies every Unit's approved implementation contract
+tree under its own directory, lists them in `fidelity.unitContracts`
+(`[{path, sha256}]`, each also an asset), and omits `upstream`. `rule-matrix
+union --approved <snapshot> --unit-contracts <c1,c2,...> --out
+ui-poc-element-rule-matrix.json --dispositions-out <file>` merges the Unit
+matrices; record its output as `fidelity.elementRuleMatrix` and
+`fidelity.dispositions`. The gate re-validates each Unit chain as that Unit
+(approval from the ledger, or byte identity with
+`construction/<unit>/code-generation/` in an engine-record scope), checks that
+all Units name the same refined contract and that this contract carries its
+full inventory, recomputes the union, and refuses a different matrix or
+dispositions. Every approved element that requires a rule needs an owner (a
+Unit row with rule IDs) or, when no Unit implements it, a receipted
+`intentionally-omitted` row: otherwise `ELEMENT_NO_OWNER` names it. Two Units
+may own one element only with identical rule IDs and the same disposition
+(status and delta); otherwise `ELEMENT_OWNER_CONFLICT`. A Unit-local omission
+never excuses an element another Unit owns: only the owner's disposition
+reaches the Build and Test comparison. A single intent-level code-generation
+contract keeps the existing `upstream` handoff unchanged.
+
+**Shared/cross-Unit states.** A state approved on one Unit's screen (for
+example the offline, loading, storage-unavailable, or load-failed banners
+approved only on `SCREEN-HOME`) is not auto-allowed to another Unit. A Unit that
+also renders it claims the state by adding that state's approved
+screen/state/AC mapping to its own contract slice; the whole state then joins
+its denominator, so it maps the elements it implements with the same rule IDs
+as the other claiming Unit and records a receipted `intentionally-omitted`
+disposition for each rule-requiring element it does not implement. Rendering
+it in a different place than approved (another screen) is an approved
+deviation or an artifact revision of the refined mockup, never a silent pass.
+
 Stage contracts:
 
 - functional-design: `ui-poc-functional-contract.md` with `upstream`
@@ -244,7 +292,8 @@ Stage contracts:
   `contractSha256`), or if its snapshot, matrix, dispositions, or mapping
   inventory differ from the implementation contract.
 - build-and-test additionally requires `fidelity.elementRuleMatrix` (unchanged
-  from code-generation) and `fidelity.elementTestMatrix`.
+  from code-generation, or with several Units the deterministic union over
+  `fidelity.unitContracts`) and `fidelity.elementTestMatrix`.
 
 Approved-upstream change control has exactly two legal paths. (1) An
 **artifact revision**: the revised refined contract declares
@@ -282,8 +331,11 @@ not applicable to a scope; it then passes with `notApplicable` and checks neithe
 contracts nor routing. Inside a Construction Unit, functional-design and
 code-generation contracts may carry the Unit's slice of the refined inventory:
 every mapping must exist upstream, and the upstream approval is checked against
-the refined contract's full inventory. Build and Test runs once per intent and
-still needs one upstream contract with the same inventory.
+the refined contract's full inventory, and the element rule matrix is scoped to
+that slice. Build and Test runs once per intent: with one intent-level
+code-generation contract it needs that one upstream contract with the same
+inventory; with Units it reads every Unit's implementation contract through
+`fidelity.unitContracts` and checks intent-level element coverage.
 
 For code-generation, include upstream: {path, sha256, stage: "refined-mockups"}; for build-and-test, use stage: "code-generation". The path points to a byte-identical local evidence copy of that upstream contract, and the approval ledger binds its SHA-256 and mapping inventory. For functional-design, use stage: "refined-mockups". The checker recursively validates the complete refined → functional design → implementation → testing chain, including every ancestor’s headings, assets, hashes, mappings and required prior approval. The chain is bounded to four stage contracts; a repeated real file identity along one ancestry path is rejected. Copy the entire referenced snapshot tree, not Markdown alone. Each ancestor resolves its own relative asset and upstream paths from its containing directory, with nested paths confined within the current-stage evidence root. Upstream copies are evidence, never substituted for engine-resolved core artifacts. Approval does not assert that generated implementation assets are byte-identical to design prototypes. The ledger path is environment-configured, not supplied by untrusted contract text. Filesystem isolation/ownership and actual human identity are deployment responsibilities; the checker cannot authenticate the purported reviewer or protect a ledger writable by the same agent. A writable self-authored ledger is NOT acceptable production evidence. Verify these controls before live runs. Unit tests intentionally create synthetic approvals solely to exercise validation.
 
