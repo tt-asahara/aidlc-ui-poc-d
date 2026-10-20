@@ -176,6 +176,8 @@ function runtimeEntrypoints(P: string): string[] {
       for (const hook of group.hooks) {
         const match = /\$CLAUDE_PROJECT_DIR\/([^"\s]+\.ts)/.exec(hook.command);
         if (match) entries.add(join(P, match[1]));
+        const dispatch = /\bengine hook ([a-z0-9-]+)(?:\s|$)/.exec(hook.command);
+        if (dispatch) entries.add(join(P, ".claude", "hooks", `aidlc-${dispatch[1]}.ts`));
       }
     }
   }

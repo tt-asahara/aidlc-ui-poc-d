@@ -40,3 +40,7 @@ persistence marker creation/failed-call cleanup, reviewer cleanup and guidance,
 and tampers with the project adapter to prove the installed runtime is used.
 It explicitly requires all four D registrations, so deleting D to satisfy a
 native test cannot pass. The ordinary D integration test still pins hook order.
+Fresh-install parity resolves every registered dispatcher hook as an explicit
+entry point, so missing or changed D adapters also fail the installed module
+closure/byte checks. The exact smoke inventory names all seventeen core hooks
+and the four D adapters; no unknown file is accepted.

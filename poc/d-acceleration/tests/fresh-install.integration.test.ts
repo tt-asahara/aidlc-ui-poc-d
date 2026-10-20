@@ -78,6 +78,23 @@ describe("clean-target D install, parity, and update", () => {
     expect((await parity(SRC, product)).ok).toBeTrue();
   }, TIMEOUT);
 
+  test("parity verifies dispatched D adapter bytes and refuses a missing adapter", async () => {
+    const rel = ".claude/hooks/aidlc-d-persistence-pre.ts";
+    const adapter = join(product, rel);
+    const original = readFileSync(adapter);
+    try {
+      appendFileSync(adapter, "\n// drift\n");
+      const changed = await parity(SRC, product);
+      expect(changed.ok).toBeFalse();
+      expect(changed.changedFromDist).toContain(rel);
+      unlinkSync(adapter);
+      const missing = await parity(SRC, product);
+      expect(missing.ok).toBeFalse();
+      expect(missing.unresolved).toContain(rel);
+    } finally { writeFileSync(adapter, original); }
+    expect((await parity(SRC, product)).ok).toBeTrue();
+  }, TIMEOUT);
+
   test("update replaces only receipt-proven compose output and refuses a user-edited stage", async () => {
     const stage = join(product, ".claude", "aidlc-common", "stages", "inception", "requirements-analysis.md");
     appendFileSync(stage, "\n<!-- team edit -->\n");
