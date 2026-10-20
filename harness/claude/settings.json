@@ -20,6 +20,7 @@
       "Bash(bun .claude/tools/pr-lens-review.ts *)",
       "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)",
       "Task",
       "WebSearch"
     ]
