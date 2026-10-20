@@ -298,6 +298,61 @@ export async function parity(src: string, product: string): Promise<ParityReport
 // ------------------------------------------------------- install / update ---
 
 const RECEIPT = ".claude/d-install-receipt.json";
+
+// The previous D release registered these source CLIs directly. Core correctly
+// preserves unrecognized project hooks, so D retires only its exact old entries,
+// proven by the installed file inventory, after official config has succeeded.
+function legacyDHookRetirements(P: string): Set<string> {
+  const settingsPath = join(P, ".claude/settings.json");
+  if (!existsSync(settingsPath)) return new Set();
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const manifestPath = join(P, ".claude/tools/data/aidlc-manifest.json");
+  const files = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")).files ?? {} : {};
+  const entries = [
+    ["PreToolUse", "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash", "d-persistence-hook.ts", " pre", 1800],
+    ["PostToolUse", "Bash", "d-persistence-hook.ts", " post", 1800],
+    ["PostToolUse", "Bash", "reviewer-dispatch-cleanup-hook.ts", "", 60],
+    ["PostToolUse", "Bash", "blocking-sensor-override-hook.ts", "", 60],
+  ] as const;
+  const planned = new Set<string>();
+  for (const [event, matcher, file, args, timeout] of entries) {
+    const command = `bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/${file}"${args}`;
+    for (const group of settings.hooks?.[event] ?? []) for (const hook of group.hooks ?? []) {
+      if (group.matcher !== matcher || hook.command !== command || hook.type !== "command" || hook.timeout !== timeout ||
+          Object.keys(hook).sort().join(",") !== "command,timeout,type") continue;
+      const rel = `.claude/tools/d-acceleration/${file}`, path = join(P, rel);
+      const recorded = files[rel];
+      if (typeof recorded !== "string" || !existsSync(path) || !lstatSync(path).isFile() || recorded.replace(/^sha256:/, "") !== fileHash(path))
+        throw new SetupStop(`legacy D hook is not proven by its installed file inventory; settings left unchanged: ${rel}`);
+      planned.add(JSON.stringify([event, matcher, command, timeout]));
+    }
+  }
+  return planned;
+}
+
+function retireLegacyDHooks(P: string, planned: Set<string>): number {
+  if (!planned.size) return 0;
+  const path = join(P, ".claude/settings.json"), settings = JSON.parse(readFileSync(path, "utf8"));
+  let removed = 0;
+  for (const [event, groups] of Object.entries(settings.hooks ?? {})) {
+    const emptied = new Set<unknown>();
+    for (const group of groups as { matcher?: string; hooks?: Json[] }[]) {
+      if (!Array.isArray(group.hooks)) continue;
+      const before = group.hooks.length;
+      group.hooks = group.hooks.filter((hook) => {
+        const match = hook.type === "command" && Object.keys(hook).sort().join(",") === "command,timeout,type" &&
+          planned.has(JSON.stringify([event, group.matcher, hook.command, hook.timeout]));
+        if (match) removed++;
+        return !match;
+      });
+      if (before && !group.hooks.length) emptied.add(group);
+    }
+    settings.hooks[event] = (groups as unknown[]).filter((group) => !emptied.has(group));
+  }
+  if (removed) writeFileSync(path, `${JSON.stringify(settings, null, 2)}\n`);
+  return removed;
+}
+
 type Receipt = { schema: 1; sourceSha: string; distClaude: string; composeOwned: Record<string, string> };
 /** Records the exact compose-produced bytes so a later update can prove them unmodified. */
 function writeReceipt(p: ReturnType<typeof paths>): Receipt {
@@ -358,6 +413,7 @@ export async function update(src: string, product: string, legacyInstallCommit?:
   // Workflow records may be mid-flight during an update; only the surfaces
   // the update writes must be clean.
   requireCleanGit(p.P, [".claude", ".agents", ".gitignore"]);
+  const legacyDHooks = legacyDHookRetirements(p.P);
   const conflicts = configConflicts(p);
   // Plugin files compose would leave stale (no-clobber) are replaced under the
   // same receipt proof as composed stage sources.
@@ -372,6 +428,7 @@ export async function update(src: string, product: string, legacyInstallCommit?:
   const refused = replaced.filter((rel) => !owned.has(rel) || receipt?.composeOwned[rel] !== fileHash(join(p.P, rel)));
   if (refused.length) throw new SetupStop(`update stops: conflicts not proven to be unmodified compose output recorded in ${RECEIPT}: ${refused.join(", ")}`);
   must(process.execPath, configArgs(p, conflicts.length ? ["--force"] : []), p.P, "official config update");
+  const retiredLegacyDHooks = retireLegacyDHooks(p.P, legacyDHooks);
   for (const rel of stalePlugin) unlinkSync(join(p.P, rel));
   const cPayload = placeCPayload(p.S, p.P);
   ignoreDRuntime(p.P);
@@ -380,7 +437,7 @@ export async function update(src: string, product: string, legacyInstallCommit?:
   if (!report.ok) throw new SetupStop(`package parity failed after update: ${JSON.stringify(report)}`);
   const pf = preflight(p.P);
   writeReceipt(p);
-  return { mode: "update", product: p.P, replacedComposeOwned: conflicts, replacedPluginFiles: stalePlugin, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, missing: pf.missing, runtime: pf.runtime } };
+  return { mode: "update", product: p.P, replacedComposeOwned: conflicts, replacedPluginFiles: stalePlugin, retiredLegacyDHooks, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, missing: pf.missing, runtime: pf.runtime } };
 }
 
 // -------------------------------------------------------------- manifest ---

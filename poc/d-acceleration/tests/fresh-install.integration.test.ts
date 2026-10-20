@@ -95,6 +95,46 @@ describe("clean-target D install, parity, and update", () => {
     expect((await parity(SRC, product)).ok).toBeTrue();
   }, TIMEOUT);
 
+  test("update retires only proven legacy D registrations and never duplicates the new adapters", async () => {
+    const settingsPath = join(product, ".claude/settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const legacy: Record<string, string> = {
+      "d-persistence-pre": 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/d-persistence-hook.ts" pre',
+      "d-persistence-post": 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/d-persistence-hook.ts" post',
+      "d-reviewer-dispatch-cleanup": 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/reviewer-dispatch-cleanup-hook.ts"',
+      "d-blocking-sensor-override": 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/blocking-sensor-override-hook.ts"',
+    };
+    for (const groups of Object.values(settings.hooks) as { hooks: { command: string }[] }[][]) for (const group of groups) for (const hook of group.hooks) {
+      const name = /engine hook ([a-z-]+)$/.exec(hook.command)?.[1];
+      if (name && legacy[name]) hook.command = legacy[name];
+    }
+    const own = { type: "command", command: "echo project-owned-hook", timeout: 9 };
+    settings.hooks.PostToolUse.push({ matcher: "Bash", hooks: [own] });
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    const module = join(product, ".claude/tools/d-acceleration/d-persistence-hook.ts");
+    const recorded = readFileSync(module);
+    appendFileSync(module, "\n// project modification\n");
+    git("add", "-A"); git("commit", "-qm", "legacy D fixture");
+    const before = readFileSync(settingsPath, "utf8");
+    await expect(update(SRC, product)).rejects.toThrow("legacy D hook is not proven");
+    expect(readFileSync(settingsPath, "utf8")).toBe(before);
+    expect(readFileSync(module, "utf8")).toContain("// project modification");
+    writeFileSync(module, recorded);
+    git("add", "-A"); git("commit", "-qm", "restore recorded D module");
+    const result = await update(SRC, product) as Record<string, any>;
+    expect(result.retiredLegacyDHooks).toBe(4);
+    const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+    const hooks = Object.values(after.hooks).flatMap((groups: any) => groups.flatMap((group: any) => group.hooks));
+    expect(hooks).toContainEqual(own);
+    for (const name of Object.keys(legacy)) expect(hooks.filter((hook: any) => hook.command.endsWith(`engine hook ${name}`))).toHaveLength(1);
+    expect(hooks.some((hook: any) => Object.values(legacy).includes(hook.command))).toBeFalse();
+    git("add", "-A"); git("commit", "-qm", "migrated D fixture");
+    const bytes = readFileSync(settingsPath, "utf8");
+    expect((await update(SRC, product) as Record<string, any>).retiredLegacyDHooks).toBe(0);
+    expect(readFileSync(settingsPath, "utf8")).toBe(bytes);
+    git("add", "-A"); git("commit", "-qm", "idempotent D update", "--allow-empty");
+  }, TIMEOUT);
+
   test("update replaces only receipt-proven compose output and refuses a user-edited stage", async () => {
     const stage = join(product, ".claude", "aidlc-common", "stages", "inception", "requirements-analysis.md");
     appendFileSync(stage, "\n<!-- team edit -->\n");

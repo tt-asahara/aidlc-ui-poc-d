@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
+import { runEngineSync, runScriptSync } from "./execution.ts";
 import { readFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { validateDirective } from "../../core/tools/aidlc-directive.ts";
 
 const args = process.argv.slice(2), value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
@@ -20,7 +20,7 @@ if (typeof directive.gate !== "boolean") throw new Error("host boundary requires
 if (directive.stage !== manifest.stage) throw new Error(`host boundary stage mismatch: ${directive.stage} != ${manifest.stage}`);
 if ((directive.unit ?? null) !== (manifest.unit ?? null)) throw new Error(`host boundary unit mismatch: ${directive.unit ?? "<stage>"} != ${manifest.unit ?? "<stage>"}`);
 const orchestrate = (argv: string[]) => {
-  const run = spawnSync(process.execPath, [resolve(engineDir, "aidlc-orchestrate.ts"), ...argv, "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  const run = runEngineSync(resolve(engineDir, "aidlc-orchestrate.ts"), [...argv, "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
   if (run.status !== 0) throw new Error(`host boundary could not obtain a fresh official directive: ${(run.stderr || run.stdout).trim()}`);
   let parsed: any;
   try { parsed = JSON.parse(run.stdout); } catch { throw new Error("host boundary fresh official directive was not JSON"); }
@@ -80,5 +80,5 @@ for (const artifact of manifestArtifacts) {
   if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`host boundary manifest artifact escapes project: ${artifact}`);
   if (!declared.has(rel)) throw new Error(`host boundary manifest artifact is not declared by the fresh directive: ${artifact}`);
 }
-const result = spawnSync(process.execPath, [resolve(import.meta.dir, "d-feature-checks.ts"), "--project-dir", projectDir, "--input", manifestFile], { cwd: projectDir, encoding: "utf8" });
+const result = runScriptSync(resolve(import.meta.dir, "d-feature-checks.ts"), [ "--project-dir", projectDir, "--input", manifestFile], { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

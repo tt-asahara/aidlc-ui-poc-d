@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
+import { runEngineSync } from "./execution.ts";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { resolveDAutomation, resolveDConstructionDefaults, resolveDParallel } from "./d-config.ts";
 
 type Json = Record<string, unknown>;
@@ -17,7 +17,7 @@ const runtime = join(product, ".claude", "tools");
 const hostCli = join(import.meta.dir, "host-session-cli.ts");
 
 function runJson(executable: string, args: string[]): Json {
-  const result = spawnSync(process.execPath, [executable, ...args, "--project-dir", product], { cwd: product, encoding: "utf8", env: { ...process.env, AIDLC_UNATTENDED: "1" } });
+  const result = runEngineSync(executable, [...args, "--project-dir", product], { cwd: product, encoding: "utf8", env: { ...process.env, AIDLC_UNATTENDED: "1" } });
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || result.error?.message || "command failed").trim());
   try { return JSON.parse(result.stdout) as Json; }
   catch { throw new Error("command did not return a JSON directive"); }

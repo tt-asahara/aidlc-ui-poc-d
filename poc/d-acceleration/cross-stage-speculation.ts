@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runEngineSync } from "./execution.ts";
 // Read-only speculative cross-stage analysis (issue #5 / #6, bounded scope).
 //
 // While official stage U waits at its human gate (`orchestrate next` emits
@@ -11,7 +12,6 @@
 // produces its own artifact and treats the draft as evidence input only.
 // See cross-stage-speculation.md for the design and what remains out of scope.
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import policy from "./stage-policy.json";
@@ -82,7 +82,7 @@ function projectFile(root: string, path: string, label: string): { rel: string; 
 export type OfficialSnapshot = { directive: any; space: string; intentDir: string; intentRel: string; stages: Map<string, string> };
 
 function readNext(projectDir: string, engineDir: string, timeoutMs: number): any {
-  const next = spawnSync(process.execPath, [join(engineDir, "aidlc-orchestrate.ts"), "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8", timeout: timeoutMs });
+  const next = runEngineSync(join(engineDir, "aidlc-orchestrate.ts"), ["next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8", timeout: timeoutMs });
   if (next.status !== 0) throw new Error(`fresh official next failed: ${(next.stderr || next.stdout).trim()}`);
   let value: any;
   try { value = JSON.parse(next.stdout); } catch { throw new Error("fresh official next was not JSON"); }

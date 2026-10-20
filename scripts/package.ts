@@ -103,6 +103,7 @@ import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 import { projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
+import { invalidNativeDInvocations, nativeDAllow, nativeDInvocations } from "../poc/d-acceleration/native-commands.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -1120,6 +1121,7 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
+  const dAllows = allow.map(nativeDAllow).filter((rule): rule is string => rule !== null);
   // The copy channel's AI-DLC command entries (the tool rewrite above has
   // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
   // give way to the one trusted prefix and the exact read-only and
@@ -1130,6 +1132,7 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
       !(typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc ")))
     ),
     `Bash(${trustedCommand("*")})`,
+    ...dAllows,
     ...nativeDispatcherCommands().map((command) => `Bash(${command})`),
   ];
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
@@ -1404,6 +1407,7 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     let value = readFileSync(file, "utf-8");
+    if (m.name === "claude") value = nativeDInvocations(value, m.harnessDir);
     // Claude's source hook/statusline dispatcher is rooted at the project, so
     // it still loads after an application command changes cwd. JSON escapes
     // its shell quotes; strip the complete invocation for native releases.
@@ -1562,6 +1566,10 @@ function rewriteNativeInvocations(
     leftovers.push(
       ...projectedNamespaceInvocationViolations(relative(outRoot, file), withoutNativeReplacements(value)),
     );
+    if (m.name === "claude") {
+      for (const name of invalidNativeDInvocations(value)) leftovers.push(`${relative(outRoot, file)}: unknown D native tool ${name}`);
+      if (/\bbun\s+[^\n]*tools\/d-acceleration\/[a-z0-9-]+\.ts/.test(value)) leftovers.push(`${relative(outRoot, file)}: source-only D invocation survived native projection`);
+    }
     if (
       relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
       /"allowedCommands"\s*:\s*\[[\s\S]*?"bun [^"]*tools\//.test(value)

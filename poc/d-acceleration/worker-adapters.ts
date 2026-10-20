@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { externalEnvironment, scriptLaunch } from "./execution.ts";
 
 export type WorkerKind = "fake" | "claude";
 export type WorkerFailure =
@@ -80,10 +81,12 @@ export type FakeWorkerRequest = {
 };
 
 export function fakeWorkerLaunch(request: FakeWorkerRequest): WorkerLaunch {
+  const launch = scriptLaunch(request.script, ["--task", request.task, "--stage", request.stage, "--unit", request.unit ?? "", "--tier", request.tier, "--model", request.model ?? "", "--duration-ms", String(request.durationMs), "--retry-ordinal", String(request.retryOrdinal), "--fail", String(request.fail ?? false), "--produce-json", JSON.stringify(request.produces ?? [])]);
   return {
     kind: "fake",
-    executable: request.executable ?? process.execPath,
-    args: [request.script, "--task", request.task, "--stage", request.stage, "--unit", request.unit ?? "", "--tier", request.tier, "--model", request.model ?? "", "--duration-ms", String(request.durationMs), "--retry-ordinal", String(request.retryOrdinal), "--fail", String(request.fail ?? false), "--produce-json", JSON.stringify(request.produces ?? [])],
+    executable: request.executable ?? launch.argv[0]!,
+    args: launch.argv.slice(1),
+    environment: launch.env,
     requestedModel: request.model || null,
     requestedEffort: null,
   };
@@ -183,7 +186,7 @@ export async function runWorker(launch: WorkerLaunch, limits: WorkerLimits): Pro
   if (!Number.isFinite(limits.timeoutMs) || limits.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
   if (!Number.isInteger(limits.maxStdoutBytes) || limits.maxStdoutBytes < 0 || !Number.isInteger(limits.maxStderrBytes) || limits.maxStderrBytes < 0) throw new Error("output limits must be non-negative integers");
   const startedAt = Date.now(); let child: ReturnType<typeof Bun.spawn>;
-  try { child = Bun.spawn([launch.executable, ...launch.args], { cwd: limits.projectDir, stdout: "pipe", stderr: "pipe", env: launch.environment }); }
+  try { child = Bun.spawn([launch.executable, ...launch.args], { cwd: limits.projectDir, stdout: "pipe", stderr: "pipe", env: launch.kind === "claude" ? externalEnvironment(launch.environment) : launch.environment }); }
   catch (error) {
     return { ok: false, kind: launch.kind, argv: [launch.executable, ...launch.args], exitCode: null, signalCode: null, failure: launch.kind === "claude" ? "unavailable" : "spawn-error", stdout: "", stderr: String(error), stdoutTruncated: false, stderrTruncated: false, requestedModel: launch.requestedModel, requestedEffort: launch.requestedEffort, runtimeReportedModel: null, modelIdentity: classifyModelIdentity(launch.requestedModel, [], "none"), usage: null, startedAt, endedAt: Date.now() };
   }

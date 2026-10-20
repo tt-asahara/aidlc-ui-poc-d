@@ -44,3 +44,39 @@ Fresh-install parity resolves every registered dispatcher hook as an explicit
 entry point, so missing or changed D adapters also fail the installed module
 closure/byte checks. The exact smoke inventory names all seventeen core hooks
 and the four D adapters; no unknown file is accepted.
+
+Updates from the direct-CLI registrations retire only the four exact old
+event/matcher/command/timeout tuples, and only when the recorded installed
+module hash still matches a regular file. An unproven module stops before
+configuration changes. The official config operation adds the new adapters;
+D then removes its proven old entries, preserving unrelated project hooks.
+The update regression checks refusal without mutation, all four migrations,
+one registration per adapter, project-hook preservation, and a byte-idempotent
+second update. Existing historical framework migration fixtures convert only
+the core's actual `LEGACY_AIDLC_HOOK_TARGETS`, not newly introduced D names.
+
+Local baseline checks used Bun 1.3.14 on macOS. Two Codex TOML refresh cases fail
+there on both `bb4754a9` and the D fix; core is unchanged. The upstream full CI
+explicitly uses Bun 1.4.2. Keep these results distinct from the app's Bun 1.3
+runtime and its Claude-only validation; this PR does not change either runtime
+version or relax those Codex assertions. Local fixture directories use their
+real paths so macOS `/var` aliases do not impersonate a different working directory.
+
+## Native D command entry
+
+The release builder compiles D's `native-entry.ts`, which forwards every ordinary
+command to the unchanged core dispatcher. Only `aidlc d <registered-tool>` uses
+D's fixed command registry and the installed runtime beside the executable.
+The same executable starts its embedded Bun mode with `BUN_BE_BUN=1`, an explicit
+installed Bun config, no `.env` loading, and no automatic package installation.
+Native builds also disable automatic project Bun config and `.env` loading.
+D-to-D subprocesses keep that mode; calls back into the official engine and
+external Claude processes remove it. Neither path needs a Bun executable on PATH.
+
+The native projection rewrites only registered D source invocations. Its explicit
+allow entries stay under `aidlc d`, outside `aidlc engine`. The GitHub-facing
+`issue-autopilot-cli` and `decision-issue-summary` tools have no native allow
+entry and continue to require individual approval. Unknown D commands are refused.
+The native regression runs with empty PATH, exercises nested D and core calls,
+modifies a project D script, and supplies project preload config and `.env` to
+prove that installed code remains authoritative.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { scriptLaunch } from "./execution.ts";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -218,7 +219,8 @@ if (mode === "action-start") {
     save({ ...leaveHumanWait(current, startedAt), hostAction: { token, startedAt }, awaitingHuman: false });
     writeHeartbeat({ token, pid: null, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + (current.claim?.leaseMs ?? 30_000), status: "starting" });
     try {
-      const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
+      const launch = scriptLaunch(import.meta.filename, ["heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token]);
+      const child = spawn(launch.argv[0]!, launch.argv.slice(1), { cwd: projectDir, env: launch.env, detached: true, stdio: "ignore" });
       if (!child.pid) throw new Error("heartbeat worker did not start");
       writeHeartbeat({ token, pid: child.pid, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + (current.claim?.leaseMs ?? 30_000), status: "running" });
       child.unref();
@@ -315,7 +317,8 @@ try {
         save(waiting);
         writeHeartbeat({ token, pid: null, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + leaseMs, status: "starting" });
         try {
-          const child = spawn(process.execPath, [import.meta.filename, "heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token], { cwd: projectDir, detached: true, stdio: "ignore" });
+          const launch = scriptLaunch(import.meta.filename, ["heartbeat-worker", "--project-dir", projectDir, "--session-file", sessionFile, "--action-token", token]);
+          const child = spawn(launch.argv[0]!, launch.argv.slice(1), { cwd: projectDir, env: launch.env, detached: true, stdio: "ignore" });
           if (!child.pid) throw new Error("waiting heartbeat worker did not start");
           writeHeartbeat({ token, pid: child.pid, startedAt, lastRenewedAt: startedAt, expiresAt: startedAt + leaseMs, status: "running" });
           child.unref(); return waiting;

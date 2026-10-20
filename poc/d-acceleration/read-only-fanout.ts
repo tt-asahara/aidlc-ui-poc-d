@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runEngineSync, externalEnvironment } from "./execution.ts";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -79,14 +80,14 @@ export async function runReadOnlyFanout(input: FanoutInput, options: FanoutOptio
   const planned = planReadOnlyFanout(input, options);
   if (planned.action !== "unverified-read-only-fanout-plan") return planned;
   const orchestrate = join(options.engineDir ?? join(options.frameworkDir, "tools"), "aidlc-orchestrate.ts");
-  const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", options.projectDir], { cwd: options.projectDir, encoding: "utf8", timeout: options.timeoutMs ?? 30_000 });
+  const next = runEngineSync(orchestrate, ["next", "--project-dir", options.projectDir], { cwd: options.projectDir, encoding: "utf8", timeout: options.timeoutMs ?? 30_000 });
   if (next.status !== 0) return { action: "official-host-action-required", reason: "fresh-next-failed", stderr: next.stderr, launches: [] };
   let fresh: any;
   try { fresh = JSON.parse(next.stdout); } catch { return { action: "official-host-action-required", reason: "fresh-next-invalid-json", launches: [] }; }
   const verification = verifyFreshDirective(planned.directive, fresh);
   if (!verification.valid) return { action: "official-host-action-required", reason: verification.reason, directive: verification.directive, launches: [] };
   const executable = options.claudeExecutable ?? "claude";
-  const help = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 5_000 });
+  const help = spawnSync(executable, ["--help"], { encoding: "utf8", timeout: 5_000, env: externalEnvironment() });
   if (help.status !== 0) throw new Error(`Claude CLI capability preflight failed: ${help.stderr || help.stdout}`);
   validateClaudeReadOnlyCapabilities(help.stdout);
   const results: any[] = [];

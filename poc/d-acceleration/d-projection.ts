@@ -15,6 +15,12 @@ export const D_PROJECTION_SUBDIR = join("tools", "d-acceleration");
 
 /** The D runtime files a Claude projection ships, relative to poc/d-acceleration/. */
 export const D_ACCELERATION_RUNTIME: readonly string[] = [
+  "native-commands.ts",
+  "native-runtime.ts",
+  "native.bunfig.toml",
+  "native-entry.ts",
+  "execution.ts",
+  "model-routing.md",
   "hooks/aidlc-d-persistence-pre.ts",
   "hooks/aidlc-d-persistence-post.ts",
   "hooks/aidlc-d-reviewer-dispatch-cleanup.ts",
@@ -103,6 +109,9 @@ function projectCoreImports(text: string): string {
   return text
     .replaceAll('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
     .replaceAll('from "../../core/tools/aidlc-runtime-paths.ts"', 'from "../aidlc-runtime-paths.ts"')
+    .replaceAll('from "../../core/tools/aidlc.ts"', 'from "../aidlc.ts"')
+    .replaceAll('from "../../core/tools/aidlc-hook-trace.ts"', 'from "../aidlc-hook-trace.ts"')
+    .replaceAll('from "../../core/tools/aidlc-color.ts"', 'from "../aidlc-color.ts"')
     .replaceAll('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
 }
 

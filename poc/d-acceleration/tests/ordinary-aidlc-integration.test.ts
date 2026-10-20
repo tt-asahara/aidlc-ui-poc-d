@@ -132,7 +132,8 @@ describe("ordinary /aidlc D integration", () => {
     expect(skill).toContain("--fanout-input <fanout-json>");
     expect(skill).toContain("the lead performs synthesis, writes every official artifact");
     expect(skill).not.toContain("--claude-fast opus --claude-balanced opus --claude-judgment opus");
-    expect(skill).toContain(".claude/d-acceleration.local.jsonc");
+    expect(skill).toContain(".claude/tools/d-acceleration/model-routing.md");
+    expect(readFileSync(join(repo, "dist/claude/.claude/tools/d-acceleration/model-routing.md"), "utf8")).toContain(".claude/d-acceleration.local.jsonc");
     expect(skill).toContain("If it returns `official-host-action-required`, continue below with the returned directive.");
     expect(skill).toContain("never mark a Unit complete from worker exit alone");
     expect(skill).toContain("Optional D checks (default off)");
