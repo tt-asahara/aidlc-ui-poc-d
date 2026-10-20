@@ -106,7 +106,7 @@ describe("D command permissions", () => {
   test("--doc writes the design files with the file tools, not a generator script", () => {
     const skill = readFileSync(join(REPO, "harness", "claude", "skills", "aidlc", "SKILL.md"), "utf8");
     const guide = readFileSync(join(REPO, "poc", "d-acceleration", "design-document-guide.md"), "utf8");
-    expect(skill).toMatch(/Create and update every design\s+file with the Write and Edit tools/);
+    expect(skill).toMatch(/Create and update every design\s+file with\s+the Write and Edit tools/);
     expect(skill).toMatch(/never write or run a\s+generator script/);
     expect(guide).toContain("**Write / Edit ツールで 1 ファイルずつ**");
   });
