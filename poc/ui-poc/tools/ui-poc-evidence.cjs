@@ -64,6 +64,39 @@ function dispositionTrust(engine, approvalLedger, dispositions, {final = false} 
   if (!approvalLedger) throw Error('Trusted approval ledger is not configured for UI deviations');
   return JSON.parse(fs.readFileSync(fs.realpathSync(approvalLedger), 'utf8'));
 }
+const IMAGE_ASSET = /\.(png|jpg|jpeg|svg|webp)$/;
+const MOCKUP_STAGES = ['rough-mockups', 'refined-mockups'];
+/**
+ * Two different screen/states whose images are byte-identical cannot be told
+ * apart by their image: the element that distinguishes them is outside the
+ * captured viewport or hidden behind a fixed bottom action bar (dogfood-3:
+ * STATE-PHOTO-ATTACHED shipped the STATE-FROM-NG PNG). Per-state PNGs are read
+ * from the snapshot captures (pngSha256); declared image assets are compared
+ * too, so a snapshot captured without PNGs still catches duplicate files.
+ */
+function identicalStateImages(approved, assets) {
+  const findings = [], byCapture = new Map(), reported = new Set();
+  for (const capture of approved?.captures || []) {
+    if (!/^[a-f0-9]{64}$/.test(capture?.pngSha256 || '')) continue;
+    const states = byCapture.get(capture.pngSha256) || new Set();
+    states.add(`${capture.screen}/${capture.state}`); byCapture.set(capture.pngSha256, states);
+  }
+  for (const [sha, states] of byCapture) {
+    if (states.size < 2) continue;
+    reported.add(sha);
+    findings.push(`Identical state images: ${[...states].join(' and ')} share one PNG (sha256 ${sha.slice(0, 12)}…). Two different states must look different in their images; the element that distinguishes them is probably outside the captured viewport or hidden behind the fixed bottom action bar. Scroll it into view or capture the full page, re-render both states, and bind the new images.`);
+  }
+  const byAsset = new Map();
+  for (const asset of assets || []) {
+    if (!asset || !IMAGE_ASSET.test(asset.path || '') || reported.has(asset.sha256)) continue;
+    const paths = byAsset.get(asset.sha256) || []; paths.push(asset.path); byAsset.set(asset.sha256, paths);
+  }
+  for (const [sha, paths] of byAsset) {
+    if (paths.length < 2) continue;
+    findings.push(`Identical state images: declared image assets ${paths.join(' and ')} are byte-identical (sha256 ${sha.slice(0, 12)}…). If they stand for different states, the element that distinguishes those states is probably outside the captured viewport or hidden behind the fixed bottom action bar; re-render so each state's image shows what makes it that state.`);
+  }
+  return findings;
+}
 function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false, engine}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
   try {
@@ -127,6 +160,10 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       const requiredStates = new Set(matrix.sliceStates(c.requiredMappings));
       const capturedStates = new Set(approved.captures.map(capture => `${capture.screen}/${capture.state}`));
       if ((!unitSlice && requiredStates.size !== capturedStates.size) || [...requiredStates].some(key => !capturedStates.has(key))) throw Error('Semantic snapshot screen/state coverage differs from the approved mapping denominator');
+      if (MOCKUP_STAGES.includes(stage) && depth === 0) {
+        const identical = identicalStateImages(approved, c.assets);
+        if (identical.length) throw Error(identical.join(' '));
+      }
       const dispositions = c.fidelity.dispositions || [];
       if (!Array.isArray(dispositions)) throw Error('Fidelity dispositions must be an array');
       const readAsset = ref => JSON.parse(boundedFile(root, ref.path).toString('utf8'));
@@ -334,4 +371,4 @@ function main(argv) {
   console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {check, hash, contracts, scopePolicy, engineFor, dispositionTrust, main, isAcId};
+module.exports = {check, hash, contracts, scopePolicy, engineFor, dispositionTrust, main, isAcId, identicalStateImages};

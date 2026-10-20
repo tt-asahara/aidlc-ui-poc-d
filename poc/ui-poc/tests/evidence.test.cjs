@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {check,hash} = require('../tools/ui-poc-evidence.cjs');
+const {check,hash,identicalStateImages} = require('../tools/ui-poc-evidence.cjs');
 function render(c) { return '# Synthetic fixture, not workflow evidence\n\n## Artifact References\n\n## Screen State Acceptance Mapping\n\n## Approval Evidence\n\n## Testing Brief\n\n```ui-poc-contract\n'+JSON.stringify(c)+'\n```\n'; }
 function fixture(t) {
  const temp = fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-unit-'));
@@ -104,4 +104,36 @@ test('refined contract carries official story AC IDs verbatim and keeps the lega
  for (const ac of ['ＡＣ１.１.１','AC1．1．1','ac1.1.1','AC1.1','AC1.1.1.1','AC1-1-1','AC 1.1.1','AC1.1.1 ','AC-1.1.1','AC.1.1.1']) {
   const result=run(ac);assert.equal(result.pass,false,ac);assert.deepEqual(result.findings,['Invalid screen/state/AC mapping'],ac);
  }
+});
+
+test('two different states sharing one image are a blocking finding that names both states',()=>{
+ const captures=[{screen:'SCREEN-FORM',state:'STATE-FROM-NG',pngSha256:'c'.repeat(64)},{screen:'SCREEN-FORM',state:'STATE-PHOTO-ATTACHED',pngSha256:'c'.repeat(64)},{screen:'SCREEN-FORM',state:'STATE-MEMO-LIMIT',pngSha256:'d'.repeat(64)}];
+ const [finding,...rest]=identicalStateImages({captures},[{path:'from-ng.png',sha256:'c'.repeat(64)},{path:'photo.png',sha256:'c'.repeat(64)}]);
+ assert.equal(rest.length,0,'the same PNG is reported once, by its states');
+ assert.match(finding,/^Identical state images: SCREEN-FORM\/STATE-FROM-NG and SCREEN-FORM\/STATE-PHOTO-ATTACHED share one PNG \(sha256 cccccccccccc…\)/);
+ assert.match(finding,/outside the captured viewport or hidden behind the fixed bottom action bar/);
+ assert.deepEqual(identicalStateImages({captures:captures.slice(1)},[{path:'a.png',sha256:'c'.repeat(64)},{path:'b.png',sha256:'d'.repeat(64)},{path:'app.html',sha256:'c'.repeat(64)}]),[]);
+ const assetsOnly=identicalStateImages({captures:[{screen:'SCREEN-A',state:'STATE-A'}]},[{path:'a.png',sha256:'e'.repeat(64)},{path:'b.png',sha256:'e'.repeat(64)}]);
+ assert.equal(assetsOnly.length,1);
+ assert.match(assetsOnly[0],/declared image assets a\.png and b\.png are byte-identical/);
+ assert.match(assetsOnly[0],/fixed bottom action bar/);
+});
+test('the refined gate refuses a contract whose states share an image, and passes once they differ',t=>{
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'ui-poc-dup-'));t.after(()=>fs.rmSync(temp,{recursive:true,force:true}));
+ const html=Buffer.from('<main data-ui-screen="SCREEN-FORM" data-ui-state="STATE-FROM-NG">Form</main>');fs.writeFileSync(path.join(temp,'screen.html'),html);
+ const png=Buffer.from('not really a png, same bytes twice'),other=Buffer.from('a different capture');
+ const capture=(state,pngSha256)=>({screen:'SCREEN-FORM',state,rendered:true,pngSha256,elements:[{key:`AUTO-${state}`,explicitId:false,kind:'text',text:state}]});
+ const write=photo=>{
+  fs.writeFileSync(path.join(temp,'from-ng.png'),png);fs.writeFileSync(path.join(temp,'photo.png'),photo);
+  const snapshot={schema:1,kind:'ui-semantic-snapshot',source:{path:'screen.html',sha256:hash(html)},captures:[capture('STATE-FROM-NG',hash(png)),capture('STATE-PHOTO-ATTACHED',hash(photo))]};
+  fs.writeFileSync(path.join(temp,'snapshot.json'),JSON.stringify(snapshot));
+  const snap={path:'snapshot.json',sha256:hash(fs.readFileSync(path.join(temp,'snapshot.json')))};
+  const mappings=['STATE-FROM-NG','STATE-PHOTO-ATTACHED'].map(state=>({screen:'SCREEN-FORM',state,ac:'AC4.1.4',asset:'screen.html',check:state}));
+  const c={schema:2,stage:'refined-mockups',arm:'C',assets:[{path:'screen.html',sha256:hash(html)},snap,{path:'from-ng.png',sha256:hash(png)},{path:'photo.png',sha256:hash(photo)}],mappings,requiredMappings:mappings.map(m=>`${m.screen}/${m.state}/${m.ac}`),fidelity:{approvedSnapshot:snap,dispositions:[]}};
+  const outputPath=path.join(temp,'ui-poc-refined-contract.md');fs.writeFileSync(outputPath,render(c));return check({stage:'refined-mockups',outputPath});
+ };
+ const dup=write(png);
+ assert.equal(dup.pass,false);
+ assert.match(dup.findings.join(' '),/Identical state images: SCREEN-FORM\/STATE-FROM-NG and SCREEN-FORM\/STATE-PHOTO-ATTACHED share one PNG/);
+ assert.equal(write(other).pass,true);
 });
