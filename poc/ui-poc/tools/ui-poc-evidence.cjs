@@ -371,7 +371,52 @@ function requireApproval(approvalLedger, root, {sha256, stage, arm, requiredMapp
   if (!approved) throw Error(stage === 'functional-design' ? 'Functional Design contract has no matching explicit approval receipt' : 'Upstream contract has no matching explicit approval receipt');
   if (JSON.stringify(approved.requiredMappings) !== JSON.stringify(requiredMappings)) throw Error('Approved mapping inventory differs');
 }
+/**
+ * `hash [--dir <dir>] <path>...`: the deterministic SHA-256 the contract's
+ * `assets` and the routing evidence need, so an agent never reaches for
+ * shasum/node/python (a headless run cannot answer that permission prompt).
+ * `--dir` (default `.`) must lie inside the project; each path is relative to it, a
+ * directory expands to its files in sorted order, and the same bounds as the
+ * checker apply (no absolute path, `..`, backslash, or symlink escape). Prints
+ * `[{path, sha256}]` with paths as written relative to `--dir`.
+ */
+function hashPaths(cwd, dir, rels) {
+  if (!rels.length) throw Error('Name at least one file or directory to hash');
+  // An absolute --dir (as an engine directive may print it) is accepted only inside the project.
+  if (path.isAbsolute(dir)) dir = path.relative(fs.realpathSync(cwd), fs.realpathSync(dir)).split(path.sep).join('/') || '.';
+  if (dir !== '.') boundedPath(cwd, dir);
+  const base = path.join(cwd, dir), out = [];
+  const add = rel => {
+    const abs = path.join(base, rel);
+    if (fs.statSync(boundedPath(base, rel)).isDirectory()) {
+      for (const name of fs.readdirSync(abs).sort()) add(`${rel === '.' ? '' : `${rel.replace(/\/+$/, '')}/`}${name}`);
+    } else out.push({path: rel, sha256: hash(boundedFile(base, rel))});
+  };
+  for (const rel of rels) add(rel);
+  return out;
+}
+function boundedPath(root, rel) {
+  if (typeof rel !== 'string' || !rel || path.isAbsolute(rel) || rel.includes('\\') || rel.split('/').includes('..')) throw Error(`Unsafe path: ${rel}`);
+  const rootReal = fs.realpathSync(root), resolved = fs.realpathSync(path.join(root, rel));
+  if (resolved !== rootReal && !resolved.startsWith(rootReal + path.sep)) throw Error(`Path escapes ${root}: ${rel}`);
+  return resolved;
+}
+function hashMain(argv, cwd = process.cwd()) {
+  let dir = '.';
+  const rels = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--dir' && argv[i + 1] && dir === '.') dir = argv[++i].replace(/\/+$/, '') || '.';
+    else if (argv[i].startsWith('--')) throw Error(`Unknown option: ${argv[i]}`);
+    else rels.push(argv[i]);
+  }
+  return hashPaths(cwd, dir, rels);
+}
 function main(argv) {
+  if (argv[0] === 'hash') {
+    try { console.log(JSON.stringify(hashMain(argv.slice(1)), null, 2)); }
+    catch (e) { console.error(`ui-poc-evidence hash: ${e.message}`); process.exitCode = 1; }
+    return;
+  }
   const args = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (!['--stage','--output-path'].includes(argv[i]) || !argv[i+1] || args[argv[i]]) {
@@ -382,4 +427,4 @@ function main(argv) {
   console.log(JSON.stringify(check({stage:args['--stage'],outputPath:args['--output-path'],approvalLedger:process.env.UI_POC_APPROVAL_LEDGER,allowLegacySchema1:process.env.UI_POC_SCHEMA1_MIGRATION === '1'})));
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {check, hash, contracts, scopePolicy, engineFor, dispositionTrust, main, isAcId, identicalStateImages};
+module.exports = {check, hash, hashMain, contracts, scopePolicy, engineFor, dispositionTrust, main, isAcId, identicalStateImages};

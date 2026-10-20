@@ -21,6 +21,7 @@
       "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
       "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-evidence.cjs *)",
       "Task",
       "WebSearch"
     ]

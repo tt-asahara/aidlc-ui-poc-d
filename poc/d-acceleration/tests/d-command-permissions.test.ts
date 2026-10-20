@@ -26,10 +26,15 @@ const SOURCES = [
   join(REPO, "poc", "ui-poc", "skills"),
   join(REPO, "poc", "pr-lens-review", "contributions"),
   join(REPO, "poc", "pr-lens-review", "tools"),
+  // The installed UI evidence contract (tools/ui-poc/contract.md) and the
+  // --doc guide the skill reads first.
+  join(REPO, "poc", "ui-poc", "tools", "ui-poc"),
+  join(REPO, "poc", "d-acceleration", "design-document-guide.md"),
 ];
 
 function* textFiles(dir: string): Generator<string> {
   if (!existsSync(dir)) return;
+  if (!statSync(dir).isDirectory()) { yield dir; return; }
   for (const entry of readdirSync(dir).sort()) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) yield* textFiles(full);
@@ -76,6 +81,34 @@ describe("D command permissions", () => {
   test("finds the D commands the shipped instructions use", () => {
     expect(commands.has(".claude/tools/d-acceleration/host-session-cli.ts")).toBe(true);
     expect(commands.has(".claude/tools/d-acceleration/issue-autopilot-cli.ts")).toBe(true);
+    // The UI evidence step hashes assets and self-checks through this tool.
+    expect(commands.has(".claude/tools/ui-poc-evidence.cjs")).toBe(true);
+  });
+
+  // A headless run (claude -p) stopped at rough-mockups when the agent hashed
+  // assets with shasum and its own node script, and --doc stalled on an
+  // ad-hoc Python generator: neither is pre-approved, and nobody can answer
+  // the prompt. The shipped instructions name the evidence tool's `hash`
+  // command and the file tools instead, and never an interpreter command.
+  test("shipped instructions never tell the agent to run a generic hashing or script interpreter", () => {
+    const offenders: string[] = [];
+    for (const dir of SOURCES) {
+      for (const file of textFiles(dir)) {
+        for (const line of readFileSync(file, "utf8").split("\n")) {
+          if (/`(?:shasum|sha256sum|openssl dgst|python3?|node) [^`]*`/.test(line) && !/never/i.test(line)) offenders.push(`${relative(REPO, file)}: ${line.slice(0, 120)}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+    expect(allow.some((rule) => /^Bash\((?:shasum|sha256sum|openssl|python3?|node)\b/.test(rule))).toBe(false);
+  });
+
+  test("--doc writes the design files with the file tools, not a generator script", () => {
+    const skill = readFileSync(join(REPO, "harness", "claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    const guide = readFileSync(join(REPO, "poc", "d-acceleration", "design-document-guide.md"), "utf8");
+    expect(skill).toMatch(/Create and update every design\s+file with the Write and Edit tools/);
+    expect(skill).toMatch(/never write or run a\s+generator script/);
+    expect(guide).toContain("**Write / Edit ツールで 1 ファイルずつ**");
   });
 
   test("every referenced D command is pre-approved or deliberately prompted", () => {
