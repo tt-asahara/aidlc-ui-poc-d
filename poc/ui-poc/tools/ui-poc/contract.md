@@ -274,6 +274,75 @@ For code-generation, include upstream: {path, sha256, stage: "refined-mockups"};
 
 The gate sensor is a preflight evidence check. Rough and refined producer gates validate draft shape and hashes without demanding an additional human approval. The consuming code-generation and build-and-test gates require a receipt of the prior stage’s ordinary approval, not approval of their own new draft. This receipt does not impersonate or replace the core stage-approval event. If approval infrastructure is unavailable, block and report the missing evidence; never set approved to make tests green.
 
+## Review findings at the mockup gates
+
+The engine's review brief shows the findings of the rough-mockups and
+refined-mockups reviews; its Approve maps every finding still open to
+`Accepted risk` on the `GATE_APPROVED` row, and nothing downstream reads that
+row. In the dogfood-3 run the refined mockups were approved 70 seconds after a
+READY review with two Major findings, all six findings became `Accepted risk`
+with no reason, and no later stage heard of them. The plugin adds the missing
+part without touching core, through its own gate sensor and a small ledger:
+
+- **The gate holds.** At the rough-mockups and refined-mockups gates the
+  `ui-poc-evidence` sensor reads the latest `REVIEW_COMPLETED` row of the
+  stage, verifies the named review record against its digest, and fails
+  (blocking, so the engine keeps the gate closed) while any Critical or Major
+  finding the engine's own list leaves `New` or `Unresolved` has no decision
+  recorded from the person. Minor findings keep the current behaviour. The
+  official blocking-sensor override remains the person's way around it; the
+  agent never takes it on its own.
+- **The person decides.** The agent asks one engine-logged question,
+  `Major review findings still open`, with the choices `Fix the Major findings
+  first` (recommended), `Decide each finding`, and `Accept all as risks`, and
+  records each decision with `bun {{HARNESS_DIR}}/tools/ui-poc-review-risks.cjs
+  decide --stage <stage> --output-path <stage contract> --fix R-NN | --accept
+  R-NN --rationale "<the person's words>" [--follow-up-stage build-and-test]`.
+  The tool refuses a decision unless the audit trail shows that question
+  (`DECISION_RECORDED` with exactly those options), a `HUMAN_TURN`, and the
+  person's answer (`QUESTION_ANSWERED`) after the review, refuses `--fix`
+  under `Accept all as risks` and `--accept` under `Fix the Major findings
+  first`, refuses an empty reason, and refuses a reason that is not among the
+  messages the human-turn hook kept for this chat after the review
+  (`<record>/.aidlc-engine/gate-words/`, which only the hooks write; a prompt
+  relayed from another session does not count). It never decides for the
+  person and never rewords them.
+- **The ledger.** Decisions are written to `ui-poc-review-decisions.json`
+  beside the stage contract: `{version: 1, stage, decisions: [{id, severity,
+  finding_sha256, review_record: {path, digest}, decision: "fix" | "accept",
+  rationale?, follow_up_stage?, person_words?: {session, offset}, question:
+  {decision, choice, answered_at}, recorded_at}]}`. A decision follows the
+  finding's text (`finding_sha256` over id, severity, location, finding, and
+  required action), so it carries over a re-review that leaves the finding
+  unchanged and lapses when the reviewer rewords or regrades it. A `fix`
+  decision opens the gate so the person's Request Changes can reopen the
+  reviewed artifacts; the revision is reviewed again as usual.
+- **Build and Test inherits.** The engine's latest `GATE_APPROVED` row of
+  each mockup stage names what was actually accepted (its `Review Finding
+  Dispositions`). Every disposition at Critical or Major severity is a check
+  item: `bun {{HARNESS_DIR}}/tools/ui-poc-review-risks.cjs handoff --stage
+  build-and-test --output-path <test contract>` prints them with the recorded
+  reason, and the Build and Test contract lists each in
+  `fidelity.acceptedRisks` as `{stage, id, reviewRecordDigest, check, result:
+  "pass" | "fail" | "unverified", note?}`. The sensor fails the Build and Test
+  gate while an accepted Major is missing from the list, has no `check`, has
+  no `result`, is `fail` or `unverified` without a note, failed its check, or
+  has no reason recorded from the person (one can still be recorded with
+  `decide --accept` at that stage, from the person's words), and when a row
+  names a finding the engine never accepted.
+- **Identical state images.** At the same two gates, two different
+  screen/states whose captured PNGs are byte-identical (`pngSha256` of the
+  approved snapshot's captures, or two declared image assets with one SHA-256)
+  fail the sensor: the element that distinguishes the states is outside the
+  captured viewport or hidden behind a fixed bottom action bar, so the image
+  cannot serve as a comparison baseline.
+
+The engine's `Review Finding Dispositions` JSON is unchanged; the plugin only
+reads it. `review_class` stays `advisory` on both stages, because a plugin
+contribution cannot override a core stage's frontmatter and a scope can only
+lower the class; the blocking gate sensor is the plugin-side way to keep the
+gate closed while a Major finding is undecided.
+
 ## Developer and testing handoff
 
 The developer must receive the refined contract, core mockup documents, user stories/ACs, unit definition and story map, functional design, and the actual engine-produced implementation/testing brief. Preserve core source-manifest.json, traceability.json, code-generation-plan.md, unit-test-instructions.md and code-summary.md. Read the pinned treatment entrypoints during the applicable stage and record actual read evidence. Do not merely name a skill in a prompt and report that it ran.

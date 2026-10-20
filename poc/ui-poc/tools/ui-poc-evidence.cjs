@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fidelity = require('./ui-poc-fidelity.cjs');
 const matrix = require('./ui-poc-element-matrix.cjs');
 const {engineRecord, engineGateStatus, stateField} = require('./ui-poc-c-routing.cjs');
+const reviewRisks = require('./ui-poc-review-risks.cjs');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const contracts = {
   'rough-mockups': 'ui-poc-rough-contract.md',
@@ -99,6 +100,7 @@ function identicalStateImages(approved, assets) {
 }
 function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLegacySchema1 = false, engine}, seen = new Set(), contractName = contracts[stage], depth = 0) {
   const findings = [];
+  let c = null;
   try {
     if (!Object.hasOwn(contracts, stage)) throw Error('Unsupported stage');
     if (!outputPath || !fs.statSync(outputPath).isFile()) throw Error('Declared deliverable is missing');
@@ -124,7 +126,7 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
     for (const title of ['Artifact References','Screen State Acceptance Mapping','Approval Evidence','Testing Brief']) {
       if (!text.split(/\r?\n/).includes('## ' + title)) throw Error('Missing heading: ' + title);
     }
-    const c = matrix.contractBlock(text);
+    c = matrix.contractBlock(text);
     if (![1,2].includes(c.schema) || c.stage !== stage || !['A','B','C'].includes(c.arm)) throw Error('Invalid schema, stage, or arm');
     if (c.schema === 1 && allowLegacySchema1 !== true) throw Error('Schema 1 is legacy migration input only; new/default UI evidence requires schema 2');
     if (c.schema === 1 && stage === 'functional-design') throw Error('Functional Design UI evidence exists only in schema 2');
@@ -260,6 +262,15 @@ function check({stage, outputPath, approvalLedger, imageFeatures = {}, allowLega
       requireUpstreamApproval(engine, approvalLedger, root, {sha256:c.upstream.sha256,stage:prior,arm:c.arm,requiredMappings:parent.requiredMappings});
     }
   } catch (e) { findings.push(e.message); }
+  // The person's decisions on the review's open Major findings (mockup gates)
+  // and their Build and Test handoff read engine facts, so they need a record;
+  // outside one (checker unit tests, a stray file) there is nothing to read.
+  if (depth === 0 && engine?.recordRoot) {
+    try {
+      if (MOCKUP_STAGES.includes(stage)) findings.push(...reviewRisks.gateFindings({recordRoot: engine.recordRoot, stage, unit: engine.unit, stageDir: path.dirname(path.resolve(outputPath)), toolsDir: __dirname}));
+      else if (stage === 'build-and-test' && c) findings.push(...reviewRisks.handoffFindings({recordRoot: engine.recordRoot, contract: c, toolsDir: __dirname}));
+    } catch (e) { findings.push(e.message); }
+  }
   return {pass: findings.length === 0, findings_count: findings.length, findings};
 }
 /**

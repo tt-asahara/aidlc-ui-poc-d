@@ -67,6 +67,20 @@ Construction iteration choice); the person still decides at the official gate.
 Opus defaults, routing evidence, and D's four automatic design waves do not
 depend on wording them into this prompt.
 
+## Review findings at the mockup gates
+
+A Critical or Major finding of the rough-mockups or refined-mockups review is
+never accepted in bulk and without a reason. While one is open and undecided,
+the `ui-poc-evidence` gate sensor keeps the gate closed; the agent asks the
+engine-logged question `Major review findings still open` (fix first, decide
+each, or accept all) and records the person's decision with
+`bun .claude/tools/ui-poc-review-risks.cjs decide …`, where an acceptance needs
+the person's own words as the reason. What the gate finally accepted becomes a
+Build and Test check item (`fidelity.acceptedRisks`, printed by
+`ui-poc-review-risks.cjs handoff`). The same sensor fails two different states
+whose PNGs are byte-identical. See `docs/contract.md`, "Review findings at the
+mockup gates".
+
 ## Requirements-only loop
 
 To grow requirements and the `/aidlc --doc` design document set without
