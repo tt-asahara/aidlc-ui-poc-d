@@ -271,7 +271,7 @@ describe("t145 packager contract regressions", () => {
 
       const run = runPackage(root, "claude");
       expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");
-      expect(run.status).toBe(0);
+      expect(run.status, output(run)).toBe(0);
       expect(existsSync(join(root, "dist", "claude", ".claude"))).toBe(false);
 
       const generated = join(root, "dist", "claude", ".foo");

@@ -67,5 +67,6 @@ test("native D commands have bounded permissions and GitHub tools remain individ
     expect(allow).toContain(`Bash(aidlc d ${name} *)`);
   expect(nativeDInvocations("bun .claude/tools/d-acceleration/run.ts --preflight", ".claude")).toBe("aidlc d run --preflight");
   expect(nativeDInvocations("bun Xclaude/tools/d-acceleration/run.ts", ".claude")).toBe("bun Xclaude/tools/d-acceleration/run.ts");
+  for (const dir of [".claude", ".foo"]) expect(nativeDInvocations(`bun ${dir}/tools/d-acceleration/design-document.ts doc-manifest`, ".foo")).toBe("aidlc d design-document doc-manifest");
   expect(externalEnvironment({ BUN_BE_BUN: "1", KEEP: "yes" })).toEqual({ KEEP: "yes" });
 });

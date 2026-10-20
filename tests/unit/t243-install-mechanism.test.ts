@@ -8113,12 +8113,28 @@ describe("t243 projection channel", () => {
     expect(claudeSettings.permissions.allow).toContain(`Bash(${trustedCommand("*")})`);
     expect(claudeSettings.permissions.allow).not.toContain("Bash");
     expect(claudeSettings.permissions.allow.some((entry) => entry.startsWith("Bash(bun "))).toBe(false);
-    // The engine prefix, then each read-only and turn-back-on command exactly
-    // as the installed aidlc command runs it.
+    // The core prefix is unchanged. Claude's D tools are named individually,
+    // outside it; neither GitHub-facing D CLI receives a pre-approved entry.
     const exactNative = copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
     expect(
       claudeSettings.permissions.allow.filter((entry) => entry.includes("aidlc")),
-    ).toEqual([`Bash(${trustedCommand("*")})`, ...exactNative.map((command) => `Bash(${command})`)]);
+    ).toEqual([
+      `Bash(${trustedCommand("*")})`,
+      "Bash(aidlc d generic-auto-cli *)",
+      "Bash(aidlc d run *)",
+      "Bash(aidlc d host-stage-boundary *)",
+      "Bash(aidlc d ai-question-controller *)",
+      "Bash(aidlc d ai-question-answers *)",
+      "Bash(aidlc d ai-approval-controller *)",
+      "Bash(aidlc d host-session-cli *)",
+      "Bash(aidlc d parallel-guard *)",
+      "Bash(aidlc d design-document *)",
+      "Bash(aidlc d pr-lens-gate *)",
+      ...exactNative.map((command) => `Bash(${command})`),
+    ]);
+    expect(claudeSettings.permissions.allow).not.toContain("Bash(aidlc d *)");
+    for (const tool of ["issue-autopilot-cli", "decision-issue-summary"])
+      expect(claudeSettings.permissions.allow.some(entry => entry.startsWith(`Bash(aidlc d ${tool}`))).toBe(false);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
       expect(
         claudeSettings.permissions.allow.some((entry) =>

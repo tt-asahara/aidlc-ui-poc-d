@@ -7,8 +7,10 @@ export const D_NATIVE_TOOLS: Readonly<Record<string, string>> = Object.fromEntri
 export const D_PROMPTED_TOOLS = new Set(["issue-autopilot-cli", "decision-issue-summary"]);
 
 export function nativeDInvocations(text: string, harnessDir: string): string {
-  const escaped = harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return text.replace(new RegExp(`\\bbun\\s+${escaped}/tools/d-acceleration/([a-z0-9-]+)\\.ts\\b`, "g"), (whole, name: string) =>
+  // Authored Claude settings/docs retain .claude even when the manifest's
+  // projected harnessDir is renamed. Both spellings name the same fixed tools.
+  const escaped = [...new Set([harnessDir, ".claude"])].map(dir => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return text.replace(new RegExp(`\\bbun\\s+(?:${escaped})/tools/d-acceleration/([a-z0-9-]+)\\.ts\\b`, "g"), (whole, name: string) =>
     Object.hasOwn(D_NATIVE_TOOLS, name) ? `aidlc d ${name}` : whole);
 }
 export function nativeDAllow(rule: unknown): string | null {
