@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { spawnSync } from "node:child_process";
+import { runEngineSync } from "./execution.ts";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { adaptOfficialNext } from "./official-next-adapter.ts";
@@ -14,7 +14,7 @@ export function withDefaultClaudeModels(models: ConductOptions["requestedClaudeM
   return { fast: models?.fast?.trim() || DEFAULT_CLAUDE_MODEL, balanced: models?.balanced?.trim() || DEFAULT_CLAUDE_MODEL, judgment: models?.judgment?.trim() || DEFAULT_CLAUDE_MODEL };
 }
 function invoke(tool: string, args: string[], options: ConductOptions): any {
-  const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", options.projectDir], { cwd: options.projectDir, env: options.env ?? process.env, encoding: "utf8", timeout: options.timeoutMs ?? 30_000 });
+  const result = runEngineSync(tool, [...args, "--project-dir", options.projectDir], { cwd: options.projectDir, env: options.env ?? process.env, encoding: "utf8", timeout: options.timeoutMs ?? 30_000 });
   if (result.status !== 0) throw new Error(`${tool} failed: ${result.stderr || result.stdout}`);
   return result.stdout.trim() ? JSON.parse(result.stdout) : null;
 }

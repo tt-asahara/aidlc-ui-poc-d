@@ -1,6 +1,6 @@
 # Hooks and Tools
 
-This chapter documents the hook system architecture, all seventeen hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
+This chapter documents the hook system architecture, the seventeen core hook scripts and four D-owned dispatcher adapters, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
 
 > **Path convention.** State, audit, and artifacts live under the active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below (a compact UTC date prefix plus a short kebab-case label so record dirs sort chronologically; the canonical id is the UUIDv7 in the `intents.json` registry row). The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
 
@@ -8,9 +8,9 @@ This chapter documents the hook system architecture, all seventeen hook scripts,
 
 ## Hook System Architecture
 
-This implementation uses seventeen TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All seventeen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other sixteen via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses twenty-one TypeScript hook sources in `.claude/hooks/`. A source-generated `dist/` projection invokes them through `bun`; native installs and versioned release runtimes route them through `aidlc engine hook`, `aidlc engine statusline`, or an `aidlc engine adapter` target. All twenty-one are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other twenty via the `hooks` block), they fire regardless of which skill is active when the host permits project hooks. Claude Code managed `allowManagedHooksOnly: true` overrides the project registration and blocks those hooks; `/aidlc --doctor` detects that policy. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
-Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a reviewed-output write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
+Fifteen of the twenty-one are **non-blocking**. The four D adapters delegate to persistence pre/post, reviewer-dispatch cleanup, and blocking-sensor guidance without changing core sources or granting permission. Native dispatch loads these adapters from the installed runtime, without invoking an external Bun executable. Six are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the deliver-stage-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the plan-approval guard refuses premature code-generation dispatches, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a reviewed-output write that would void a fresh terminal review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
 ```
 .claude/hooks/
@@ -382,7 +382,7 @@ lose the quoted clause; nothing else about the switch changes.
 
 ### Shared Characteristics
 
-All seventeen TypeScript hook sources:
+The seventeen core TypeScript hook sources are listed below. The Claude D projection also ships `aidlc-d-persistence-pre.ts`, `aidlc-d-persistence-post.ts`, `aidlc-d-reviewer-dispatch-cleanup.ts`, and `aidlc-d-blocking-sensor-override.ts`; see `poc/d-acceleration/native-hook-dispatch.md` for their dispatcher boundary.
 
 - Are written in TypeScript and invoked through the channel's dispatcher
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell

@@ -11,13 +11,16 @@ review, audit, or Testing Contract boundaries. It lives entirely outside
 `core/`, which stays byte-identical to upstream AI-DLC v2.11.0 (`6a378b53`;
 guarded by `tests/core-pristine.test.ts`). D extends AI-DLC only through the
 Claude harness projection, the ui-poc plugin, and D-owned tools and ledgers; it
-never writes engine state or the official audit itself. An install must opt in
+never writes engine state or the official audit itself. D hook registrations use the existing `engine hook` dispatcher and four D-owned `hooks/aidlc-d-*.ts` adapters. Copy-channel commands retain the quoted project root; native commands load the installed runtime through the self-contained `aidlc` executable. The adapters and their modules are projected from `poc/d-acceleration/`, and no core file is edited. An install must opt in
 before dispatching work through the existing engine directives. What the core
 restore re-homed and what it dropped is listed under "Core restore" below.
 
 A separate clean target (install, receipt-proven update, package parity,
 headless real-host turns, and an evidence manifest) follows
 [`clean-target.md`](clean-target.md).
+
+The source/native hook boundary and baseline CI comparison are documented in
+[`native-hook-dispatch.md`](native-hook-dispatch.md).
 
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces.

@@ -102,7 +102,7 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     const dControllers = ["generic-auto-cli.ts", "run.ts", "host-stage-boundary.ts", "ai-question-controller.ts", "ai-question-answers.ts", "ai-approval-controller.ts", "host-session-cli.ts", "parallel-guard.ts", "design-document.ts", "pr-lens-gate.ts"]
       .map((script) => `Bash(bun .claude/tools/d-acceleration/${script} *)`)
       // The pr-lens-review plugin's tool lands at tools/ when composed; local only.
-      .concat("Bash(bun .claude/tools/pr-lens-review.ts *)", "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)", "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)");
+      .concat("Bash(bun .claude/tools/pr-lens-review.ts *)", "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)", "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)", "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)", "Bash(bun .claude/tools/ui-poc-evidence.cjs *)");
     expect(allow.length).toBe(4 + dControllers.length + copyChannelDispatcherCommands().length + 2 * copyChannelToolScripts().length);
     for (const entry of dControllers) expect(allow).toContain(entry);
     expect(allow.some((entry) => /issue-autopilot-cli|decision-issue-summary/.test(entry))).toBe(false);
@@ -112,6 +112,9 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(allow).not.toContain("Bash(bun .claude/tools/aidlc-*)");
     expect(allow).not.toContain("Bash(date -u *)");
     expect(allow).not.toContain("Bash");
+    // Headless runs cannot answer a prompt, so hashing goes through the
+    // evidence tool's own `hash` command, never a generic interpreter allow.
+    expect(allow.some((entry) => /^Bash\((shasum|sha256sum|node|python3?|openssl)\b/.test(entry))).toBe(false);
   });
 
   test("T6: settings.local.json.example is valid JSON [.sh test 6]", () => {

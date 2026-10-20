@@ -75,8 +75,11 @@ jobs:
 
       # Several D suites import the generated Claude runtime (dist/claude) and
       # the harness matrix expects every dist/<harness> tree.
+      # Fresh-install/official-next fixtures also compose the UI plugin.
       - name: Materialize generated harness trees
-        run: bun scripts/package.ts
+        run: |
+          bun scripts/package.ts
+          bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/ui-poc claude --json
 
       # D persistence and sandbox suites create throwaway git repositories and
       # commits; give git an identity that cannot be mistaken for a person.

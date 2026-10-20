@@ -140,6 +140,21 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
         `Bash(bun .claude/tools/${script})`,
         `Bash(bun .claude/tools/${script} *)`,
       ]),
+      "Bash(bun .claude/tools/d-acceleration/generic-auto-cli.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/run.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/host-stage-boundary.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-question-controller.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-question-answers.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/ai-approval-controller.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/host-session-cli.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/parallel-guard.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/design-document.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/pr-lens-gate.ts *)",
+      "Bash(bun .claude/tools/pr-lens-review.ts *)",
+      "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-evidence.cjs *)",
       "Task",
       "WebSearch",
     ]);
@@ -319,11 +334,33 @@ describe("permissions.allow on the native release", () => {
   }
   const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
 
-  test("the engine prefix and each exact read-only and turn-back-on command are the only AI-DLC entries", () => {
+  test("the engine prefix, bounded D tools and exact read-only and turn-back-on commands are the only AI-DLC entries", () => {
     expect(nativeAllow.filter((entry) => entry.includes("aidlc"))).toEqual([
       "Bash(aidlc engine *)",
+      "Bash(aidlc d generic-auto-cli *)",
+      "Bash(aidlc d run *)",
+      "Bash(aidlc d host-stage-boundary *)",
+      "Bash(aidlc d ai-question-controller *)",
+      "Bash(aidlc d ai-question-answers *)",
+      "Bash(aidlc d ai-approval-controller *)",
+      "Bash(aidlc d host-session-cli *)",
+      "Bash(aidlc d parallel-guard *)",
+      "Bash(aidlc d design-document *)",
+      "Bash(aidlc d pr-lens-gate *)",
       ...copyChannelDispatcherCommands().map((command) => `Bash(aidlc ${command})`),
     ]);
+  });
+
+  test("D GitHub operations and unknown D tools still prompt outside the trusted engine prefix", () => {
+    for (const command of [
+      "aidlc d issue-autopilot-cli --project-dir /product 52",
+      "aidlc d decision-issue-summary --project-dir /product --send",
+      "aidlc d unknown-tool --project-dir /product",
+      "aidlc d run-extra --project-dir /product",
+      "aidlc d /tmp/arbitrary.ts",
+    ]) expect(nativeEffect(command), command).toBe("prompt");
+    expect(nativeEffect("aidlc d generic-auto-cli status --project-dir /product")).toBe("allow");
+    expect(nativeEffect("aidlc d design-document doc-manifest --project-dir /product")).toBe("allow");
   });
 
   test("reading a setting, doctor, status, version and turning a check back on run with no prompt", () => {

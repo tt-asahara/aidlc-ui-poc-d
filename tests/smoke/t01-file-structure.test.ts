@@ -92,6 +92,13 @@ const HOOKS = [
   "aidlc-fold-usage.ts",
 ] as const;
 
+const D_HOOKS = [
+  "aidlc-d-persistence-pre.ts",
+  "aidlc-d-persistence-post.ts",
+  "aidlc-d-reviewer-dispatch-cleanup.ts",
+  "aidlc-d-blocking-sensor-override.ts",
+] as const;
+
 // The 32 stage files, partitioned by phase exactly as the .sh's per-phase loops
 // did (3 + 7 + 8 + 7 + 7 = 32).
 const STAGES: Record<string, readonly string[]> = {
@@ -167,14 +174,13 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  // STRONGER than the .sh: not just "each of these 17 exists" but "the hooks
-  // dir contains EXACTLY 17 aidlc-*.ts hooks" — catches an 18th hook sneaking
-  // in or a rename that drops one while another covers the count.
-  test("ships EXACTLY the 17 expected aidlc-*.ts hooks [.sh L20-29 — count strengthening]", () => {
+  // Keep all 17 core hooks plus the four D-owned dispatcher adapters exact:
+  // an unknown extra or a missing/renamed core or D hook still fails.
+  test("ships EXACTLY the 21 expected core and D aidlc-*.ts hooks [.sh L20-29 — count strengthening]", () => {
     const shipped = readdirSync(at("hooks"))
       .filter((f) => f.startsWith("aidlc-") && f.endsWith(".ts"))
       .sort();
-    expect(shipped).toEqual([...HOOKS].sort());
+    expect(shipped).toEqual([...HOOKS, ...D_HOOKS].sort());
   });
 
   test("ships each of the 14 agent personas [.sh L32-34]", () => {

@@ -115,6 +115,9 @@ function repoResolve(value: string): string {
 // dispatcher to prove the smoke gate can fail. AIDLC_BUILD_OUT_DIR keeps that
 // failure proof out of the real release staging directory.
 const ENTRY = repoResolve(process.env.AIDLC_BUILD_ENTRY ?? DEFAULT_ENTRY);
+const D_ENTRY = join(dirname(DEFAULT_ENTRY), "d-acceleration", "native-entry.ts");
+// D adds its native namespace in a separate entry; the core source/grep gate is unchanged.
+const COMPILE_ENTRY = !process.env.AIDLC_BUILD_ENTRY && existsSync(D_ENTRY) ? D_ENTRY : ENTRY;
 const OUT_DIR = repoResolve(process.env.AIDLC_BUILD_OUT_DIR ?? DEFAULT_OUT_DIR);
 
 function targetConfigs(outDir: string): TargetConfig[] {
@@ -2391,7 +2394,7 @@ function targetRunsOnHost(target: TargetConfig): boolean {
 function buildTarget(target: TargetConfig): TargetResult {
   removeStaleArtifacts(target);
 
-  const args = ["build", ENTRY, "--compile", "--outfile", target.artifact];
+  const args = ["build", COMPILE_ENTRY, "--compile", "--no-compile-autoload-bunfig", "--no-compile-autoload-dotenv", "--outfile", target.artifact];
   if (target.bunTarget) args.push(`--target=${target.bunTarget}`);
 
   const start = performance.now();
@@ -2597,6 +2600,7 @@ function writeResults(
     const output = {
       generator: "scripts/build-binaries.ts",
       entry: ENTRY,
+      compileEntry: COMPILE_ENTRY,
       outDir: OUT_DIR,
       bunVersion,
       expectedVersion: AIDLC_VERSION,

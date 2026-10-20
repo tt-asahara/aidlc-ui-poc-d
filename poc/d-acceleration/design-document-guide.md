@@ -101,6 +101,14 @@ bun .claude/tools/d-acceleration/design-document.ts doc-manifest --json --projec
 `warnings[]` が非空なら、registry 行と record dir の対応が壊れた record が除外されている。
 生成は続行してよいが、その旨を利用者に伝えて `/aidlc --doctor` を案内すること。
 
+### 書き出し方（ファイルツールのみ）
+
+設計書と `design-summary.md` は、**Write / Edit ツールで 1 ファイルずつ**作成・更新する。
+Python・node・シェルのループやヒアドキュメントなど、生成スクリプトを書いて実行してはならない。
+headless 実行（`claude -p`）には許可プロンプトに答える人がおらず、許可リストに無いスクリプト実行は
+拒否されて生成が止まる。Bash で実行してよいのは、本ガイドが名指しする
+`design-document.ts`（`doc-manifest` / `doc-snapshot`）だけである。
+
 ### incremental（既定）と `--full`
 
 - `/aidlc --doc`（既定）＝ **incremental merge**: 既存 `design-document/` を読み、manifest の新規/変更 intent

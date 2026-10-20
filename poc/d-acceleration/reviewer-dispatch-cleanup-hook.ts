@@ -56,21 +56,23 @@ export function staleRecord(review: ReviewCommand, record: DispatchRecord, respo
   return !sameReview;
 }
 
-if (import.meta.main) {
+export function run(text: string): number {
   let input: HookInput = {};
-  try { input = JSON.parse(await Bun.stdin.text()); } catch { process.exit(0); }
+  try { input = JSON.parse(text); } catch { return 0; }
   // The same precedence as the official reviewer-scope hook, so both resolve
   // one record path.
   const explicit = process.env.AIDLC_PROJECT_DIR || process.env.CLAUDE_PROJECT_DIR;
   const projectDir = explicit ? (isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)) : input.cwd;
   const review = parseReviewCommand(input.tool_input?.command ?? "");
-  if (!projectDir || input.tool_name !== "Bash" || !review || responseFailed(input.tool_response)) process.exit(0);
+  if (!projectDir || input.tool_name !== "Bash" || !review || responseFailed(input.tool_response)) return 0;
   try {
     const path = reviewerDispatchPath(projectDir);
-    if (!existsSync(path)) process.exit(0);
+    if (!existsSync(path)) return 0;
     const record = JSON.parse(readFileSync(path, "utf8")) as DispatchRecord;
     if (staleRecord(review, record, input.tool_response)) rmSync(path, { force: true });
   } catch {
     // Cleanup is advisory: the official hook's six-hour orphan window remains.
   }
+  return 0;
 }
+if (import.meta.main) process.exitCode = run(await Bun.stdin.text());

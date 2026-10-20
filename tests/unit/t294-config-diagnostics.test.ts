@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,7 +21,7 @@ import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
-import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
+import { LEGACY_AIDLC_HOOK_TARGETS, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -76,7 +77,7 @@ afterEach(() => {
 }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 function temp(prefix: string): string {
-  const path = mkdtempSync(join(tmpdir(), prefix));
+  const path = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   temporary.push(path);
   return path;
 }
@@ -4123,7 +4124,9 @@ describe("t294 config diagnostics CLI", () => {
       for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
         for (const hook of group.hooks) {
           const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
-          if (target) {
+          // New D adapters never shipped as legacy framework hook scripts.
+          // Convert exactly the historical targets the core's legacy contract names.
+          if (target && LEGACY_AIDLC_HOOK_TARGETS.has(target)) {
             hook.command =
               `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
           }

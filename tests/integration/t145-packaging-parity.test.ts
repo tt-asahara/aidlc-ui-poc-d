@@ -65,6 +65,11 @@ function makeFixture(harness: string, sourceHarness = harness): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-package-contract-"));
   copyDir(join(REPO_ROOT, "core"), join(root, "core"));
   copyDir(join(REPO_ROOT, "scripts"), join(root, "scripts"));
+  // package.ts imports the D projection and Claude builds ship its runtime.
+  copyDir(
+    join(REPO_ROOT, "poc", "d-acceleration"),
+    join(root, "poc", "d-acceleration"),
+  );
   cpSync(join(REPO_ROOT, "package.json"), join(root, "package.json"));
   cpSync(join(REPO_ROOT, "bun.lock"), join(root, "bun.lock"));
   mkdirSync(join(root, "harness"), { recursive: true });
@@ -266,7 +271,7 @@ describe("t145 packager contract regressions", () => {
 
       const run = runPackage(root, "claude");
       expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");
-      expect(run.status).toBe(0);
+      expect(run.status, output(run)).toBe(0);
       expect(existsSync(join(root, "dist", "claude", ".claude"))).toBe(false);
 
       const generated = join(root, "dist", "claude", ".foo");

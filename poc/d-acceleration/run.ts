@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
+import { runEngineSync, runScriptSync } from "./execution.ts";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { CLEF_REMOVED, checkDPrerequisites, resolveDConfig, resolveDGitPersistence, resolveDModelContract, resolveDModels } from "./d-config.ts";
 import { enforceParallelOff } from "./parallel-guard.ts";
 import { prLensGate } from "./pr-lens-gate.ts";
@@ -23,11 +23,11 @@ const stageCheckInput = value("--stage-check-input");
 if (stageCheckInput) {
   const directiveFile = value("--directive-file");
   if (!directiveFile) throw new Error("--stage-check-input requires --directive-file so the official stage boundary can be verified");
-  const check = spawnSync(process.execPath, [join(import.meta.dir, "host-stage-boundary.ts"), "--project-dir", projectDir, "--directive-file", directiveFile, "--manifest", stageCheckInput, "--engine-dir", tools], { cwd: projectDir, encoding: "utf8" });
+  const check = runScriptSync(join(import.meta.dir, "host-stage-boundary.ts"), [ "--project-dir", projectDir, "--directive-file", directiveFile, "--manifest", stageCheckInput, "--engine-dir", tools], { cwd: projectDir, encoding: "utf8" });
   process.stdout.write(check.stdout); process.stderr.write(check.stderr); process.exit(check.status ?? 1);
 }
 const officialNext = () => {
-  const next = spawnSync(process.execPath, [orchestrate, "next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  const next = runEngineSync(orchestrate, ["next", "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
   if (next.status !== 0) { process.stderr.write(next.stderr || next.stdout); process.exit(next.status ?? 2); }
   return JSON.parse(next.stdout);
 };
@@ -53,7 +53,7 @@ if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   const models = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
   command.push("--model-fast", models.models.fast, "--model-balanced", models.models.balanced, "--model-judgment", models.models.judgment);
   if (args.includes("--dry-run")) command.push("--dry-run");
-  const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" }); process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
+  const result = runScriptSync(command[0]!, command.slice(1), { cwd: projectDir, encoding: "utf8" }); process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }
 const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
@@ -61,5 +61,5 @@ const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast")
 for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);
 for (const flag of ["--claude-effort", "--timeout-ms"]) { const v = value(flag); if (v) command.push(flag, v); }
 if (args.includes("--disposable-test-mode")) command.push("--disposable-test-mode");
-const result = spawnSync(process.execPath, command, { cwd: projectDir, encoding: "utf8" });
+const result = runScriptSync(command[0]!, command.slice(1), { cwd: projectDir, encoding: "utf8" });
 process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);

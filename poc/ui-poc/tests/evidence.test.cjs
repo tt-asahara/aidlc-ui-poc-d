@@ -137,3 +137,35 @@ test('the refined gate refuses a contract whose states share an image, and passe
  assert.match(dup.findings.join(' '),/Identical state images: SCREEN-FORM\/STATE-FROM-NG and SCREEN-FORM\/STATE-PHOTO-ATTACHED share one PNG/);
  assert.equal(write(other).pass,true);
 });
+// Headless runs cannot approve shasum/node/python, so the evidence tool owns
+// the hashing step the contract's assets and the routing evidence need.
+test('hash prints the exact asset entries the checker accepts, without a shell hashing command',t=>{
+ const f=fixture(t),{spawnSync}=require('node:child_process'),project=path.dirname(f.root);
+ fs.mkdirSync(path.join(f.root,'assets','css'),{recursive:true});
+ fs.writeFileSync(path.join(f.root,'assets','b.html'),'<p>b</p>');fs.writeFileSync(path.join(f.root,'assets','css','a.css'),'p{}');
+ const run=(...args)=>spawnSync(process.execPath,[path.resolve(__dirname,'../tools/ui-poc-evidence.cjs'),'hash',...args],{cwd:project,encoding:'utf8'});
+ const r=run('--dir','evidence','screen.html','assets');
+ assert.equal(r.status,0,r.stderr);
+ const assets=JSON.parse(r.stdout);
+ assert.deepEqual(assets.map(a=>a.path),['screen.html','assets/b.html','assets/css/a.css']);
+ for(const a of assets) assert.equal(a.sha256,hash(fs.readFileSync(path.join(f.root,a.path))));
+ f.c.assets=[assets[0]];f.writeContract();f.approve();
+ assert.equal(f.run().pass,true);
+ const pinned=JSON.parse(run('evidence/screen.html').stdout);
+ assert.deepEqual(pinned,[{path:'evidence/screen.html',sha256:assets[0].sha256}]);
+});
+test('hash refuses paths outside its directory and unknown options',t=>{
+ const f=fixture(t),{hashMain}=require('../tools/ui-poc-evidence.cjs'),project=path.dirname(f.root);
+ fs.writeFileSync(path.join(project,'outside.html'),'x');fs.symlinkSync(path.join(project,'outside.html'),path.join(f.root,'link.html'));
+ assert.throws(()=>hashMain(['--dir','evidence','../outside.html'],project),/Unsafe path/);
+ assert.throws(()=>hashMain(['--dir','evidence','link.html'],project),/escapes/);
+ assert.throws(()=>hashMain(['/etc/hosts'],project),/Unsafe path/);
+ assert.throws(()=>hashMain(['--dir','..','x'],project),/Unsafe path/);
+ assert.throws(()=>hashMain(['--dir',os.tmpdir(),'x'],project),/Unsafe path/);
+ assert.deepEqual(hashMain(['--dir',f.root,'screen.html'],project).map(a=>a.path),['screen.html']);
+ assert.throws(()=>hashMain(['--sha1','x'],project),/Unknown option/);
+ assert.throws(()=>hashMain(['--dir','evidence'],project),/at least one/);
+ const {spawnSync}=require('node:child_process');
+ const r=spawnSync(process.execPath,[path.resolve(__dirname,'../tools/ui-poc-evidence.cjs'),'hash','../x'],{cwd:project,encoding:'utf8'});
+ assert.equal(r.status,1);assert.equal(r.stdout,'');assert.match(r.stderr,/Unsafe path/);
+});

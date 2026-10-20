@@ -134,6 +134,7 @@ function expectedSkills(harnessName: string): string[] {
   return [
     ...COMMON_EXPECTED_SKILLS,
     ...(harnessName === "cursor" ? CURSOR_SHORTCUT_SKILLS : []),
+    ...(harnessName === "claude" ? ["aidlc-issue-autopilot"] : []),
   ].sort();
 }
 

@@ -11,6 +11,7 @@
 // stage named by a blocking-sensor failure or that refusal. It records nothing
 // and decides nothing: the person still chooses, and the engine still checks.
 import { dirname, relative, resolve, isAbsolute } from "node:path";
+import { isCompiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE as CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION as DECISION,
@@ -46,8 +47,10 @@ export function overrideTrigger(response: unknown, command = ""): OverrideTrigge
 
 const quote = (value: string) => /^[A-Za-z0-9._/-]+$/.test(value) ? value : `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
 
-export function overrideGuidance(trigger: OverrideTrigger, toolsDir: string): string {
-  const log = `bun ${toolsDir}/aidlc-log.ts`, orchestrate = `bun ${toolsDir}/aidlc-orchestrate.ts`, stage = quote(trigger.stage);
+export function overrideGuidance(trigger: OverrideTrigger, toolsDir: string, native = false): string {
+  const log = native ? "aidlc engine log" : `bun ${toolsDir}/aidlc-log.ts`;
+  const orchestrate = native ? "aidlc engine orchestrate" : `bun ${toolsDir}/aidlc-orchestrate.ts`;
+  const stage = quote(trigger.stage);
   const lead = trigger.kind === "override-refused"
     ? `The override for ${stage} was refused because no "${DECISION}" decision with these exact options was recorded before the person's reply. ` +
       "A decision or answer recorded now cannot count for a reply already given, so offer the choice again through the steps below."
@@ -67,17 +70,19 @@ function projectRoot(input: HookInput): string | undefined {
   return explicit ? (isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)) : input.cwd;
 }
 
-if (import.meta.main) {
+export function run(text: string): number {
   let input: HookInput = {};
-  try { input = JSON.parse(await Bun.stdin.text()); } catch { process.exit(0); }
+  try { input = JSON.parse(text); } catch { return 0; }
   const command = input.tool_input?.command ?? "";
-  if (input.tool_name !== "Bash" || !/aidlc-(?:orchestrate|state)|\baidlc(?:\.ts)?\s+engine\b/.test(command)) process.exit(0);
+  if (input.tool_name !== "Bash" || !/aidlc-(?:orchestrate|state)|\baidlc(?:\.ts)?\s+engine\b/.test(command)) return 0;
   const trigger = overrideTrigger(input.tool_response, command);
   const root = projectRoot(input);
-  if (!trigger || !root) process.exit(0);
+  if (!trigger || !root) return 0;
   // This file is installed in <harness>/tools/d-acceleration/; the engine tools sit one level up.
   const toolsDir = relative(root, dirname(import.meta.dir)).split("\\").join("/") || ".";
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: overrideGuidance(trigger, toolsDir) },
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: overrideGuidance(trigger, toolsDir, isCompiledExecutable()) },
   }) + "\n");
+  return 0;
 }
+if (import.meta.main) process.exitCode = run(await Bun.stdin.text());

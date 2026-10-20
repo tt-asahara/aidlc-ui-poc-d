@@ -92,6 +92,7 @@ const WORD2INT: Record<string, number> = {
   zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6,
   seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
   thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20, "twenty-one": 21,
 };
 function word2int(word: string | undefined): number {
   if (word === undefined || !(word in WORD2INT)) return Number.NaN;
@@ -109,9 +110,9 @@ function docWord(re: RegExp): string | undefined {
 //   "uses <word> TypeScript hook sources" -> total
 //   "All <word> are **project-wide**"     -> total restatement
 //   "the other <word> via the `hooks` block" -> hooks-block subcount
-const DOC_TOTAL_WORD = docWord(/uses ([a-z]+) TypeScript hook sources/);
-const DOC_ALL_PW_WORD = docWord(/All ([a-z]+) are\s+\*\*project-wide\*\*/);
-const DOC_BLOCK_WORD = docWord(/the other ([a-z]+) via the `hooks` block/);
+const DOC_TOTAL_WORD = docWord(/uses ([a-z-]+) TypeScript hook sources/);
+const DOC_ALL_PW_WORD = docWord(/All ([a-z-]+) are\s+\*\*project-wide\*\*/);
+const DOC_BLOCK_WORD = docWord(/the other ([a-z-]+) via the `hooks` block/);
 
 const DOC_TOTAL = word2int(DOC_TOTAL_WORD);
 const DOC_ALL_PW = word2int(DOC_ALL_PW_WORD);

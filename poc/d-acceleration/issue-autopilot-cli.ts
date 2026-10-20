@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runEngineSync, runScriptSync } from "./execution.ts";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
@@ -50,7 +51,7 @@ const recoverHostSession = (): HostRecovery => {
   // This is deliberately an executable recovery boundary, not a JSON read.
   // status owns the lifecycle lock and atomically terminalizes stale workers,
   // releases their owner claim, and removes heartbeat debris before intake.
-  const recovered = spawnSync(process.execPath, [join(import.meta.dir, "host-session-cli.ts"), "status", "--project-dir", projectDir, "--session-file", hostSessionFile], { cwd: projectDir, encoding: "utf8" });
+  const recovered = runScriptSync(join(import.meta.dir, "host-session-cli.ts"), [ "status", "--project-dir", projectDir, "--session-file", hostSessionFile], { cwd: projectDir, encoding: "utf8" });
   if (recovered.status !== 0) throw new Error((recovered.stderr || recovered.stdout || "host session recovery failed").trim());
   const parsed = JSON.parse(recovered.stdout) as { state?: HostSessionState | null; lifecycleBusy?: boolean; recoveredReason?: string | null };
   return { state: parsed.state ?? null, lifecycleBusy: parsed.lifecycleBusy ?? false, recoveredReason: parsed.recoveredReason ?? null };
@@ -64,7 +65,7 @@ const requireHostRecovery = (): HostRecovery => {
 };
 
 function runJson(executable: string, args: string[]): Json {
-  const result = spawnSync(process.execPath, [executable, ...args, "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
+  const result = runEngineSync(executable, [...args, "--project-dir", projectDir], { cwd: projectDir, encoding: "utf8" });
   if (result.status !== 0) {
     const message = (result.stderr || result.stdout || result.error?.message || "official command failed").trim();
     const retryClass = result.status === 75 ? "transient"

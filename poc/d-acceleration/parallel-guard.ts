@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runEngineSync } from "./execution.ts";
 // D's parallel.enabled=false enforcement. One owner for "is D allowed to run
 // more than one worker at a time" and for "may an official swarm hand-off
 // proceed while D parallel is off".
@@ -19,7 +20,6 @@
 //   `invoke-swarm` the engine already decided to issue; they never enable a
 //   swarm by themselves. While D parallel is off no swarm hand-off proceeds,
 //   whatever env/machine/project/local swarm flag is set.
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { resolveDParallel } from "./d-config.ts";
@@ -51,7 +51,7 @@ export function isSwarmHandOff(value: unknown): boolean {
 }
 
 function officialExecution(stateTool: string, projectDir: string, env: NodeJS.ProcessEnv): string | null {
-  const result = spawnSync(process.execPath, [stateTool, "get", "Construction Execution", "--project-dir", projectDir], { cwd: projectDir, env, encoding: "utf8", timeout: 30_000 });
+  const result = runEngineSync(stateTool, ["get", "Construction Execution", "--project-dir", projectDir], { cwd: projectDir, env, encoding: "utf8", timeout: 30_000 });
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
@@ -66,7 +66,7 @@ export function enforceParallelOff(options: { projectDir: string; engineDir?: st
     executionBefore = officialExecution(stateTool, options.projectDir, env);
     if (executionBefore !== "swarm") serialization = "already-serial";
     else {
-      const set = spawnSync(process.execPath, [stateTool, "set-construction-execution", "serial", "--project-dir", options.projectDir], { cwd: options.projectDir, env, encoding: "utf8", timeout: 30_000 });
+      const set = runEngineSync(stateTool, ["set-construction-execution", "serial", "--project-dir", options.projectDir], { cwd: options.projectDir, env, encoding: "utf8", timeout: 30_000 });
       if (set.status === 0) serialization = "set-serial";
       else { serialization = "refused"; detail = (set.stderr || set.stdout || "").trim().slice(0, 2000); }
     }

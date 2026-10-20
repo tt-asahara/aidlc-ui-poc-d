@@ -194,10 +194,15 @@ function requestJson(url, method = 'GET') {
   });
 }
 
-async function waitForFile(file, timeoutMs = 20000) {
+async function waitForBrowserPort(file, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (fs.existsSync(file)) return;
+    // Chrome creates this file before writing its port and browser endpoint.
+    // A blank/partial port becomes HTTP's default 80; never connect from it.
+    try {
+      const ready = /^([1-9]\d{0,4})\r?\n\/devtools\/browser\/[^\s]+(?:\r?\n)?$/.exec(fs.readFileSync(file, 'utf8'));
+      if (ready && Number(ready[1]) <= 65535) return Number(ready[1]);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
     await new Promise(resolve => setTimeout(resolve, 40));
   }
   throw new Error('BROWSER_START_TIMEOUT');
@@ -341,8 +346,7 @@ async function capture(options) {
   const processHandle = spawn(executable, [...RENDER_FLAGS,'--remote-debugging-port=0',`--user-data-dir=${temp}`,target], { stdio:'ignore' });
   let cdp;
   try {
-    const active = path.join(temp, 'DevToolsActivePort'); await waitForFile(active);
-    const [port] = fs.readFileSync(active, 'utf8').trim().split(/\r?\n/);
+    const port = await waitForBrowserPort(path.join(temp, 'DevToolsActivePort'));
     const version = await requestJson(`http://127.0.0.1:${port}/json/version`);
     const pages = await requestJson(`http://127.0.0.1:${port}/json`);
     const page = pages.find(item => item.type === 'page'); if (!page) throw new Error('BROWSER_PAGE_UNAVAILABLE');
@@ -431,4 +435,4 @@ async function main(argv) {
   } catch(error) { console.log(JSON.stringify({pass:false,findings_count:1,findings:[error.message]})); process.exitCode=1; }
 }
 if(require.main===module) main(process.argv.slice(2));
-module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,snapshotElements,elementDifferences,elementDeltaSha256,elementResults,compareSnapshots,compareImages,dispositionReceipt,engineRecordTrust,isEngineTrust,engineDispositionFindings,DISPOSITION_STATUSES,browserExecutable,capture,mergeSnapshots,main};
+module.exports={RENDER_FLAGS,canonical,hashJson,validateSnapshot,snapshotElements,elementDifferences,elementDeltaSha256,elementResults,compareSnapshots,compareImages,dispositionReceipt,engineRecordTrust,isEngineTrust,engineDispositionFindings,DISPOSITION_STATUSES,browserExecutable,waitForBrowserPort,capture,mergeSnapshots,main};

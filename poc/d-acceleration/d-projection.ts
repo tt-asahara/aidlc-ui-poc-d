@@ -1,8 +1,9 @@
 // Packager-side projection of Arm D's Claude-only acceleration runtime into a
 // built `.claude/` tree (called by scripts/package.ts; never shipped itself).
 //
-// core/ stays byte-identical to upstream AI-DLC, so D may only add files in
-// its own `tools/d-acceleration/` subtree. The collision guard compares every
+// core/ stays byte-identical to upstream AI-DLC, so D adds its own runtime in
+// `tools/d-acceleration/` and uniquely named dispatcher adapters in `hooks/`.
+// The collision guard compares every
 // D destination against the files the core projection actually wrote into the
 // tree: the same relative path, or the same basename anywhere in it (a D file
 // named like a core file would shadow it for an agent or a resolver). Either
@@ -14,6 +15,16 @@ export const D_PROJECTION_SUBDIR = join("tools", "d-acceleration");
 
 /** The D runtime files a Claude projection ships, relative to poc/d-acceleration/. */
 export const D_ACCELERATION_RUNTIME: readonly string[] = [
+  "native-commands.ts",
+  "native-runtime.ts",
+  "native.bunfig.toml",
+  "native-entry.ts",
+  "execution.ts",
+  "model-routing.md",
+  "hooks/aidlc-d-persistence-pre.ts",
+  "hooks/aidlc-d-persistence-post.ts",
+  "hooks/aidlc-d-reviewer-dispatch-cleanup.ts",
+  "hooks/aidlc-d-blocking-sensor-override.ts",
   "aidlc-acceleration-plan.ts",
   "ai-approval-controller.ts",
   "ai-question-answers.ts",
@@ -58,6 +69,11 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "worker-adapters.ts",
 ];
 
+/** D-owned hook adapters use the stock dispatcher seam; runtime modules stay separate. */
+export function dProjectionPath(file: string): string {
+  return file.startsWith("hooks/") ? file : `${D_PROJECTION_SUBDIR.split(sep).join("/")}/${file}`;
+}
+
 function* files(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
     const full = join(dir, entry);
@@ -79,9 +95,8 @@ export function projectedPaths(treeRoot: string): string[] {
 export function dProjectionCollisions(projected: readonly string[], runtime: readonly string[]): string[] {
   const paths = new Set(projected);
   const names = new Map(projected.map((path) => [basename(path), path]));
-  const prefix = D_PROJECTION_SUBDIR.split(sep).join("/");
   return runtime.flatMap((file) => {
-    const destination = `${prefix}/${file}`;
+    const destination = dProjectionPath(file);
     if (paths.has(destination)) return [`${destination} (path already projected)`];
     const twin = names.get(basename(file));
     return twin ? [`${destination} (same name as projected ${twin})`] : [];
@@ -93,6 +108,10 @@ export function dProjectionCollisions(projected: readonly string[], runtime: rea
 function projectCoreImports(text: string): string {
   return text
     .replaceAll('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
+    .replaceAll('from "../../core/tools/aidlc-runtime-paths.ts"', 'from "../aidlc-runtime-paths.ts"')
+    .replaceAll('from "../../core/tools/aidlc.ts"', 'from "../aidlc.ts"')
+    .replaceAll('from "../../core/tools/aidlc-hook-trace.ts"', 'from "../aidlc-hook-trace.ts"')
+    .replaceAll('from "../../core/tools/aidlc-color.ts"', 'from "../aidlc-color.ts"')
     .replaceAll('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
 }
 
@@ -106,9 +125,14 @@ export function projectDAcceleration(treeRoot: string, accelerationRoot: string,
   if (collisions.length) throw new Error(`[claude] D acceleration runtime would overwrite or shadow a projected core file: ${collisions.join(", ")}`);
   for (const file of runtime) {
     const source = join(accelerationRoot, file);
-    const destination = join(treeRoot, D_PROJECTION_SUBDIR, file);
+    const destination = join(treeRoot, dProjectionPath(file));
     mkdirSync(dirname(destination), { recursive: true });
-    if (file.endsWith(".ts")) writeFileSync(destination, projectCoreImports(readFileSync(source, "utf8")));
+    if (file.endsWith(".ts")) {
+      const text = readFileSync(source, "utf8");
+      writeFileSync(destination, file.startsWith("hooks/")
+        ? text.replace(/from "\.\.\/([a-z0-9-]+\.ts)"/g, 'from "../tools/d-acceleration/$1"')
+        : projectCoreImports(text));
+    }
     else cpSync(source, destination);
   }
 }
