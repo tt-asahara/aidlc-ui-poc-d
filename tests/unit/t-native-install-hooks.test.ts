@@ -10,10 +10,11 @@
 // Windows, sh elsewhere), and asks doctor, also as Kiro CLI's `/aidlc --doctor`.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { reviewerDispatchPath } from "../../core/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
@@ -192,6 +193,9 @@ describe.skipIf(SKIP_REASON !== null)("a native install runs every Claude Code h
     expect(hooks.length).toBeGreaterThan(0);
     for (const hook of hooks) expect(hook.command).toMatch(/^aidlc engine hook [a-z-]+$/);
     expect(statusLine).toBe("aidlc engine statusline");
+    for (const name of ["d-persistence-pre", "d-persistence-post", "d-reviewer-dispatch-cleanup", "d-blocking-sensor-override"]) {
+      expect(hooks.some((hook) => hook.command === `aidlc engine hook ${name}`)).toBe(true);
+    }
   });
 
   test("every hook command runs and records that it ran", () => {
@@ -227,6 +231,48 @@ describe.skipIf(SKIP_REASON !== null)("a native install runs every Claude Code h
     // Warnings are advice (such as starting the harness from a desktop icon); a
     // hook row that fails means the hooks do not work.
     expect(checks.filter((check) => !check.pass && check.severity !== "warn" && /hook/i.test(check.label))).toEqual([]);
+  });
+
+  test("D adapters perform persistence, cleanup and guidance through the installed runtime without external Bun", () => {
+    const init = spawnSync("git", ["init", "-q", "-b", "main"], { cwd: project, encoding: "utf-8" });
+    expect(init.status, init.stderr).toBe(0);
+    const blocked = join(root, "external-bun-was-called");
+    const bin = join(root, "no-external-bun");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "bun"), '#!/bin/sh\nprintf called > "$NATIVE_D_BUN_MARKER"\nexit 97\n', { mode: 0o755 });
+    writeFileSync(join(bin, "bun.cmd"), '@echo called> "%NATIVE_D_BUN_MARKER%"\r\n@exit /b 97\r\n');
+    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    const extra = { CLAUDE_PROJECT_DIR: project, NATIVE_D_BUN_MARKER: blocked, [pathKey]: `${bin}${process.platform === "win32" ? ";" : ":"}${env[pathKey] ?? ""}` };
+    const packet = { cwd: project, session_id: "native-d", tool_use_id: "report-1", tool_name: "Bash", tool_input: { command: "aidlc engine orchestrate report --stage scope-definition --result approved" } };
+    const pre = sh("aidlc engine hook d-persistence-pre", JSON.stringify(packet), extra);
+    expect(pre.status, pre.stderr).toBe(0);
+    const markers = join(project, ".git", "aidlc-d-persistence", "report-markers");
+    expect(readdirSync(markers)).toHaveLength(1);
+    const post = sh("aidlc engine hook d-persistence-post", JSON.stringify({ ...packet, tool_response: { success: false } }), extra);
+    expect(post.status, post.stderr).toBe(0);
+    expect(readdirSync(markers)).toHaveLength(0);
+
+    const record = reviewerDispatchPath(project);
+    mkdirSync(join(project, ".aidlc-engine"), { recursive: true });
+    writeFileSync(record, JSON.stringify({ stage: "scope-definition", unit: null }));
+    // A native process must never import the project's edited adapter.
+    const adapter = join(project, ".claude", "hooks", "aidlc-d-reviewer-dispatch-cleanup.ts");
+    const original = readFileSync(adapter);
+    const cleanup = (() => {
+      writeFileSync(adapter, 'throw new Error("project adapter must not run");\n');
+      try {
+        return sh("aidlc engine hook d-reviewer-dispatch-cleanup", JSON.stringify({ cwd: project, tool_name: "Bash", tool_input: { command: "aidlc engine log review --stage requirements-analysis" }, tool_response: { success: true } }), extra);
+      } finally { writeFileSync(adapter, original); }
+    })();
+    expect(cleanup.status, cleanup.stderr).toBe(0);
+    expect(existsSync(record)).toBe(false);
+    const guidance = sh("aidlc engine hook d-blocking-sensor-override", JSON.stringify({ cwd: project, tool_name: "Bash", tool_input: { command: "aidlc engine orchestrate report" }, tool_response: 'Blocking gate sensor evaluation did not pass for "scope-definition"' }), extra);
+    expect(guidance.status, guidance.stderr).toBe(0);
+    const context = JSON.parse(guidance.stdout).hookSpecificOutput.additionalContext;
+    expect(context).toContain("aidlc engine log decision");
+    expect(context).toContain("aidlc engine orchestrate report");
+    expect(context).not.toContain("bun ");
+    expect(existsSync(blocked)).toBe(false);
   });
 
   test("Kiro CLI's /aidlc --doctor answers with the doctor report", () => {

@@ -54,7 +54,7 @@ const REPO = join(import.meta.dir, "..", "..");
 // only things read from REPO are `dist/claude/.claude/tools/aidlc-lib.ts`
 // (import, read-only) and the fixture-copy source list below (read-only cp).
 // No path under REPO is ever opened for writing by this file.
-const SCRATCH_SOURCES = ["core", "harness", "scripts", "plugins"] as const;
+const SCRATCH_SOURCES = ["core", "harness", "scripts", "plugins", "poc/d-acceleration"] as const;
 const SCRATCH_FILES = ["package.json", "bun.lock", "tsconfig.json"] as const;
 
 let scratch = "";

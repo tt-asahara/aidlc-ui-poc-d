@@ -109,11 +109,11 @@ describe("ordinary /aidlc D integration", () => {
     expect(bash).toBeDefined();
     const commands = bash.hooks.map((hook: { command: string }) => hook.command);
     const rebuild = commands.findIndex((command: string) => command.includes("engine hook rebuild-stage-graph"));
-    const persistence = commands.findIndex((command: string) => command.includes("tools/d-acceleration/d-persistence-hook.ts"));
+    const persistence = commands.findIndex((command: string) => command.endsWith("engine hook d-persistence-post"));
     expect(rebuild).toBeGreaterThanOrEqual(0);
     expect(persistence).toBe(rebuild + 1);
-    expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/reviewer-dispatch-cleanup-hook.ts"');
-    expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/d-acceleration/blocking-sensor-override-hook.ts"');
+    expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook d-reviewer-dispatch-cleanup');
+    expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook d-blocking-sensor-override');
   });
 
   test("the ordinary skill invokes D automatically and preserves official fallback", () => {
