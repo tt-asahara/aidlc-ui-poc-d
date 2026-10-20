@@ -9,7 +9,7 @@ The source plugin is named `ui-poc`. The original foundation was shared; this re
 ## Local verification
 
 ```
-node --test tests/evidence.test.cjs tests/fidelity.test.cjs tests/visual.test.cjs tests/fidelity-e2e.test.cjs tests/unit-matrix.test.cjs
+node --test tests/browser-readiness.test.cjs tests/evidence.test.cjs tests/fidelity.test.cjs tests/visual.test.cjs tests/fidelity-e2e.test.cjs tests/unit-matrix.test.cjs
 UI_POC_REQUIRE_BROWSER=1 node --test tests/fidelity-e2e-browser.test.cjs   # real Chrome/Edge capture; skipped (not passed) without a renderer
 python3 tests/check-source-contract.py --source-root /path/to/pinned-source --tree /path/to/tree.json
 node tools/ui-poc-evidence.cjs --stage refined-mockups --output-path /actual/stage/mockups.md
