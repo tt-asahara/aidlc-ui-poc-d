@@ -206,6 +206,7 @@ refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザイ�
 | `impeccable-historical` | Impeccable `frontend-design`（Arm C） | `pbakaus/impeccable@209444a9`（Apache-2.0） | 既定。A/B/C比較と同じ条件で作る |
 | `impeccable` | Impeccable 4.6.0 | `pbakaus/impeccable@08d5b470`（Apache-2.0） | 業務アプリの見た目を作り込む。new-workで方向を決め、描画を見てcritique・polishで直す |
 | `ui-ux-pro-max` | UI/UX Pro Max | `nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1`（MIT） | ローカル検索でスタイル・配色・書体・UX規則のデザインシステム案を作る（要python3） |
+| `ponta-pass-design` | Pontaパス デザインシステム | `local/ponta-pass-design@c73c420e`（手元のフォルダ。Git tree固定、非公開） | Pontaパス（Web・Android・iOS）の既存画面と見分けがつかない画面案を作る（要python3） |
 
 選択肢の正本は、合成済みのC routing設定 `.claude/tools/ui-poc/c-stage-routing.json` の
 `designSkillChoices` です。固定版のファイルハッシュは `.claude/tools/ui-poc/design-skill-lock.json`
@@ -218,7 +219,11 @@ refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザイ�
 - **使い方の制限（adapter）:** 各スキルは上流をそのまま実行せず、AI-DLCの中で範囲を区切って使います。
   Impeccable 4.6.0では、バイナリを取得して実行するランチャー（`scripts/impeccable`）、hooks、
   live modeを使いません。UI/UX Pro Maxでは、ローカル検索だけを使い、`--persist` は使いません。
-  どちらも、依頼者が確認したDesign Contextをスキルの好みより優先します。
+  Pontaパス デザインシステムでは、プラットフォームとWebの様式（F1〜F14）を確認済みのDesign Contextと承認済み要件から決め、
+  決まらないときはAI-DLCの質問で聞きます。`scripts/check.py --strict` で既存画面に無い値と色の直書きを調べ、
+  `scripts/bundle.py` で画像を埋め込んだ1ファイルのHTMLにします。元資料（`PONTA_PASS_EXPORT`）が無いときは、
+  手順2と7を省いたと記録します。
+  どれも、依頼者が確認したDesign Contextをスキルの好みより優先します。
 - **WCAG補正レポート:** 既定値のときだけ必要です。固定版の誤った大きい文字の基準を補正するためのものです。
 
 既定値以外を選ぶ前に、固定版をPRODUCTへ取得します（D checkoutから実行）。
@@ -227,6 +232,17 @@ refined-mockups（Stage 2.5の詳細モックアップHTML）で使うデザイ�
 bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill impeccable --dry-run
 bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill impeccable
 ```
+
+`ponta-pass-design` は公開されていないため、取得せずに手元のフォルダを `--source` で渡します。
+このリポジトリにはスキル本体を置かず、ファイルごとのハッシュとGit treeだけを記録しています。
+
+```bash
+bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill ponta-pass-design --source /abs/ponta-pass-design --dry-run
+bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill ponta-pass-design --source /abs/ponta-pass-design
+```
+
+フォルダは記録と完全に一致する必要があります（Finderの `.DS_Store` だけは無視）。ファイルの追加・欠落・変更、
+symlinkがあれば何も書かずに停止します。スキルを更新したときは、lockとrouting設定の固定値も更新します。
 
 setupは固定コミットを一時checkoutに取得し、symlinkとsubmoduleを拒否します。LICENSEが
 記録と一致することを確かめ、スキルを `.agents/skills/<id>/`、ライセンスを

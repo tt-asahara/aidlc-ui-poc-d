@@ -151,6 +151,7 @@ The refined-mockups design slot defaults to the pinned Arm C component
 
 - `impeccable`: Impeccable 4.6.0, `pbakaus/impeccable@08d5b470`, Apache-2.0.
 - `ui-ux-pro-max`: UI/UX Pro Max, `nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1`, MIT. It needs `python3`.
+- `ponta-pass-design`: the Pontaパス design system, `local/ponta-pass-design@c73c420e` (a Git tree ID). It is not published, so it is never fetched: ask the person for the absolute path of their copy and add `--source <path>` to both setup commands. It needs `python3`.
 
 The router refuses any non-default choice in `ui-poc-comparison`. Do not
 install a choice or set `uiDesign.refinedMockupSkill` unless the person
@@ -172,6 +173,7 @@ The setup stops on any of these, and you report it as a setup failure:
 
 - installed routing files that differ from SRC
 - a symlink or submodule in the pinned skill
+- a `--source` folder with an extra, missing, or changed file
 - a licence that differs from the record
 - an existing file that differs from the pinned file
 - an extra file in the install directory
