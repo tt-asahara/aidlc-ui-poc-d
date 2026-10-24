@@ -25,6 +25,10 @@ The source/native hook boundary and baseline CI comparison are documented in
 See [`stage-coverage.md`](stage-coverage.md) for supported and unsupported
 surfaces.
 
+A Japanese command and option reference for this repository (`/aidlc`
+commands by stage, automatic events, D settings, scopes, GitHub, and the
+differences from the KDDI distribution) is [`../aidlc-commands.html`](../aidlc-commands.html).
+
 The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for
 exactly one GitHub Issue per invocation, plus `/aidlc --next-intent --from-issue`
 routing. Claude Code's standard `/loop` is not overwritten; it may schedule the

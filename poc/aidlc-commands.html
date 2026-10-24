@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC コマンド＆オプション リファレンス — aidlc-ui-poc-d（D acceleration）</title>
+<style>
+  :root{
+    --init:#9D5BD2; --idea:#0EA5E9; --incp:#6366F1; --cons:#10B981; --oper:#E84393;
+    --core:#10B981; --ext:#F59E0B; --on:#10B981; --off:#F59E0B; --manual:#94A3B8;
+    --bg:#FAFAF8; --card:#FFFFFF; --ink:#1F2430; --muted:#6B7280; --line:#E5E7EB;
+    --code:#0F172A; --codebg:#F1F5F9; --accent:#0EA5E9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;font-size:14px;line-height:1.75}
+  .wrap{max-width:1280px;margin:0 auto;padding:28px 22px 80px}
+  h1{font-size:24px;margin:8px 0 4px}
+  h2{font-size:19px;margin:44px 0 8px;padding-top:14px;border-top:2px solid var(--line)}
+  h3{font-size:15px;margin:22px 0 6px}
+  p.body{margin:6px 0 12px;color:#374151}
+  .meta{color:var(--muted);font-size:12.5px;margin-bottom:6px}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.92em;background:var(--codebg);color:var(--code);padding:1px 5px;border-radius:4px}
+  pre{background:var(--codebg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+  pre code{background:none;padding:0}
+  .chip{display:inline-block;min-width:26px;text-align:center;color:#fff;border-radius:5px;font-size:10.5px;font-weight:700;padding:1px 4px;font-family:Menlo,monospace}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:8px 0 14px;font-size:12.5px;color:#374151}
+  .legend .it{display:flex;align-items:center;gap:6px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .dot.core{background:var(--core)} .dot.ext{background:var(--ext)}
+  .ring{width:10px;height:10px;border-radius:50%;display:inline-block;border:2.5px solid var(--incp);background:transparent}
+  .swatch{width:14px;height:10px;display:inline-block;border-radius:2px}
+  /* matrix */
+  .matrix-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+  table.matrix{border-collapse:collapse;font-size:12px;min-width:1150px;width:100%}
+  table.matrix th,table.matrix td{border:1px solid #EEF0F3;padding:3px 6px;text-align:center}
+  table.matrix th.rowhead{position:sticky;left:0;background:var(--card);text-align:left;font-family:Menlo,monospace;font-size:11.5px;white-space:nowrap;min-width:150px;z-index:2}
+  table.matrix td.desc{text-align:left;min-width:130px;max-width:170px;color:#374151;font-size:11.5px}
+  table.matrix tr.cmd{cursor:pointer}
+  table.matrix tr.cmd:hover th.rowhead, table.matrix tr.cmd:hover td{background:#F0F9FF}
+  table.matrix tr.cmd.selected th.rowhead, table.matrix tr.cmd.selected td{background:#E0F2FE}
+  table.matrix tr.core th.rowhead{box-shadow:inset 3px 0 0 var(--core)}
+  table.matrix tr.ext th.rowhead{box-shadow:inset 3px 0 0 var(--ext)}
+  td.span-global{background:#ECFEFF;color:#0369A1;font-size:11px}
+  td.span-any{background:#F8FAFC;color:#64748B;font-size:11px;background-image:repeating-linear-gradient(45deg,transparent,transparent 6px,#EEF2F7 6px,#EEF2F7 8px)}
+  .cell{min-width:22px;height:22px}
+  /* detail panel */
+  .detail{border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:10px;background:var(--card);padding:14px 18px;margin:14px 0 6px;display:none}
+  .detail h4{margin:0 0 4px;font-size:16px;font-family:Menlo,monospace}
+  .detail h5{margin:12px 0 3px;font-size:12px;color:var(--muted);letter-spacing:.06em}
+  .detail .origin{font-size:11px;border-radius:99px;padding:2px 9px;color:#fff;vertical-align:2px;margin-left:8px}
+  .detail .origin.core{background:var(--core)} .detail .origin.ext{background:var(--ext)}
+  .detail ul{margin:4px 0 4px 18px;padding:0}
+  /* generic tables */
+  table.list{border-collapse:collapse;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13px}
+  table.list th,table.list td{border-bottom:1px solid #EEF0F3;padding:7px 10px;text-align:left;vertical-align:top}
+  table.list th{background:#F8FAFC;font-size:12px;color:#475569}
+  table.list td.mono, table.list th.mono{font-family:Menlo,monospace;font-size:12px;white-space:nowrap}
+  tr.on td:first-child{box-shadow:inset 3px 0 0 var(--on)}
+  tr.off td:first-child{box-shadow:inset 3px 0 0 var(--off)}
+  tr.manual td:first-child{box-shadow:inset 3px 0 0 var(--manual)}
+  .default-pill{display:inline-block;font-size:11px;border-radius:99px;padding:1px 8px;font-weight:700}
+  .default-pill.on{background:#D1FAE5;color:#047857}
+  .default-pill.off{background:#FEF3C7;color:#B45309}
+  .default-pill.manual{background:#F1F5F9;color:#64748B}
+  .figcap{font-size:12px;color:var(--muted);margin:6px 2px 0}
+  .note{background:#FFFBEB;border:1px solid #FDE68A;border-radius:8px;padding:10px 14px;font-size:13px;margin:10px 0}
+  .toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:13px}
+  .toc a{color:#0369A1;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>AI-DLC コマンド＆オプション リファレンス</h1>
+<div class="meta">
+  対象: <b>aidlc-ui-poc-d（Arm D ＝ Arm C の UI 基盤 ＋ D acceleration）</b> — core 2.11.0 ベース ／ 基準: upstream <code>v2.11.0</code> @ <code>6a378b53</code>（<code>core/</code> は upstream と同一）＋ <code>poc/ui-poc</code>・<code>poc/d-acceleration</code>・<code>poc/pr-lens-review</code> ／ 2026-10-24 更新<br>
+  正本: <code>.claude/skills/aidlc/SKILL.md</code>・<code>bun .claude/tools/aidlc-utility.ts help</code>・<code>poc/d-acceleration/configuration.md</code>・<code>poc/d-acceleration/d-acceleration.example.jsonc</code>。本ページはその読み物ビュー（KDDI 配布の <code>docs/kddi-aidlc-commands.html</code> と同じ観点でこのリポジトリ版に作り直したもの）。
+</div>
+
+<div class="toc">
+  <b>目次</b> —
+  <a href="#sec1">① コマンド × 33ステージ</a> ・
+  <a href="#sec2">② 自動発火するイベント</a> ・
+  <a href="#sec3">③ D 設定一覧</a> ・
+  <a href="#sec4">④ scope 一覧</a> ・
+  <a href="#sec5">⑤ GitHub 連携とラベル</a> ・
+  <a href="#sec6">⑥ 状況別の使い分け</a> ・
+  <a href="#sec7">⑦ KDDI 配布版との違い</a>
+</div>
+
+<h3>用語（3行で）</h3>
+<p class="body">
+<b>engine</b>＝決定論のオーケストレーションエンジン（<code>aidlc-orchestrate.ts next / report</code>。ルーティング・状態遷移・監査を所有）。
+<b>conductor</b>＝<code>/aidlc</code> skill を実行する LLM セッション（engine に次の一手を聞き、ステージ本体の知識労働を行う）。
+<b>tool</b>＝<code>bun .claude/tools/aidlc-*.ts</code>（core の決定論ツール）。D 拡張は <code>.claude/tools/d-acceleration/</code>、UI 基盤（Arm C）は <code>.claude/tools/ui-poc-*.cjs</code> に置かれ、native 版では <code>aidlc d &lt;tool&gt;</code> で呼ぶ。
+</p>
+
+<h2 id="sec1">① <code>/aidlc</code> コマンド × 33ステージ マトリクス</h2>
+<p class="body">縦が <code>/aidlc</code> に続けて打つ全コマンド（core 20＋D 拡張 5、＋独立 skill 1）、横が33ステージ。<b>●＝そのステージの成果物を直接読み書きする確定的な対応</b>、<b>◎＝ステージ範囲に緩く対応する概念上の紐付け</b>、<b>帯塗り＝ステージを問わず全体に効く／毎回対象を指定する</b>。<b>行をクリックすると下に構文・使用例・詳細・参照資料・編集する成果物が開く。</b></p>
+<div class="legend">
+  <span class="it"><span class="dot core"></span> core が確定的に対応</span>
+  <span class="it"><span class="dot ext"></span> D 拡張が確定的に対応</span>
+  <span class="it"><span class="ring"></span> 範囲に緩く対応（概念上）</span>
+  <span class="it"><span class="swatch" style="background:#ECFEFF;border:1px solid #BAE6FD"></span> 全ステージ共通</span>
+  <span class="it"><span class="swatch" style="background:#F8FAFC;border:1px dashed #CBD5E1"></span> 任意指定（毎回対象が変わる）</span>
+</div>
+<div class="matrix-wrap"><table class="matrix" id="cmdMatrix"></table></div>
+<p class="figcap">列の色はフェーズ配色（紫=Initialization／青=Ideation／藍=Inception／緑=Construction／桃=Operation）。行見出し左の縦線（緑=core／橙=D 拡張）がコマンドの出自。</p>
+<div class="detail" id="detailPane"></div>
+
+<h3>ターミナルから使う D / UI 基盤のツール（<code>/aidlc</code> の引数ではない）</h3>
+<p class="body">導入・前提確認・任意スキルの取得は <code>/aidlc</code> の外で行う。<b>D checkout（このリポジトリ）から実行するもの</b>と、<b>PRODUCT 内で conductor が実行するもの</b>がある。</p>
+<table class="list">
+<thead><tr><th style="width:330px" class="mono">コマンド</th><th style="width:120px">どこで</th><th>役割</th></tr></thead>
+<tbody>
+<tr><td class="mono">/aidlc-setup</td><td>D checkout</td><td>固定版の Arm C UI 基盤と D acceleration を PRODUCT に導入する skill。既存の <code>CLAUDE.md</code>・<code>.claude</code>・skills・hooks・設定を置き換えない</td></tr>
+<tr><td class="mono">bun poc/d-acceleration/fresh-install.ts install|update|parity|manifest --src &lt;D&gt; --product &lt;PRODUCT&gt;</td><td>D checkout</td><td>PRODUCT への導入・receipt で証明した更新・パッケージ一致の確認・証跡 manifest。<b>PRODUCT 側で手を入れたファイルは上書きせず、update が止まる</b>（受領記録で無改変と証明できる合成出力だけを置き換える）</td></tr>
+<tr><td class="mono">bun .claude/tools/d-acceleration/run.ts --preflight</td><td>PRODUCT</td><td>D 設定の実効値（<code>optional.*</code>）と ON にした機能の前提行を表示する。前提が未充足なら exit 3</td></tr>
+<tr><td class="mono">bun poc/ui-poc/scripts/setup-design-skill.ts --product &lt;P&gt; --skill &lt;id&gt; [--source &lt;dir&gt;] [--dry-run]</td><td>D checkout</td><td>2.5 refined-mockups のデザインスキル（③ <code>uiDesign</code>）を固定版で取得・配置する。<code>ponta-pass-design</code> は手元のフォルダを <code>--source</code> で渡す。設定値は書き換えない</td></tr>
+<tr><td class="mono">bun poc/pr-lens-review/scripts/setup-pr-lens.ts …</td><td>D checkout</td><td>PR Lens（③ <code>features.prLensReview</code>）の固定版を取得・build・合成する</td></tr>
+<tr><td class="mono">bun .claude/tools/ui-poc-fidelity.cjs capture --html &lt;state-html&gt; --out &lt;snapshot.json&gt; [--png …]</td><td>PRODUCT</td><td>モック HTML の各画面・状態を実ブラウザで描画し、意味的 DOM snapshot（と任意で基準 PNG）を取る。1.6 / 2.5 の承認前に必須</td></tr>
+<tr><td class="mono">bun .claude/tools/ui-poc-evidence.cjs hash --dir &lt;stage dir&gt; &lt;path&gt;…</td><td>PRODUCT</td><td>宣言した資産のハッシュ付け（<code>shasum</code> 等で代用しない）。<code>--stage &lt;slug&gt; --output-path &lt;contract&gt;</code> で自己検査</td></tr>
+<tr><td class="mono">bun .claude/tools/ui-poc-review-risks.cjs status|decide --stage &lt;slug&gt; --output-path &lt;contract&gt; …</td><td>PRODUCT</td><td>1.6 / 2.5 のゲート前に残った Critical / Major のレビュー指摘への本人の判断（<code>--fix R-NN</code> / <code>--accept R-NN --rationale "&lt;本人の言葉&gt;"</code>）を記録する。理由はこのチャットで本人が打った文そのままでないと拒否される</td></tr>
+</tbody>
+</table>
+
+<h2 id="sec2">② コマンドではなく自動発火するイベント</h2>
+<p class="body">①は<b>人間が明示的に打つ</b>入口。これとは別に、ステージ境界・ゲート・Bash 呼び出しで<b>コマンド無しに発火する</b>処理がある。「自動」に見えて<b>既定オフ（オプトイン）</b>のものが混在するので、行の色で区別する: <b style="color:var(--on)">緑＝既定オン</b>／<b style="color:var(--off)">橙＝既定オフ</b>／<b style="color:#64748B">グレー＝自動発火なし（手動必須）</b>。</p>
+<table class="list">
+<thead><tr><th style="width:220px">イベント</th><th style="width:210px" class="mono">制御（d-acceleration.jsonc）</th><th style="width:70px">既定</th><th>発火タイミングと書き込み先</th></tr></thead>
+<tbody>
+<tr class="on"><td>UI 証跡ゲート（ui-poc-evidence sensor）</td><td class="mono">—（ui-poc scope で常時）</td><td><span class="default-pill on">常時</span></td><td>ui-poc の3 scope で、1.6 rough-mockups・2.3・2.5 refined-mockups・2.6・3.1・3.5・3.6 の<b>ゲートを開くとき</b>に blocking sensor として発火。UI 契約（安定した screen / state / AC ID）、C routing の証跡、Design Context、固定版スキルのバイト一致、WCAG 補正レポート、描画 snapshot の網羅を検査し、落ちればゲートを閉じたままにする</td></tr>
+<tr class="on"><td>Major 指摘の保留（ゲート前）</td><td class="mono">—</td><td><span class="default-pill on">常時</span></td><td>1.6 / 2.5（と 3.6 での追跡）。レビューで Critical / Major の指摘が <code>New</code> / <code>Unresolved</code> のまま本人の判断が無いと、sensor がゲートを止める。conductor は「先に直す／1件ずつ決める／すべてリスクとして受け入れる」を本人に聞き、<code>ui-poc-review-risks.cjs decide</code> で記録する。受け入れた Major は 3.6 build-and-test の確認項目になる</td></tr>
+<tr class="on"><td>C routing のスキル適用</td><td class="mono">uiDesign.refinedMockupSkill</td><td><span class="default-pill on">"impeccable-historical"</span></td><td>1.6・2.3・2.5・2.6・3.5 などで、C routing が決めたスキル（Matt の prototype / grilling / domain-modeling、Impeccable の frontend-design / teach-impeccable）を範囲を区切って適用し、<code>ui-poc-skill-evidence.json</code> に読み込み・適用の証跡を残す。2.5 のデザイン枠だけ③で差し替えられる</td></tr>
+<tr class="on"><td>reviewer dispatch の片付け</td><td class="mono">—（フラグ無し）</td><td><span class="default-pill on">常時</span></td><td>PostToolUse（Bash）。per-unit レビューの判定記録後に <code>.aidlc-engine/reviewer-dispatch.json</code> を消し、次の Unit の reviewer が最大6時間拒否される窓を閉じる。ブロックせず、他は何も書かない</td></tr>
+<tr class="on"><td>blocking sensor の override 手順案内</td><td class="mono">—（フラグ無し）</td><td><span class="default-pill on">常時</span></td><td>PostToolUse（Bash）。blocking sensor の失敗や「no fresh authorization receipt」の拒否が出たとき、そのステージ用の正しい順序のコマンド（decision → 本人の返答 → answer → <code>--override-blocking-sensors</code> 付き report）を1行で文脈に足す。何も記録・判断しない</td></tr>
+<tr class="on"><td>並列ガード（invoke-swarm 前）</td><td class="mono">parallel.enabled</td><td><span class="default-pill on">true</span></td><td>engine が <code>invoke-swarm</code> を出したとき、conductor が <code>parallel-guard.ts</code> を通す。OFF なら D の worker は同時1つに制限され、既存の swarm intent は公式 setter で serial に移される（拒否されたら1行で停止）</td></tr>
+<tr class="on"><td>Construction 既定値の適用</td><td class="mono">constructionDefaults</td><td><span class="default-pill on">stage-major＋swarm</span></td><td><code>/aidlc --auto</code> が<b>新しく作った intent だけ</b>に、作成直後に公式 setter で1回適用。既存 intent には遡らない。<code>official</code> にすると AI-DLC 本体の既定のまま</td></tr>
+<tr class="off"><td>承認済み遷移の Git チェックポイント</td><td class="mono">gitPersistence.enabled / push</td><td><span class="default-pill off">false</span></td><td>公式 <code>orchestrate report</code> が承認境界を通った直後（PostToolUse）。承認済み manifest だけを、必須の secret scan のあとに commit。worktree・index 使用中・進行中の Git 操作・保護パス・secret があれば見送る。push は別スイッチで、失敗しても公式 state は戻さず次回同じ refspec を再送する</td></tr>
+<tr class="off"><td>要件 ID 照合（機能21）</td><td class="mono">features.requirementIdValidation</td><td><span class="default-pill off">false</span></td><td>2.5 と 3.1 の成果物作成後、レビュー・sensor・承認の前。C の UI 契約の AC と <code>stories.md</code> の公式 ID（<code>AC1.1.1</code> 形式）を照合し、欠落・重複・不明 AC を NOT-READY にする</td></tr>
+<tr class="off"><td>Functional Design の文書量検査（機能22）</td><td class="mono">features.functionalDesignDocumentDiscipline</td><td><span class="default-pill off">false</span></td><td>3.1 の成果物作成後。<code>featureInputs.functionalDesignBudgets</code> の byte 上限と重複 metadata を検査</td></tr>
+<tr class="off"><td>source / spec grounding（機能27 / 28）</td><td class="mono">features.sourceGrounding / specGrounding</td><td><span class="default-pill off">false</span></td><td>2.6（spec は各 Unit の 3.1 / 3.5 も）の後、レビュー前。指定 root だけを読む read-only worker が設計主張を実装・既存仕様と照合し、証拠 JSON を保存。root が空・不正なら NOT-READY を記録して準拠を主張しない</td></tr>
+<tr class="off"><td>基準 PNG 生成／画像比較</td><td class="mono">features.mockupPngGeneration / visualRegression</td><td><span class="default-pill off">false</span></td><td>2.5 承認前に基準 PNG を撮る／3.6 で承認時の PNG と実装画面を比べる。意味的 DOM snapshot はこれらと無関係に常に必須。3.6 で基準を初めて作ったり更新したりはしない</td></tr>
+<tr class="off"><td>PR Lens 補助レビュー</td><td class="mono">features.prLensReview</td><td><span class="default-pill off">false</span></td><td>3.6 build-and-test の Step 11 前（アプリ実装がある場合だけ）。変更差分の図と証拠付き補助レビューを <code>.pr-lens/</code> と <code>build-and-test/pr-lens-review.md/.json</code> に作る。公式レビュー・承認は置き換えない。OFF なら <code>skipped-by-config</code> だけを記録</td></tr>
+<tr class="off"><td>低リスク質問への AI 回答</td><td class="mono">aiApproval.mode</td><td><span class="default-pill off">"human"</span></td><td><code>stage-gates</code> にし、本人が <code>AI-DLC delegate-ai-approvals …</code> の完全一致文で委任したときだけ、<code>[AI-Autonomy]: low-risk-reversible</code> 付きの通常質問に AI が答える（confidence が <code>minConfidence</code> 未満なら人に戻す）。記録は D の台帳 <code>decisions/ai-question-answers.jsonl</code>。<b>ステージゲートの承認は常に人</b></td></tr>
+<tr class="off"><td>AI 判断の GitHub 要約</td><td class="mono">decisionIssueSummary.enabled / send</td><td><span class="default-pill off">false</span></td><td>intent ごとに上の台帳から Issue 要約 payload を作る。送信には <code>send: true</code> と、repository・intent・payload hash を指定した本人の最新の許可文が必要。台帳が空なら <code>nothing-to-publish</code></td></tr>
+<tr class="off"><td>Issue オートパイロット</td><td class="mono">auto.enabled ＋ issueAutopilot.enabled</td><td><span class="default-pill off">false</span></td><td>それ自体は自動発火しない。<code>/loop 15m /aidlc-issue-autopilot &lt;label&gt;</code> で定期起動したときだけ、1回1件を処理する（①参照）</td></tr>
+<tr class="manual"><td>設計書（design-document）</td><td class="mono">—（コマンド）</td><td><span class="default-pill manual">手動</span></td><td><code>/aidlc --doc</code> のみ。フェーズ境界での自動生成は無い</td></tr>
+</tbody>
+</table>
+
+<h2 id="sec3">③ D 設定一覧（<code>.claude/d-acceleration.jsonc</code>）</h2>
+<p class="body">PRODUCT の <code>.claude/d-acceleration.jsonc</code> を読み、<code>.claude/d-acceleration.local.jsonc</code> がフィールド単位で上書きする（local が優先）。ファイルが無ければすべて既定値。ひな形は <code>.claude/tools/d-acceleration/d-acceleration.example.jsonc</code>（各スイッチの直前に日本語で対象・ON/OFF 時の挙動・既定値・利用場面が書いてある）。<b>追加機能・Issue オートパイロット・自動進行はすべて既定オフ</b>。実効値は <code>run.ts --preflight</code> で確かめる。</p>
+<table class="list">
+<thead><tr><th style="width:190px" class="mono">グループ</th><th style="width:280px">キーと既定値</th><th>何を制御するか</th></tr></thead>
+<tbody>
+<tr><td class="mono">models</td><td><code>fast / balanced / judgment: "opus"</code></td><td>D が起動する並列 worker のモデル（tier 別）。親セッションのモデルは変えない</td></tr>
+<tr><td class="mono">parallel</td><td><code>enabled: true</code></td><td>D の並列処理の親スイッチ（②参照）。OFF は即時反映、ON は次の D 起動から</td></tr>
+<tr><td class="mono">constructionDefaults</td><td><code>iteration: "stage-major"</code>・<code>execution: "swarm"</code></td><td><code>--auto</code> が作った新規 intent の Construction 歩行順と実行方式（②参照）。<code>swarm</code> には <code>stage-major</code> が必要</td></tr>
+<tr><td class="mono">gitPersistence</td><td><code>enabled: false</code>・<code>push: false</code>・<code>remote: "origin"</code></td><td>承認済み遷移の checkpoint commit と push（②参照）。secret scan 自体には OFF スイッチが無い</td></tr>
+<tr><td class="mono">features</td><td><code>requirementIdValidation</code>・<code>functionalDesignDocumentDiscipline</code>・<code>sourceGrounding</code>・<code>specGrounding</code>・<code>mockupPngGeneration</code>・<code>visualRegression</code>・<code>prLensReview</code>: すべて <code>false</code></td><td>任意の検査・補助レビュー（②参照）。<code>visualRegression</code> を ON にすると基準 PNG 生成も有効になる</td></tr>
+<tr><td class="mono">featureInputs</td><td><code>requirementIdBridges: []</code>・<code>functionalDesignBudgets</code>（60000 / 160000 / 30000 byte）・<code>sourceRoots: []</code>・<code>specRoots: []</code>・<code>groundingLimits</code>（200 file / 1,000,000 byte）</td><td>features の入力。bridge は旧形式 <code>AC-…</code> の契約だけに使う。grounding は明示した root だけを読み、空のまま ON にすると NOT-READY を記録する</td></tr>
+<tr><td class="mono">uiDesign</td><td><code>refinedMockupSkill: "impeccable-historical"</code></td><td>2.5 refined-mockups のデザインスキル。選択肢は <code>impeccable-historical</code>（既定・Arm C）／<code>impeccable</code>（4.6.0）／<code>ui-ux-pro-max</code>／<code>ponta-pass-design</code>（Pontaパス デザインシステム）。既定以外は事前に <code>setup-design-skill.ts</code> で導入が必要で、<code>ui-poc-comparison</code> では拒否される</td></tr>
+<tr><td class="mono">auto</td><td><code>enabled: false</code>・<code>through: "code-generation"</code>・<code>sessionOnly: true</code>・<code>ambiguityPolicy: "halt"</code>・<code>assumptionLedger: true</code>・<code>maxRetries: 2</code>・<code>maxSteps: 64</code>・<code>deadlineMs: 900000</code>・<code>labelAllowlist: []</code></td><td>自動進行の親スイッチと上限。<code>sessionOnly: true</code> は intent 作成で止まる。<code>ambiguityPolicy</code> は halt（止まる）／assume（仮定を台帳に記録して進む）／research（調べても不明なら止まる）。<code>assumptionLedger: false</code> なら常に halt 扱い。<code>deadlineMs</code> は人の待ち時間を数えない。空の <code>labelAllowlist</code> は「許可なし」</td></tr>
+<tr><td class="mono">issueAutopilot</td><td><code>enabled: false</code>・<code>oneIssuePerRun: true</code></td><td>GitHub Issue 入口の子スイッチ（<code>auto.enabled</code> も必要）。<code>oneIssuePerRun: false</code> は設定エラーで止まる</td></tr>
+<tr><td class="mono">aiApproval</td><td><code>mode: "human"</code>・<code>minConfidence: 0.9</code></td><td>委任された低リスク質問への AI 回答（②参照）。旧 <code>decisionRecordPath</code> は削除済みで、書くと設定エラー</td></tr>
+<tr><td class="mono">decisionIssueSummary</td><td><code>enabled: false</code>・<code>repository</code>・<code>send: false</code>・<code>maxRetries: 2</code></td><td>AI 判断の Issue 要約（②参照）。<code>repository</code> は <code>owner/name</code> か <code>HOST/owner/name</code>（GitHub Enterprise）</td></tr>
+</tbody>
+</table>
+<div class="note">core 側の実行設定（depth・test-strategy・review・guard-policy・sensors など）は従来どおり <code>/aidlc config get|set|list</code> と①の各フラグで変える。D の設定ファイルはそれとは別で、D が足した機能だけを制御する。</div>
+
+<h2 id="sec4">④ scope 一覧（14種）</h2>
+<p class="body">scope はステージ集合＋depth＋test-strategy のプリセット。<code>/aidlc &lt;scope名&gt;</code> または説明文からの自動判定で決まる。<b>ui-poc-*</b> の3つは UI 基盤プラグイン（<code>poc/ui-poc</code>）の scope で、D の導入で使えるようになる。短い英語の依頼（web app・dashboard など）は <code>ui-poc-application</code> に自動判定されるが、長文や日本語の依頼は通常の提案になるので、scope 確認で <code>ui-poc-application</code> を選ぶ。</p>
+<table class="list">
+<thead><tr><th class="mono" style="width:180px">scope</th><th style="width:110px">EXECUTE / 33</th><th style="width:120px">depth</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td class="mono">ui-poc-application <span class="chip" style="background:var(--ext)">UI</span></td><td>23 / 33</td><td>standard</td><td>UI アプリの通常の開発。1.6 rough-mockups と 2.5 refined-mockups の HTML 証跡を Construction まで引き継ぐ。Guard Policy strict・plan approval on</td></tr>
+<tr><td class="mono">ui-poc-requirements <span class="chip" style="background:var(--ext)">UI</span></td><td>11 / 33</td><td>standard</td><td>作らずに要件だけを練り直すループ。モックと要件・ストーリーを回し、<code>--doc</code> の設計書を育てる。設計・Construction・Operation は無い</td></tr>
+<tr><td class="mono">ui-poc-comparison <span class="chip" style="background:var(--ext)">UI</span></td><td>23 / 33</td><td>standard</td><td>A/B/C のデザイン処理を同じ条件で比べるための scope。2.5 のデザインスキルは既定（Arm C）から変えられない</td></tr>
+<tr><td class="mono">classic</td><td>18 / 33</td><td>standard</td><td>ゲート重視の標準フロー。<b>説明文からの自動判定で決まらないときの既定</b></td></tr>
+<tr><td class="mono">express</td><td>10 / 33</td><td>minimal</td><td>軽量フロー。要件からデプロイまで、設計パスとレビューなし</td></tr>
+<tr><td class="mono">bugfix</td><td>9 / 33</td><td>minimal</td><td>特定バグの修正</td></tr>
+<tr><td class="mono">poc</td><td>8 / 33</td><td>minimal</td><td>実現可能性の高速検証</td></tr>
+<tr><td class="mono">refactor</td><td>10 / 33</td><td>minimal</td><td>既存コードの整理</td></tr>
+<tr><td class="mono">security-patch</td><td>10 / 33</td><td>minimal</td><td>CVE 対応</td></tr>
+<tr><td class="mono">infra</td><td>13 / 33</td><td>standard</td><td>インフラ変更</td></tr>
+<tr><td class="mono">mvp</td><td>23 / 33</td><td>standard</td><td>operation を後回しにしてコアを出荷</td></tr>
+<tr><td class="mono">workshop</td><td>26 / 33</td><td>standard（test: minimal）</td><td>ファシリテーション付きグループセッション（全ゲート必須）</td></tr>
+<tr><td class="mono">feature</td><td>33 / 33</td><td>standard</td><td>新機能の実践的フルコース</td></tr>
+<tr><td class="mono">enterprise</td><td>33 / 33</td><td>comprehensive</td><td>規制産業向け・完全監査証跡</td></tr>
+</tbody>
+</table>
+<p class="figcap">core の scope の正本は <code>.claude/scopes/aidlc-&lt;name&gt;.md</code>（＋各ステージ frontmatter の <code>scopes:</code> を転置したコンパイル済み grid）。ui-poc の scope は <code>poc/ui-poc/scopes/</code> と各ステージへの contribution で、件数は合成後の grid（2.1 reverse-engineering は brownfield のときだけ実行）。composer（<code>/aidlc compose</code>）の承認済みプランは既定ではその intent だけに適用される。</p>
+
+<h2 id="sec5">⑤ GitHub 連携とラベル</h2>
+<p class="body">D には<b>ラベルの正本カタログもラベルガードも無い</b>（KDDI 配布の <code>aidlc:*</code> 10個・<code>github-setup</code>・<code>github.autoSync</code> の Milestone / Issue 投影は持ち込んでいない）。GitHub に触れるのは次の3つだけで、どれも既定オフ。</p>
+<table class="list">
+<thead><tr><th class="mono" style="width:260px">入口</th><th style="width:220px">使うラベル・設定</th><th>挙動</th></tr></thead>
+<tbody>
+<tr><td class="mono">/aidlc-issue-autopilot &lt;label&gt;</td><td><code>auto.labelAllowlist</code>（完全一致）</td><td>許可リストのラベルを持つ open Issue を、番号の昇順で1回1件。ラベル名はチームが決める（例: <code>aidlc-auto</code>）。空配列なら何も処理しない</td></tr>
+<tr><td class="mono">/aidlc --next-intent --from-issue &lt;N&gt;<br>/aidlc --auto --through &lt;s&gt; --from-issue &lt;N&gt;</td><td>同上</td><td>番号を指定して1件だけ intent 化する。同じ Issue の intent が既にあればそこから再開する</td></tr>
+<tr><td class="mono">decisionIssueSummary</td><td><code>repository</code>・<code>send</code></td><td>intent ごとの AI 判断要約 Issue を1つ作成・更新する。未解決事項の別 Issue は作らない</td></tr>
+</tbody>
+</table>
+<div class="note">GitHub に触れる前に必ず <code>gh auth status --hostname &lt;host&gt;</code> を確認し、そのホストに未ログインなら <code>gh-auth-required</code> で止まって <code>gh auth login --hostname &lt;host&gt;</code> を案内する。github.com と GitHub Enterprise（例: <code>github.kddi.com</code>）は別扱いで、片方のログインでは満たさない。</div>
+
+<h2 id="sec6">⑥ 状況別の使い分け</h2>
+<table class="list">
+<thead><tr><th style="width:290px">やりたいこと</th><th>打つもの</th></tr></thead>
+<tbody>
+<tr><td>UI のある機能を作り始める</td><td><code>/aidlc ui-poc-application</code>、または説明文で始めて scope 確認で <code>ui-poc-application</code> を選ぶ</td></tr>
+<tr><td>作らずに要件と画面案だけ詰めたい</td><td><code>/aidlc ui-poc-requirements</code> → 区切りごとに <code>/aidlc --doc</code></td></tr>
+<tr><td>UI の無い機能・修正を進める</td><td><code>/aidlc &lt;説明文&gt;</code>（scope 自動判定）または <code>/aidlc feature</code> / <code>bugfix</code> など</td></tr>
+<tr><td>中断したワークフローを再開する</td><td><code>/aidlc</code>（進行中の作業を直接続ける）／park していたら <code>/aidlc --resume</code></td></tr>
+<tr><td>いまどこ？を確認する</td><td><code>/aidlc --status</code></td></tr>
+<tr><td>導入や設定がおかしい気がする</td><td><code>/aidlc --doctor</code>（共有用は <code>--doctor --export</code>）／D の設定は <code>run.ts --preflight</code></td></tr>
+<tr><td>2.5 のモックを Pontaパスの見た目で作りたい</td><td><code>setup-design-skill.ts --skill ponta-pass-design --source &lt;フォルダ&gt;</code> → <code>"uiDesign": { "refinedMockupSkill": "ponta-pass-design" }</code></td></tr>
+<tr><td>ゲートで Major 指摘が残って止まった</td><td>conductor の3択（先に直す／1件ずつ決める／すべてリスクとして受け入れる）に答える。受け入れるなら理由を自分の言葉で書く</td></tr>
+<tr><td>計画を作り直したい・ステージを間引きたい</td><td><code>/aidlc compose "&lt;やりたいこと&gt;"</code>（承認ゲート付き）</td></tr>
+<tr><td>設計書がほしい／最新化したい</td><td><code>/aidlc --doc</code>（差分マージ）／作り直しは <code>--doc --full</code></td></tr>
+<tr><td>説明文から自動で進めてほしい（席にいる）</td><td><code>auto.enabled: true</code>（続けるなら <code>sessionOnly: false</code> と <code>through</code>）にして <code>/aidlc --auto &lt;説明文&gt;</code>。確認は <code>--auto status</code>、停止は <code>--auto stop</code></td></tr>
+<tr><td>open Issue を1件ずつ消化しておいてほしい</td><td><code>auto.enabled</code>・<code>issueAutopilot.enabled</code>・<code>labelAllowlist</code> を設定して <code>/loop 15m /aidlc-issue-autopilot &lt;label&gt;</code></td></tr>
+<tr><td>簡単な質問は AI に任せたい</td><td><code>aiApproval.mode: "stage-gates"</code> にして <code>AI-DLC delegate-ai-approvals …</code> で委任（ゲートの承認は自分で行う）</td></tr>
+<tr><td>承認ごとに Git に残したい</td><td><code>gitPersistence.enabled: true</code>（push も必要なら <code>push: true</code>）</td></tr>
+<tr><td>Construction を逐次で確かめたい</td><td><code>parallel.enabled: false</code></td></tr>
+</tbody>
+</table>
+<div class="note"><b>人が決めることは人が決める</b>: D はステージゲートの AI 承認を持たない（core を upstream と同一に保つため）。自動進行・Issue オートパイロット・AI 回答のどれを使っても、ゲートの承認、権限・認証・公開・外部送信・破壊的操作は常に人で止まる。</div>
+
+<h2 id="sec7">⑦ KDDI 配布版（<code>docs/kddi-aidlc-commands.html</code>）との違い — 追加 / 変更 / 無し</h2>
+
+<h3>追加 — このリポジトリにだけあるもの</h3>
+<table class="list">
+<thead><tr><th style="width:280px" class="mono">対象</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td class="mono">ui-poc-application / -requirements / -comparison</td><td>UI 基盤（Arm C）の3 scope。1.6 / 2.5 の HTML モックと UI 契約を Construction まで引き継ぎ、ui-poc-evidence sensor がゲートで検査する</td></tr>
+<tr><td class="mono">uiDesign.refinedMockupSkill</td><td>2.5 のデザインスキルの選択（Impeccable 固定版／4.6.0／UI/UX Pro Max／Pontaパス デザインシステム）と <code>setup-design-skill.ts</code></td></tr>
+<tr><td class="mono">Major 指摘の保留と ui-poc-review-risks</td><td>1.6 / 2.5 のゲート前に、残った Major 指摘への本人の判断（直す／理由付きで受け入れる）を記録し、受け入れたものを 3.6 で追跡する</td></tr>
+<tr><td class="mono">UI fidelity（capture / 画像比較）</td><td>承認したモックの意味的 DOM snapshot を基準に、実装画面との差を検査する。PNG 生成と画像比較は任意</td></tr>
+<tr><td class="mono">/aidlc --auto &lt;説明文&gt;</td><td>説明文からの generic auto。KDDI の <code>--auto</code>（現在地から construction まで）と違い、既定ではセッション内・intent 作成で止まり、<code>maxSteps</code>・<code>deadlineMs</code>・<code>through</code> の上限を持つ</td></tr>
+<tr><td class="mono">aiApproval（低リスク質問の AI 回答）</td><td>本人の完全一致の委任文があるときだけ、印の付いた低リスク質問に AI が答える。ゲート承認は委任できない</td></tr>
+<tr><td class="mono">gitPersistence / parallel / constructionDefaults</td><td>承認済み遷移だけの checkpoint commit、並列処理の親スイッチ、新規 intent の Construction 既定値</td></tr>
+<tr><td class="mono">features（機能21/22/27/28・PR Lens）</td><td>要件 ID 照合、Functional Design の文書量検査、source / spec grounding、PR Lens 補助レビュー</td></tr>
+<tr><td class="mono">decisionIssueSummary</td><td>AI 判断の intent 単位 Issue 要約（本人の許可文が必要）</td></tr>
+</tbody>
+</table>
+
+<h3>変更 — 同名だが中身が違うもの（KDDI → このリポジトリ）</h3>
+<table class="list">
+<thead><tr><th style="width:50%">KDDI 配布</th><th>このリポジトリ</th></tr></thead>
+<tbody>
+<tr><td>機能フラグは <code>.claude/aidlc-kddi-features.json</code></td><td>D の設定は <code>.claude/d-acceleration.jsonc</code>（＋<code>.local.jsonc</code> が優先）。項目は③のとおり別物</td></tr>
+<tr><td><code>--doc</code> に critic ループ（<code>docCriticLoop</code>）あり</td><td><code>--doc</code> は移植済みだが critic ループは無い。入力は <code>design-document.ts doc-manifest --json</code></td></tr>
+<tr><td><code>--auto</code> は Construction Autonomy を借用し、別に supervisor（<code>--through</code>）で無人実行</td><td><code>--auto</code> は D の generic auto（上限付き）。無人の夜間 supervisor は無い</td></tr>
+<tr><td>Issue オートパイロットは <code>aidlc:*</code> 実行ラベル4種・<code>requirementGapPolicy</code>・<code>aidlc:assumed-requirements</code></td><td>ラベルは <code>auto.labelAllowlist</code> の完全一致。曖昧さは <code>auto.ambiguityPolicy</code>（halt / assume / research）と仮定台帳</td></tr>
+<tr><td><code>--next-intent</code>（完了検査つきで次の intent へ）</td><td><code>--next-intent --from-issue &lt;N&gt;</code> だけ。Issue を使わない次の intent は説明文で始める（engine が新規作業として確認する）</td></tr>
+<tr><td>scope 15種（<code>api</code>・<code>review-loop</code>・<code>vibe</code>・<code>mock</code> が KDDI 限定）</td><td>scope 14種（core 11＋ui-poc 3）</td></tr>
+</tbody>
+</table>
+
+<h3>無し — KDDI 配布にあってこのリポジトリに無いもの</h3>
+<table class="list">
+<thead><tr><th style="width:280px" class="mono">対象</th><th>補足</th></tr></thead>
+<tbody>
+<tr><td class="mono">--dashboard / dashboard.autoRefresh</td><td>進捗は <code>/aidlc --status</code></td></tr>
+<tr><td class="mono">--dora / dora.autoMeasure</td><td>—</td></tr>
+<tr><td class="mono">--pick</td><td>単独実行が必要なら core の <code>--stage &lt;slug&gt; --single</code></td></tr>
+<tr><td class="mono">--review（値なしの独立再レビュー）</td><td>値付きの core <code>--review &lt;class&gt;</code> はある。補助レビューは PR Lens（既定オフ）</td></tr>
+<tr><td class="mono">aidlc-kddi-supervisor.ts</td><td>—</td></tr>
+<tr><td class="mono">github.autoSync / labelGuard / issues.closeOnComplete</td><td>⑤のとおり、GitHub への投影とラベル正本は無い</td></tr>
+<tr><td class="mono">autoCommit / prPerIntent</td><td>近いものは <code>gitPersistence</code>（承認済み遷移だけを commit。ブランチ・PR は作らない）</td></tr>
+<tr><td class="mono">taskLedger / stageSkip / critic・bestOfK・grounding ループ</td><td>grounding は D の <code>sourceGrounding</code> / <code>specGrounding</code>（ループではなく1回の照合）</td></tr>
+<tr><td class="mono">scope: api / review-loop / vibe / mock</td><td>モック中心の作業は <code>ui-poc-requirements</code></td></tr>
+</tbody>
+</table>
+
+<p class="figcap" style="margin-top:30px">更新: 2026-10-24 ／ このページは手書きの読み物ビューです。コマンド・フラグの真値と食い違ったら正本（SKILL / <code>aidlc-utility.ts help</code> / <code>poc/d-acceleration/configuration.md</code> / <code>d-acceleration.example.jsonc</code>）が勝ちます。</p>
+
+</div>
+<script>
+const PHASES=[["0.1","初期化",1],["0.2","",1],["0.3","",1],["1.1","Ideation",1],["1.2","",1],["1.3","",1],["1.4","",1],["1.5","",1],["1.6","",1],["1.7","",1],["2.1","Inception",1],["2.2","",1],["2.3","",1],["2.4","",1],["2.5","",1],["2.6","",1],["2.7","",1],["2.8","",1],["2.9","",1],["3.1","Construction",1],["3.2","",1],["3.3","",1],["3.4","",1],["3.5","",1],["3.6","",1],["3.7","",1],["4.1","Operation",1],["4.2","",1],["4.3","",1],["4.4","",1],["4.5","",1],["4.6","",1],["4.7","",1]];
+const COLOR={0:"#9D5BD2",1:"#0EA5E9",2:"#6366F1",3:"#10B981",4:"#E84393"};
+const STAGES=["0.1","0.2","0.3","1.1","1.2","1.3","1.4","1.5","1.6","1.7","2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","3.1","3.2","3.3","3.4","3.5","3.6","3.7","4.1","4.2","4.3","4.4","4.5","4.6","4.7"];
+
+// kind: "global"（全ステージ共通の帯）| "any"（任意指定の帯）| "cells"（個別セル。dots=●、rings=◎）
+const CMDS=[
+{name:"/aidlc（bare）",origin:"core",desc:"新規開始／直接継続",kind:"global",
+ syntax:"/aidlc",example:"/aidlc",
+ body:"引数なし。v2.11.0 では、進行中の作業があれば Resume / Redo / Jump / Start Fresh メニューを出さず、その作業を直接続ける。fresh clone でもコミット済みの作業を選んで一度に再開する。作業が無ければ開始方法を案内する。park 済みなら --resume。",
+ stages:"全33ステージ共通（ステージ非依存）",refs:[".claude/skills/aidlc/SKILL.md（The Forwarding Loop）"],writes:["engine が選択・継続を所有"]},
+{name:"/aidlc <説明文>",origin:"core",desc:"scope 自動判定で開始",kind:"global",
+ syntax:"/aidlc <やりたいことの説明>",example:"/aidlc 在庫管理アプリを作りたい",
+ body:"説明文から scope を自動判定して開始する。active intent がある場合、conductor が「継続か、新規の第2 intent か」を判定し、新規なら Yes/No 確認のうえ intent-create へルーティングする（勝手に birth しない）。",
+ stages:"全33ステージ共通（誕生は 1.1 から）",refs:["SKILL.md（New work while an intent is active）"],writes:["intent-create 経由: registry / cursor / aidlc-state.md / audit（core が所有）"]},
+{name:"/aidlc <scope名>",origin:"core",desc:"scope 明示で開始",kind:"global",
+ syntax:"/aidlc <bugfix|feature|ui-poc-application|…>",example:"/aidlc ui-poc-application",
+ body:"scope を明示して開始する。scope はステージ集合＋depth＋test-strategy のプリセット（④参照）。UI のある開発は ui-poc-application、要件だけのループは ui-poc-requirements。",
+ stages:"scope の EXECUTE 集合に依存",refs:[".claude/scopes/aidlc-<name>.md",".claude/scopes/ui-poc-<name>.md"],writes:["同上（intent-create 経由）"]},
+{name:"--project-type",origin:"core",desc:"新規／既存コードを明示",kind:"global",
+ syntax:"/aidlc --project-type <greenfield|brownfield>",example:"/aidlc --project-type brownfield",
+ body:"この作業が新規プロジェクトか既存コードかを明示する（v2.11.0）。途中で指定しても workspace を再スキャンし、brownfield なら Reverse Engineering を実行対象に戻す。create-next-app 等の scaffold 後に分類を変えるときにも使う。",
+ stages:"workspace-detection / reverse-engineering と以後の全体",refs:["aidlc-utility.ts help","workspace-detection.md"],writes:["Project Type、必要なら stage routing"]},
+{name:"--status",origin:"core",desc:"進捗を表示",kind:"global",
+ syntax:"/aidlc --status",example:"/aidlc --status",
+ body:"現在のフェーズ / ステージ・完了数・scope / depth を表示するだけ。状態は一切変更しない（read-only）。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts"],writes:["なし"]},
+{name:"--resume",origin:"core",desc:"park の再開",kind:"global",
+ syntax:"/aidlc --resume",example:"/aidlc --resume",
+ body:"park（きれいなステージ境界での中断）済みワークフローを再開する。engine が park マーカーを消してから続行する。",
+ stages:"park した境界から",refs:["SKILL.md（Parking a workflow）"],writes:["park マーカーの削除（engine）"]},
+{name:"--doctor",origin:"core",desc:"健全性診断",kind:"global",
+ syntax:"/aidlc --doctor [--export [--output <dir>]]",example:"/aidlc --doctor --export",
+ body:"導入・hooks 配線・ディレクトリ構成・グラフ整合・scope を診断（45+ チェック、read-only）。--export は作業内容を含まない redacted レポートを書き出す。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts doctor"],writes:["--export 時のみ aidlc/diagnostics/（gitignored）"]},
+{name:"--stage",origin:"core",desc:"ステージへ移動",kind:"any",
+ syntax:"/aidlc --stage <slug|番号> [--single]",example:"/aidlc --stage code-generation ／ /aidlc --stage 2.3 --single",
+ body:"名前か番号で任意ステージへジャンプ。--single を付けると Current Stage を動かさず合成 workflow id の下で単独実行する。",
+ stages:"任意（実行のたびに指定）",refs:["aidlc-orchestrate.ts（Branch 4b --single）"],writes:["ジャンプは JUMP audit（engine 所有）"]},
+{name:"--phase",origin:"core",desc:"フェーズへ移動",kind:"any",
+ syntax:"/aidlc --phase <name|番号>",example:"/aidlc --phase construction --scope bugfix",
+ body:"5フェーズのいずれかへジャンプし、その scope で最初の EXECUTE ステージから再開する。",
+ stages:"任意（実行のたびに指定）",refs:["aidlc-utility.ts"],writes:["同上"]},
+{name:"--scope",origin:"core",desc:"scope 変更",kind:"global",
+ syntax:"/aidlc --scope <scope>",example:"/aidlc --scope bugfix --depth comprehensive",
+ body:"アクティブな scope を変更（未開始なら新規開始）。SCOPE_CHANGED が監査に記録され、runtime graph が再コンパイルされる。",
+ stages:"全33ステージ共通",refs:["scope-grid.json（コンパイル済み）"],writes:["aidlc-state.md の scope 行＋audit（engine 所有）"]},
+{name:"--depth / --test-strategy",origin:"core",desc:"深さ・テスト量の上書き",kind:"global",
+ syntax:"/aidlc --depth <minimal|standard|comprehensive> ／ --test-strategy <同>",example:"/aidlc --depth standard --test-strategy minimal",
+ body:"成果物の厚みとテストの厚みを独立に調整する。DEPTH_CHANGED / TEST_STRATEGY_CHANGED を記録。config get / config set / config list でも同じ値を操作できる。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts help（config get / set / list）"],writes:["state の該当 field＋audit（engine 所有）"]},
+{name:"compose / --new-scope",origin:"core",desc:"適応型プラン合成",kind:"global",
+ syntax:"/aidlc compose \"<task>\" ／ compose --report <path> ／ --new-scope \"<task>\"",example:"/aidlc compose \"deploy パイプラインを堅牢化したい\"",
+ body:"composer agent が read-only スキャン＋エントロピー推定から EXECUTE/SKIP 案（ARS スコア・ステージ別根拠つき）と設定（depth/test/review/guard/collaborators）を提案し、人間の approve/edit/reject ゲートを経て確定する。v2.11.0 では通常の Approve はプランをこの intent にだけ適用し、scope ファイルを書かない。「Approve and save as scope」を選ぶか、後から保存を頼んだときだけ engine の scope save が再利用 scope を書く。",
+ stages:"全33ステージ共通（プラン自体を再形成）",refs:["SKILL.md（Composing a workflow plan）","skills/aidlc/composer.md","agents/aidlc-composer-agent.md"],writes:["承認: intent の plan/overrides。保存を選択したときだけ scopes/*.md＋scope-grid.json"]},
+{name:"intent（verbs）",origin:"core",desc:"intent 一覧・切替",kind:"global",
+ syntax:"/aidlc intent list [--json] [--all] ／ intent switch <name>（bare intent <name> 可）／ intent archive <name> [--reason <text>] ／ intent unarchive <name>",example:"/aidlc intent list",
+ body:"アクティブ space 内の intent（=record）を一覧・切替・退役（archive）・復帰（unarchive）する。archive しても record はディスクに残り、既定の一覧から外れるだけ。切替は active-intent cursor を動かすだけで、旧 record の成果物・state・audit はそのまま — 退避も復元手順も無い（record モデル）。",
+ stages:"全33ステージ共通",refs:["aidlc-lib.ts listIntents()"],writes:["active-intent cursor（gitignored）"]},
+{name:"space（verbs）",origin:"core",desc:"ワークスペース切替",kind:"global",
+ syntax:"/aidlc space list [--json] ／ space switch <name> ／ space create <name>",example:"/aidlc space create experiments",
+ body:"space（intent の入れ物。memory / codekb / design-document を共有する単位）の一覧・切替・作成。",
+ stages:"全33ステージ共通",refs:["aidlc/spaces/<space>/"],writes:["active-space cursor（gitignored）"]},
+{name:"config / plugin（verbs）",origin:"core",desc:"設定・プラグイン",kind:"global",
+ syntax:"/aidlc config get|set|list ／ plugin select|list|sync|validate|build",example:"/aidlc plugin list",
+ body:"config は実行中ワークフローの設定（depth / test-strategy / review / guard-policy / sensors / learnings / summary-confirmation / guard.<fence>）の読み書き。set は複数キーを原子的に変更できる。plugin はインストール済みプラグインの選択・一覧・compose（sync）・検証・host plugin のビルド（このリポジトリでは UI 基盤の ui-poc や pr-lens-review を compose する。選択は graph 面を切り替えるだけで、投影済みファイルは残り再有効化できる）。",
+ stages:"全33ステージ共通",refs:["docs/reference/18-plugin-mechanism.md","poc/ui-poc/README.md"],writes:["plugin sync: contribution のマージ結果"]},
+{name:"--config [section]",origin:"core",desc:"セッション内で設定",kind:"global",
+ syntax:"/aidlc --config [models|runtime|providers|trust|flags|project]",example:"/aidlc --config models",
+ body:"セッションの中から aidlc config の各節（モデル・実行環境・プロバイダ・trust・フラグ・プロジェクト）を設定する（v2.10.0）。モデル／Effort の方針（agent tier の上書き）もここ。D の設定は別ファイル（③ .claude/d-acceleration.jsonc）。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts help（Utilities）"],writes:["aidlc.settings.json などプロジェクト設定"]},
+{name:"--review <class> / --guard-policy / --collaborators / --sensors / --learnings / --summary-confirmation",origin:"core",desc:"この run の上書き",kind:"global",
+ syntax:"/aidlc --review <adversarial|advisory|none> ／ --guard-policy <strict|relaxed|off> ／ --collaborators on|off ／ --sensors on|off ／ --learnings on|off ／ --summary-confirmation on|off",example:"/aidlc --collaborators on",
+ body:"実行中の intent だけに効く上書き。--review <class> はステージレビューの上限、--guard-policy はガードがどこまで退くか（旧名 --change-control）、--collaborators は lead agent と一緒に support agents を呼ぶか、ほかは sensor・学び保存・要約確認の on/off。v2.11.0 の既定は enterprise 以外で Guard Policy off / collaborators off（ui-poc の3 scope は Guard Policy strict を明示している）。個別のガードは config set guard.<fence> on|off。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts help（Utilities）"],writes:["aidlc-state.md の実行設定"]},
+{name:"knowledge（verbs）",origin:"core",desc:"DocumentKB（文書の目録）",kind:"global",
+ syntax:"/aidlc knowledge onboard [path] ／ sync ／ list [--json] ／ show <id> ／ associate|dissociate <id> --intent [slug] ／ rebind <id> --to <path>",example:"/aidlc knowledge onboard aidlc/spaces/default/knowledge/documents/policy.pdf",
+ body:"チームの既存文書（PDF・Word・Markdown・テキスト）を space の目録に登録し、agent が引用できるようにする（v2.10.0）。原本は knowledge/documents/ にコピーされ、目録と抽出テキストは documentkb/。要約とタグを付けられるが、検索機能は無く、どのステージも自動では読まない（依頼文で指すか agent が参照する）。/aidlc-knowledge skill が同じ手順を案内する。",
+ stages:"全33ステージ共通（入力資料の受け皿）",refs:[".claude/skills/aidlc-knowledge/SKILL.md","docs/guide/08-knowledge.md"],writes:["aidlc/spaces/<space>/knowledge/{documents,documentkb}/"]},
+{name:"unit（verbs）／ --claim ／ --release",origin:"core",desc:"チームで Unit を分担",kind:"cells",dots:["3.1","3.2","3.3","3.4","3.5","3.6"],
+ syntax:"/aidlc unit status|participate|adopt|publish|pin|gate|land|merge-status <unit> ／ --claim <unit> ／ --release <unit>",example:"/aidlc unit status",
+ body:"複数人・複数 checkout で Construction の Unit を分担する（v2.10.0）。claim で Unit を原子的に確保し、publish → pin → gate（承認／差し戻し）→ land で main に取り込む。status は確保可能・確保済み・依存待ちの Unit を表示する。",
+ stages:"Construction の Unit 単位",refs:["aidlc-utility.ts help（Utilities）"],writes:["Unit claim と pinned candidate の記録（core が所有）"]},
+{name:"--version / --help",origin:"core",desc:"バージョン・使用法",kind:"global",
+ syntax:"/aidlc --version ／ /aidlc --help",example:"/aidlc --help",
+ body:"バージョン表示とコマンド一覧（read-only・再開プロンプトなし）。--help の出力がコマンド面の正本。",
+ stages:"全33ステージ共通",refs:["aidlc-utility.ts help"],writes:["なし"]},
+{name:"--doc",origin:"ext",desc:"設計書を生成・最新化",kind:"cells",rings:["2.1","2.2","2.3","2.4","2.5","2.6","2.7","2.8","2.9","3.1","3.2","3.3"],
+ syntax:"/aidlc --doc [--full]",example:"/aidlc --doc",
+ body:"全 intent をまたぐプロダクト単位の設計書を作る（KDDI ハーネスから移植）。engine の next には渡さず、conductor が design-document.ts doc-manifest --json で入力集合（各 record_root）を決定論に得て、design-document-guide.md の章立てに従い差分マージする。--full は doc-snapshot で1世代だけ退避してから作り直す。ワークフロー状態は変えない（read-only）。KDDI の docCriticLoop（設計書 critic ループ）は移植していない。ui-poc-requirements scope は要件ループのたびにこの設計書を育てる前提。",
+ stages:"Inception 全域と Construction の設計成果物（2.1〜2.9, 3.1〜3.3）を入力として消費",refs:[".claude/tools/d-acceleration/design-document.ts（doc-manifest / doc-snapshot）",".claude/tools/d-acceleration/design-document-guide.md","poc/d-acceleration/README.md（Design document）"],writes:["aidlc/spaces/<space>/design-document/（正本）","--full 時: aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/（1世代、gitignored）"]},
+{name:"--auto <説明文>",origin:"ext",desc:"説明文から自動進行",kind:"global",
+ syntax:"/aidlc --auto <やりたいことの説明>",example:"/aidlc --auto 在庫一覧画面を作りたい",
+ body:"D の generic auto。auto.enabled=true のときだけ動く。先頭の --auto だけを外した説明文をファイルに書き、generic-auto-cli.ts start → 公式 print の intent-create → bootstrap（start 以降に作られた intent だけに束縛）→ 各 directive ごとの checkpoint の順で、公式 engine の正規遷移だけを自動で続ける。既定の auto.sessionOnly=true では intent 作成直後に止まる。続けるには sessionOnly:false と through / maxSteps / deadlineMs の上限が必要。承認ゲート（ask）とステージ内質問は人の回答を待ち、その待ち時間は deadline に数えない。新規 intent には constructionDefaults（既定 stage-major＋swarm）を公式 setter で1回だけ適用する。",
+ stages:"全33ステージ共通（auto.through で止まる位置を決める）",refs:[".claude/skills/aidlc/SKILL.md（--auto）",".claude/tools/d-acceleration/generic-auto-cli.ts","poc/d-acceleration/configuration.md","poc/d-acceleration/README.md（Bounded-run deadline）"],writes:["D の session journal（humanWaits[] を含む）","通常のステージ成果物（公式 engine 経由）"]},
+{name:"--auto status ／ --auto stop",origin:"ext",desc:"自動進行の確認・停止",kind:"global",
+ syntax:"/aidlc --auto status ／ /aidlc --auto stop",example:"/aidlc --auto status",
+ body:"status は session・claim・heartbeat を一切変えない観測専用。stop は自動進行を止め、回復処理（期限切れ claim の片付けなど）は stop か次回の開始時に行う。generic auto と Issue 入口で共通。",
+ stages:"全33ステージ共通",refs:["generic-auto-cli.ts status","issue-autopilot-cli.ts"],writes:["status: なし／stop: D の session 状態"]},
+{name:"--auto --through <stage> --from-issue <N>",origin:"ext",desc:"Issue を1件だけ自動処理",kind:"global",
+ syntax:"/aidlc --auto --through <stage> --from-issue <番号>",example:"/aidlc --auto --through code-generation --from-issue 42",
+ body:"auto.enabled と issueAutopilot.enabled が両方 ON で、D 設定の auto.through が同じ値のときだけ動く。指定 Issue のラベルが auto.labelAllowlist に完全一致する必要がある（空配列は許可なし）。Issue 本文をフラグとして解釈することはない。intent は最大1つだけ作り、以後のステージ作業は通常の /aidlc ループに戻す。曖昧さの判定は auto.ambiguityPolicy（halt / assume / research）に従い、新しい intent を作るときだけ行う。",
+ stages:"1.1（intent 誕生）から auto.through まで",refs:["SKILL.md（The Forwarding Loop 冒頭）","issue-autopilot.ts","issue-autopilot-runtime.ts","issue-ambiguity-assessor.ts"],writes:["Issue claim・仮定台帳（JSONL）","通常のステージ成果物"]},
+{name:"--next-intent --from-issue <N>",origin:"ext",desc:"Issue から次の intent",kind:"cells",dots:["1.1"],
+ syntax:"/aidlc --next-intent --from-issue <番号>",example:"/aidlc --next-intent --from-issue 42",
+ body:"issue-autopilot-cli.ts --project-dir <PRODUCT> <番号> を実行し、その Issue から intent を最大1つ作る。その Issue の intent が既にあれば判定をやり直さず、その intent で再開する。issueAutopilot.enabled が OFF なら GitHub に接続しない。GitHub に触れる前に gh auth status --hostname <host> を確認し、未ログインなら gh-auth-required で止まって次の一手を返す。",
+ stages:"1.1（新 intent の誕生）",refs:[".claude/tools/d-acceleration/issue-autopilot-cli.ts","poc/d-acceleration/configuration.md"],writes:["intent-create 経由の公式 state（core 所有）","D の Issue claim"]},
+{name:"/aidlc-issue-autopilot <label>（独立 skill）",origin:"ext",desc:"Issue を1件ずつ消化",kind:"cells",dots:["1.1"],rings:["2.3","3.5","3.6"],
+ syntax:"/aidlc-issue-autopilot <必須ラベル> ／ /loop 15m /aidlc-issue-autopilot <必須ラベル>",example:"/loop 15m /aidlc-issue-autopilot aidlc-auto",
+ body:"open Issue のうちラベルが許可リストに完全一致するものを、Issue 番号の昇順で1回に最大1件だけ処理する（oneIssuePerRun は常に true）。既定 OFF（auto.enabled と issueAutopilot.enabled の両方が必要）。定期実行は Claude Code 標準の /loop から起動する（/loop は上書きしない）。ステージの遷移・レビュー・sensor・承認はすべて通常の /aidlc に任せる。",
+ stages:"1.1 で intent 化し、auto.through まで通常フロー",refs:[".claude/skills/aidlc-issue-autopilot/SKILL.md","issue-autopilot-cli.ts"],writes:["Issue claim・選定記録（候補・選択番号・理由）","通常のステージ成果物"]}
+];
+
+function chip(idx){const ph=Math.floor(["0","1","2","3","4"].indexOf(STAGES[idx][0]));return `<span class="chip" style="background:${COLOR[ph]}">${STAGES[idx]}</span>`}
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+
+(function render(){
+  const t=document.getElementById("cmdMatrix");
+  let h='<thead><tr><th class="rowhead" rowspan="2"></th><th rowspan="2" style="min-width:130px">説明</th>';
+  for(let i=0;i<33;i++)h+=`<th>${chip(i)}</th>`;
+  h+='</tr><tr>';
+  h+=`<th colspan="3" style="color:${COLOR[0]}">Initialization</th><th colspan="7" style="color:${COLOR[1]}">Ideation</th><th colspan="9" style="color:${COLOR[2]}">Inception</th><th colspan="7" style="color:${COLOR[3]}">Construction</th><th colspan="7" style="color:${COLOR[4]}">Operation</th>`;
+  h+='</tr></thead><tbody>';
+  CMDS.forEach((c,ci)=>{
+    h+=`<tr class="cmd ${c.origin}" data-i="${ci}"><th class="rowhead">${esc(c.name)}</th><td class="desc">${esc(c.desc)}</td>`;
+    if(c.kind==="global")h+='<td class="span-global" colspan="33">全33ステージ共通（ステージ非依存）</td>';
+    else if(c.kind==="any")h+='<td class="span-any" colspan="33">任意のステージ／フェーズ（実行のたびに指定）</td>';
+    else{for(const s of STAGES){
+      if((c.dots||[]).includes(s))h+=`<td class="cell"><span class="dot ${c.origin}"></span></td>`;
+      else if((c.rings||[]).includes(s))h+='<td class="cell"><span class="ring"></span></td>';
+      else h+='<td class="cell"></td>';
+    }}
+    h+='</tr>';
+  });
+  h+='</tbody>';
+  t.innerHTML=h;
+  t.addEventListener("click",e=>{
+    const tr=e.target.closest("tr.cmd");if(!tr)return;
+    t.querySelectorAll("tr.selected").forEach(x=>x.classList.remove("selected"));
+    tr.classList.add("selected");
+    const c=CMDS[+tr.dataset.i];
+    const pane=document.getElementById("detailPane");
+    pane.style.display="block";
+    pane.innerHTML=`<h4>${esc(c.name)}<span class="origin ${c.origin}">${c.origin==="core"?"core":"D 拡張"}</span></h4>
+      <h5>構文</h5><pre><code>${esc(c.syntax)}</code></pre>
+      <h5>使用例</h5><pre><code>${esc(c.example)}</code></pre>
+      <h5>詳細</h5><p class="body">${esc(c.body)}</p>
+      <h5>ステージとの対応</h5><p class="body">${esc(c.stages)}</p>
+      <h5>参照する資料</h5><ul>${c.refs.map(r=>`<li><code>${esc(r)}</code></li>`).join("")}</ul>
+      <h5>編集する成果物</h5><ul>${c.writes.map(w=>`<li>${esc(w)}</li>`).join("")}</ul>`;
+    pane.scrollIntoView({behavior:"smooth",block:"nearest"});
+  });
+})();
+</script>
+</body>
+</html>
