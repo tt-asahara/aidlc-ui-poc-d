@@ -270,7 +270,7 @@ test('the refined-mockups design slot defaults to the pinned Arm C component', (
   assert.deepEqual(plan('refined-mockups',refinedFacts,'ui-poc-application',null).invocations,p.invocations);
 });
 test('a selected design skill replaces only the refined-mockups slot, with its own adapter and outputs', () => {
-  for (const id of ['impeccable','ui-ux-pro-max']) {
+  for (const id of ['impeccable','ui-ux-pro-max','ponta-pass-design']) {
     const p=plan('refined-mockups',refinedFacts,'ui-poc-application',id),cfg=load();
     assert.equal(p.pass,true);assert.equal(p.designSkill,id);
     const design=p.invocations.find(x=>x.designApplication);
@@ -287,7 +287,7 @@ test('ui-poc-comparison keeps the pinned Arm C design skill and unknown choices 
   assert.equal(plan('refined-mockups',refinedFacts,'ui-poc-comparison','impeccable-historical').pass,true);
   assert.equal(plan('build-and-test',{},'ui-poc-comparison','impeccable').pass,true);
   const unknown=plan('refined-mockups',refinedFacts,'ui-poc-application','taste-skill');
-  assert.equal(unknown.pass,false);assert.match(unknown.findings[0],/Unknown uiDesign\.refinedMockupSkill: taste-skill \(choices: impeccable-historical, impeccable, ui-ux-pro-max\)/);
+  assert.equal(unknown.pass,false);assert.match(unknown.findings[0],/Unknown uiDesign\.refinedMockupSkill: taste-skill \(choices: impeccable-historical, impeccable, ui-ux-pro-max, ponta-pass-design\)/);
 });
 test('verify accepts a selected design skill whose installed entrypoints match the pin, without a WCAG report', t => {
   const tools=fakeDesignTools(t),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'impeccable'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
@@ -298,6 +298,13 @@ test('verify accepts a selected design skill whose installed entrypoints match t
   assert.equal(tools.routing.designSkillStatus('impeccable',f.project).ok,false,'licences are not installed in this fixture');
   fs.appendFileSync(path.join(f.project,'.agents/skills/impeccable/reference/polish.md'),'edited');
   assert.match(tools.routing.verify('refined-mockups',args[0],args[1],{...args[2],designSkill:'impeccable'}).findings[0],/Installed entrypoint differs from source-lock: \.agents\/skills\/impeccable\/reference\/polish\.md/);
+});
+test('a design skill installed from a local folder verifies like a fetched one, and its setup hint asks for --source', t => {
+  const tools=fakeDesignTools(t,'ponta-pass-design'),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'ponta-pass-design'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
+  assert.deepEqual(tools.routing.verify('refined-mockups',f.logPath,f.facts,{contextPath:f.contextPath,factsPath:f.factsPath,outputPath:f.outputPath,designSkill:'ponta-pass-design'}),{pass:true,findings_count:0,findings:[]});
+  assert.equal(tools.routing.designSkillStatus('ponta-pass-design',f.project).ok,true,'it has no licence files to install');
+  fs.rmSync(path.join(f.project,'.agents/skills/ponta-pass-design/SKILL.md'));
+  assert.match(tools.routing.designSkillStatus('ponta-pass-design',f.project).detail,/--skill ponta-pass-design --source <your ponta-pass-design folder>$/);
 });
 test('verify still requires the creator-confirmed Design Context for a selected design skill', t => {
   const tools=fakeDesignTools(t,'ui-ux-pro-max'),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'ui-ux-pro-max'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));

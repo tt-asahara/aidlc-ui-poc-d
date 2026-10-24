@@ -87,7 +87,7 @@ describe("D preflight prerequisites and effective values", () => {
     expect(row()[0]!.satisfied).toBe(false);
     expect(row()[0]!.requires).toContain("Installed entrypoint is missing: .agents/skills/impeccable/SKILL.md; run: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill impeccable");
     writeFileSync(join(root, ".claude", "d-acceleration.jsonc"), JSON.stringify({ uiDesign: { refinedMockupSkill: "taste-skill" } }));
-    expect(row()[0]!.requires).toContain("Unknown uiDesign.refinedMockupSkill: taste-skill (choices: impeccable-historical, impeccable, ui-ux-pro-max)");
+    expect(row()[0]!.requires).toContain("Unknown uiDesign.refinedMockupSkill: taste-skill (choices: impeccable-historical, impeccable, ui-ux-pro-max, ponta-pass-design)");
     const { status, json } = preflight(root);
     expect(status).toBe(3);
     expect(json.optional.uiDesign).toEqual({ refinedMockupSkill: "taste-skill" });

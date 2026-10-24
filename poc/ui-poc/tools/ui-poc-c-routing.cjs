@@ -163,7 +163,7 @@ function designSkillStatus(id, projectRoot = process.cwd()) {
   const cfg = load();
   let design;
   try { design = designChoice(cfg, id); } catch (e) { return {ok: false, detail: e.message}; }
-  const skill = cfg.skills[design.skill], setupHint = design.install ? `; run: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill ${design.id}` : '';
+  const skill = cfg.skills[design.skill], setupHint = design.install ? `; run: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill ${design.id}${design.install.origin === 'local-folder' ? ` --source <your ${design.id} folder>` : ''}` : '';
   for (const entrypoint of skill.entrypoints) {
     let problem;
     try { problem = entrypointProblem(design.skill, entrypoint, projectRoot); } catch (e) { problem = e.message; }

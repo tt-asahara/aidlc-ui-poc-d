@@ -50,7 +50,8 @@
     //   "impeccable-historical" … Arm Cの固定版Impeccable frontend-design（pbakaus/impeccable@209444a9）。既定値。追加installは不要。
     //   "impeccable"            … Impeccable 4.6.0（pbakaus/impeccable@08d5b470、Apache-2.0）。new-workで見た目の方向を決め、craft-floor・critique・polishで描画を見て直す。業務アプリ（Operate mode）向け。
     //   "ui-ux-pro-max"         … UI/UX Pro Max（nextlevelbuilder/ui-ux-pro-max-skill@56ea9cf1、MIT）。ローカル検索でスタイル・配色・書体・UX規則のデザインシステム案を作る。要python3。
-    // 既定値以外は事前に固定版の取得が必要: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill <選択肢>（setupはこの値を書き換えない）。未installならpreflightの前提行が未充足になり、sensorはNOT-READYで止まる。
+    //   "ponta-pass-design"     … Pontaパス デザインシステム（Web・Android・iOSの既存画面から作ったトークン・部品・雛形・画像）。既存画面と見分けがつかない画面案を作る。本体は公開しないため、手元のフォルダから --source で入れる。要python3。
+    // 既定値以外は事前に固定版の取得が必要: bun <D checkout>/poc/ui-poc/scripts/setup-design-skill.ts --product <PRODUCT> --skill <選択肢>（ponta-pass-designは --source <手元のフォルダ> も付ける。setupはこの値を書き換えない）。未installならpreflightの前提行が未充足になり、sensorはNOT-READYで止まる。
     // 境界: ui-poc-comparisonスコープでは比較条件を保つため既定値以外を拒否する（ui-poc-application / ui-poc-requirementsで有効）。承認・review・sensorは置き換えない。利用場面: 詳細モックアップの見た目を別のスキルで作り比べたいとき。
     "refinedMockupSkill": "impeccable-historical",
   },

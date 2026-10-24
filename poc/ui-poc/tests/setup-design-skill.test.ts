@@ -3,7 +3,7 @@
 // composed routing tools re-pinned to that repository's commit.
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -45,6 +45,32 @@ function world() {
   cpSync(tools, join(product, ".claude/tools"), { recursive: true });
   const options = { srcTools: tools, fetchUrl: () => upstream };
   return { upstream, tools, product, options, skill };
+}
+
+/** A person's own copy of the local-folder choice plus a PRODUCT whose installed tools pin that copy's bytes and Git tree. */
+function localWorld() {
+  const source = temp("design-skill-local-source-");
+  const files: Record<string, string> = { "SKILL.md": "fake skill\n", "references/screens.md": "fake screens\n", "scripts/check.py": "print('ok')\n", "assets/web/logo.png": "png" };
+  for (const [rel, text] of Object.entries(files)) { mkdirSync(dirname(join(source, rel)), { recursive: true }); writeFileSync(join(source, rel), text); }
+  const tree = temp("design-skill-local-tree-");
+  git(tree, "init", "-q");
+  cpSync(source, tree, { recursive: true });
+  git(tree, "add", "-A");
+  const commit = git(tree, "write-tree");
+  const tools = temp("design-skill-tools-");
+  cpSync(SRC_TOOLS, tools, { recursive: true });
+  const cfg = JSON.parse(readFileSync(join(tools, "ui-poc/c-stage-routing.json"), "utf8"));
+  const skill = cfg.skills["ponta-pass-design"];
+  skill.commit = commit;
+  writeFileSync(join(tools, "ui-poc/c-stage-routing.json"), JSON.stringify(cfg));
+  const lock = JSON.parse(readFileSync(join(tools, "ui-poc/design-skill-lock.json"), "utf8"));
+  const pinned = lock.sources.find((s: { repository: string }) => s.repository === skill.repository);
+  pinned.commit = commit;
+  pinned.files = Object.entries(files).map(([path, text]) => ({ path, git_blob_sha: blob(Buffer.from(text)), bytes: Buffer.byteLength(text) }));
+  writeFileSync(join(tools, "ui-poc/design-skill-lock.json"), JSON.stringify(lock));
+  const product = temp("design-skill-product-");
+  cpSync(tools, join(product, ".claude/tools"), { recursive: true });
+  return { source, product, options: { srcTools: tools, source }, commit };
 }
 
 describe("setup-design-skill", () => {
@@ -95,5 +121,31 @@ describe("setup-design-skill", () => {
   test("the default choice needs no fetch and reports the Arm C payload status", () => {
     const w = world();
     expect(setupDesignSkill(w.product, "impeccable-historical", w.options)).toMatchObject({ skill: "impeccable-historical", ready: false });
+  });
+  test("a local-folder choice installs the person's own copy only when it is exactly the pinned tree", () => {
+    const w = localWorld();
+    expect(() => setupDesignSkill(w.product, "ponta-pass-design", { srcTools: w.options.srcTools })).toThrow(/installed from your own copy, not fetched; pass --source/);
+    expect(setupDesignSkill(w.product, "ponta-pass-design", { ...w.options, dryRun: true })).toMatchObject({ mode: "dry-run", repository: "local/ponta-pass-design", commit: w.commit, from: realpathSync(w.source), to: ".agents/skills/ponta-pass-design", licenses: [], alreadyInstalled: false });
+    expect(existsSync(join(w.product, ".agents"))).toBe(false);
+    writeFileSync(join(w.source, ".DS_Store"), "finder");
+    expect(setupDesignSkill(w.product, "ponta-pass-design", w.options)).toMatchObject({ mode: "apply", ready: true, files: 4 });
+    expect(existsSync(join(w.product, ".agents/skills/ponta-pass-design/.DS_Store"))).toBe(false);
+    expect(setupDesignSkill(w.product, "ponta-pass-design", w.options)).toMatchObject({ mode: "apply", ready: true });
+    expect(existsSync(join(w.product, ".claude/d-acceleration.jsonc"))).toBe(false);
+  });
+  test("a local-folder copy that differs from the pin, or --source on a fetched choice, stops before writing", () => {
+    const changed = localWorld();
+    appendFileSync(join(changed.source, "scripts/check.py"), "# edited\n");
+    expect(() => setupDesignSkill(changed.product, "ponta-pass-design", changed.options)).toThrow(/--source scripts\/check\.py differs from the pinned ponta-pass-design/);
+    const extra = localWorld();
+    writeFileSync(join(extra.source, "notes.md"), "mine");
+    rmSync(join(extra.source, "assets/web/logo.png"));
+    expect(() => setupDesignSkill(extra.product, "ponta-pass-design", extra.options)).toThrow(/is not the pinned ponta-pass-design \(extra notes\.md, missing assets\/web\/logo\.png\)/);
+    const linked = localWorld();
+    symlinkSync(join(linked.source, "SKILL.md"), join(linked.source, "link.md"));
+    expect(() => setupDesignSkill(linked.product, "ponta-pass-design", linked.options)).toThrow(/--source contains a symlink \(link\.md\)/);
+    for (const w of [changed, extra, linked]) expect(existsSync(join(w.product, ".agents"))).toBe(false);
+    const fetched = world();
+    expect(() => setupDesignSkill(fetched.product, "impeccable", { ...fetched.options, source: changed.source })).toThrow(/--source applies only to a choice installed from your own copy; impeccable is fetched from pbakaus\/impeccable/);
   });
 });
