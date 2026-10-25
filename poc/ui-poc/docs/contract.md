@@ -360,7 +360,7 @@ Each engine scope picks its upstream approval source in
 `tools/ui-poc/scope-evidence.json`. `upstreamApproval: "ledger"`
 (`ui-poc-comparison` and any unlisted scope) requires the detached ledger above.
 `upstreamApproval: "engine-record"` (`ui-poc-application`,
-`ui-poc-requirements`) leaves approval to the official stage gate and reads no
+`ui-poc-requirements`, `ui-poc-document-driven`) leaves approval to the official stage gate and reads no
 ledger for it: the upstream copy must be byte-identical to the contract the
 engine record holds for that stage, in the intent's refined-mockups directory or
 in this Unit's Construction stage directory, and the engine audit must show

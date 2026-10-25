@@ -1,7 +1,8 @@
 # Document-driven auto mode (design study)
 
-Status: design study on `feat/d-document-driven-auto`. Nothing here is
-implemented yet.
+Status: design study on `feat/d-document-driven-auto`, with the person's
+decisions recorded under "Decisions" (they override the general study where
+they differ, notably the boundary). Implementation is in progress.
 
 ## Goal
 
@@ -82,8 +83,8 @@ takes a one-word reply. "Keep" means it stays as it is.
 1. **Documents.** D runs the official `knowledge onboard <path>` and
    `knowledge sync`, so DocumentKB holds every document with an ID, a revision,
    and extracted text. D never parses PDFs or Word files itself.
-2. **Scope.** A new ui-poc plugin scope `ui-poc-document-driven` with the same
-   stages as `ui-poc-application` and these ceremony defaults:
+2. **Scope.** A new ui-poc plugin scope `ui-poc-document-driven` (stages under
+   "Decisions") with these ceremony defaults:
    `summary_confirmation: off`, `learnings: off`, `plan_approval: off`,
    `skeleton: off`, `collaborators: off`. Sensors and reviewers stay on. These
    are scope defaults, not locks, so the person can turn any of them back on.
@@ -97,9 +98,8 @@ takes a one-word reply. "Keep" means it stays as it is.
    to the `--through` boundary, bound to the hash of those words and to the
    DocumentKB revision set. The same `grantHumanTurnRefusal` check applies.
    One owner per rule: the existing check is reused, not copied.
-4. **Session.** `generic-auto-cli.ts start` as today, with `--through
-   build-and-test` by default and the deadline/step/no-progress limits as
-   today.
+4. **Session.** `generic-auto-cli.ts start` as today, with the boundary at
+   `user-stories` and the deadline/step/no-progress limits as today.
 
 ### Document-grounded answers
 
@@ -199,11 +199,45 @@ scope), which also produces fewer AI-DLC artifacts.
 
 Every phase keeps `git diff --stat -- core` empty.
 
-## Open decisions for the person
+## Decisions (2026-10-25)
 
-1. Base scope: `ui-poc-application` stages (UI products), or also a non-UI
-   variant built on `feature`/`mvp`.
-2. Boundary: stop at Build and Test, or include Operation stages.
-3. Protected topics: is a verified document quote enough to settle pricing,
-   personal data, and release questions, or should those always go to the
-   person.
+The person decided:
+
+1. **UI only.** The mode is a ui-poc scope. No non-UI variant.
+2. **Boundary: through 2.4 User Stories.** The mode stops before 2.5 Refined
+   Mockups. Construction and Operation are out, so Plan Approval, skeleton,
+   autonomy, and the verification command never arise. To continue, the person
+   runs `/aidlc --add refined-mockups` (or starts a `ui-poc-application`
+   intent) after reviewing the stories.
+3. **Protected topics.** A question on any topic may be answered by AI when a
+   verified document quote settles it. Without a verified quote it goes to the
+   person; a `delegated-ai-assumption` on a protected topic is never accepted.
+
+### Resulting scope: `ui-poc-document-driven`
+
+Stages (the `ui-poc-requirements` set without Refined Mockups): Initialization
+(3, no gate), 1.1 Intent Capture, 1.4 Scope Definition, 1.6 Rough Mockups,
+2.1 Reverse Engineering (brownfield only), 2.2 Practices Discovery,
+2.3 Requirements Analysis, 2.4 User Stories. The intent completes when User
+Stories is approved.
+
+Frontmatter: `skeleton: off`, `summary_confirmation: off`, `learnings: off`,
+`plan_approval: off`, `collaborators: off`, `sensors: on`,
+`guard_policy: strict`. No routing keywords: the mode is entered only by the
+explicit `--docs` command or by naming the scope.
+
+### Resulting stop budget
+
+| Stop | Count (new project) |
+| --- | --- |
+| Approval gates | 6 (7 on an existing codebase, with Reverse Engineering) |
+| Residual questions | only questions the documents do not settle, one message per stage at most |
+| Rough Mockups open Major review findings | 0 when the bounded fix loop clears them, else 1 |
+| Failures, blocking sensors | as they occur |
+
+Rough Mockups adds a stop of its own: when the reviewer leaves a Critical or
+Major finding open, the ui-poc contribution asks the person "Fix / Decide each /
+Accept all". In this scope the conductor takes the recommended **Fix the Major
+findings first** path without asking, for at most two fix-and-review rounds,
+and asks only when findings remain open after that. Accepting a risk always
+stays the person's, because it needs their own words as the rationale.

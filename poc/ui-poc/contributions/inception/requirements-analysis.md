@@ -6,6 +6,7 @@ adds:
     - ui-poc-comparison
     - ui-poc-application
     - ui-poc-requirements
+    - ui-poc-document-driven
   sensors:
     - ui-poc-evidence
   consumes:

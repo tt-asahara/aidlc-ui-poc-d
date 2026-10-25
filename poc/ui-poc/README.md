@@ -81,6 +81,23 @@ Build and Test check item (`fidelity.acceptedRisks`, printed by
 whose PNGs are byte-identical. See `docs/contract.md`, "Review findings at the
 mockup gates".
 
+## Document-driven run
+
+To carry a UI product from handed-over requirement documents to approved user
+stories with only the stage approvals as stops, select the document-driven
+scope explicitly (it has no routing keywords):
+
+```text
+/aidlc --scope ui-poc-document-driven
+```
+
+It runs the requirements-loop stages without refined-mockups (intent-capture,
+scope-definition, rough-mockups, reverse-engineering on brownfield only,
+practices-discovery, requirements-analysis, user-stories), with summary
+confirmation, learnings, and plan approval off: 6 approval gates on a new
+project. The D entry and document-grounded answers are designed in
+`../d-acceleration/document-driven-auto.md`.
+
 ## Requirements-only loop
 
 To grow requirements and the `/aidlc --doc` design document set without
