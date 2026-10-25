@@ -4,6 +4,7 @@
   "scopes": {
     "ui-poc-comparison": { "sensor": "on", "upstreamApproval": "ledger" },
     "ui-poc-application": { "sensor": "on", "upstreamApproval": "engine-record" },
-    "ui-poc-requirements": { "sensor": "on", "upstreamApproval": "engine-record" }
+    "ui-poc-requirements": { "sensor": "on", "upstreamApproval": "engine-record" },
+    "ui-poc-document-driven": { "sensor": "on", "upstreamApproval": "engine-record" }
   }
 }

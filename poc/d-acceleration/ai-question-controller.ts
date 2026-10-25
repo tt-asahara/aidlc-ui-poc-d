@@ -66,8 +66,11 @@ export function classifyQuestions(body: string) {
 }
 
 /** The exact no-tool, no-MCP, non-persistent argv used by the delegated question assessor. */
-export function questionAssessorLaunch(request: { executable: string; model: string; prompt: string }): WorkerLaunch {
-  return { kind: "claude", executable: request.executable, requestedModel: request.model, requestedEffort: "high", args: ["--print", "--output-format", "json", "--no-session-persistence", "--restricted", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--permission-mode", "dontAsk", "--tools", "", "--allowed-tools", "", "--disallowed-tools", "Bash,Edit,Write,Agent,Task,WebFetch,WebSearch", "--model", request.model, "--effort", "high", request.prompt] };
+export function questionAssessorLaunch(request: { executable: string; model: string; prompt: string; promptOnStdin?: boolean }): WorkerLaunch {
+  // A prompt carrying whole documents can exceed one argv entry's OS limit, so it may travel on stdin instead.
+  const launch: WorkerLaunch = { kind: "claude", executable: request.executable, requestedModel: request.model, requestedEffort: "high", args: ["--print", "--output-format", "json", "--no-session-persistence", "--restricted", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--disable-slash-commands", "--permission-mode", "dontAsk", "--tools", "", "--allowed-tools", "", "--disallowed-tools", "Bash,Edit,Write,Agent,Task,WebFetch,WebSearch", "--model", request.model, "--effort", "high", request.prompt] };
+  if (request.promptOnStdin) { launch.args.pop(); launch.stdin = request.prompt; }
+  return launch;
 }
 
 /** Prefix of every precheck refusal that means "no usable delegation for this stage". */

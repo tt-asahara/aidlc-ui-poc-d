@@ -64,6 +64,7 @@ describe("ordinary /aidlc D integration", () => {
       "d-persistence-hook.ts",
       "d-persistence.ts",
       "d-feature-checks.ts",
+      "document-answers.ts",
       "grounding-runtime.ts",
       "generic-auto-cli.ts",
       "issue-ambiguity-assessor.ts",

@@ -73,7 +73,7 @@
 
 <h1>AI-DLC コマンド＆オプション リファレンス</h1>
 <div class="meta">
-  対象: <b>aidlc-ui-poc-d（Arm D ＝ Arm C の UI 基盤 ＋ D acceleration）</b> — core 2.11.0 ベース ／ 基準: upstream <code>v2.11.0</code> @ <code>6a378b53</code>（<code>core/</code> は upstream と同一）＋ <code>poc/ui-poc</code>・<code>poc/d-acceleration</code>・<code>poc/pr-lens-review</code> ／ 2026-10-24 更新<br>
+  対象: <b>aidlc-ui-poc-d（Arm D ＝ Arm C の UI 基盤 ＋ D acceleration）</b> — core 2.11.0 ベース ／ 基準: upstream <code>v2.11.0</code> @ <code>6a378b53</code>（<code>core/</code> は upstream と同一）＋ <code>poc/ui-poc</code>・<code>poc/d-acceleration</code>・<code>poc/pr-lens-review</code> ／ 2026-10-25 更新<br>
   正本: <code>.claude/skills/aidlc/SKILL.md</code>・<code>bun .claude/tools/aidlc-utility.ts help</code>・<code>poc/d-acceleration/configuration.md</code>・<code>poc/d-acceleration/d-acceleration.example.jsonc</code>。本ページはその読み物ビュー（KDDI 配布の <code>docs/kddi-aidlc-commands.html</code> と同じ観点でこのリポジトリ版に作り直したもの）。
 </div>
 
@@ -96,7 +96,7 @@
 </p>
 
 <h2 id="sec1">① <code>/aidlc</code> コマンド × 33ステージ マトリクス</h2>
-<p class="body">縦が <code>/aidlc</code> に続けて打つ全コマンド（core 20＋D 拡張 5、＋独立 skill 1）、横が33ステージ。<b>●＝そのステージの成果物を直接読み書きする確定的な対応</b>、<b>◎＝ステージ範囲に緩く対応する概念上の紐付け</b>、<b>帯塗り＝ステージを問わず全体に効く／毎回対象を指定する</b>。<b>行をクリックすると下に構文・使用例・詳細・参照資料・編集する成果物が開く。</b></p>
+<p class="body">縦が <code>/aidlc</code> に続けて打つ全コマンド（core 20＋D 拡張 6、＋独立 skill 1）、横が33ステージ。<b>●＝そのステージの成果物を直接読み書きする確定的な対応</b>、<b>◎＝ステージ範囲に緩く対応する概念上の紐付け</b>、<b>帯塗り＝ステージを問わず全体に効く／毎回対象を指定する</b>。<b>行をクリックすると下に構文・使用例・詳細・参照資料・編集する成果物が開く。</b></p>
 <div class="legend">
   <span class="it"><span class="dot core"></span> core が確定的に対応</span>
   <span class="it"><span class="dot ext"></span> D 拡張が確定的に対応</span>
@@ -169,13 +169,14 @@
 </table>
 <div class="note">core 側の実行設定（depth・test-strategy・review・guard-policy・sensors など）は従来どおり <code>/aidlc config get|set|list</code> と①の各フラグで変える。D の設定ファイルはそれとは別で、D が足した機能だけを制御する。</div>
 
-<h2 id="sec4">④ scope 一覧（14種）</h2>
+<h2 id="sec4">④ scope 一覧（15種）</h2>
 <p class="body">scope はステージ集合＋depth＋test-strategy のプリセット。<code>/aidlc &lt;scope名&gt;</code> または説明文からの自動判定で決まる。<b>ui-poc-*</b> の3つは UI 基盤プラグイン（<code>poc/ui-poc</code>）の scope で、D の導入で使えるようになる。短い英語の依頼（web app・dashboard など）は <code>ui-poc-application</code> に自動判定されるが、長文や日本語の依頼は通常の提案になるので、scope 確認で <code>ui-poc-application</code> を選ぶ。</p>
 <table class="list">
 <thead><tr><th class="mono" style="width:180px">scope</th><th style="width:110px">EXECUTE / 33</th><th style="width:120px">depth</th><th>用途</th></tr></thead>
 <tbody>
 <tr><td class="mono">ui-poc-application <span class="chip" style="background:var(--ext)">UI</span></td><td>23 / 33</td><td>standard</td><td>UI アプリの通常の開発。1.6 rough-mockups と 2.5 refined-mockups の HTML 証跡を Construction まで引き継ぐ。Guard Policy strict・plan approval on</td></tr>
 <tr><td class="mono">ui-poc-requirements <span class="chip" style="background:var(--ext)">UI</span></td><td>11 / 33</td><td>standard</td><td>作らずに要件だけを練り直すループ。モックと要件・ストーリーを回し、<code>--doc</code> の設計書を育てる。設計・Construction・Operation は無い</td></tr>
+<tr><td class="mono">ui-poc-document-driven <span class="chip" style="background:var(--ext)">UI</span></td><td>10 / 33</td><td>standard</td><td>渡された要件資料から 2.4 User Stories まで進める。サマリー確認・learnings・plan approval は off で、止まるのは各ステージの承認ゲート（新規なら6回）と資料で決まらない質問だけ。2.5 以降は無い。入口は <code>/aidlc --from-docs</code></td></tr>
 <tr><td class="mono">ui-poc-comparison <span class="chip" style="background:var(--ext)">UI</span></td><td>23 / 33</td><td>standard</td><td>A/B/C のデザイン処理を同じ条件で比べるための scope。2.5 のデザインスキルは既定（Arm C）から変えられない</td></tr>
 <tr><td class="mono">classic</td><td>18 / 33</td><td>standard</td><td>ゲート重視の標準フロー。<b>説明文からの自動判定で決まらないときの既定</b></td></tr>
 <tr><td class="mono">express</td><td>10 / 33</td><td>minimal</td><td>軽量フロー。要件からデプロイまで、設計パスとレビューなし</td></tr>
@@ -209,6 +210,7 @@
 <thead><tr><th style="width:290px">やりたいこと</th><th>打つもの</th></tr></thead>
 <tbody>
 <tr><td>UI のある機能を作り始める</td><td><code>/aidlc ui-poc-application</code>、または説明文で始めて scope 確認で <code>ui-poc-application</code> を選ぶ</td></tr>
+<tr><td>要件資料を渡して、承認以外は止まらずにストーリーまで進めたい</td><td><code>/aidlc --from-docs &lt;資料フォルダ&gt; &lt;説明&gt;</code> → intent 作成後に <code>AI-DLC delegate-document-answers</code> を1回送る → 各ゲートで承認</td></tr>
 <tr><td>作らずに要件と画面案だけ詰めたい</td><td><code>/aidlc ui-poc-requirements</code> → 区切りごとに <code>/aidlc --doc</code></td></tr>
 <tr><td>UI の無い機能・修正を進める</td><td><code>/aidlc &lt;説明文&gt;</code>（scope 自動判定）または <code>/aidlc feature</code> / <code>bugfix</code> など</td></tr>
 <tr><td>中断したワークフローを再開する</td><td><code>/aidlc</code>（進行中の作業を直接続ける）／park していたら <code>/aidlc --resume</code></td></tr>
@@ -254,7 +256,7 @@
 <tr><td><code>--auto</code> は Construction Autonomy を借用し、別に supervisor（<code>--through</code>）で無人実行</td><td><code>--auto</code> は D の generic auto（上限付き）。無人の夜間 supervisor は無い</td></tr>
 <tr><td>Issue オートパイロットは <code>aidlc:*</code> 実行ラベル4種・<code>requirementGapPolicy</code>・<code>aidlc:assumed-requirements</code></td><td>ラベルは <code>auto.labelAllowlist</code> の完全一致。曖昧さは <code>auto.ambiguityPolicy</code>（halt / assume / research）と仮定台帳</td></tr>
 <tr><td><code>--next-intent</code>（完了検査つきで次の intent へ）</td><td><code>--next-intent --from-issue &lt;N&gt;</code> だけ。Issue を使わない次の intent は説明文で始める（engine が新規作業として確認する）</td></tr>
-<tr><td>scope 15種（<code>api</code>・<code>review-loop</code>・<code>vibe</code>・<code>mock</code> が KDDI 限定）</td><td>scope 14種（core 11＋ui-poc 3）</td></tr>
+<tr><td>scope 15種（<code>api</code>・<code>review-loop</code>・<code>vibe</code>・<code>mock</code> が KDDI 限定）</td><td>scope 15種（core 11＋ui-poc 4）</td></tr>
 </tbody>
 </table>
 
@@ -274,7 +276,7 @@
 </tbody>
 </table>
 
-<p class="figcap" style="margin-top:30px">更新: 2026-10-24 ／ このページは手書きの読み物ビューです。コマンド・フラグの真値と食い違ったら正本（SKILL / <code>aidlc-utility.ts help</code> / <code>poc/d-acceleration/configuration.md</code> / <code>d-acceleration.example.jsonc</code>）が勝ちます。</p>
+<p class="figcap" style="margin-top:30px">更新: 2026-10-25 ／ このページは手書きの読み物ビューです。コマンド・フラグの真値と食い違ったら正本（SKILL / <code>aidlc-utility.ts help</code> / <code>poc/d-acceleration/configuration.md</code> / <code>d-acceleration.example.jsonc</code>）が勝ちます。</p>
 
 </div>
 <script>
@@ -368,6 +370,10 @@ const CMDS=[
  syntax:"/aidlc --doc [--full]",example:"/aidlc --doc",
  body:"全 intent をまたぐプロダクト単位の設計書を作る（KDDI ハーネスから移植）。engine の next には渡さず、conductor が design-document.ts doc-manifest --json で入力集合（各 record_root）を決定論に得て、design-document-guide.md の章立てに従い差分マージする。--full は doc-snapshot で1世代だけ退避してから作り直す。ワークフロー状態は変えない（read-only）。KDDI の docCriticLoop（設計書 critic ループ）は移植していない。ui-poc-requirements scope は要件ループのたびにこの設計書を育てる前提。",
  stages:"Inception 全域と Construction の設計成果物（2.1〜2.9, 3.1〜3.3）を入力として消費",refs:[".claude/tools/d-acceleration/design-document.ts（doc-manifest / doc-snapshot）",".claude/tools/d-acceleration/design-document-guide.md","poc/d-acceleration/README.md（Design document）"],writes:["aidlc/spaces/<space>/design-document/（正本）","--full 時: aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/（1世代、gitignored）"]},
+{name:"--from-docs <資料> <説明文>",origin:"ext",desc:"要件資料から自動で質問に回答して進める",kind:"cells",rings:["1.1","1.4","1.6","2.1","2.2","2.3","2.4"],
+ syntax:"/aidlc --from-docs <資料フォルダかファイル> <やりたいことの説明> ／ intent 作成後に AI-DLC delegate-document-answers",example:"/aidlc --from-docs ./要件資料 家計簿ウェブアプリを作りたい",
+ body:"D の資料ドリブンモード。document-answers.ts onboard が資料（md・txt・pdf・docx）を knowledge/documents/ にコピーして公式 DocumentKB に索引し、scope を ui-poc-document-driven に明示して開始する（scope 確認なし）。intent 作成直後に document-answers.ts bind で資料をその intent に紐づけ（他の intent の資料は読まない）、一度だけ止まり、人が AI-DLC delegate-document-answers と送ると、2.4 User Stories までの質問ステージを資料からの回答に任せる grant ができる（最初のプロンプトは intent が無いため HUMAN_TURN に残らず、この1手が必要）。各ステージでは no-tool の判定モデルが回答と引用を出し、引用が資料の抽出テキストに逐語で存在するものだけを [Answer Source]: document-fact 付きで書き込む。残りの質問だけを人に1回で聞く。ゲート前に digest で「資料から決めたこと／人が答えたこと／未決」を示す。ゲートの承認は常に人。",
+ stages:"1.1, 1.4, 1.6, 2.1（既存コードのみ）, 2.2, 2.3, 2.4",refs:[".claude/skills/aidlc/SKILL.md（--from-docs）",".claude/tools/d-acceleration/document-answers.ts（onboard / bind / answer / digest）",".claude/tools/d-acceleration/ai-approval-controller.ts（document-grant）","poc/d-acceleration/document-driven-auto.md"],writes:["aidlc/spaces/<space>/knowledge/documents/<フォルダ>/（資料のコピー）と documentkb/","各ステージの <stage>-questions.md の回答欄（資料で決まった問のみ）","decisions/document-answer-delegation.json・decisions/document-answers.jsonl（D の台帳。公式 audit ではない）"]},
 {name:"--auto <説明文>",origin:"ext",desc:"説明文から自動進行",kind:"global",
  syntax:"/aidlc --auto <やりたいことの説明>",example:"/aidlc --auto 在庫一覧画面を作りたい",
  body:"D の generic auto。auto.enabled=true のときだけ動く。先頭の --auto だけを外した説明文をファイルに書き、generic-auto-cli.ts start → 公式 print の intent-create → bootstrap（start 以降に作られた intent だけに束縛）→ 各 directive ごとの checkpoint の順で、公式 engine の正規遷移だけを自動で続ける。既定の auto.sessionOnly=true では intent 作成直後に止まる。続けるには sessionOnly:false と through / maxSteps / deadlineMs の上限が必要。承認ゲート（ask）とステージ内質問は人の回答を待ち、その待ち時間は deadline に数えない。新規 intent には constructionDefaults（既定 stage-major＋swarm）を公式 setter で1回だけ適用する。",

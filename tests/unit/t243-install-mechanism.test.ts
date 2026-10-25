@@ -8130,6 +8130,7 @@ describe("t243 projection channel", () => {
       "Bash(aidlc d parallel-guard *)",
       "Bash(aidlc d design-document *)",
       "Bash(aidlc d pr-lens-gate *)",
+      "Bash(aidlc d document-answers *)",
       ...exactNative.map((command) => `Bash(${command})`),
     ]);
     expect(claudeSettings.permissions.allow).not.toContain("Bash(aidlc d *)");

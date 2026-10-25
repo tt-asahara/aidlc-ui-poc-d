@@ -15,6 +15,11 @@
       "id": "requirements-c",
       "scope": "ui-poc-requirements",
       "comparisonTreatment": null
+    },
+    "ui-poc-document-driven": {
+      "id": "document-driven-c",
+      "scope": "ui-poc-document-driven",
+      "comparisonTreatment": null
     }
   },
   "sourceCommit": "49dd158d1076134a641b33efb035946536778336",

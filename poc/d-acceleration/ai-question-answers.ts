@@ -33,7 +33,7 @@ const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // the heading/slot counts, and the count checks then fail closed.
 export const QUESTION_HEADING = /^##[ \t]+([Qq][0-9]+)(?![\p{L}\p{N}_])[^\r\n]*$/gmu;
 export const LOW_RISK_MARKER_LINE = /^[ \t]*\[AI-Autonomy\]:[ \t]*low-risk-reversible[ \t]*$/;
-export const questionTemplate = (body: string): string => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID)\]:[^\r\n]*(?:\r?\n)?/gm, "");
+export const questionTemplate = (body: string): string => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID|Citation)\]:[^\r\n]*(?:\r?\n)?/gm, "");
 export const answerValues = (body: string): string[] => [...body.matchAll(/^\s*\[Answer\]:[ \t]*(.*?)[ \t]*$/gm)].map((match) => match[1].trim());
 export function questionSections(body: string): Array<{ id: string; body: string }> {
   const headings = [...body.matchAll(QUESTION_HEADING)], ids = headings.map((heading) => heading[1].toUpperCase());
@@ -59,6 +59,17 @@ export function sectionEligibility(section: string): "eligible" | "unmarked" | "
 export const PER_UNIT_QUESTION_STAGES: ReadonlySet<string> = new Set(["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design"]);
 // The engine writes this questions file itself (Plan Approval); no agent may.
 const ENGINE_OWNED_QUESTION_STAGES: ReadonlySet<string> = new Set(["code-generation"]);
+
+/** The phase heading (`### IDEATION PHASE` -> `ideation`) under which the state lists `stage`, or null. */
+export function stagePhaseInState(body: string, stage: string): string | null {
+  let phase: string | null = null;
+  for (const line of body.split(/\r?\n/)) {
+    const heading = line.match(/^###\s+([A-Z]+)\s+PHASE\s*$/);
+    if (heading) { phase = heading[1].toLowerCase(); continue; }
+    if (new RegExp(`^\\s*-\\s*\\[[^\\]]\\]\\s+${escape(stage)}\\s+—`).test(line)) return phase;
+  }
+  return null;
+}
 
 export function stateValue(body: string, field: string): string | undefined { return body.match(new RegExp(`^\\s*-\\s*\\*\\*${escape(field)}\\*\\*:\\s*(.+?)\\s*$`, "im"))?.[1]?.trim(); }
 
@@ -171,7 +182,7 @@ const ledgerHas = (path: string, decisionId: string) => existsSync(path) && read
  * run under the same exclusive ledger lock, so concurrent settlers neither
  * lose rows nor duplicate a decisionId. Returns false when already recorded.
  */
-export function appendLedgerOnce(path: string, decisionId: string, rows: () => AiQuestionAnswerLedgerRow[]): boolean {
+export function appendLedgerOnce<Row = AiQuestionAnswerLedgerRow>(path: string, decisionId: string, rows: () => Row[]): boolean {
   return withLedgerLock(path, () => {
     if (ledgerHas(path, decisionId)) return false;
     appendJsonl(path, rows());

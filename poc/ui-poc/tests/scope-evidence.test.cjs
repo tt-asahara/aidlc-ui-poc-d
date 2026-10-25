@@ -42,6 +42,7 @@ function fixture(t, scope, unitMappings = [HOME]) {
 test('scope policy: application and requirements use the engine record, comparison and unlisted scopes keep the ledger', () => {
   assert.deepEqual(scopePolicy('ui-poc-application'), {sensor:'on', upstreamApproval:'engine-record'});
   assert.deepEqual(scopePolicy('ui-poc-requirements'), {sensor:'on', upstreamApproval:'engine-record'});
+  assert.deepEqual(scopePolicy('ui-poc-document-driven'), {sensor:'on', upstreamApproval:'engine-record'});
   assert.deepEqual(scopePolicy('ui-poc-comparison'), {sensor:'on', upstreamApproval:'ledger'});
   assert.deepEqual(scopePolicy('some-other-scope'), {sensor:'on', upstreamApproval:'ledger'});
   assert.deepEqual(scopePolicy(null), {sensor:'on', upstreamApproval:'ledger'});

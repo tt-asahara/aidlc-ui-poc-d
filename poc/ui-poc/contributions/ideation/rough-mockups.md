@@ -6,6 +6,7 @@ adds:
     - ui-poc-comparison
     - ui-poc-application
     - ui-poc-requirements
+    - ui-poc-document-driven
   produces:
     - ui-poc-rough-contract
   sensors:
@@ -32,6 +33,8 @@ Read the installed runtime contract at {{HARNESS_DIR}}/tools/ui-poc/contract.md 
 ### Review findings before the gate
 
 The `ui-poc-evidence` sensor fires when this stage's gate opens. While the current review leaves any Critical or Major finding `New` or `Unresolved` with no decision by the person, it reports `Open Major review findings without the person's decision: …` and the engine keeps the gate closed. That hold is the designed path, not a sensor defect: do not take the blocking-sensor override for it on your own, and never record a decision the person did not make. Only Minor findings open, or none: nothing changes, present the standard gate.
+
+In the `ui-poc-document-driven` scope, first try to clear them without a question: revise the artifacts to address every open Critical or Major finding and have the stage's reviewer review again, as the stage protocol's review loop allows, at most two more times. Ask the question below only when such a finding is still open after that. Accepting a risk is never taken on the person's behalf.
 
 Ask the person one question through the engine, exactly: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage rough-mockups --decision "Major review findings still open" --options "Fix the Major findings first,Decide each finding,Accept all as risks"`. Show the open Major findings from the review brief and the three choices in that order, the first marked recommended, in the conversation language, and end the turn. Record their reply with `bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage rough-mockups --details "<the chosen label>"`, then record what they decided with `bun {{HARNESS_DIR}}/tools/ui-poc-review-risks.cjs decide --stage rough-mockups --output-path <record>/ideation/rough-mockups/ui-poc-rough-contract.md …` (run `status` with the same flags to see what is open):
 
