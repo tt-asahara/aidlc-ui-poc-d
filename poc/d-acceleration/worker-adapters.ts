@@ -19,6 +19,8 @@ export type WorkerLaunch = {
   requestedModel: string | null;
   requestedEffort: string | null;
   environment?: Record<string, string | undefined>;
+  /** Text written to the worker's stdin; a prompt too large for one argv entry goes here. */
+  stdin?: string;
 };
 
 export type WorkerResult = {
@@ -186,7 +188,7 @@ export async function runWorker(launch: WorkerLaunch, limits: WorkerLimits): Pro
   if (!Number.isFinite(limits.timeoutMs) || limits.timeoutMs <= 0) throw new Error("timeoutMs must be positive");
   if (!Number.isInteger(limits.maxStdoutBytes) || limits.maxStdoutBytes < 0 || !Number.isInteger(limits.maxStderrBytes) || limits.maxStderrBytes < 0) throw new Error("output limits must be non-negative integers");
   const startedAt = Date.now(); let child: ReturnType<typeof Bun.spawn>;
-  try { child = Bun.spawn([launch.executable, ...launch.args], { cwd: limits.projectDir, stdout: "pipe", stderr: "pipe", env: launch.kind === "claude" ? externalEnvironment(launch.environment) : launch.environment }); }
+  try { child = Bun.spawn([launch.executable, ...launch.args], { cwd: limits.projectDir, ...(launch.stdin === undefined ? {} : { stdin: new Blob([launch.stdin]) }), stdout: "pipe", stderr: "pipe", env: launch.kind === "claude" ? externalEnvironment(launch.environment) : launch.environment }); }
   catch (error) {
     return { ok: false, kind: launch.kind, argv: [launch.executable, ...launch.args], exitCode: null, signalCode: null, failure: launch.kind === "claude" ? "unavailable" : "spawn-error", stdout: "", stderr: String(error), stdoutTruncated: false, stderrTruncated: false, requestedModel: launch.requestedModel, requestedEffort: launch.requestedEffort, runtimeReportedModel: null, modelIdentity: classifyModelIdentity(launch.requestedModel, [], "none"), usage: null, startedAt, endedAt: Date.now() };
   }

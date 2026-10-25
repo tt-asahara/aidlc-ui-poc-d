@@ -27,7 +27,7 @@ const DENIED_STAGE_TOKEN = /(^|[-_])(operations?|deployment|deploy|production|re
 const OPERATION_STAGES = new Set(stagePolicy.stages.filter((entry) => entry.phase === "operation").map((entry) => entry.stage));
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 const DEFAULT_GRANT_PATH = "decisions/ai-approval-delegation.json";
-const DOCUMENT_DELEGATION_PATH = "decisions/document-answer-delegation.json";
+export const DOCUMENT_DELEGATION_PATH = "decisions/document-answer-delegation.json";
 /** The person's exact words that hand a document-driven intent's question stages to document-grounded answers. */
 export const DOCUMENT_DELEGATION_COMMAND = "AI-DLC delegate-document-answers";
 /** Document-grounded answers never reach past this stage (the document-driven mode's boundary). */
@@ -75,7 +75,7 @@ export type AiApprovalGrantResult = {
 
 type Snapshot = { path: string; absolute: string; bytes: Buffer; sha256: string };
 
-function sha256(value: string | Uint8Array): string {
+export function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -130,7 +130,7 @@ function canonicalize(value: unknown): unknown {
   throw new Error(`unsupported ${typeof value} in canonical value`);
 }
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalize(value));
 }
 
@@ -142,7 +142,7 @@ function parseDelegationCommand(message: string): { scope: string; through: stri
   return { scope: match[1], through: match[2], allowedStages };
 }
 
-function within(root: string, candidate: string): boolean {
+export function within(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
@@ -220,7 +220,7 @@ function stateScope(state: Snapshot): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function atomicWrite(path: string, text: string): void {
+export function atomicWrite(path: string, text: string): void {
   const parent = dirname(path);
   mkdirSync(parent, { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;

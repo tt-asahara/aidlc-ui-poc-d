@@ -4,14 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDocumentAnswerGrant, documentDelegationStages, DOCUMENT_DELEGATION_COMMAND } from "../ai-approval-controller.ts";
 import { AI_QUESTION_ANSWER_LEDGER, questionTemplate } from "../ai-question-answers.ts";
-import { answerFromDocuments, bindDocuments, citationRefusal, DOCUMENT_ANSWER_LEDGER, DOCUMENT_HANDOVER, documentDigest, intentUuid, loadKbDocuments, normalizeForQuote, parseProposals, stageDocuments, type KbDocument } from "../document-answers.ts";
+import { answerFromDocuments, bindDocuments, citationRefusal, DOCUMENT_ANSWER_LEDGER, DOCUMENT_HANDOVER, documentDigest, intentUuid, loadKbDocuments, normalizeForQuote, parseProposals, stageDocuments, takePathFile, type KbDocument } from "../document-answers.ts";
 import { recordHumanTurn } from "./human-turn.ts";
 
 const T = 60_000;
 // The source dispatcher; `aidlc engine knowledge ...` is the route both install channels use.
 const AIDLC = join(import.meta.dir, "..", "..", "..", "core", "tools", "aidlc.ts");
 const UUID = "01a17000-0000-7000-8000-00000000d0c5";
-const state = (scope = "ui-poc-document-driven") => `- **Scope**: ${scope}
+const nowSecond = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
+const state = (scope = "ui-poc-document-driven", start = nowSecond()) => `- **Scope**: ${scope}
+- **Start Date**: ${start}
 - **Lifecycle Phase**: IDEATION
 - **Current Stage**: intent-capture
 
@@ -48,7 +50,7 @@ B. 多通貨
 ## Q3 — 公開時期
 [Answer]:
 `;
-const DOCUMENT = "# 家計簿アプリ要件\n\n対象ユーザーは共働きの30代夫婦とする。\n表示通貨は日本円のみとする。\n";
+const DOCUMENT = "# 家計簿アプリ要件\n\n対象ユーザーは共働きの30代夫婦とする。\n表示通貨は日本円のみとし、外貨は扱わない。\n";
 
 /** A document-driven intent whose hand-over documents went through onboard + bind, as the SKILL entry runs them. */
 function fixture(opts: { delegate?: boolean; words?: string; scope?: string } = {}) {
@@ -56,12 +58,12 @@ function fixture(opts: { delegate?: boolean; words?: string; scope?: string } = 
   mkdirSync(join(intent, "ideation/intent-capture"), { recursive: true });
   writeFileSync(join(intents, "active-intent"), "example\n");
   writeFileSync(join(intents, "intents.json"), JSON.stringify([{ uuid: UUID, slug: "example", dirName: "example", scope: opts.scope ?? "ui-poc-document-driven", status: "in-flight", request: "00000000" }], null, 2));
-  writeFileSync(join(intent, "aidlc-state.md"), state(opts.scope));
   writeFileSync(join(intent, "ideation/intent-capture/intent-capture-questions.md"), QUESTIONS);
   mkdirSync(join(root, "handover"));
   writeFileSync(join(root, "handover/requirements.md"), DOCUMENT);
   stageDocuments(root, "handover", AIDLC);
-  bindDocuments(root, AIDLC);
+  writeFileSync(join(intent, "aidlc-state.md"), state(opts.scope));
+  if ((opts.scope ?? "ui-poc-document-driven") === "ui-poc-document-driven") bindDocuments(root, AIDLC);
   if (opts.delegate !== false) {
     const words = opts.words ?? DOCUMENT_DELEGATION_COMMAND;
     writeFileSync(join(root, "words.txt"), words);
@@ -95,27 +97,39 @@ describe("document-driven grant", () => {
     recordHumanTurn(f.root, "承認");
     expect(() => createDocumentAnswerGrant({ projectDir: f.root, userMessageFile: "words.txt", messageId: "m" })).toThrow(/latest turn/);
   }, T);
+  test("bind refuses a leftover hand-over: another scope, another space, or an intent older than the hand-over", () => {
+    const f = fixture({ delegate: false });
+    mkdirSync(join(f.root, "later"));
+    writeFileSync(join(f.root, "later/x.md"), "画面はスマートフォン優先とし、PCでも閲覧できればよい。\n");
+    stageDocuments(f.root, "later", AIDLC);
+    writeFileSync(join(f.intent, "aidlc-state.md"), state("ui-poc-document-driven", "2020-01-01T00:00:00Z"));
+    expect(() => bindDocuments(f.root, AIDLC)).toThrow(/does not belong to the active example intent and was removed/);
+    expect(existsSync(join(f.root, DOCUMENT_HANDOVER))).toBe(false);
+  }, T);
   test("is refused outside the document-driven scope", () => {
     expect(() => fixture({ scope: "ui-poc-application" })).toThrow(/needs a ui-poc-document-driven intent/);
   }, T);
 });
 
 describe("citation check", () => {
-  const documents = new Map<string, KbDocument>([["d1", { id: "d1", path: "documents/r.md", sha256: "x", sourceRevision: "x", content: "表示通貨は\n日本円のみとする。", contentSha256: "y" }]]);
+  const documents = new Map<string, KbDocument>([["d1", { id: "d1", path: "documents/r.md", sha256: "x", sourceRevision: "x", content: "表示通貨は\n日本円のみとし、外貨は扱わない。", contentSha256: "y", normalized: normalizeForQuote("表示通貨は\n日本円のみとし、外貨は扱わない。"), original: null }]]);
   test("accepts a verbatim quote across width and whitespace differences", () => {
     expect(normalizeForQuote("ＡＢＣ  def")).toBe("abc def");
-    expect(citationRefusal([{ documentId: "d1", quote: "表示通貨は 日本円のみとする" }], documents)).toBeNull();
+    expect(citationRefusal([{ documentId: "d1", quote: "表示通貨は 日本円のみとし、外貨は扱わない" }], documents)).toBeNull();
   });
   test("refuses an invented, too short, or unknown-document quote", () => {
-    expect(citationRefusal([{ documentId: "d1", quote: "表示通貨は米ドルとする" }], documents)).toMatch(/not in documents\/r.md/);
-    expect(citationRefusal([{ documentId: "d1", quote: "日本円" }], documents)).toMatch(/too short/);
-    expect(citationRefusal([{ documentId: "d9", quote: "表示通貨は日本円のみとする" }], documents)).toMatch(/unknown or stale/);
+    expect(citationRefusal([{ documentId: "d1", quote: "表示通貨は米ドルとし、円は扱わない" }], documents)).toMatch(/not in documents\/r.md/);
+    expect(citationRefusal([{ documentId: "d1", quote: "日本円のみとし、外貨" }], documents)).toMatch(/too short/);
+    expect(citationRefusal([{ documentId: "d9", quote: "表示通貨は日本円のみとし、外貨は扱わない" }], documents)).toMatch(/unknown or stale/);
   });
   test("parses one entry per blank question in order and rejects shape errors", () => {
     const entry = { questionId: "Q1", outcome: "needs-person", answer: null, citations: [], reason: "記載なし" };
     expect(parseProposals(JSON.stringify({ result: JSON.stringify({ answers: [entry] }) }), ["Q1"])[0].outcome).toBe("needs-person");
     expect(() => parseProposals(JSON.stringify({ result: JSON.stringify({ answers: [entry] }) }), ["Q2"])).toThrow();
-    expect(() => parseProposals(JSON.stringify({ result: JSON.stringify({ answers: [{ ...entry, outcome: "document-fact", answer: "A", citations: [] }] }) }), ["Q1"])).toThrow();
+    // One unusable entry goes to the person on its own; the others survive.
+    const mixed = parseProposals(JSON.stringify({ result: JSON.stringify({ answers: [{ ...entry, outcome: "document-fact", answer: "A", citations: [] }, { questionId: "Q2", outcome: "document-fact", answer: "line\nbreak", citations: [{ documentId: "d1", quote: "表示通貨は日本円のみとし、外貨は扱わない" }], reason: "r" }, { questionId: "Q3", outcome: "document-fact", answer: "A. 日本円のみ", citations: [{ documentId: "d1", quote: "表示通貨は日本円のみとし、外貨は扱わない" }], reason: "r" }] }) }), ["Q1", "Q2", "Q3"]);
+    expect(mixed.map((proposal) => proposal.outcome)).toEqual(["needs-person", "needs-person", "document-fact"]);
+    expect(mixed[0].reason).toMatch(/unusable/);
   });
   test("citation lines stay outside the low-risk settler's question template", () => {
     expect(questionTemplate("## Q1\n[Answer]: A\n[Answer Source]: document-fact\n[AI Decision ID]: x\n[Citation]: documents/r.md — \"q\"\n")).toBe("## Q1\n[Answer]:\n");
@@ -139,15 +153,26 @@ describe("hand-over documents", () => {
     writeFileSync(join(from, "要件.md"), "画面はPC優先とする。\n");
     expect(() => stageDocuments(f.root, "more", AIDLC)).toThrow(/different document already exists/);
   }, T);
+  test("refuses to sweep AI-DLC's own trees, and takes the person's path from a file it then removes", () => {
+    const f = fixture({ delegate: false });
+    expect(() => stageDocuments(f.root, ".", AIDLC)).toThrow(/not one that is or contains aidlc/);
+    expect(() => stageDocuments(f.root, "aidlc/spaces/default/knowledge/documents", AIDLC)).toThrow(/not one that is or contains aidlc/);
+    mkdirSync(join(f.root, ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(f.root, ".aidlc-engine/d-docs-path-abc.txt"), "docs/Bob's spec $(rm -rf x)\n");
+    expect(takePathFile(f.root, ".aidlc-engine/d-docs-path-abc.txt")).toBe("docs/Bob's spec $(rm -rf x)");
+    expect(existsSync(join(f.root, ".aidlc-engine/d-docs-path-abc.txt"))).toBe(false);
+    expect(() => takePathFile(f.root, "words.txt")).toThrow(/must be .aidlc-engine/);
+  }, T);
   test("bind associates the hand-over with the active intent only, and an intent reads only its own documents", () => {
     const f = fixture({ delegate: false });
     expect(existsSync(join(f.root, DOCUMENT_HANDOVER))).toBe(false);
     expect(loadKbDocuments(f.root, UUID, AIDLC).map((document) => document.path)).toEqual(["documents/handover/requirements.md"]);
     // A document handed over but not yet bound to this intent is never read for it.
     mkdirSync(join(f.root, "other"));
-    writeFileSync(join(f.root, "other/old.md"), "別案件: 表示通貨は米ドルとする。\n");
+    writeFileSync(join(f.root, "other/old.md"), "別案件: 表示通貨は米ドルとし、円は扱わない。\n");
     stageDocuments(f.root, "other", AIDLC);
     expect(loadKbDocuments(f.root, UUID, AIDLC).map((document) => document.path)).toEqual(["documents/handover/requirements.md"]);
+    writeFileSync(join(f.intent, "aidlc-state.md"), state());
     bindDocuments(f.root, AIDLC);
     expect(loadKbDocuments(f.root, UUID, AIDLC)).toHaveLength(2);
     expect(() => bindDocuments(f.root, AIDLC)).toThrow(/run onboard first/);
@@ -180,6 +205,15 @@ describe("answerFromDocuments", () => {
       stillOpen: ["Q2", "Q3"],
     });
   }, T);
+  test("the model receives the whole prompt on stdin, not as one argv entry", async () => {
+    const f = fixture(), id = docId(f.root), seen = join(f.root, "stdin.txt"), argv = join(f.root, "argv.txt");
+    const path = join(f.root, "claude-stdin");
+    writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argv}'\ncat > '${seen}'\ncat <<'AIDLC_EOF'\n${JSON.stringify({ result: JSON.stringify(settle(id)) })}\nAIDLC_EOF\n`);
+    chmodSync(path, 0o755);
+    expect((await run(f, path)).answered).toEqual(["Q1"]);
+    expect(readFileSync(seen, "utf8")).toContain("対象ユーザーは共働きの30代夫婦とする。");
+    expect(readFileSync(argv, "utf8")).not.toContain("対象ユーザーは共働き");
+  }, T);
   test("the digest shows a slot the person rewrote as theirs, and an AI-looking slot without a ledger row as theirs", async () => {
     const f = fixture(), id = docId(f.root);
     await run(f, model(f.root, settle(id)));
@@ -194,7 +228,7 @@ describe("answerFromDocuments", () => {
     const f = fixture(), id = docId(f.root);
     const first = { answers: [
       { questionId: "Q1", outcome: "document-fact", answer: "B. 共働き世帯", citations: [{ documentId: id, quote: "対象ユーザーは共働きの30代夫婦とする。" }], reason: "要件" },
-      { questionId: "Q2", outcome: "document-fact", answer: "A. 日本円のみ", citations: [{ documentId: id, quote: "表示通貨は日本円のみとする。" }], reason: "要件" },
+      { questionId: "Q2", outcome: "document-fact", answer: "A. 日本円のみ", citations: [{ documentId: id, quote: "表示通貨は日本円のみとし、外貨は扱わない。" }], reason: "要件" },
       { questionId: "Q3", outcome: "needs-person", answer: null, citations: [], reason: "記載なし" },
     ] };
     expect((await run(f, model(f.root, first))).answered).toEqual(["Q1", "Q2"]);

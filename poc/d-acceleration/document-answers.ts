@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { resolveDModels } from "./d-config.ts";
 import { runWorker, type ModelIdentity, type WorkerUsage } from "./worker-adapters.ts";
-import { activeIntentDir, DOCUMENT_DELEGATION_THROUGH, DOCUMENT_DRIVEN_SCOPE, grantHumanTurnRefusal, productionClaudeExecutable } from "./ai-approval-controller.ts";
+import { activeIntentDir, atomicWrite, canonicalJson, DOCUMENT_DELEGATION_PATH, DOCUMENT_DELEGATION_THROUGH, DOCUMENT_DRIVEN_SCOPE, grantHumanTurnRefusal, productionClaudeExecutable, sha256 as hash, within as inside } from "./ai-approval-controller.ts";
 import { runEngineSync } from "./execution.ts";
 import { questionAssessorLaunch } from "./ai-question-controller.ts";
-import { appendLedgerOnce, questionSections, resolveAiQuestionTarget, stateValue } from "./ai-question-answers.ts";
+import { appendLedgerOnce, questionSections, resolveAiQuestionTarget, stagePhaseInState, stateValue } from "./ai-question-answers.ts";
 
 // Document-grounded answers for the document-driven mode
 // (document-driven-auto.md). Under the person's exact
@@ -16,25 +15,24 @@ import { appendLedgerOnce, questionSections, resolveAiQuestionTarget, stateValue
 // in the official DocumentKB. The model never decides validity: an answer is
 // written only when every citation it gives is found verbatim in the current
 // extracted text of a current DocumentKB record. Everything else stays blank
-// for the person. Answers are AI provenance, recorded in the Intent's own D
+// for the person. The citation check proves only that the quoted words are the
+// person's own documents' words; whether they support the answer is shown to
+// the person, quote beside answer, in the gate digest, and the gate stays
+// theirs. Answers are AI provenance, recorded in the Intent's own D
 // ledger DOCUMENT_ANSWER_LEDGER (kept apart from the delegated low-risk
 // ledger, whose readers accept only their own rows); this never writes the
 // official audit or engine state, and never answers a gate.
 
-export const DOCUMENT_GRANT_PATH = join("decisions", "document-answer-delegation.json");
 /** Intent-relative D ledger of document-grounded answers. Not the official AI-DLC audit. */
 export const DOCUMENT_ANSWER_LEDGER = join("decisions", "document-answers.jsonl");
 /** Project-level hand-over manifest: documents `onboard` indexed before the intent existed, until `bind` associates them. */
 export const DOCUMENT_HANDOVER = join(".aidlc-engine", "d-document-handover.json");
 export const DOCUMENT_ANSWER_SOURCE = "document-fact";
-/** A quote shorter than this (after normalization) cannot settle anything. */
-export const MIN_QUOTE_CHARS = 6;
+/** A quote shorter than this (after normalization) is too generic to settle anything. */
+export const MIN_QUOTE_CHARS = 15;
 const MAX_DOCUMENT_CHARS = 400_000;
 const SHA = /^[a-f0-9]{64}$/;
 
-const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
-const canonical = (value: unknown): string => JSON.stringify(value, (_key, child) => child && typeof child === "object" && !Array.isArray(child) ? Object.fromEntries(Object.entries(child).sort(([a], [b]) => a.localeCompare(b))) : child);
-const inside = (root: string, path: string) => { const rel = relative(root, path); return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)); };
 const posix = (root: string, path: string) => relative(root, path).split(sep).join("/");
 
 /** Width-, case- and whitespace-insensitive form used only to compare a quote with a document. */
@@ -42,7 +40,22 @@ export function normalizeForQuote(text: string): string {
   return text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export type KbDocument = { id: string; path: string; sha256: string; sourceRevision: string; content: string; contentSha256: string };
+export type KbDocument = { id: string; path: string; sha256: string; sourceRevision: string; content: string; contentSha256: string; normalized: string; original: string | null };
+
+/**
+ * Null when every document read is still associated, extracted, and
+ * byte-identical at its original; otherwise the path that changed. One `list`
+ * plus a hash per original, so the check runs no `show` per document.
+ */
+export function documentsChanged(root: string, intent: string, documents: KbDocument[], aidlcTool = defaultAidlcTool(root)): string | null {
+  const listed = new Map<string, any>((knowledge(root, aidlcTool, ["list", "--json"]).documents ?? []).map((row: any) => [String(row.id), row]));
+  for (const document of documents) {
+    const row = listed.get(document.id);
+    if (!row || row.state !== "extracted" || row.status !== "indexed" || !Array.isArray(row.intents) || !row.intents.includes(intent)) return document.path;
+    if (!document.original || !existsSync(document.original) || lstatSync(document.original).isSymbolicLink() || hash(readFileSync(document.original)) !== document.sha256) return document.path;
+  }
+  return null;
+}
 
 /** The installed dispatcher; in a native install `runEngineSync` re-enters the compiled `aidlc` instead. */
 const defaultAidlcTool = (root: string) => join(root, ".claude", "tools", "aidlc.ts");
@@ -71,13 +84,14 @@ export function intentUuid(intentDir: string): string {
  */
 export function loadKbDocuments(root: string, intent: string, aidlcTool = defaultAidlcTool(root)): KbDocument[] {
   const listed = knowledge(root, aidlcTool, ["list", "--json"]);
+  const knowledgeDir = typeof listed.space === "string" && /^[A-Za-z0-9._-]+$/.test(listed.space) ? join(root, "aidlc", "spaces", listed.space, "knowledge") : null;
   const documents: KbDocument[] = [];
   for (const row of Array.isArray(listed.documents) ? listed.documents : []) {
     if (row.state !== "extracted" || row.status !== "indexed" || typeof row.id !== "string" || !Array.isArray(row.intents) || !row.intents.includes(intent)) continue;
     const shown = knowledge(root, aidlcTool, ["show", row.id, "--json"]);
     const revision = shown.extraction?.source_revision;
     if (typeof shown.content !== "string" || !SHA.test(String(shown.sha256)) || revision !== shown.sha256) continue;
-    documents.push({ id: shown.id, path: String(shown.path), sha256: shown.sha256, sourceRevision: revision, content: shown.content, contentSha256: hash(shown.content) });
+    documents.push({ id: shown.id, path: String(shown.path), sha256: shown.sha256, sourceRevision: revision, content: shown.content, contentSha256: hash(shown.content), normalized: normalizeForQuote(shown.content), original: shown.source?.kind === "managed" && knowledgeDir && typeof shown.source.path === "string" ? join(knowledgeDir, shown.source.path) : null });
   }
   return documents.sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -99,8 +113,14 @@ const sweepSkips = (name: string) => name.startsWith(".") || name.endsWith(".pem
 export function stageDocuments(projectDir: string, from: string, aidlcTool?: string) {
   if (!isAbsolute(projectDir)) throw new Error("--project-dir must be absolute");
   const root = realpathSync(projectDir);
+  if (!from.trim()) throw new Error("documents path is empty");
   const source = resolve(root, from);
   if (!existsSync(source) || lstatSync(source).isSymbolicLink()) throw new Error(`documents path is missing or a symlink: ${from}`);
+  // Never sweep AI-DLC's own records, the harness, or the DocumentKB originals as hand-over documents.
+  const real = realpathSync(source);
+  for (const owned of [join(root, "aidlc"), join(root, ".claude"), join(root, ".aidlc-engine")]) {
+    if (inside(owned, real) || inside(real, owned)) throw new Error(`hand over a folder or file of requirement documents, not one that is or contains ${posix(root, owned)}`);
+  }
   const files: Array<{ absolute: string; rel: string }> = [];
   const walk = (dir: string, prefix: string) => {
     for (const name of readdirSync(dir).sort()) {
@@ -137,7 +157,7 @@ export function stageDocuments(projectDir: string, from: string, aidlcTool?: str
   }
   const states = new Map<string, string>((knowledge(root, tool, ["list", "--json"]).documents ?? []).map((row: any) => [String(row.id), String(row.state)]));
   for (const entry of staged) entry.state = states.get(entry.id) ?? "missing";
-  atomic(join(root, DOCUMENT_HANDOVER), `${JSON.stringify({ schemaVersion: 1, space, documents: staged.map(({ id, path }) => ({ id, path })), createdAt: new Date().toISOString() }, null, 2)}\n`);
+  atomicWrite(join(root, DOCUMENT_HANDOVER), `${JSON.stringify({ schemaVersion: 1, space, createdAtMs: Date.now(), documents: staged.map(({ id, path }) => ({ id, path })) }, null, 2)}\n`);
   return { space, staged, notExtracted: staged.filter((entry) => entry.state !== "extracted").map((entry) => entry.path) };
 }
 
@@ -150,8 +170,18 @@ export function bindDocuments(projectDir: string, aidlcTool?: string) {
   if (!isAbsolute(projectDir)) throw new Error("--project-dir must be absolute");
   const root = realpathSync(projectDir), tool = aidlcTool ?? defaultAidlcTool(root), manifestPath = join(root, DOCUMENT_HANDOVER);
   const manifest: any = JSON.parse(regularFile(manifestPath, "document hand-over manifest (run onboard first)").toString("utf8"));
-  if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.documents) || manifest.documents.length === 0) throw new Error("document hand-over manifest is invalid");
-  const intent = activeIntentDir(root), uuid = intentUuid(intent);
+  if (manifest.schemaVersion !== 1 || typeof manifest.space !== "string" || typeof manifest.createdAtMs !== "number" || !Array.isArray(manifest.documents) || manifest.documents.length === 0) throw new Error("document hand-over manifest is invalid");
+  const intent = activeIntentDir(root), uuid = intentUuid(intent), stateBody = regularFile(join(intent, "aidlc-state.md"), "state file").toString("utf8");
+  // The hand-over belongs to the run that made it: the same space, and a
+  // document-driven intent started no earlier than the hand-over (to the
+  // state's one-second precision). Anything else is a leftover; it is removed
+  // and the person hands the documents over again.
+  const space = existsSync(join(root, "aidlc", "active-space")) ? readFileSync(join(root, "aidlc", "active-space"), "utf8").trim() : "default";
+  const started = Date.parse(stateValue(stateBody, "Start Date") ?? "");
+  if (manifest.space !== space || stateValue(stateBody, "Scope") !== DOCUMENT_DRIVEN_SCOPE || !Number.isFinite(started) || started < Math.floor(manifest.createdAtMs / 1000) * 1000) {
+    unlinkSync(manifestPath);
+    throw new Error(`the document hand-over does not belong to the active ${basename(intent)} intent and was removed; run /aidlc --from-docs again`);
+  }
   const listed = new Map<string, any>((knowledge(root, tool, ["list", "--json"]).documents ?? []).map((row: any) => [String(row.id), row]));
   for (const document of manifest.documents) {
     if (typeof document?.id !== "string" || !listed.has(document.id)) throw new Error(`handed-over document is not in DocumentKB: ${document?.path ?? document?.id}`);
@@ -164,21 +194,24 @@ export function bindDocuments(projectDir: string, aidlcTool?: string) {
 export type Citation = { documentId: string; quote: string };
 export type ProposedAnswer = { questionId: string; outcome: "document-fact" | "needs-person"; answer: string | null; citations: Citation[]; reason: string };
 
-/** Parses the model's JSON. Shape errors fail the whole call closed; content is judged later. */
+/**
+ * Parses the model's JSON. A wrong overall shape (count, order, ids) fails the
+ * whole call closed; one unusable entry becomes `needs-person` on its own, so
+ * it never discards the other answers. Content is judged later.
+ */
 export function parseProposals(stdout: string, questionIds: string[]): ProposedAnswer[] {
   const outer: any = JSON.parse(stdout);
   const raw = typeof outer.result === "string" ? outer.result.trim().replace(/^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/, "$1") : outer.result;
   const value: any = typeof raw === "string" ? JSON.parse(raw) : raw;
   if (!value || !Array.isArray(value.answers) || value.answers.length !== questionIds.length) throw new Error("model must return one entry per blank question");
-  return value.answers.map((entry: any, index: number) => {
-    if (!entry || entry.questionId !== questionIds[index] || !["document-fact", "needs-person"].includes(entry.outcome) || typeof entry.reason !== "string" || !entry.reason.trim()) throw new Error("answer entry is invalid");
-    if (entry.outcome === "needs-person") return { questionId: entry.questionId, outcome: "needs-person" as const, answer: null, citations: [], reason: entry.reason.trim() };
-    if (typeof entry.answer !== "string" || !entry.answer.trim() || /[\r\n\u2028\u2029]/.test(entry.answer) || entry.answer.length > 512 || !Array.isArray(entry.citations) || entry.citations.length === 0 || entry.citations.length > 8) throw new Error("document-fact entry is invalid");
-    const citations = entry.citations.map((citation: any) => {
-      if (!citation || typeof citation.documentId !== "string" || typeof citation.quote !== "string" || !citation.quote.trim() || citation.quote.length > 1000) throw new Error("citation is invalid");
-      return { documentId: citation.documentId, quote: citation.quote.trim() };
-    });
-    return { questionId: entry.questionId, outcome: "document-fact" as const, answer: entry.answer.trim(), citations, reason: entry.reason.trim() };
+  if (value.answers.some((entry: any, index: number) => entry?.questionId !== questionIds[index])) throw new Error("model entries do not match the blank questions in order");
+  return value.answers.map((entry: any, index: number): ProposedAnswer => {
+    const unusable = (why: string): ProposedAnswer => ({ questionId: questionIds[index], outcome: "needs-person", answer: null, citations: [], reason: `the model's answer was unusable (${why})` });
+    if (!["document-fact", "needs-person"].includes(entry.outcome) || typeof entry.reason !== "string" || !entry.reason.trim()) return unusable("no outcome or reason");
+    if (entry.outcome === "needs-person") return { questionId: entry.questionId, outcome: "needs-person", answer: null, citations: [], reason: entry.reason.trim() };
+    if (typeof entry.answer !== "string" || !entry.answer.trim() || /[\r\n\u2028\u2029]/.test(entry.answer) || entry.answer.length > 512) return unusable("the answer is not one line of at most 512 characters");
+    if (!Array.isArray(entry.citations) || entry.citations.length === 0 || entry.citations.length > 8 || entry.citations.some((citation: any) => !citation || typeof citation.documentId !== "string" || typeof citation.quote !== "string" || !citation.quote.trim() || citation.quote.length > 1000)) return unusable("the citations are missing or malformed");
+    return { questionId: entry.questionId, outcome: "document-fact", answer: entry.answer.trim(), citations: entry.citations.map((citation: any) => ({ documentId: citation.documentId, quote: citation.quote.trim() })), reason: entry.reason.trim() };
   });
 }
 
@@ -193,12 +226,17 @@ export function citationRefusal(citations: Citation[], documents: ReadonlyMap<st
     if (!document) return `citation names an unknown or stale document: ${citation.documentId}`;
     const quote = normalizeForQuote(citation.quote);
     if (quote.length < MIN_QUOTE_CHARS) return "citation quote is too short to settle the question";
-    if (!normalizeForQuote(document.content).includes(quote)) return `citation quote is not in ${document.path}`;
+    if (!document.normalized.includes(quote)) return `citation quote is not in ${document.path}`;
   }
   return null;
 }
 
-function atomic(path: string, body: string) { mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`; const fd = openSync(tmp, "wx", 0o600); try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); } renameSync(tmp, path); }
+/** Where a stage's questions file lives: under the phase whose heading lists the stage in the state file. */
+export function stageQuestionsPath(intent: string, stateBody: string, stage: string): string | null {
+  const phase = stagePhaseInState(stateBody, stage);
+  return phase ? join(intent, phase, stage, `${stage}-questions.md`) : null;
+}
+
 function regularFile(path: string, label: string): Buffer {
   if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) throw new Error(`${label} is missing or not a regular file`);
   return readFileSync(path);
@@ -231,7 +269,7 @@ export async function answerFromDocuments(options: DocumentAnswerOptions): Promi
   if (!isAbsolute(options.projectDir)) throw new Error("--project-dir must be absolute");
   const root = realpathSync(options.projectDir), intent = activeIntentDir(root), stage = options.stage;
   const block = (reason: string): DocumentAnswerResult => ({ status: "block", reason, stage, answered: [], residual: [] });
-  const grantPath = join(intent, DOCUMENT_GRANT_PATH);
+  const grantPath = join(intent, DOCUMENT_DELEGATION_PATH);
   if (!existsSync(grantPath)) return block(`no document answer delegation; the person sends \`AI-DLC delegate-document-answers\` to give one`);
   const grantBytes = regularFile(grantPath, "document answer delegation"), grant: any = JSON.parse(grantBytes.toString("utf8"));
   const unbound = grantHumanTurnRefusal(intent, grant);
@@ -241,6 +279,7 @@ export async function answerFromDocuments(options: DocumentAnswerOptions): Promi
   const target = resolveAiQuestionTarget(root, intent, stateBody, stage, null);
   if (!target.ok) return block(target.reason);
   const questionsPath = resolve(root, target.canonicalPath);
+  if (questionsPath !== stageQuestionsPath(intent, stateBody, stage)) return block("the current stage's questions file is not where the gate digest reads it");
   const questionsBytes = regularFile(questionsPath, "questions file"), questionsBody = questionsBytes.toString("utf8");
   const sections = questionSections(questionsBody);
   if (sections.length === 0) return block("questions file has no `## Q<n>` question");
@@ -272,7 +311,7 @@ export async function answerFromDocuments(options: DocumentAnswerOptions): Promi
   ].join("\n\n");
   const executable = options.claudeExecutable ? resolve(options.claudeExecutable) : productionClaudeExecutable(root);
   const model = resolveDModels(root).models.judgment;
-  const worker = await runWorker(questionAssessorLaunch({ executable, model, prompt }), { projectDir: root, timeoutMs: options.timeoutMs ?? 180_000, maxStdoutBytes: 262_144, maxStderrBytes: 16_384 });
+  const worker = await runWorker(questionAssessorLaunch({ executable, model, prompt, promptOnStdin: true }), { projectDir: root, timeoutMs: options.timeoutMs ?? 180_000, maxStdoutBytes: 262_144, maxStderrBytes: 16_384 });
   if (!worker.ok) return block(`document answer assessor failed closed (${worker.failure ?? "unknown"})`);
   const telemetry = { modelIdentity: worker.modelIdentity, usage: worker.usage, durationMs: worker.endedAt - worker.startedAt };
   let proposals: ProposedAnswer[];
@@ -289,7 +328,7 @@ export async function answerFromDocuments(options: DocumentAnswerOptions): Promi
   if (accepted.length === 0) return { status: "answered", reason: "the documents settle none of the blank questions", stage, answered: [], residual, questionsFile: target.canonicalPath, telemetry };
 
   const payload = { schemaVersion: 1, kind: "document-grounded-answers", stage, questions: { path: target.canonicalPath, sha256: hash(questionsBytes) }, delegation: { sha256: hash(grantBytes), requestSha256: grant.requestSha256 }, documents: documents.map(({ id, path, sha256, contentSha256 }) => ({ id, path, sha256, contentSha256 })), answers: accepted.map(({ questionId, answer, citations, reason }) => ({ questionId, answer, citations, reason })), model: { requested: worker.requestedModel, runtimeReported: worker.runtimeReportedModel } };
-  const decisionId = hash(canonical(payload));
+  const decisionId = hash(canonicalJson(payload));
   let body = questionsBody;
   for (const answer of accepted) {
     const section = questionSections(body).find((entry) => entry.id === answer.questionId)!;
@@ -299,15 +338,15 @@ export async function answerFromDocuments(options: DocumentAnswerOptions): Promi
   // The file, the grant, and every document read must still be what was read;
   // a document removed or re-extracted meanwhile stops the write.
   if (hash(regularFile(questionsPath, "questions file")) !== hash(questionsBytes) || hash(regularFile(grantPath, "document answer delegation")) !== hash(grantBytes)) throw new Error("questions file or delegation changed during assessment; rerun");
-  const current = new Map(loadKbDocuments(root, uuid, options.aidlcTool).map((document) => [document.id, document.contentSha256]));
-  for (const document of documents) if (current.get(document.id) !== document.contentSha256) throw new Error(`document changed or was removed during assessment: ${document.path}; rerun`);
-  atomic(join(intent, "decisions", "document-answer-decisions", `${decisionId}.json`), `${JSON.stringify({ ...payload, decisionId, residual, createdAt: new Date().toISOString() }, null, 2)}\n`);
+  const changed = documentsChanged(root, uuid, documents, options.aidlcTool);
+  if (changed) throw new Error(`document changed or was removed during assessment: ${changed}; rerun`);
+  atomicWrite(join(intent, "decisions", "document-answer-decisions", `${decisionId}.json`), `${JSON.stringify({ ...payload, decisionId, residual, createdAt: new Date().toISOString() }, null, 2)}\n`);
   // Ledger first: a slot is shown as the documents' answer only when its row
   // exists, so a crash before the file write leaves the slot blank, never an
   // AI answer that looks like the person's.
   const settledAt = new Date().toISOString();
   appendLedgerOnce<DocumentAnswerLedgerRow>(join(intent, DOCUMENT_ANSWER_LEDGER), decisionId, () => accepted.map((answer) => ({ schemaVersion: 1, kind: "d-document-grounded-answer", ledger: "d-acceleration (not the official AI-DLC audit)", actor: "ai", decisionId, stage, questionId: answer.questionId, answer: answer.answer, answerSource: DOCUMENT_ANSWER_SOURCE, reason: answer.reason, citations: answer.citations.map(({ documentId, path, sha256, quote }) => ({ documentId, path, sha256, quote })), questionsFile: target.canonicalPath, delegationSha256: hash(grantBytes), requestedModel: worker.requestedModel ?? model, runtimeReportedModel: worker.runtimeReportedModel ?? "unreported", settledAt })));
-  atomic(questionsPath, body);
+  atomicWrite(questionsPath, body);
   return { status: "answered", reason: `${accepted.length} of ${candidates.length} blank questions answered from the documents`, stage, answered: accepted.map((answer) => answer.questionId), residual, decisionId, questionsFile: target.canonicalPath, telemetry };
 }
 
@@ -329,8 +368,7 @@ export function documentDigest(projectDir: string, stage: string) {
     try { const row = JSON.parse(line); if (row.kind === "d-document-grounded-answer" && row.stage === stage) rows.set(`${row.decisionId}:${row.questionId}`, row); } catch { /* an unreadable row settles nothing */ }
   }
   const stateBody = regularFile(join(intent, "aidlc-state.md"), "state file").toString("utf8");
-  const phase = stateValue(stateBody, "Lifecycle Phase")?.toLowerCase();
-  const questionsPath = phase ? join(intent, phase, stage, `${stage}-questions.md`) : null;
+  const questionsPath = stageQuestionsPath(intent, stateBody, stage);
   const body = questionsPath && existsSync(questionsPath) ? readFileSync(questionsPath, "utf8") : "";
   const fromDocuments: Array<{ questionId: string; answer: string; citations: Array<{ path: string; quote: string }> }> = [];
   const answeredByPerson: string[] = [], stillOpen: string[] = [];
@@ -347,13 +385,22 @@ export function documentDigest(projectDir: string, stage: string) {
   return { stage, questionsFile: questionsPath ? posix(root, questionsPath) : null, fromDocuments, answeredByPerson, stillOpen };
 }
 
+const PATH_FILE = /^\.aidlc-engine\/d-docs-path-[A-Za-z0-9_-]+\.txt$/;
+/** Reads and removes the conductor's `.aidlc-engine/d-docs-path-<random>.txt`, which carries the person's path verbatim. */
+export function takePathFile(projectDir: string, file: string): string {
+  if (!isAbsolute(projectDir) || !PATH_FILE.test(file)) throw new Error("--from-file must be .aidlc-engine/d-docs-path-<random>.txt");
+  const path = join(realpathSync(projectDir), file), text = regularFile(path, "documents path file").toString("utf8").trim();
+  unlinkSync(path);
+  return text;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2), one = (flag: string) => { const at = args.indexOf(flag); return at < 0 ? undefined : args[at + 1]; }, many = (flag: string) => args.flatMap((value, index) => value === flag && args[index + 1] ? [args[index + 1]] : []);
   try {
-    if (args[0] === "onboard") { process.stdout.write(`${JSON.stringify(stageDocuments(one("--project-dir") ?? "", one("--from") ?? ""), null, 2)}\n`); process.exit(0); }
+    if (args[0] === "onboard") { process.stdout.write(`${JSON.stringify(stageDocuments(one("--project-dir") ?? "", one("--from-file") ? takePathFile(one("--project-dir") ?? "", one("--from-file")!) : one("--from") ?? ""), null, 2)}\n`); process.exit(0); }
     if (args[0] === "bind") { process.stdout.write(`${JSON.stringify(bindDocuments(one("--project-dir") ?? ""), null, 2)}\n`); process.exit(0); }
     if (args[0] === "digest") { process.stdout.write(`${JSON.stringify(documentDigest(one("--project-dir") ?? "", one("--stage") ?? ""), null, 2)}\n`); process.exit(0); }
-    if (args[0] !== "answer") throw new Error("usage: document-answers.ts onboard --project-dir ABS --from PATH | bind --project-dir ABS | <answer|digest> --project-dir ABS --stage STAGE [--evidence INTENT_FILE ...]");
+    if (args[0] !== "answer") throw new Error("usage: document-answers.ts onboard --project-dir ABS (--from-file .aidlc-engine/d-docs-path-<random>.txt | --from PATH) | bind --project-dir ABS | <answer|digest> --project-dir ABS --stage STAGE [--evidence INTENT_FILE ...]");
     const result = await answerFromDocuments({ projectDir: one("--project-dir") ?? "", stage: one("--stage") ?? "", evidenceFiles: many("--evidence"), claudeExecutable: one("--claude-executable"), timeoutMs: one("--timeout-ms") ? Number(one("--timeout-ms")) : undefined });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exit(result.status === "block" ? 2 : 0);

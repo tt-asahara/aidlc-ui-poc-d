@@ -11,17 +11,23 @@ Where this section and the study below differ, this section is current.
 - **Entry: `/aidlc --from-docs <path> <description>`** (Claude `SKILL.md`). It
   does not use the generic `--auto` session: the ordinary loop already runs on
   until the next `ask`, and the stops are the gates and questions.
-  1. `document-answers.ts onboard --from <path>` copies the handed-over
+  1. The conductor writes the person's path to
+     `.aidlc-engine/d-docs-path-<random>.txt` (so no shell ever reads it) and
+     `document-answers.ts onboard --from-file <that file>` copies the handed-over
      documents (Markdown, text, PDF, Word; regular files only, no hidden or
      secret-looking names in a folder sweep) under
      `aidlc/spaces/<space>/knowledge/documents/<folder>/` and indexes each with
      the official `knowledge onboard`. A different file already at a target
-     path stops the run; nothing is overwritten.
+     path stops the run; nothing is overwritten. A path that is or contains
+     `aidlc/`, `.claude/` or `.aidlc-engine/` is refused, so AI-DLC's own
+     records never become hand-over documents.
   2. The engine runs with the scope set explicitly
      (`--scope ui-poc-document-driven`), so there is no scope confirmation.
   3. Right after the official `intent-create`, `document-answers.ts bind`
      associates the handed-over documents with the new intent
-     (`knowledge associate --intent`). Answers read only documents associated
+     (`knowledge associate --intent`). The hand-over manifest records its space
+     and time; `bind` refuses (and removes) a leftover from another space,
+     scope, or an intent older than the hand-over. Answers read only documents associated
      with the active intent, so another intent's documents in the same space
      are never used. All DocumentKB calls go through `aidlc engine knowledge`
      (`execution.ts runEngineSync`), so the copy channel and native installs
@@ -43,9 +49,15 @@ Where this section and the study below differ, this section is current.
   no-tool judgment model proposes `document-fact` (answer plus verbatim
   quotes with document IDs) or `needs-person` for each blank question. An
   answer is written only when every quote, NFKC-, case- and
-  whitespace-normalized, is at least 6 characters and occurs in the current
+  whitespace-normalized, is at least 15 characters and occurs in the current
   extracted text of a current DocumentKB record (read through the official
-  `knowledge list/show --json`). The tool writes the slot with
+  `knowledge list/show --json`). This proves the quote is the documents'
+  own words, not that it supports the answer: that judgement is the person's,
+  made from the gate digest, which shows each answer beside its quote. The
+  prompt, documents included, reaches the model on stdin, so no OS argument
+  limit applies; one unusable model entry goes to the person on its own.
+  Before writing, one `list` plus a hash of each original confirms that no
+  document read was changed or removed meanwhile. The tool writes the slot with
   `[Answer Source]: document-fact`, `[AI Decision ID]` and `[Citation]` lines,
   appends `d-document-grounded-answer` rows to its own D ledger
   `decisions/document-answers.jsonl` before it writes the file (a crash in

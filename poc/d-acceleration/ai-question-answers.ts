@@ -60,6 +60,17 @@ export const PER_UNIT_QUESTION_STAGES: ReadonlySet<string> = new Set(["functiona
 // The engine writes this questions file itself (Plan Approval); no agent may.
 const ENGINE_OWNED_QUESTION_STAGES: ReadonlySet<string> = new Set(["code-generation"]);
 
+/** The phase heading (`### IDEATION PHASE` -> `ideation`) under which the state lists `stage`, or null. */
+export function stagePhaseInState(body: string, stage: string): string | null {
+  let phase: string | null = null;
+  for (const line of body.split(/\r?\n/)) {
+    const heading = line.match(/^###\s+([A-Z]+)\s+PHASE\s*$/);
+    if (heading) { phase = heading[1].toLowerCase(); continue; }
+    if (new RegExp(`^\\s*-\\s*\\[[^\\]]\\]\\s+${escape(stage)}\\s+—`).test(line)) return phase;
+  }
+  return null;
+}
+
 export function stateValue(body: string, field: string): string | undefined { return body.match(new RegExp(`^\\s*-\\s*\\*\\*${escape(field)}\\*\\*:\\s*(.+?)\\s*$`, "im"))?.[1]?.trim(); }
 
 /**
