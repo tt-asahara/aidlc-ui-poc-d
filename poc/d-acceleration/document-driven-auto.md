@@ -19,6 +19,13 @@ Where this section and the study below differ, this section is current.
      path stops the run; nothing is overwritten.
   2. The engine runs with the scope set explicitly
      (`--scope ui-poc-document-driven`), so there is no scope confirmation.
+  3. Right after the official `intent-create`, `document-answers.ts bind`
+     associates the handed-over documents with the new intent
+     (`knowledge associate --intent`). Answers read only documents associated
+     with the active intent, so another intent's documents in the same space
+     are never used. All DocumentKB calls go through `aidlc engine knowledge`
+     (`execution.ts runEngineSync`), so the copy channel and native installs
+     behave the same.
 - **Grant: one short turn after the intent exists.** Measured on 2026-10-25
   with a headless run: the person's first prompt is not recorded as a
   `HUMAN_TURN`, because the record-human-turn hook writes into the active
@@ -28,7 +35,8 @@ Where this section and the study below differ, this section is current.
   `AI-DLC delegate-document-answers`, and
   `ai-approval-controller.ts document-grant` mints a `document-driven` grant
   bound to that turn with the same `grantHumanTurnRefusal` check as the
-  low-risk grant. Its stages are the intent's open EXECUTE stages from
+  low-risk grant. It is refused unless the intent's Scope is
+  `ui-poc-document-driven`. Its stages are the intent's open EXECUTE stages from
   Ideation through `user-stories`, read from the state file.
 - **Answers: `document-answers.ts answer --stage <stage>`.** No marker is
   needed: the citation check is the boundary, not a self-classification. A
@@ -39,13 +47,16 @@ Where this section and the study below differ, this section is current.
   extracted text of a current DocumentKB record (read through the official
   `knowledge list/show --json`). The tool writes the slot with
   `[Answer Source]: document-fact`, `[AI Decision ID]` and `[Citation]` lines,
-  appends `d-document-grounded-answer` rows to the D ledger
-  `decisions/ai-question-answers.jsonl`, and returns the `residual`
+  appends `d-document-grounded-answer` rows to its own D ledger
+  `decisions/document-answers.jsonl` before it writes the file (a crash in
+  between leaves the slot blank), and returns the `residual`
   questions. Partial settlement is on; protected topics need the same
   verified quote as any other topic. The official audit is never written.
-- **Gate digest: `document-answers.ts digest --stage <stage>`** lists what the
-  documents settled (with citations), what the person answered, and what is
-  still open; the conductor opens each gate message with it.
+- **Gate digest: `document-answers.ts digest --stage <stage>`** reads the
+  questions file as it is now: a slot counts as the documents' answer only
+  while it carries the `document-fact` provenance and its exact answer matches
+  a ledger row for that decision and question; any other filled slot is the
+  person's. The conductor opens each gate message with it.
 - **Rough Mockups:** in this scope the conductor first revises and has the
   reviewer review again (at most two more times, as the review loop allows)
   before asking about open Critical or Major findings.
@@ -129,7 +140,7 @@ takes a one-word reply. "Keep" means it stays as it is.
 ### Entry
 
 ```
-/aidlc --auto --docs <path> [description]
+/aidlc --from-docs <path> <description>
 ```
 
 1. **Documents.** D runs the official `knowledge onboard <path>` and
@@ -145,7 +156,7 @@ takes a one-word reply. "Keep" means it stays as it is.
 3. **Grant.** The start command itself is the delegation. Today the grant needs
    the separate exact turn `AI-DLC delegate-ai-approvals ...`. The mode adds a
    second grammar in `ai-approval-controller.ts`: when the person's latest
-   host-recorded turn is `/aidlc --auto --docs ...`, `grant` mints a
+   host-recorded turn is `/aidlc --from-docs ...`, `grant` mints a
    `document-driven` grant for every question stage of the selected scope up
    to the `--through` boundary, bound to the hash of those words and to the
    DocumentKB revision set. The same `grantHumanTurnRefusal` check applies.
@@ -241,7 +252,7 @@ scope), which also produces fewer AI-DLC artifacts.
   kind from the audit, for `ui-poc-application` today. It settles the open
   facts above (scope confirmation with an explicit scope, interaction mode,
   verification command).
-- **P1 Scope and entry.** `ui-poc-document-driven` scope, the `--docs` entry in
+- **P1 Scope and entry.** `ui-poc-document-driven` scope, the `--from-docs` entry in
   the Claude `SKILL.md`, DocumentKB onboarding, the `document-driven` grant.
 - **P2 Document-grounded answers.** Eligibility class, citation verifier,
   protected-topic rule, partial settlement, ledger rows with citations.
@@ -276,7 +287,7 @@ Stories is approved.
 Frontmatter: `skeleton: off`, `summary_confirmation: off`, `learnings: off`,
 `plan_approval: off`, `collaborators: off`, `sensors: on`,
 `guard_policy: strict`. No routing keywords: the mode is entered only by the
-explicit `--docs` command or by naming the scope.
+explicit `--from-docs` command or by naming the scope.
 
 ### Resulting stop budget
 

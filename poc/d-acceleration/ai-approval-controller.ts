@@ -32,6 +32,8 @@ const DOCUMENT_DELEGATION_PATH = "decisions/document-answer-delegation.json";
 export const DOCUMENT_DELEGATION_COMMAND = "AI-DLC delegate-document-answers";
 /** Document-grounded answers never reach past this stage (the document-driven mode's boundary). */
 export const DOCUMENT_DELEGATION_THROUGH = "user-stories";
+/** The only scope whose stage questions may be delegated to document-grounded answers. */
+export const DOCUMENT_DRIVEN_SCOPE = "ui-poc-document-driven";
 export const DOCUMENT_GRANT_HUMAN_TURN_REQUIRED = `Document answer delegation needs the person's own latest turn to be exactly \`${DOCUMENT_DELEGATION_COMMAND}\`; ask the person to send it, then rerun document-grant.`;
 const DELEGATION_COMMAND = /^AI-DLC delegate-ai-approvals --scope ([A-Za-z0-9._-]+) --through ([A-Za-z0-9._-]+) --stages ([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*)$/;
 /** Grants minted before the human-turn binding (schemaVersion 1) are never accepted. */
@@ -187,7 +189,8 @@ function grantRequestSha(grant: Omit<DelegationGrant, "schemaVersion" | "request
   return sha256(canonicalJson(grant));
 }
 
-function activeIntentDir(projectRoot: string): string {
+/** The active intent directory: the active-intent pointer, or the space's lone intent record. */
+export function activeIntentDir(projectRoot: string): string {
   const aidlcRoot = join(projectRoot, "aidlc");
   let space = "default";
   const spacePointer = join(aidlcRoot, "active-space");
@@ -403,7 +406,7 @@ export function createDocumentAnswerGrant(options: DocumentAnswerGrantOptions): 
   const intentDir = activeIntentDir(projectRoot);
   const state = snapshot(projectRoot, relative(projectRoot, join(intentDir, "aidlc-state.md")), "active intent state");
   const scope = stateScope(state);
-  if (!scope) throw new Error("active intent state has no Scope");
+  if (scope !== DOCUMENT_DRIVEN_SCOPE) throw new Error(`document answer delegation needs a ${DOCUMENT_DRIVEN_SCOPE} intent; the active intent's Scope is ${scope ?? "missing"}`);
   const allowedStages = documentDelegationStages(state.bytes.toString("utf8"));
   if (allowedStages.length === 0) throw new Error(`no open question stage up to ${DOCUMENT_DELEGATION_THROUGH} remains for document-grounded answers`);
   const turn = latestRecordedHumanTurn(projectRoot, intentDir);

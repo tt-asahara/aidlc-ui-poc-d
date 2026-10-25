@@ -16,7 +16,7 @@ collaborators: off
 # UI document-driven run
 
 Use this scope when the person hands over the requirement documents and asks
-AI-DLC to carry the work forward from them (`/aidlc --auto --docs <path>`). It
+AI-DLC to carry the work forward from them (`/aidlc --from-docs <path> <description>`). It
 retains intent-capture, scope-definition, rough-mockups, reverse-engineering
 (brownfield only), practices-discovery, requirements-analysis and user-stories
 with the normal official approval gates and the same rough HTML evidence

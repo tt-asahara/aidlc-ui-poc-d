@@ -33,7 +33,7 @@ const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // the heading/slot counts, and the count checks then fail closed.
 export const QUESTION_HEADING = /^##[ \t]+([Qq][0-9]+)(?![\p{L}\p{N}_])[^\r\n]*$/gmu;
 export const LOW_RISK_MARKER_LINE = /^[ \t]*\[AI-Autonomy\]:[ \t]*low-risk-reversible[ \t]*$/;
-export const questionTemplate = (body: string): string => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID)\]:[^\r\n]*(?:\r?\n)?/gm, "");
+export const questionTemplate = (body: string): string => body.replace(/^(\s*\[Answer\]:)[^\r\n]*$/gm, "$1").replace(/^\s*\[(?:Answer Source|AI Decision ID|Citation)\]:[^\r\n]*(?:\r?\n)?/gm, "");
 export const answerValues = (body: string): string[] => [...body.matchAll(/^\s*\[Answer\]:[ \t]*(.*?)[ \t]*$/gm)].map((match) => match[1].trim());
 export function questionSections(body: string): Array<{ id: string; body: string }> {
   const headings = [...body.matchAll(QUESTION_HEADING)], ids = headings.map((heading) => heading[1].toUpperCase());
