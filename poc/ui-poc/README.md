@@ -95,7 +95,8 @@ It runs the requirements-loop stages without refined-mockups (intent-capture,
 scope-definition, rough-mockups, reverse-engineering on brownfield only,
 practices-discovery, requirements-analysis, user-stories), with summary
 confirmation, learnings, and plan approval off: 6 approval gates on a new
-project. The D entry and document-grounded answers are designed in
+project. The D entry `/aidlc --from-docs <path> <description>` selects it
+and answers stage questions from the documents; see
 `../d-acceleration/document-driven-auto.md`.
 
 ## Requirements-only loop

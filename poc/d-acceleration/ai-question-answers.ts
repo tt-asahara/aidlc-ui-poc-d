@@ -171,7 +171,7 @@ const ledgerHas = (path: string, decisionId: string) => existsSync(path) && read
  * run under the same exclusive ledger lock, so concurrent settlers neither
  * lose rows nor duplicate a decisionId. Returns false when already recorded.
  */
-export function appendLedgerOnce(path: string, decisionId: string, rows: () => AiQuestionAnswerLedgerRow[]): boolean {
+export function appendLedgerOnce<Row = AiQuestionAnswerLedgerRow>(path: string, decisionId: string, rows: () => Row[]): boolean {
   return withLedgerLock(path, () => {
     if (ledgerHas(path, decisionId)) return false;
     appendJsonl(path, rows());

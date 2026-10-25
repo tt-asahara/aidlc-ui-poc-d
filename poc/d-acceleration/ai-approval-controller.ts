@@ -27,6 +27,12 @@ const DENIED_STAGE_TOKEN = /(^|[-_])(operations?|deployment|deploy|production|re
 const OPERATION_STAGES = new Set(stagePolicy.stages.filter((entry) => entry.phase === "operation").map((entry) => entry.stage));
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 const DEFAULT_GRANT_PATH = "decisions/ai-approval-delegation.json";
+const DOCUMENT_DELEGATION_PATH = "decisions/document-answer-delegation.json";
+/** The person's exact words that hand a document-driven intent's question stages to document-grounded answers. */
+export const DOCUMENT_DELEGATION_COMMAND = "AI-DLC delegate-document-answers";
+/** Document-grounded answers never reach past this stage (the document-driven mode's boundary). */
+export const DOCUMENT_DELEGATION_THROUGH = "user-stories";
+export const DOCUMENT_GRANT_HUMAN_TURN_REQUIRED = `Document answer delegation needs the person's own latest turn to be exactly \`${DOCUMENT_DELEGATION_COMMAND}\`; ask the person to send it, then rerun document-grant.`;
 const DELEGATION_COMMAND = /^AI-DLC delegate-ai-approvals --scope ([A-Za-z0-9._-]+) --through ([A-Za-z0-9._-]+) --stages ([A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*)$/;
 /** Grants minted before the human-turn binding (schemaVersion 1) are never accepted. */
 export const DELEGATION_GRANT_SCHEMA_VERSION = 2;
@@ -41,7 +47,7 @@ export type DelegationGrant = {
   userMessage: string;
   userMessageSha256: string;
   humanTurn: GrantHumanTurn;
-  mode: "stage-gates";
+  mode: "stage-gates" | "document-driven";
   scope: string;
   through: string | null;
   allowedStages: string[];
@@ -356,6 +362,72 @@ export function createAiApprovalGrant(options: AiApprovalGrantOptions): AiApprov
   };
 }
 
+/**
+ * The stages a document-driven grant covers: every stage the active intent's
+ * state lists as EXECUTE and not yet completed under its Ideation and
+ * Inception phase headings, in the state's own order, up to and including
+ * DOCUMENT_DELEGATION_THROUGH; never a human-only stage token. Derived from
+ * recorded state, never from prose.
+ */
+export function documentDelegationStages(stateBody: string): string[] {
+  const stages: string[] = [];
+  let phase = "";
+  for (const line of stateBody.split(/\r?\n/)) {
+    const heading = line.match(/^###\s+([A-Z]+)\s+PHASE\s*$/);
+    if (heading) { phase = heading[1].toLowerCase(); continue; }
+    const match = line.match(/^\s*-\s*\[([ ?R-]|x)\]\s+([a-z0-9-]+)\s+—\s+EXECUTE\s*$/);
+    if (!match || (phase !== "ideation" && phase !== "inception")) continue;
+    const [, mark, stage] = match;
+    if (mark !== "x" && !OPERATION_STAGES.has(stage) && !DENIED_STAGE_TOKEN.test(stage) && !stages.includes(stage)) stages.push(stage);
+    if (stage === DOCUMENT_DELEGATION_THROUGH) break;
+  }
+  return stages;
+}
+
+export type DocumentAnswerGrantOptions = { projectDir: string; userMessageFile: string; messageId: string };
+
+/**
+ * Create the person's delegation of document-grounded answers for the active
+ * document-driven intent. The words must be exactly DOCUMENT_DELEGATION_COMMAND
+ * and the person's own latest host-recorded turn; the same human-turn binding
+ * and `grantHumanTurnRefusal` check as the low-risk grant apply. It never
+ * approves a gate.
+ */
+export function createDocumentAnswerGrant(options: DocumentAnswerGrantOptions): AiApprovalGrantResult & { allowedStages: string[] } {
+  if (!isAbsolute(options.projectDir) || !existsSync(options.projectDir)) throw new Error("--project-dir must be an existing absolute path");
+  const projectRoot = realpathSync(options.projectDir);
+  const messageFile = snapshot(projectRoot, options.userMessageFile, "user message file");
+  const userMessage = boundedString(messageFile.bytes.toString("utf8"), "user message");
+  if (userMessage !== DOCUMENT_DELEGATION_COMMAND) throw new Error(`user message must be exactly ${DOCUMENT_DELEGATION_COMMAND}`);
+  const messageId = boundedString(options.messageId, "message ID");
+  const intentDir = activeIntentDir(projectRoot);
+  const state = snapshot(projectRoot, relative(projectRoot, join(intentDir, "aidlc-state.md")), "active intent state");
+  const scope = stateScope(state);
+  if (!scope) throw new Error("active intent state has no Scope");
+  const allowedStages = documentDelegationStages(state.bytes.toString("utf8"));
+  if (allowedStages.length === 0) throw new Error(`no open question stage up to ${DOCUMENT_DELEGATION_THROUGH} remains for document-grounded answers`);
+  const turn = latestRecordedHumanTurn(projectRoot, intentDir);
+  if (!turn || turn.words.trim() !== userMessage) throw new Error(DOCUMENT_GRANT_HUMAN_TURN_REQUIRED);
+  const userMessageSha256 = sha256(userMessage);
+  const request = {
+    messageId,
+    userMessage,
+    userMessageSha256,
+    humanTurn: { at: turn.at, session: turn.session, wordsSha256: userMessageSha256 },
+    mode: "document-driven" as const,
+    scope,
+    through: DOCUMENT_DELEGATION_THROUGH,
+    allowedStages,
+    minConfidence: 0,
+  };
+  const grant: DelegationGrant = { schemaVersion: DELEGATION_GRANT_SCHEMA_VERSION, ...request, requestSha256: grantRequestSha(request) };
+  const path = intentOutputPath(intentDir, DOCUMENT_DELEGATION_PATH, "document answer delegation path");
+  const body = `${JSON.stringify(grant, null, 2)}\n`;
+  assertUnchanged([messageFile, state]);
+  atomicWrite(path, body);
+  return { path: relative(projectRoot, path).split(sep).join("/"), sha256: sha256(body), messageId, requestSha256: grant.requestSha256, allowedStages };
+}
+
 function cliValues(argv: string[], known: ReadonlySet<string>): { values: (flag: string) => string[]; one: (flag: string, required?: boolean) => string | undefined } {
   const values = (flag: string) => argv.flatMap((value, index) => value === flag && argv[index + 1] ? [argv[index + 1]] : []);
   const one = (flag: string, required = true) => {
@@ -392,6 +464,11 @@ export const AI_GATE_APPROVAL_DROPPED = "Delegated AI stage-gate approval is not
 if (import.meta.main) {
   try {
     const argv = process.argv.slice(2);
+    if (argv[0] === "document-grant") {
+      const { one } = cliValues(argv, new Set(["--project-dir", "--user-message-file", "--message-id"]));
+      process.stdout.write(`${JSON.stringify(createDocumentAnswerGrant({ projectDir: one("--project-dir")!, userMessageFile: one("--user-message-file")!, messageId: one("--message-id")! }), null, 2)}\n`);
+      process.exit(0);
+    }
     if (argv[0] === "grant") {
       process.stdout.write(`${JSON.stringify(createAiApprovalGrant(grantCliOptions(argv)), null, 2)}\n`);
       process.exit(0);

@@ -99,7 +99,7 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     const allow = readSettings().permissions?.allow ?? [];
     // Arm D's host-run controllers that the ordinary /aidlc skill invokes; the
     // network-facing Issue/summary CLIs deliberately keep Claude Code's prompt.
-    const dControllers = ["generic-auto-cli.ts", "run.ts", "host-stage-boundary.ts", "ai-question-controller.ts", "ai-question-answers.ts", "ai-approval-controller.ts", "host-session-cli.ts", "parallel-guard.ts", "design-document.ts", "pr-lens-gate.ts"]
+    const dControllers = ["generic-auto-cli.ts", "run.ts", "host-stage-boundary.ts", "ai-question-controller.ts", "ai-question-answers.ts", "ai-approval-controller.ts", "host-session-cli.ts", "parallel-guard.ts", "design-document.ts", "pr-lens-gate.ts", "document-answers.ts"]
       .map((script) => `Bash(bun .claude/tools/d-acceleration/${script} *)`)
       // The pr-lens-review plugin's tool lands at tools/ when composed; local only.
       .concat("Bash(bun .claude/tools/pr-lens-review.ts *)", "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)", "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)", "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)", "Bash(bun .claude/tools/ui-poc-evidence.cjs *)");

@@ -29,8 +29,13 @@ A Japanese command and option reference for this repository (`/aidlc`
 commands by stage, automatic events, D settings, scopes, GitHub, and the
 differences from the KDDI distribution) is [`../aidlc-commands.html`](../aidlc-commands.html).
 
-The design study for a document-driven auto mode (requirement documents in,
-human stops minimized within the upstream gate contract) is
+`/aidlc --from-docs <path> <description>` runs the document-driven mode:
+the handed-over requirement documents are indexed in DocumentKB, the
+`ui-poc-document-driven` scope runs through User Stories, and after the
+person's one `AI-DLC delegate-document-answers` turn, stage questions that a
+verified document quote settles are answered by `document-answers.ts`. Only
+the stage gates and the questions the documents leave open stop for the
+person. Design, decisions, and what is built are in
 [`document-driven-auto.md`](document-driven-auto.md).
 
 The Claude package exposes a default-off `/aidlc-issue-autopilot` surface for

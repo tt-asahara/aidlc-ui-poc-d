@@ -39,6 +39,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "decision-issue-summary.ts",
   "design-document.ts",
   "design-document-guide.md",
+  "document-answers.ts",
   "fake-worker.ts",
   "functional-design-discipline.ts",
   "gh-host.ts",

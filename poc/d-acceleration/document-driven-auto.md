@@ -4,6 +4,58 @@ Status: design study on `feat/d-document-driven-auto`, with the person's
 decisions recorded under "Decisions" (they override the general study where
 they differ, notably the boundary). Implementation is in progress.
 
+## As built
+
+Where this section and the study below differ, this section is current.
+
+- **Entry: `/aidlc --from-docs <path> <description>`** (Claude `SKILL.md`). It
+  does not use the generic `--auto` session: the ordinary loop already runs on
+  until the next `ask`, and the stops are the gates and questions.
+  1. `document-answers.ts onboard --from <path>` copies the handed-over
+     documents (Markdown, text, PDF, Word; regular files only, no hidden or
+     secret-looking names in a folder sweep) under
+     `aidlc/spaces/<space>/knowledge/documents/<folder>/` and indexes each with
+     the official `knowledge onboard`. A different file already at a target
+     path stops the run; nothing is overwritten.
+  2. The engine runs with the scope set explicitly
+     (`--scope ui-poc-document-driven`), so there is no scope confirmation.
+- **Grant: one short turn after the intent exists.** Measured on 2026-10-25
+  with a headless run: the person's first prompt is not recorded as a
+  `HUMAN_TURN`, because the record-human-turn hook writes into the active
+  intent's audit and there is none yet. A grant bound to the start command is
+  therefore impossible without core changes. Right after the intent is
+  created, the conductor ends the turn; the person sends exactly
+  `AI-DLC delegate-document-answers`, and
+  `ai-approval-controller.ts document-grant` mints a `document-driven` grant
+  bound to that turn with the same `grantHumanTurnRefusal` check as the
+  low-risk grant. Its stages are the intent's open EXECUTE stages from
+  Ideation through `user-stories`, read from the state file.
+- **Answers: `document-answers.ts answer --stage <stage>`.** No marker is
+  needed: the citation check is the boundary, not a self-classification. A
+  no-tool judgment model proposes `document-fact` (answer plus verbatim
+  quotes with document IDs) or `needs-person` for each blank question. An
+  answer is written only when every quote, NFKC-, case- and
+  whitespace-normalized, is at least 6 characters and occurs in the current
+  extracted text of a current DocumentKB record (read through the official
+  `knowledge list/show --json`). The tool writes the slot with
+  `[Answer Source]: document-fact`, `[AI Decision ID]` and `[Citation]` lines,
+  appends `d-document-grounded-answer` rows to the D ledger
+  `decisions/ai-question-answers.jsonl`, and returns the `residual`
+  questions. Partial settlement is on; protected topics need the same
+  verified quote as any other topic. The official audit is never written.
+- **Gate digest: `document-answers.ts digest --stage <stage>`** lists what the
+  documents settled (with citations), what the person answered, and what is
+  still open; the conductor opens each gate message with it.
+- **Rough Mockups:** in this scope the conductor first revises and has the
+  reviewer review again (at most two more times, as the review loop allows)
+  before asking about open Critical or Major findings.
+- **Not built yet:** pre-drafting the next stage while a gate waits, and push
+  notification at a gate.
+
+Stops for a new project whose documents settle every question: 1 delegation
+turn plus 6 stage gates. Each residual question set adds at most one message
+for its stage.
+
 ## Goal
 
 The person hands AI-DLC every requirement document at the start. From then on
