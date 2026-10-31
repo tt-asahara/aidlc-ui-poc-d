@@ -2,7 +2,7 @@
 // Install the AI-DLC runtime plus the composed ui-poc plugin (the Arm C UI
 // baseline) into a PRODUCT for a harness that has no D acceleration yet.
 //
-//   bun poc/ui-poc/scripts/setup-ui-poc.ts --harness kiro|kiro-ide|codex --src /abs/SRC --product /abs/PRODUCT [--dry-run]
+//   bun poc/ui-poc/scripts/setup-ui-poc.ts --harness kiro|kiro-ide|codex --src /abs/SRC --product /abs/PRODUCT [--set <switch>=true|false ...] [--dry-run]
 //
 // Claude products use poc/d-acceleration/fresh-install.ts, which adds D on top
 // of these same steps. Each step fails closed with a one-line reason:
@@ -15,12 +15,16 @@
 //      sync and session-start compose find it; Codex composes from SRC's build,
 //      as Claude does.
 //   4. Project-local compose run twice; the second run must change nothing.
-// It never selects a design skill or writes D configuration.
+//   5. The project's D configuration (<harness dir>/d-acceleration.jsonc) with
+//      every key, the person's --set answers and the setup defaults otherwise;
+//      an existing file keeps its values (d-config-writer.ts).
+// It never installs a design skill.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { placeCPayload, treeHash } from "../../d-acceleration/fresh-install.ts";
+import { configWithPrerequisites, placeCPayload, treeHash } from "../../d-acceleration/fresh-install.ts";
+import { writeDConfig } from "../../d-acceleration/d-config-writer.ts";
 
 export class SetupStop extends Error {}
 
@@ -93,7 +97,7 @@ function compose(p: Paths): string {
   return treeHash(join(p.P, p.dir)).sha256;
 }
 
-export function setupUiPoc(harness: string, src: string, product: string, dryRun = false) {
+export function setupUiPoc(harness: string, src: string, product: string, dryRun = false, answers: Readonly<Record<string, boolean>> = {}) {
   const p = uiPocPaths(harness, src, product);
   if (!existsSync(join(p.P, ".git"))) throw new SetupStop("PRODUCT must be a Git repository so existing work can be proven untouched");
   const dirty = run("git", ["-C", p.P, "status", "--porcelain"], p.P).out;
@@ -106,14 +110,22 @@ export function setupUiPoc(harness: string, src: string, product: string, dryRun
   const pluginFiles = p.folderDrop ? dropPlugin(p) : 0;
   const first = compose(p), second = compose(p);
   if (first !== second) throw new SetupStop("second compose changed the installed tree; compose is not idempotent");
-  return { mode: "apply", ...plan, cPayload: payload, pluginFilesAdded: pluginFiles, composedTreeSha256: second, next: `open the project in ${p.harness === "codex" ? "Codex" : p.harness === "kiro" ? "Kiro CLI (kiro-cli chat)" : "Kiro IDE"} and run /aidlc --doctor` };
+  const config = configWithPrerequisites(p.P, writeDConfig(p.P, p.dir, answers), p.dir);
+  return { mode: "apply", ...plan, config, cPayload: payload, pluginFilesAdded: pluginFiles, composedTreeSha256: second, next: `open the project in ${p.harness === "codex" ? "Codex" : p.harness === "kiro" ? "Kiro CLI (kiro-cli chat)" : "Kiro IDE"} and run /aidlc --doctor` };
 }
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
   const flag = (name: string) => { const at = argv.indexOf(name); return at < 0 ? "" : argv[at + 1] ?? ""; };
   try {
-    process.stdout.write(`${JSON.stringify(setupUiPoc(flag("--harness"), flag("--src"), flag("--product"), argv.includes("--dry-run")), null, 2)}\n`);
+    const answers: Record<string, boolean> = {};
+    argv.forEach((pair, index) => {
+      if (argv[index - 1] !== "--set") return;
+      const [key, value] = pair.split("=");
+      if (!key || !["true", "false"].includes(value ?? "")) throw new SetupStop(`--set takes <switch>=true|false, got ${pair}`);
+      answers[key] = value === "true";
+    });
+    process.stdout.write(`${JSON.stringify(setupUiPoc(flag("--harness"), flag("--src"), flag("--product"), argv.includes("--dry-run"), answers), null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`ui-poc setup stopped: ${(error as Error).message}\n`);
     process.exit(2);
