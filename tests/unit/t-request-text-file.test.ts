@@ -12,7 +12,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hooksHealthDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
+import { cleanupTestProject, proposalFollowUp, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -60,6 +60,13 @@ function next(proj: string, args: string[], extra: Record<string, string> = {}):
     env,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  try {
+    const proposal = proposalFollowUp(JSON.parse((r.stdout ?? "").trim()));
+    if (proposal !== null) return next(proj, proposal, extra);
+  } catch {
+    // the caller reads the raw output
+  }
   expect(r.status, r.stderr).toBe(0);
   return JSON.parse(r.stdout) as Directive;
 }
@@ -84,7 +91,19 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeRequest(proj, `${WORDS}\n`);
     const directive = next(proj, ["--request-file", FILE]);
     expect(directive.kind, JSON.stringify(directive)).toBe("ask");
-    expect(keptRequests(proj)).toEqual([WORDS]);
+    // One request: the proposal step's question and the plan question derived from it hold the same words.
+    expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
+    expect(existsSync(join(proj, FILE))).toBe(false);
+  });
+
+  // The Kiro CLI hook sends a compose request this way on Windows: the verb
+  // stays on the line and the file's words are its task text.
+  test("compose reads its task text from the file, and the file is removed", () => {
+    const proj = installed();
+    writeRequest(proj, `${WORDS}\n`);
+    const directive = next(proj, ["compose", "--request-file", FILE]);
+    expect(directive.kind, JSON.stringify(directive)).not.toBe("error");
+    expect(JSON.stringify(directive)).not.toContain("--request-file");
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 
@@ -130,6 +149,15 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(keptRequests(proj)).toEqual([]);
   });
 
+  // Behind the `--` mark the flag's name is one of the person's words, as every
+  // flag is: their request to build that option reaches AI-DLC whole.
+  test("the flag's name among the words behind -- is theirs, not a second way to send the request", () => {
+    const proj = installed();
+    const directive = next(proj, ["--", ..."add a --request-file option to the CLI".split(" ")]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("ask");
+    expect(new Set(keptRequests(proj))).toEqual(new Set(["add a --request-file option to the CLI"]));
+  });
+
   test("a next stopped before any work keeps the file, so the same command runs again", () => {
     const proj = installed();
     writeRequest(proj, WORDS);
@@ -141,7 +169,7 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString(), "utf-8");
     const asked = next(proj, ["--request-file", FILE], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
     expect(asked.kind, JSON.stringify(asked)).toBe("ask");
-    expect(keptRequests(proj)).toEqual([WORDS]);
+    expect(new Set(keptRequests(proj))).toEqual(new Set([WORDS]));
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
 

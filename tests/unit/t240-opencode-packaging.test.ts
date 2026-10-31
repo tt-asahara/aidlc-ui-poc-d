@@ -30,6 +30,7 @@ import {
   cpSync,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -38,10 +39,11 @@ import {
   rmdirSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { platform, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -88,7 +90,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
@@ -124,7 +125,6 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
   });
 
   test("3: the .opencode shell holds ONLY the native emissions — no engine .ts opencode would auto-import", () => {
-    // Top-level shape: exactly the three natively-consumed dirs.
     expect(readdirSync(SHELL).sort()).toEqual(["agents", "command", "plugin"]);
     // The tool-scan trap: opencode imports .opencode/tool/*.ts and
     // .opencode/tools/*.ts as custom tools. Neither dir may ever appear.
@@ -248,10 +248,83 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       };
     };
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
-    expect(cfg.instructions).toContain("aidlc/spaces/default/memory/**/*.md");
+    // The method glob reads the engine's git-ignored copy of the active space's memory.
+    expect(cfg.instructions).toContain("aidlc/active-memory/**/*.md");
     expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
     expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
     expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
+    // AI-DLC ships no "*" rule: the person's own opencode settings decide their
+    // commands and edits; only a recursive delete and a push ask.
+    expect(cfg.permission?.bash?.["*"]).toBeUndefined();
+    expect(cfg.permission?.edit?.["*"]).toBeUndefined();
+    expect(cfg.permission?.bash?.["rm -r*"]).toBe("ask");
+    expect(cfg.permission?.bash?.["git push *"]).toBe("ask");
+  });
+
+  // opencode v1.18.18 packages/opencode/src/util/wildcard.ts match() (the same
+  // in v1.18.34 packages/core): `*` is anything, anchored at both ends, and a
+  // pattern ending in " *" also matches the command alone; the last matching
+  // rule decides (permission/index.ts evaluate), none means opencode's own default.
+  function opencodeMatch(command: string, pattern: string): boolean {
+    let escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+    if (escaped.endsWith(" .*")) escaped = `${escaped.slice(0, -3)}( .*)?`;
+    return new RegExp(`^${escaped}$`, "s").test(command);
+  }
+
+  test("8b: the shipped asks catch a recursive delete and a push, nothing else, and never AI-DLC's own command", () => {
+    const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
+      permission: { bash: Record<string, string> };
+    };
+    const rules = Object.entries(cfg.permission.bash);
+    const decide = (command: string) => rules.filter(([pattern]) => opencodeMatch(command, pattern)).at(-1)?.[1];
+    for (const command of [
+      "rm -rf dist", "rm -rf", "rm -r dist", "rm -rfv dist", "rm -rf dist 2>/dev/null",
+      "git push", "git push origin main", "git push --force-with-lease",
+    ]) {
+      expect(decide(command), command).toBe("ask");
+    }
+    for (const command of [
+      "rm file.txt", "rm -f file.txt", "rm -- -rfile", "rmdir dist",
+      "git pushx", "git log --oneline", "bun test", "bun src/app.js", "ls -la",
+    ]) {
+      expect(decide(command), command).toBeUndefined();
+    }
+    expect(decide("bun .aidlc/tools/aidlc.ts engine orchestrate next")).toBe("allow");
+  });
+
+  test("10b: doctor says once, as a warning, when the person's global opencode config holds a short-form permission rule", () => {
+    const root = mkdtempSync(join(tmpdir(), "t240-opencode-global-"));
+    try {
+      const project = join(root, "project");
+      cpSync(OPENCODE_ROOT, project, { recursive: true });
+      const home = join(root, "home");
+      const file = join(home, ".config", "opencode", "opencode.jsonc");
+      mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+      const doctor = () => spawnSync(
+        "bun",
+        [join(project, ".aidlc", "tools", "aidlc-utility.ts"), "doctor", "--verbose", "--project-dir", project],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc", HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: join(home, ".config") },
+        },
+      );
+      const text = '{\n  // the person\x27s own file\n  "permission": { "bash": "ask" },\n}\n';
+      writeFileSync(file, text);
+      const seen = doctor();
+      // The file as the person sees it: "~/..." on Linux and macOS, the full path on Windows.
+      const shownFile = platform() === "win32" ? file : "~/.config/opencode/opencode.jsonc";
+      const line = `Your opencode setting asks before every shell command; in this project AI-DLC\x27s permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${shownFile}.`;
+      expect(seen.stdout.split(line).length - 1, seen.stdout).toBe(1);
+      const row = seen.stdout.split(/\r?\n/).find((candidate) => candidate.includes(line));
+      expect(row ?? "").toMatch(/^\s*warn\s/);
+      expect(readFileSync(file, "utf-8")).toBe(text);
+      writeFileSync(file, '{ "permission": { "bash": { "*": "ask" } } }');
+      expect(doctor().stdout).not.toContain("Your opencode setting");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // Each allowed bash call continues through two real core-hook subprocesses.
@@ -278,12 +351,27 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         { tool: "bash", sessionID: "main", callID: "direct" },
         {
           args: {
-            command: "bun .aidlc/tools/aidlc.ts engine state approve",
+            command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
           },
         },
       ),
-    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
+    ).rejects.toThrow(/AIDLC runtime records and hooks belong to the harness/);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
+
+  // The adapter imports one leaf tool (how a Windows .cmd starts) from the
+  // engine tree beside .opencode/, in the copy and the native tree alike;
+  // opencode loads it at every start, so it imports only node built-ins.
+  test("9c: the adapter's tool import resolves in both opencode trees to a leaf with node imports only", () => {
+    for (const tree of [OPENCODE_ROOT, join(REPO_ROOT, "dist-release", "opencode")]) {
+      const plugin = join(tree, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+      const relativeImports = [...readFileSync(plugin, "utf-8").matchAll(/^import [^;]*? from "(\.[^"]+)";$/gm)].map((m) => m[1]);
+      expect(relativeImports, tree).toEqual(["../../.aidlc/tools/aidlc-executable-path.ts"]);
+      const leaf = join(dirname(plugin), relativeImports[0]);
+      expect(existsSync(leaf), leaf).toBe(true);
+      const leafImports = [...readFileSync(leaf, "utf-8").matchAll(/^import [^;]*? from "([^"]+)";$/gm)].map((m) => m[1]);
+      expect(leafImports, leaf).toEqual(["node:fs", "node:path"]);
+    }
+  });
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {
     const root = mkdtempSync(join(tmpdir(), "t240-opencode-doctor-"));
@@ -314,4 +402,95 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // The /aidlc command carries the skill whole. opencode cuts any tool output
+  // over 50 KiB (its skill tool included) and saves the rest in its own data
+  // folder, so a skill loaded through that tool lost its last 180 lines in
+  // every chat. A command template's text is not cut, and opencode runs a
+  // !`...` line in it at command time, so the command prints the installed
+  // skill into itself through the engine's own read-only verb.
+  test("11: the /aidlc command prints the installed skill into itself, whole", () => {
+    const command = readFileSync(join(SHELL, "command", "aidlc.md"), "utf-8");
+    expect(command).toContain("!`bun .aidlc/tools/aidlc.ts engine skill-text --harness-dir .aidlc`");
+    expect(command).toContain("$ARGUMENTS");
+    expect(command).not.toContain("Invoke the `aidlc` skill");
+    // The native channel spells the same line with the installed launcher.
+    const release = readFileSync(
+      join(REPO_ROOT, "dist-release", "opencode", ".opencode", "command", "aidlc.md"),
+      "utf-8",
+    );
+    expect(release).toContain("!`aidlc engine skill-text --harness-dir .aidlc`");
+    expect(release).not.toContain("{{INVOKE}}");
+    // What the line prints, run the way opencode runs it (from the project
+    // folder, no --project-dir): the shipped skill, byte for byte, whatever its
+    // size against opencode's 50 KiB tool-output cut.
+    const r = spawnSync(
+      process.execPath,
+      [join(ENGINE, "tools", "aidlc.ts"), "engine", "skill-text", "--harness-dir", ".aidlc"],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: OPENCODE_ROOT,
+        encoding: "utf-8",
+        env: withoutHarnessEnv(),
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const skill = readFileSync(join(ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
+  });
+
+  // Claude Code and opencode may share one project (the lifecycle guide's
+  // coexistence rule). The native launcher resolves a harness by precedence,
+  // `.claude` before `.aidlc`, so the opencode command names its own harness:
+  // with `--harness-dir .aidlc` the verb prints opencode's skill even when it
+  // runs from the Claude Code tools under a launcher that is not Bun by name
+  // (a copy of Bun named aidlc stands in for the compiled executable; under
+  // the name bun the tool's own tree always wins, so the flag shows only here).
+  test("12: --harness-dir picks the opencode skill in a project that also has Claude Code", () => {
+    const root = mkdtempSync(join(tmpdir(), "t240-two-trees-"));
+    try {
+      const project = join(root, "project");
+      cpSync(CLAUDE_SRC, join(project, ".claude"), { recursive: true });
+      cpSync(ENGINE, join(project, ".aidlc"), { recursive: true });
+      const launcher = join(root, process.platform === "win32" ? "aidlc.exe" : "aidlc");
+      try {
+        linkSync(process.execPath, launcher);
+      } catch {
+        copyFileSync(process.execPath, launcher);
+      }
+      const claudeSkill = readFileSync(join(project, ".claude", "skills", "aidlc", "SKILL.md"), "utf-8");
+      const opencodeSkill = readFileSync(join(project, ".aidlc", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(claudeSkill).not.toBe(opencodeSkill);
+      const run = (...args: string[]) =>
+        spawnSync(
+          launcher,
+          [join(project, ".claude", "tools", "aidlc-utility.ts"), "skill-text", "--project-dir", project, ...args],
+          {
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            cwd: project,
+            encoding: "utf-8",
+            env: withoutHarnessEnv(),
+          },
+        );
+      const named = run("--harness-dir", ".aidlc");
+      expect(named.status, named.stderr).toBe(0);
+      expect(named.stdout).toBe(opencodeSkill.endsWith("\n") ? opencodeSkill : `${opencodeSkill}\n`);
+      const ambient = run();
+      expect(ambient.status, ambient.stderr).toBe(0);
+      expect(ambient.stdout).toBe(claudeSkill.endsWith("\n") ? claudeSkill : `${claudeSkill}\n`);
+    } finally {
+      // The launcher it just ran can hold the folder a moment on Windows.
+      cleanupTestProject(root);
+    }
+  });
 });
+
+// The environment a person's shell gives the launcher: no AI-DLC harness or
+// runtime-root selector left over from this test process.
+function withoutHarnessEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.AIDLC_HARNESS_DIR;
+  delete env.AIDLC_RUNTIME_ROOT;
+  delete env.AIDLC_RUNTIME_HARNESS_ROOT;
+  return env;
+}

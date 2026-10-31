@@ -1,12 +1,11 @@
-// covers: function:inferScopeFromText, function:validScopes, subcommand:aidlc-utility:intent-create
+// covers: function:validScopes, subcommand:aidlc-utility:intent-create
 //
-// t191 - the P2 composed-scope write contract (adaptive workflows).
+// t191 - the composed-scope write contract (adaptive workflows).
 //
 // The front composer authors TWO files after approval - scopes/aidlc-<name>.md
 // + a scope-grid.json entry - and the runtime honors them at the next
-// invocation with zero recompile (spike A). This test pins the deterministic
-// half of that contract plus the KEYWORD-HYGIENE rule the review made a
-// landing requirement:
+// invocation with zero recompile. This test pins the deterministic half of
+// that contract plus the KEYWORD-HYGIENE rule:
 //
 //   - A composed scope written with `keywords: []` RESOLVES by --scope (creation
 //     succeeds, the created state carries the scope, the authored grid drives
@@ -109,21 +108,6 @@ function run(
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-function inferIn(proj: string, input: string): string {
-  const res = spawnSync(
-    BUN,
-    [
-      "-e",
-      `import { inferScopeFromText } from ${JSON.stringify(utilityIn(proj))}; console.log(inferScopeFromText(process.env.T191_INPUT).scope);`,
-    ],
-    {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-      encoding: "utf-8",
-      env: { ...process.env, T191_INPUT: input, AIDLC_SCOPE_MAPPING: undefined } as unknown as Record<string, string>,
-    },
-  );
-  return (res.stdout ?? "").trim();
-}
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -156,26 +140,6 @@ describe("t191 composed-scope write contract + keyword hygiene", () => {
     expect(assertComposedScopeFile(join(proj, ".claude", "scopes"), name)).toBe(
       join(proj, ".claude", "scopes", filename),
     );
-    expect(inferIn(proj, "fix bug")).toBe("bugfix");
-  });
-
-  test("keywords: [] never wins inference - stock routing UNCHANGED (the hygiene rule)", () => {
-    const proj = freshProject();
-    authorComposedScope(proj, "aaa-composed", {}); // alphabetically FIRST if it had keywords
-    // Keyword text that matches stock bugfix must still infer bugfix.
-    expect(inferIn(proj, "fix bug")).toBe("bugfix");
-    // And rich prose falls to the classic default.
-    expect(inferIn(proj, "a long description of a brand new system to build")).toBe(
-      "classic",
-    );
-  });
-
-  test("counterfactual: an authored keyword DOES shadow stock inference (why [] is the default)", () => {
-    const proj = freshProject();
-    // "aaa-composed" sorts before "bugfix"; granting it the stock keyword
-    // "fix" makes it win first-alphabetical - the spike-proven trap.
-    authorComposedScope(proj, "aaa-composed", { keywords: ["fix"] });
-    expect(inferIn(proj, "fix bug")).toBe("aaa-composed");
   });
 
   test("a .md WITHOUT a grid entry resolves as all-SKIP (both files required)", () => {

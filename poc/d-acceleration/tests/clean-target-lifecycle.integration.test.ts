@@ -53,17 +53,24 @@ describe("generic auto lifecycle on an installed clean target", () => {
     mkdirSync(join(product, ".aidlc-engine"), { recursive: true });
     writeFileSync(join(product, ".aidlc-engine", "d-auto-request-life1.txt"), "Build a tiny todo CLI in TypeScript");
     const routed = auto("start", "--description-file", ".aidlc-engine/d-auto-request-life1.txt");
-    expect(routed).toMatchObject({ status: "routed", reason: "human-gate", directive: { kind: "ask" } });
+    // Upstream v2.11.2: the official print asks the host (the agent) to propose a
+    // plan; `next --propose` then returns the person's plan question.
+    expect(routed).toMatchObject({ status: "routed", reason: "official-routing", directive: { kind: "print" } });
     expect(existsSync(join(product, ".aidlc-engine", "d-auto-request-life1.txt"))).toBeFalse();
     expect(existsSync(join(product, ".aidlc-engine", "d-autopilot-session.json"))).toBeFalse();
     expect(intents()).toEqual([]);
 
-    // The person picks "poc" (recorded by the official prompt hook); the host
-    // runs the matching official scope command from the directive.
-    hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "poc" });
-    const choice = (routed.directive.scope_commands as { scope: string; command: string }[]).find((entry) => entry.scope === "poc")!;
-    const argv = choice.command.split(" ").slice(2);
-    const print = bunJson(join(tools(), "aidlc-orchestrate.ts"), [...argv, "--project-dir", product]);
+    const proposeRequest = /next --propose <plan> --request ([A-Fa-f0-9]{8})/.exec(routed.directive.message)?.[1];
+    expect(proposeRequest).toBeString();
+    const ask = bunJson(join(tools(), "aidlc-orchestrate.ts"), ["next", "--propose", "poc", "--request", proposeRequest!, "--project-dir", product]);
+    expect(ask.kind).toBe("ask");
+    // The person accepts the proposed "poc" plan (recorded by the official
+    // prompt hook); the host runs the matching official command.
+    hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "Go ahead with poc" });
+    const command: string = ask.ask_type === "scope-confirm" ? ask.confirm_command : (ask.scope_commands as { scope: string; command: string }[]).find((entry) => entry.scope === "poc")!.command;
+    const scope = /--scope ([A-Za-z0-9._-]+)/.exec(command)?.[1], request = /--request ([A-Fa-f0-9]{8})/.exec(command)?.[1];
+    expect(scope).toBe("poc"); expect(request).toBeString();
+    const print = bunJson(join(tools(), "aidlc-orchestrate.ts"), ["next", "--scope", scope!, "--request", request!, "--project-dir", product]);
     // Upstream core names the creation command in the print's prose only; the
     // host runs it exactly as given (the ordinary run-then-continue print).
     expect(print.kind).toBe("print");

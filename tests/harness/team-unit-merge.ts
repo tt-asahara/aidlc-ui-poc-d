@@ -232,13 +232,6 @@ export function makeSeed(
       'export const keep3 = "same";\n' +
       'export const right = "base";\n',
   );
-  writeFileSync(
-    join(seededAuditDir(seed), "skeleton.md"),
-    "## Bolt Started\n**Timestamp**: 2026-08-20T00:00:00Z\n" +
-      "**Event**: BOLT_STARTED\n**Bolt names**: skeleton\n**Walking skeleton**: true\n\n---\n" +
-      "## Bolt Completed\n**Timestamp**: 2026-08-20T00:00:01Z\n" +
-      "**Event**: BOLT_COMPLETED\n**Bolt names**: skeleton\n\n---\n",
-  );
   completeUnitOnMain(seed, "skeleton");
   writeFileSync(
     join(seed, ".gitignore"),
@@ -439,6 +432,12 @@ export function prepareCandidate(
     sourceText?: string;
     sharedText?: string;
     wave?: boolean;
+    /** The stage documents are written and committed with CRLF line endings
+     *  (core.autocrlf off and an editor that writes CRLF). */
+    crlf?: boolean;
+    /** The recorded Plan Approval answer line; the engine's recorder writes the
+     *  chosen option with its letter by default. */
+    answerLine?: string;
   } = {},
 ): {
   checkout: string;
@@ -447,6 +446,7 @@ export function prepareCandidate(
   auditShard: string;
 } {
   const checkout = clone(remote, label);
+  if (options.crlf) git(checkout, ["config", "core.autocrlf", "false"]);
   const claim = runMergeTool(UNIT, ["claim", unit, "--team", label], checkout);
   expect(claim.status, claim.out).toBe(0);
   const claimPayload = JSON.parse(claim.stdout);
@@ -495,9 +495,10 @@ export function prepareCandidate(
     );
     mkdirSync(dir, { recursive: true });
     for (const name of stage.produces ?? []) {
+      const body = `# ${name}\n\ncandidate ${unit}\n`;
       writeFileSync(
         join(dir, artifactFilename(name)),
-        `# ${name}\n\ncandidate ${unit}\n`,
+        options.crlf ? body.replaceAll("\n", "\r\n") : body,
       );
     }
   }
@@ -534,7 +535,7 @@ export function prepareCandidate(
   const questions =
     "## Plan Approval\n" +
     `[Approval Fingerprint]: ${planFingerprint}\n` +
-    "[Answer]: A. Approve Plan\n";
+    `${options.answerLine ?? "[Answer]: A. Approve Plan"}\n`;
   writeFileSync(join(codeDir, "code-generation-plan.md"), plan);
   writeFileSync(join(codeDir, "unit-test-instructions.md"), instructions);
   writeFileSync(questionsFile, questions);

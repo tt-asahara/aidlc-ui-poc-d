@@ -206,7 +206,6 @@ function auditRows(project: string): string {
 
 const LOWER_FENCE_SWITCH = "config set guard.plan-approval off";
 
-// GUARD_STOOD_ASIDE rows whose Guard is plan-approval.
 function stoodAsideRows(project: string): number {
   if (!existsSync(join(seededRecordDir(project), "audit"))) return 0;
   return auditRows(project).split("\n## ").filter((block) =>
@@ -292,7 +291,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     };
     assertBlocked("code-generation-plan.md is missing or empty.");
     writePlanArtifacts(project);
-    assertBlocked("the plan is not approved yet; run next to ask the person to approve it.");
+    assertBlocked("the plan is not approved yet; run next.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("under a strict policy the same flow keeps source writes refused until the plan is approved", () => {
@@ -392,7 +391,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     expect(continuation.code, continuation.stderr).toBe(policy === "strict" ? 2 : 0);
     if (policy === "relaxed") {
       expect(continuation.stdout).toContain(
-        "Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
+        "Continuing past the plan re-approval check because it is off for this piece of work (guard policy relaxed (from scope poc))",
       );
     } else if (policy === "off") {
       expect(continuation.stdout).not.toContain("Continuing past");
@@ -404,7 +403,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     assertFence(project, policy);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a recorded recovery choice clears an interrupted native planning write", () => {
+  test("the agent's record of the recovery yes clears an interrupted native planning write", () => {
     const project = fixture();
     const legacy = (target: string, payload: object) =>
       run(project, ["engine", "adapter", "kiro-ide", target], payload, true);
@@ -418,8 +417,14 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
     const pending = shell();
     expect(pending.code, pending.stderr).toBe(2);
     expect(pending.stderr).toContain("recovery requires a human response");
-    const response = legacy("record-human-turn", { prompt: "Recover Plan Approval" });
+    const response = legacy("record-human-turn", { prompt: "Yes, bring it back." });
     expect(response.code, response.stderr).toBe(0);
+    // The agent's record of the yes it read: the recovery question's one choice command.
+    const yes = run(project, [
+      "engine", "log", "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Recover Plan Approval", "--project-dir", project,
+    ]);
+    expect(yes.code, yes.stdout + yes.stderr).toBe(0);
     const recovered = shell();
     expect(recovered.code, recovered.stderr).toBe(2);
     expect(recovered.stderr).toContain("recovery issued a fresh directive");

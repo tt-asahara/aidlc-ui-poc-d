@@ -16,11 +16,15 @@
 //   2. The plan tool is update_plan ({plan:[{step,status}]}), not
 //      TaskUpdate — the shim maps the in_progress step to the
 //      {status, activeForm} shape the statusline-sync hook keys on.
-//   3. Every event is delivered TWICE (×2 duplication observed across the
-//      whole corpus). The shim is idempotent by REPLAY: the first delivery
+//   3. An event can be delivered TWICE (×2 duplication seen across the
+//      payload corpus; one delivery per registration on 0.162.1).
+//      The shim is idempotent by REPLAY: the first delivery
 //      runs the core hook and caches {stdout, exit}; the duplicate replays
 //      the identical response (never swallowed — we must answer duplicates
 //      exactly like originals because Codex's combine rule is unspecified).
+//      Two exceptions run the core hook on every delivery instead, where a
+//      stale replay costs more than a duplicate whose answer may differ: the
+//      Stop check and a compact SessionStart (bypassReplay, below).
 //   4. There is no SessionEnd event (D-4): the session-start target
 //      reconciles — when the heartbeat file names a DIFFERENT prior
 //      session, it pipes an inferred-provenance reason into the core
@@ -31,16 +35,13 @@
 //      brief as `prompt` under the root session id. Spawned subagents carry
 //      agent_id; internal reviewers carry a transcript_path naming their own
 //      thread. record-human-turn never counts either as the person's turn
-//      (#1411).
+//      (#1411), and the preamble maps either thread to this chat so an engine
+//      command run in it acts on this chat's work.
 //
 // Output contracts:
 //   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
-//   - bind-bash-session: POSIX Bash input is rewritten through
-//     hookSpecificOutput.updatedInput so every command inherits the validated
-//     payload session without process inspection, until a tool has seen
-//     Codex give a command that session as CODEX_THREAD_ID.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -51,7 +52,14 @@
 //                  rebuild-stage-graph | validate-state | log-subagent | continue-workflow |
 //                  record-human-turn | state-transition-guard | reviewer-scope |
 //                  review-freeze | deliver-stage-rules | plan-approval-guard |
-//                  bind-bash-session
+//                  guard-tool-call
+// guard-tool-call is the one PreToolUse registration: it runs the four guards
+// in this process, and those guards run their core hook in this process too
+// (runCoreHere), so a shell call costs one engine load, not nine (#2066). No
+// member rewrites the command: Codex gives every command it runs the session
+// as CODEX_THREAD_ID (0.145.0 and later) and the tools read it from there, so
+// the words the agent wrote are what runs and what the shipped
+// rules/default.rules prefixes match.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -63,14 +71,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  collectHookOutput,
   emptyPickerResult,
   isNonAnswer,
+  noteHelperSession,
+  runHookHere,
   sessionsDir,
-  codexThreadSessionPath,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -156,26 +165,40 @@ export function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unk
   const selections = Object.entries(answers as Record<string, unknown>);
   if (selections.length === 0) return false;
   const offered = offeredOptionLabels(toolInput);
-  return selections.every(([questionId, selection]) => {
+  // A question the person moved past comes back as an empty list (Codex lets
+  // them submit with it unanswered); the box is theirs when another question
+  // carries a pick, and the core hook records the blank one as no reply.
+  let picked = false;
+  const wellFormed = selections.every(([questionId, selection]) => {
     if (selection === null || typeof selection !== "object" || Array.isArray(selection)) return false;
     const record = selection as Record<string, unknown>;
     if (Object.keys(record).length !== 1 || !Array.isArray(record.answers)) return false;
-    return record.answers.length > 0 && record.answers.every((answer) => {
+    if (record.answers.length === 0) return true;
+    picked = true;
+    return record.answers.every((answer) => {
       if (typeof answer !== "string" || answer.trim().length === 0) return false;
       return !isNonAnswer(answer) || offered.get(questionId)?.has(answer.trim()) === true;
     });
   });
+  return wellFormed && picked;
+}
+
+// The thread a Codex rollout file is for (rollout-<timestamp>-<thread id>[_<rollout
+// id>].jsonl), or null for a path in any other form.
+function rolloutThread(transcriptPath: unknown): string | null {
+  if (typeof transcriptPath !== "string") return null;
+  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
+  return name.match(
+    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
+  )?.[1]?.toLowerCase() ?? null;
 }
 
 // True when transcript_path is a Codex rollout file for a thread other than
 // the session's root thread (whose id is the session id).
 function otherThreadInput(transcriptPath: unknown, sessionId: unknown): boolean {
-  if (typeof transcriptPath !== "string" || typeof sessionId !== "string" || !sessionId) return false;
-  const name = transcriptPath.split(/[\\/]/).pop() ?? "";
-  const thread = name.match(
-    /^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:_[0-9a-f-]+)?\.jsonl(?:\.[a-z0-9]+)?$/i,
-  )?.[1];
-  return thread !== undefined && thread.toLowerCase() !== sessionId.trim().toLowerCase();
+  if (typeof sessionId !== "string" || !sessionId) return false;
+  const thread = rolloutThread(transcriptPath);
+  return thread !== null && thread.toLowerCase() !== sessionId.trim().toLowerCase();
 }
 
 function explicitHumanSelectionText(toolResponse: unknown): string {
@@ -193,6 +216,38 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
     // Non-structured prompt payloads use the direct fields below.
   }
   return "";
+}
+
+// Codex's other question box (request_user_input_async, offered beside
+// request_user_input on some models) sends the person's answer back as a new
+// prompt: its own markers around a JSON array of {answer, question,
+// questionItemId} (codex-rs context-fragments answered_question.rs, measured
+// on 0.164.0). What the person said is the answers, each whole, one per line in
+// Codex's order; null for any other prompt, which is theirs as it came. The
+// markers anchor the whole prompt and the body between them is parsed whole,
+// so an answer holding the closing marker is still one answer.
+const QUESTION_REPLY_OPEN = "<send_user_message_question_reply>";
+const QUESTION_REPLY_CLOSE = "</send_user_message_question_reply>";
+
+export function questionReplyWords(prompt: string): string | null {
+  const text = prompt.trim();
+  if (!text.startsWith(QUESTION_REPLY_OPEN) || !text.endsWith(QUESTION_REPLY_CLOSE)) return null;
+  let replies: unknown;
+  try {
+    replies = JSON.parse(text.slice(QUESTION_REPLY_OPEN.length, text.length - QUESTION_REPLY_CLOSE.length));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(replies) || replies.length === 0) return null;
+  const answers: string[] = [];
+  for (const reply of replies) {
+    if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
+    const { answer, question, questionItemId } = reply as Record<string, unknown>;
+    if (typeof answer !== "string") return null;
+    if (![question, questionItemId].every((field) => field === undefined || typeof field === "string")) return null;
+    if (answer.trim()) answers.push(answer);
+  }
+  return answers.join("\n");
 }
 
 export async function run(
@@ -220,51 +275,139 @@ const payloadSessionId = validSessionId(codex.session_id);
 if (payloadSessionId) {
   process.env.AIDLC_SESSION_OVERRIDE = payloadSessionId;
   process.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+  // A spawned agent's payloads carry agent_id = its own thread id, the one its
+  // shell gets as CODEX_THREAD_ID; Codex's own review thread carries no
+  // agent_id, and only its transcript_path names its thread (the root chat's
+  // rollout names the root itself, which noteHelperSession ignores). Note the
+  // pair once, from the thread's first event, so an engine command run in that
+  // thread resolves to this chat and not to whatever the shared cursor names
+  // (aidlc-lib resolveInvokingSessionId reads it).
+  const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
+  if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
-const projectEnv = {
-  ...process.env,
+// What a core hook is given on top of this process's environment, as a child
+// or (runCoreHere) while it runs here.
+const projectPins = {
   AIDLC_PROJECT_DIR: projectDir,
   CLAUDE_PROJECT_DIR: projectDir,
 };
+const projectEnv = { ...process.env, ...projectPins };
 
 // --- Duplicate-delivery replay cache ---------------------------------------
 //
 // Key = sha256(target + raw stdin): identical deliveries (same turn, same
-// tool_use_id, same content) collide; legitimate re-fires differ (turn_id /
-// stop_hook_active / tool_use_id change). First delivery takes the slot via
-// atomic mkdir (the audit-lock idiom), runs, and persists its response;
-// the duplicate waits briefly for that response and replays it byte-for-byte.
-// Entries are pruned after 30 minutes. Failure anywhere → fail open (run or
-// allow), never trap the turn.
+// tool_use_id, same content) collide; most legitimate re-fires differ
+// (turn_id / tool_use_id change), with the exceptions below. First delivery
+// takes the slot via atomic mkdir (the audit-lock idiom), runs, and persists
+// its response; the duplicate waits briefly for that response and replays it
+// byte-for-byte.
+//
+// A re-fire that does NOT differ: a person who types the same words again
+// while the turn is still closing (`1` to two numbered questions in a row)
+// lands in the same Codex turn, so the second UserPromptSubmit carries
+// byte-identical stdin (measured on Codex 0.162.1: the payload has no
+// per-submission field). What tells it from Codex's duplicate of one delivery
+// is that the agent has spoken in between, so on that seam the key also
+// carries the number of assistant messages in the Codex rollout.
+// The cache lives in the project's own gitignored scratch folder
+// (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
+// delivery that uses it prunes it: a slot is kept for 5 minutes at most (the
+// duplicate waits 2 seconds; the bound outlasts any hook's run) and at most 64
+// slots stay, so a long session never piles up folders. Failure anywhere fails
+// open (run or allow), never trapping the turn.
 //
 // Compact-source SessionStart is EXEMPT: Codex SessionStart input carries no
 // turn_id, so two DISTINCT compactions in one session produce byte-identical
 // stdin and would replay the FIRST compaction's (stale) workflow context.
 // The compact render is read-only (source=compact emits no audit row), so
 // re-running a true duplicate is harmless while replaying a stale one is not.
-const bypassReplay = target === "session-start" && codex.source === "compact";
+//
+// The Stop check is EXEMPT too. Stops after a block in one turn carry
+// byte-identical stdin whenever the agent only runs tools or says nothing in
+// between, and the rollout gains no assistant message, so a replay would answer
+// them from the cache: the core hook would not see them, its no-progress count
+// would stop climbing, and a cap above that count (8 under autonomous
+// Construction) would never let the loop go. The core hook owns that decision
+// and is built to run on every Stop. A second delivery of one Stop runs it
+// twice: the count can climb twice, and an answer the core hook gives once (an
+// error diagnostic, the allow at an intent switch) may differ on the second
+// run.
+const bypassReplay =
+  target === "continue-workflow" ||
+  (target === "session-start" && codex.source === "compact");
 
-const DEDUPE_ROOT = join(
-  tmpdir(),
-  `aidlc-codex-dedupe-${createHash("sha256").update(projectDir).digest("hex").slice(0, 16)}`,
-);
-const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}`).digest("hex").slice(0, 32);
+// Measured on 0.162.1: an assistant message is in the rollout before the next
+// UserPromptSubmit, and a duplicate that comes with its original reads the
+// same count. Only the lines that name the assistant are parsed, and a last
+// line still being written is not counted.
+// Without a readable rollout the key is target and stdin alone.
+const ASSISTANT_ROLE = Buffer.from('"role":"assistant"');
+function assistantMessagesInRollout(transcriptPath: unknown): string {
+  if (typeof transcriptPath !== "string" || rolloutThread(transcriptPath) === null) return "";
+  try {
+    const rollout = readFileSync(transcriptPath);
+    let count = 0;
+    for (let at = rollout.indexOf(ASSISTANT_ROLE); at !== -1; at = rollout.indexOf(ASSISTANT_ROLE, at + 1)) {
+      const end = rollout.indexOf(10, at);
+      if (end === -1) break;
+      try {
+        const line = rollout.subarray(rollout.lastIndexOf(10, at) + 1, end).toString("utf-8");
+        const entry = JSON.parse(line) as { type?: unknown; payload?: { type?: unknown; role?: unknown } };
+        if (entry.type === "response_item" && entry.payload?.type === "message" && entry.payload.role === "assistant") {
+          count++;
+        }
+      } catch {
+        // not a JSON line
+      }
+      at = end;
+    }
+    return `\n${count}`;
+  } catch {
+    return "";
+  }
+}
+// A subagent's prompt (agent_id) or an internal reviewer's (its own rollout)
+// is not the person's turn: record-human-turn records nothing for it, so it
+// keeps the plain key and costs no read.
+const otherAgentInput =
+  (typeof codex.agent_id === "string" && codex.agent_id.trim().length > 0) ||
+  otherThreadInput(codex.transcript_path, codex.session_id);
+const repeatableDelivery =
+  target === "record-human-turn" && codex.hook_event_name === "UserPromptSubmit" && !otherAgentInput;
+const progress = repeatableDelivery ? assistantMessagesInRollout(codex.transcript_path) : "";
+
+const DEDUPE_ROOT = join(sessionsDir(projectDir), "codex-dedupe");
+const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}${progress}`).digest("hex").slice(0, 32);
 const slotDir = join(DEDUPE_ROOT, dedupeKey);
 const responseFile = join(slotDir, "response.json");
+const SLOT_MAX_AGE_MS = 5 * 60 * 1000;
+const SLOT_MAX_COUNT = 64;
 
 function pruneStale(): void {
   try {
-    const cutoff = Date.now() - 30 * 60 * 1000;
+    const cutoff = Date.now() - SLOT_MAX_AGE_MS;
+    const slots: { full: string; mtime: number }[] = [];
     for (const entry of readdirSync(DEDUPE_ROOT)) {
       const full = join(DEDUPE_ROOT, entry);
       try {
-        if (statSync(full).mtimeMs < cutoff) rmSync(full, { recursive: true, force: true });
+        slots.push({ full, mtime: statSync(full).mtimeMs });
       } catch {
-        // racing prune — ignore
+        // racing prune - ignore
       }
     }
+    // Newest first: a slot past the age bound goes, and so does any beyond the
+    // newest SLOT_MAX_COUNT.
+    slots.sort((a, b) => b.mtime - a.mtime);
+    slots.forEach(({ full, mtime }, index) => {
+      if (mtime >= cutoff && index < SLOT_MAX_COUNT) return;
+      try {
+        rmSync(full, { recursive: true, force: true });
+      } catch {
+        // racing prune - ignore
+      }
+    });
   } catch {
-    // no dedupe root yet — nothing to prune
+    // no dedupe root yet - nothing to prune
   }
 }
 
@@ -379,6 +522,20 @@ function runCoreWithStderr(
   };
 }
 
+// The core hooks that run on every shell call run INSIDE this process
+// (runHookHere): a child `aidlc engine hook` loads the whole engine a second
+// time for each of them, and Codex starts every matching handler at once. The
+// hook module is imported from beside this file (the packaged runtime under
+// the compiled engine, the project copy under the Bun channel). A hook that
+// cannot be imported or exports no run() runs as a child as before.
+async function runCoreHere(
+  hookFile: string,
+  input: string,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return (await runHookHere(join(HOOKS_DIR, hookFile), input, projectPins)) ??
+    runCoreWithStderr(hookFile, input);
+}
+
 // Re-wrap the core context output ({"additionalContext": ...}) into the
 // hookSpecificOutput envelope Codex consumes (verified live for SessionStart).
 // CONTRACT WARNING: each Codex event has its OWN output schema — do not reuse
@@ -426,15 +583,6 @@ function allowUpdatedInput(coreStdout: string): string {
     // Unparseable core output is not a successful input rewrite.
   }
   return coreStdout;
-}
-
-function wrapUpdatedInput(updatedInput: Record<string, unknown>): string {
-  return allowUpdatedInput(`${JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      updatedInput,
-    },
-  })}\n`);
 }
 
 // --- D-4: SESSION_ENDED reconcile-at-next-start ------------------------------
@@ -493,40 +641,6 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 // --- Targets ------------------------------------------------------------------
 
 switch (target) {
-  case "bind-bash-session": {
-    const command =
-      typeof codex.tool_input?.command === "string"
-        ? codex.tool_input.command
-        : "";
-    // Codex gives the command this session as CODEX_THREAD_ID (0.160 and
-    // later); once a tool has seen it there, the command keeps the words the
-    // agent wrote.
-    const threadNoted = (() => {
-      const path = payloadSessionId ? codexThreadSessionPath(projectDir, payloadSessionId) : null;
-      return path !== null && existsSync(path);
-    })();
-    if (
-      process.platform === "win32" ||
-      codex.tool_name !== "Bash" ||
-      !payloadSessionId ||
-      !command ||
-      threadNoted
-    ) {
-      persistResponse("", 0);
-      return 0;
-    }
-    const prefix =
-      `export AIDLC_SESSION_OVERRIDE='${payloadSessionId}' ` +
-      "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; ";
-    const wrapped = wrapUpdatedInput({
-      ...codex.tool_input,
-      command: command.startsWith(prefix) ? command : `${prefix}${command}`,
-    });
-    persistResponse(wrapped, 0);
-    process.stdout.write(wrapped);
-    return 0;
-  }
-
   case "session-start": {
     reconcilePriorSession();
     // Forward session_id so the core hook's per-session→intent stamp (on
@@ -589,21 +703,23 @@ switch (target) {
 
   case "rebuild-stage-graph": {
     // Codex already names the shell tool "Bash" with tool_input.command —
-    // the core hook's exact contract. Verbatim pipe. The core hook's only
-    // stdout is the engine-error relay, one {"systemMessage": ...} line that
-    // Codex surfaces as a warning in the UI (documented for PostToolUse), so
-    // forward it. It is display-only, so unlike a decision it is deliberately
-    // NOT cached for the duplicate delivery: replaying it would show the same
-    // warning twice. The hook stays advisory (exit 0) either way.
-    const r = runCore("aidlc-rebuild-stage-graph.ts", rawInput);
+    // the core hook's exact contract. Verbatim pipe. The core hook's stdout is
+    // one line: the engine-error relay ({"systemMessage": ...}, which Codex
+    // surfaces as a warning in the UI, with a note for the model) or the
+    // setter's say-once note (PostToolUse additionalContext, which Codex hands
+    // the model as a developer message and draws nowhere), so forward it.
+    // Unlike a decision it is deliberately NOT cached for the duplicate
+    // delivery: replaying it would show the warning twice and hand the model
+    // the note twice. The hook stays advisory (exit 0) either way.
+    const r = await runCoreHere("aidlc-rebuild-stage-graph.ts", rawInput);
     persistResponse("", 0);
     if (r.stdout) process.stdout.write(r.stdout);
     return 0;
   }
 
   case "validate-state": {
-    // PreCompact: the core hook reads no stdin fields — state validation +
-    // SESSION_COMPACTED + recovery breadcrumb are all self-contained.
+    // PreCompact: the core hook reads only the session id from stdin; state
+    // validation and SESSION_COMPACTED are its own.
     runCore("aidlc-validate-state.ts", rawInput);
     persistResponse("", 0);
     return 0;
@@ -619,9 +735,9 @@ switch (target) {
 
   case "continue-workflow": {
     // Contract identical on Codex (stop_hook_active included): pass stdin
-    // verbatim, forward {"decision":"block","reason"} stdout + exit code.
+    // verbatim, forward {"decision":"block","reason"} stdout + exit code. Never
+    // cached (bypassReplay): every Stop is the core hook's to judge.
     const r = runCore("aidlc-continue-workflow.ts", rawInput);
-    persistResponse(r.stdout, r.code);
     if (r.stdout) process.stdout.write(r.stdout);
     return r.code;
   }
@@ -639,7 +755,7 @@ switch (target) {
     // replays the block faithfully. Fail-open on any spawn failure.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
-      const r = runCoreWithStderr("aidlc-reviewer-scope.ts", rawInput);
+      const r = await runCoreHere("aidlc-reviewer-scope.ts", rawInput);
       // Persist the ANSWERED code, not the raw one: anything that is not the
       // block contract (2) is answered 0 below, and the duplicate must replay
       // exactly what the original answered (a crashed core hook exiting 1
@@ -672,7 +788,7 @@ switch (target) {
           ...(codex.agent_type ? { agent_type: codex.agent_type } : {}),
           ...(codex.agent_id ? { agent_id: codex.agent_id } : {}),
         });
-        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+        const r = await runCoreHere("aidlc-reviewer-scope.ts", fwd);
         if (r.code === 2) {
           persistResponse("", 2, r.stderr);
           process.stderr.write(r.stderr);
@@ -691,7 +807,7 @@ switch (target) {
     // stderr; the response cache replays the block on duplicate delivery.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
-      const r = runCoreWithStderr("aidlc-review-freeze.ts", rawInput);
+      const r = await runCoreHere("aidlc-review-freeze.ts", rawInput);
       persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);
@@ -712,7 +828,7 @@ switch (target) {
           tool_name: f.tool,
           tool_input: { file_path: f.path },
         });
-        const r = runCoreWithStderr("aidlc-review-freeze.ts", fwd);
+        const r = await runCoreHere("aidlc-review-freeze.ts", fwd);
         if (r.code === 2) {
           persistResponse("", 2, r.stderr);
           process.stderr.write(r.stderr);
@@ -749,7 +865,7 @@ switch (target) {
     // the block faithfully.
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
-      const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", rawInput);
+      const r = await runCoreHere("aidlc-plan-approval-guard.ts", rawInput);
       persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);
@@ -765,7 +881,7 @@ switch (target) {
         targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
       }
       for (const f of targets) {
-        const r = runCoreWithStderr(
+        const r = await runCoreHere(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
             hook_event_name: "PreToolUse",
@@ -803,7 +919,7 @@ switch (target) {
       },
       ...(payloadSessionId ? { session_id: payloadSessionId } : {}),
     });
-    const r = runCoreWithStderr("aidlc-plan-approval-guard.ts", fwd);
+    const r = await runCoreHere("aidlc-plan-approval-guard.ts", fwd);
     persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
     if (r.code === 2) {
       process.stderr.write(r.stderr);
@@ -814,18 +930,54 @@ switch (target) {
 
   case "state-transition-guard": {
     // Global PreToolUse lifecycle guard. Only Bash can name aidlc-state.ts;
-    // everything else permits immediately. Preserve exit 2 + stderr exactly.
+    // everything else permits immediately. Preserve exit 2 + stderr exactly;
+    // returned, never process.exit, since this runs as a guard-tool-call member.
     if ((codex.tool_name ?? "") === "Bash") {
-      const r = runCoreWithStderr("aidlc-state-transition-guard.ts", rawInput);
+      const r = await runCoreHere("aidlc-state-transition-guard.ts", rawInput);
       persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);
-        process.exit(2);
+        return 2;
       }
     }
     persistResponse("", 0);
-    process.exit(0);
-    break;
+    return 0;
+  }
+
+  case "guard-tool-call": {
+    // The one PreToolUse registration: the four checks a shell call used to
+    // start as four handlers run here in order, in this process. Every member
+    // runs even after one refuses, as Codex ran every handler; the call is
+    // refused when any member refuses, with each refusal once on stderr and
+    // nothing on stdout. When every member lets the call through nothing is
+    // printed and the command runs as the agent wrote it. A member that fails
+    // on its own (its own case answers that 0; a thrown error lands here as
+    // code 1) refuses nothing, as its crashed process did not. The group
+    // persists its own answer for the duplicate delivery.
+    const members = [
+      "state-transition-guard",
+      "reviewer-scope",
+      "review-freeze",
+      "plan-approval-guard",
+    ];
+    let code = 0;
+    let allowed = "";
+    const refusals: string[] = [];
+    for (const member of members) {
+      const said = await collectHookOutput(() => run(member, rawInput, _extraArgs));
+      if (said.code === 2) {
+        code = 2;
+        if (said.stderr && !refusals.includes(said.stderr)) refusals.push(said.stderr);
+      } else if (said.code === 0) {
+        allowed += said.stdout;
+      }
+    }
+    const stdout = code === 0 ? allowed : "";
+    const stderr = refusals.join("");
+    persistResponse(stdout, code, stderr || undefined);
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+    return code;
   }
 
   case "record-human-turn": {
@@ -865,8 +1017,7 @@ switch (target) {
     // the main chat. A path in any other form decides nothing.
     if (
       codex.tool_name !== "request_user_input" &&
-      ((typeof codex.agent_id === "string" && codex.agent_id.trim().length > 0) ||
-        otherThreadInput(codex.transcript_path, codex.session_id))
+      otherAgentInput
     ) {
       persistResponse("", 0);
       return 0;
@@ -882,7 +1033,10 @@ switch (target) {
     // Plan Approval choice from either channel, but the break-glass override
     // phrase counts only when the human typed it as a prompt. The box's reply
     // goes along as it came, so each question's reply is kept word for word.
+    // An answer in Codex's other box arrives as a prompt in Codex's envelope
+    // and goes on as the answer alone, read like a reply typed in the chat.
     const selectionText = explicitHumanSelectionText(codex.tool_response);
+    const typed = codex.prompt || codex.user_prompt || codex.message || "";
     const forwarded =
       codex.tool_name === "request_user_input"
         ? {
@@ -896,15 +1050,16 @@ switch (target) {
         : {
             hook_event_name: "UserPromptSubmit",
             ...(codex.session_id ? { session_id: codex.session_id } : {}),
-            prompt: codex.prompt || codex.user_prompt || codex.message || "",
+            prompt: questionReplyWords(typed) ?? typed,
           };
     const turn = runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify(forwarded));
     // The core hook's note says what a switch the person typed did, and that the
     // engine already tells them. Dropping it is why the agent ran a setter of its
     // own on the piece of work that was open instead of the one they asked about.
-    // Same context envelope as session-start; an output with nothing in it stays
+    // Same context envelope as session-start, under the event Codex fired (a box
+    // answer's line goes back as PostToolUse); an output with nothing in it stays
     // empty, so a turn with no note answers exactly as before.
-    const context = wrapContext(turn.stdout, "UserPromptSubmit");
+    const context = wrapContext(turn.stdout, forwarded.hook_event_name);
     persistResponse(context, 0);
     if (context) process.stdout.write(context);
     return 0;

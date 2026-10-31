@@ -80,25 +80,32 @@ const KIRO_TOOLS: Record<string, KiroTool> = {
   // cannot mutate the workspace during a Plan Approval window, while denying it
   // stopped a Windows customer mid-workflow (#1039).
   disclose_context: { role: "read" },
+  // `tool_load` loads the definition of a deferred MCP tool (`tool_ids`, such
+  // as `probe-ws::ws_echo`) before Kiro calls it, measured on Kiro CLI 2.31.0
+  // and Kiro IDE 1.3.0. It runs nothing and writes nothing; the call it
+  // prepares is checked on its own.
+  tool_load: { role: "read" },
   thinking: { role: "read" },
   todo_list: { role: "read" },
   // A helper agent's word to the chat that sent it about where it is; it has
   // no write surface, and refusing it left the composer unable to say why it
   // stopped while Code Generation waited.
   report_progress: { role: "read" },
+  // A helper agent's last call: it hands its answer back to the chat that sent
+  // it. It writes nothing and cannot answer an approval, and the chat's next
+  // call, the one that acts on the answer, is checked.
+  subagent_response: { role: "read" },
 };
 
 // `subagent_<agent>` is the named dispatch an agent gets from the `subagent`
-// tool category. `subagent_response` is the completion shell that carries no
-// output, not a dispatch.
+// tool category. `subagent_response` (in the table above) is the completion
+// shell that carries no output, not a dispatch.
 const NAMED_DELEGATE_PREFIX = "subagent_";
 const DELEGATE_RESPONSE = "subagent_response";
 
 function kiroTool(name: string): KiroTool | undefined {
   if (Object.hasOwn(KIRO_TOOLS, name)) return KIRO_TOOLS[name];
-  return name.startsWith(NAMED_DELEGATE_PREFIX) && name !== DELEGATE_RESPONSE
-    ? { role: "delegate" }
-    : undefined;
+  return name.startsWith(NAMED_DELEGATE_PREFIX) ? { role: "delegate" } : undefined;
 }
 
 function namesWhere(select: (tool: KiroTool) => boolean): string[] {
@@ -151,17 +158,30 @@ export function isLegacyPlanningWriteTool(name: string): boolean {
   return (tool?.role === "write" || tool?.role === "edit") && tool.legacyPlanningWrite === true;
 }
 
+// A write whose file AI-DLC records in the audit and runs the sensors on.
+export function isAuditedWriteTool(name: string): boolean {
+  const tool = kiroTool(name);
+  return (tool?.role === "write" || tool?.role === "edit") && tool.audited;
+}
+
 export function isKiroAppendTool(name: string): boolean {
   const tool = kiroTool(name);
   return (tool?.role === "write" || tool?.role === "edit") && tool.append === true;
+}
+
+// A call to one of the person's MCP servers: Kiro names it `mcp_<server>_<tool>`
+// (a `-` in either name becomes `_`), measured on Kiro CLI 2.31.0 and Kiro IDE
+// 1.3.0. A name in the table is never one.
+export function isKiroMcpTool(name: string): boolean {
+  return name.startsWith("mcp_") && name.length > "mcp_".length && kiroTool(name) === undefined;
 }
 
 export function isPlanApprovalSafeReadTool(name: string): boolean {
   return kiroTool(name)?.role === "read";
 }
 
-// Any name the table does not call a read may change the workspace, including
-// one it does not know.
+// Any nonempty name the table does not call a read may change the workspace,
+// including one it does not know.
 export function mutationCapableTool(name: string): boolean {
   return name.length > 0 && !isPlanApprovalSafeReadTool(name);
 }
@@ -171,9 +191,9 @@ const readNames = namesWhere((tool) => tool.role === "read").join("|");
 
 // The matcher each registration must carry, built from the table (read by
 // t245; the registrations themselves are hand-written JSON). PostToolUse
-// matchers stay unanchored and PreToolUse ones anchored, as each was written;
-// the delegate-completion matcher admits `subagent_response` too, which the
-// adapter then drops.
+// matchers stay unanchored and PreToolUse ones anchored; the
+// delegate-completion matcher leaves out only `subagent_response`, which
+// the adapter drops on every entry point too.
 export const KIRO_HOOK_MATCHERS = {
   auditedWrite: namesWhere((tool) =>
     (tool.role === "write" || tool.role === "edit") && tool.audited
@@ -183,7 +203,7 @@ export const KIRO_HOOK_MATCHERS = {
   writeOrShellPreToolUse: `^(${
     [...namesWhere((tool) => tool.role === "write" || tool.role === "edit"), shellNames].join("|")
   })$`,
-  delegateCompletion: `^(${
+  delegateCompletion: `^(?!${DELEGATE_RESPONSE}$)(${
     [`${NAMED_DELEGATE_PREFIX}.+`, ...namesWhere((tool) => tool.role === "delegate")].join("|")
   })$`,
   // Every name but the table's reads, which cannot change the workspace, so a
@@ -192,17 +212,29 @@ export const KIRO_HOOK_MATCHERS = {
 } as const;
 
 // Kiro IDE shows a card for every hook run (#2022), so one registration runs
-// several adapter targets: the five tool-call checks, and the two hooks after a
-// shell command. Each member keeps the matcher its own registration had, in the
-// file-name order Kiro ran those registrations; the read-only tools reach none.
+// several adapter targets: the four tool-call checks, and the two hooks for the
+// person's message. Each member keeps the matcher its own registration had, in
+// the file-name order Kiro ran those registrations; the read-only tools reach
+// none. What Kiro ran after a write or a command (the audit and sensors, and
+// the after-shell pair) has no card of its own: the guard notes the call it lets
+// through, and the next card that runs anyway (the guard, the message, the
+// turn's end) does that work first, as catch-up.
 export const KIRO_HOOK_GROUPS: Readonly<Record<string, ReadonlyArray<{ target: string; matcher: string }>>> = {
   "guard-tool-call": [
-    { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
+    { target: "catch-up", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
     { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
     { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
     { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
     { target: "terminal-command-guard", matcher: KIRO_HOOK_MATCHERS.shellPreToolUse },
   ],
+  // A prompt names no tool, so every member runs.
+  "person-message": [
+    { target: "catch-up", matcher: "" },
+    { target: "record-human-turn", matcher: "" },
+    { target: "verb-intercept", matcher: "" },
+  ],
+  // Still registered by a project whose hook files predate catch-up, and run by
+  // catch-up itself.
   "after-shell": [
     { target: "rebuild-stage-graph", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },
     { target: "sync-workflow-state", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse },

@@ -78,6 +78,36 @@ function assertQualityTargetGate(root: string, orgPath: string): void {
     "Weakening, relaxing, lowering, or disabling a defined\n" +
       "quality target is never an acceptable fix.",
   );
+  // The scope floor's CI obligation is a target only when the plan runs CI
+  // Pipeline: a plan that skips it is not a failed build (a live run asked the
+  // person to "Accept failure" over a CI step their plan never had).
+  expect(buildAndTest).toContain(
+    'A CI obligation (the contract\'s "Run the selected tests in CI before merge."\n' +
+      '  line, or a memory note\'s "CI execution before merge") applies only when the\n' +
+      "  plan runs CI Pipeline",
+  );
+  expect(buildAndTest).toContain(
+    "it is not\n  applicable, so it is never `Unverified` and never a failure",
+  );
+  expect(buildAndTest).toContain(
+    "or for a target the\n  plan makes inapplicable",
+  );
+  // While CI Pipeline is still ahead in the plan, the CI obligation is its to
+  // meet: Build and Test runs before any CI exists, so a failure there is false
+  // (live runs asked the person to "Accept failure" over the stage that sets CI
+  // up next).
+  expect(buildAndTest).toContain(
+    "While CI\n  Pipeline is still ahead (its checkbox is `[ ]`), the target is CI Pipeline's\n" +
+      "  to meet: record Owning Stage `ci-pipeline`, Verdict `N/A`, and the reason \"CI\n" +
+      '  Pipeline, later in this plan, sets up CI to run these tests before merge".\n' +
+      "  It is never `Unverified` and never a failure here.",
+  );
+  expect(buildAndTest).toContain(
+    "as Step 1 says for the CI obligation of a plan\n  that runs no CI Pipeline or has it still ahead.",
+  );
+  expect(codeGeneration).toContain(
+    "80% line coverage and, when the plan runs CI Pipeline, CI execution before merge",
+  );
 
   expect(read(root, FILES.stageProtocol)).toContain(
     "Relaxing, lowering, or disabling a previously defined quality target (e.g.\n" +

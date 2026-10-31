@@ -1,11 +1,12 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report
 //
 // CLI-contract tests for the orchestrator's bolt_dag self-heal path. The
-// internal readBoltDagBatches helper is not exported, so this file claims the
+// internal resolveBoltBatches helper is not exported, so this file claims the
 // legitimate registry surfaces that exercise it: the real next and report
 // subprocesses. Each case seeds a fresh per-intent record, writes the
 // unit-of-work-dependency.md artifact when needed, and asserts on the emitted
-// directive plus stderr observability.
+// directive. A heal says nothing: the artifact is the authority, and the cache
+// a fresh clone or a pending recompile leaves behind is not a fault.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -30,6 +31,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -38,6 +40,11 @@ import {
   artifactFilename,
   parseBoltDag,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -49,8 +56,6 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
-const HEAL_NOTE =
-  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)";
 const FD_PRODUCES = [
   "entities",
   "rules",
@@ -99,6 +104,7 @@ function constructionState(current: string, skeletonStance = "on"): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: ${skeletonStance}
 
 ## Scope Configuration
@@ -136,6 +142,7 @@ function inceptionState(current: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -411,12 +418,6 @@ function runReport(proj: string): RunResult {
   ]);
 }
 
-function logCapturedStderr(stderr: string): void {
-  for (const line of stderr.trim().split(/\r?\n/)) {
-    if (line.length > 0) console.error(line);
-  }
-}
-
 describe("t215 bolt dag self-heal", () => {
   test("1: missing runtime graph heals from the dependency artifact on next", () => {
     const proj = seedProject("functional-design");
@@ -428,8 +429,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.produces).toContain(
       `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("2: runtime graph without a bolt_dag node heals from the dependency artifact", () => {
@@ -439,8 +439,7 @@ describe("t215 bolt dag self-heal", () => {
     const r = runNext(proj);
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBe("alpha");
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("3: no dependency artifact preserves the single placeholder degrade path", () => {
@@ -495,6 +494,7 @@ describe("t215 bolt dag self-heal", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["alpha"]);
     seedAlphaBetaDependency(proj);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
     logReview(proj, "alpha");
     const alphaCompletion = runNext(proj);
@@ -511,8 +511,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
       "beta",
     ]);
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("7: approve guard sees healed units and refuses uncovered per-unit work", () => {
@@ -524,8 +523,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("alpha");
     expect(r.directive.message).toContain("beta");
     expect(r.directive.message).toContain("work items are not complete");
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: approve guard names the repair of a malformed dependency artifact, then the same approval", () => {
@@ -546,8 +544,7 @@ describe("t215 bolt dag self-heal", () => {
     const r = runNext(proj);
     expect(r.directive.kind).toBe("invoke-swarm");
     expect(r.directive.units).toEqual(["alpha"]);
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10: healed per-unit iteration advances and settles from artifact coverage", () => {
@@ -561,8 +558,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(betaRun.directive.kind).toBe("run-stage");
     expect(betaRun.directive.unit).toBe("beta");
     expect(betaRun.directive.gate).toBe(false);
-    expect(betaRun.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(betaRun.stderr);
+    expect(betaRun.stderr).toBe("");
 
     coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
     const reviewRun = runNext(proj);
@@ -576,8 +572,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(settle.directive.kind).toBe("run-stage");
     expect(settle.directive.unit).toBe("beta");
     expect(settle.directive.gate).toBe(true);
-    expect(settle.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(settle.stderr);
+    expect(settle.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("11: non-per-unit stages do not trigger the read-side heal", () => {
@@ -603,13 +598,11 @@ describe("t215 bolt dag self-heal", () => {
     const r = runNext(proj);
     expect(r.directive.kind).toBe("run-stage");
     expect(r.directive.unit).toBe("alpha");
-    expect(r.stderr).toContain(HEAL_NOTE);
-    logCapturedStderr(r.stderr);
+    expect(r.stderr).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 12b: the same corrupted graph with NO dependency artifact degrades to the
-  // single placeholder directive (the pre-existing behavior for that input),
-  // never an exit-1 crash on an undefined unit.
+  // single placeholder directive, never an exit-1 crash on an undefined unit.
   test("12b: empty cached batches with no artifact fall back to the degrade path", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, []);

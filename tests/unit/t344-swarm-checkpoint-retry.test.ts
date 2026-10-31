@@ -189,6 +189,7 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     const checkpoint = next();
     expect(checkpoint.code, checkpoint.err).toBe(0);
     expect(JSON.parse(checkpoint.out).swarm_checkpoint, checkpoint.out).toBeTruthy();
+    expect(JSON.parse(checkpoint.out).protocol_modules).toEqual(["construction", "checkpoint", "swarm", "sensors"]);
     if (approvalMode === "grouped") {
       for (const unit of units) {
         const approval = evaluateCodeGenerationApproval(pd, { unit });
@@ -402,14 +403,16 @@ describe("t344 explicit swarm checkpoint re-entry", () => {
     expect(starts(pd)).toHaveLength(2);
   });
 
-  test("ordinary prepare creates worktrees and still refuses an existing directory", () => {
+  test("ordinary prepare creates worktrees and keeps one already prepared in this attempt, untouched", () => {
     const pd = fixture();
     const first = prepare(pd);
     expect(first.code, `${first.out}\n${first.err}`).toBe(0);
     expect(JSON.parse(first.out).units[0].worktree_path).toBe(wt(pd));
+    const before = readFileSync(seededStateFile(wt(pd)), "utf-8");
     const second = prepare(pd);
-    expect(second.code).toBe(2);
-    expect(second.out).toContain("already exists");
+    expect(second.code, `${second.out}\n${second.err}`).toBe(0);
+    expect(JSON.parse(second.out).units[0]).toMatchObject({ unit: "alpha", ok: true, retained: true, worktree_path: wt(pd) });
+    expect(readFileSync(seededStateFile(wt(pd)), "utf-8")).toBe(before);
     expect(starts(pd)).toHaveLength(1);
   });
 

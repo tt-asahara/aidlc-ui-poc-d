@@ -12,22 +12,29 @@ Each authored agent is a flat `.md` file in `core/agents/` with YAML frontmatter
 
 ### Frontmatter Contract
 
-Every authored core agent file must include this YAML frontmatter:
+Every authored core agent file opens with YAML frontmatter. The shipped architect agent's, from `core/agents/aidlc-architect-agent.md`:
 
 ```yaml
 ---
-name: aidlc-architect-agent               # Agent identifier (matches filename without .md)
-description: >                      # Brief role summary (shown in Claude Code agent list)
-  System architect responsible for domain design,
-  NFR design, and component decomposition.
-disallowedTools: Task               # Agents cannot spawn subagents
-tier: judgment                      # judgment | balanced | templated (see Agent Tiers)
+name: aidlc-architect-agent
+display_name: Architect Agent
+examples:
+  - tech-stack.md
+  - infrastructure-preferences.md
+description: >
+  Solutions architect responsible for domain design, contract design, NFR patterns, and component decomposition.
+  Leads Feasibility, Domain Design, Units Generation, Contract Design, Functional Design, NFR Requirements, and NFR Design stages,
+  and serves as the dispatched last link of the Reverse Engineering pipeline.
+disallowedTools: Task
+tier: judgment
 ---
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Agent identifier, must match filename |
+| `display_name` | Yes | The persona's human-facing name, shown in the statusline. The agent loader refuses an AI-DLC agent file without it, as it does one without `name` |
+| `examples` | No | Suggested knowledge file names for the agent's team folder. The two reviewers and the composer carry none |
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
 | `disallowedTools` | Yes in authored core | Must include `Task` -- only the conductor delegates. The packager removes or translates this Claude-dialect key when a harness uses a different native tool-policy surface |
@@ -85,7 +92,7 @@ On Claude Code, every agent *can* reach Bash and WebSearch by inheritance; the t
 
 ### Agent Tiers
 
-The authored dial on every agent is `tier:` -- it names the KIND of work the persona does, and the packager (`bun scripts/package.ts`) projects it into each harness's native model/effort form. Previous behaviour (v2.2.15 through v2.2.19; before that the key was the inert `modelOverride:`) pinned a raw `model: opus|sonnet` per agent, which forcibly downgraded sessions running a bigger model; the tier projection replaces that pin.
+The authored dial on every agent is `tier:` -- it names the KIND of work the persona does, and the packager (`bun scripts/package.ts`) projects it into each harness's native model/effort form.
 
 | Tier | Agents | Meaning |
 |------|--------|---------|
@@ -105,8 +112,8 @@ Key facts behind the table:
 
 - **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the shipped default for judgment and templated when no model policy is recorded. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0 and 0.142.5; the current doctor-advised minimum is 0.145.0 for immediate compact-session reload). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
 - **Presets are explicit group effort policy, separate from tiers.** The wizard-default `balanced` preset sets Deciding, Reviewing, and Writing up to `medium`; `minimal` sets Deciding and Reviewing to `medium` and Writing up to `low`; `thorough` sets Reviewing to `xhigh` while Deciding and Writing up inherit session effort. They never set model IDs. Per-agent exceptions override group dials, which override this shipped tier table. Kiro IDE, Cursor, and Copilot report group efforts as unexpressed, so the wizard records no preset there; on Kiro CLI a preset is one session effort, saved with the session model in the person's personal Kiro settings ([Session model and effort](../guide/harnesses/kiro-cli.md#session-model-and-effort)). See [Model Policy](../guide/18-install-and-lifecycle.md#model-policy) for the upgrade path.
-- **Kiro never pins a model.** A shipped Kiro model ID resolves only when that model is enabled on the user's install; a session running any other model rejects every delegated spawn with `Invalid model ID`, and Kiro rejects the Claude-dialect tier aliases (`opus`/`sonnet`) outright -- so there is no universally safe pinnable value. Every Kiro tier therefore omits `"model"` (and the `.md` frontmatter `model:` line): all agents inherit the session model. The kiro slots in `TIER_PROJECTIONS` and the `kiroModelDefaults()` machinery remain in place, dormant, should a resolvable per-install pinning mechanism appear.
-- **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so a per-model effort default can only ride on `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort`. With no tier pinning a model, the shipped `cli.json` carries no `chat.modelDefaults`: a project map replaces the person's whole personal map, so the session's model and effort live in their personal Kiro settings, written by `aidlc config` (see `core/tools/aidlc-kiro-session.ts`). That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
+- **Kiro never pins a model.** A shipped Kiro model ID resolves only when that model is enabled on the user's install; a session running any other model rejects every delegated spawn with `Invalid model ID`, and Kiro rejects the Claude-dialect tier aliases (`opus`/`sonnet`) outright -- so there is no universally safe pinnable value. Every Kiro tier therefore omits `"model"` (and the `.md` frontmatter `model:` line): all agents inherit the session model. The kiro slots in `TIER_PROJECTIONS` and the `kiroModelDefaults()` machinery remain in place, dormant, should a resolvable per-install pinning mechanism appear. A person's own per-agent pin is different: they name a model their install offers. On the kiro-ide row, `aidlc config models --agent` writes that agent's `model:` (a quoted string) and `effortLevel:` into its `.md` (`applyModelPolicyToProjection` in `core/tools/aidlc-model-policy.ts`); Kiro CLI on its v3 engine and Kiro IDE run a delegated agent on both.
+- **The legacy Kiro CLI row has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so a per-model effort default can only ride on `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort`. With no tier pinning a model, the shipped `cli.json` carries no `chat.modelDefaults`: a project map replaces the person's whole personal map, so the session's model and effort live in their personal Kiro settings, written by `aidlc config` (see `core/tools/aidlc-kiro-session.ts`). That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
 - **Cursor never pins a model either.** Model availability on Cursor is plan-dependent (a Free account rejects every named model and can only run `Auto`), so a pinned agent model would hard-fail installs on lower plans. Every Cursor tier therefore omits the `.md` frontmatter `model:` line (Cursor has no per-agent effort key -- effort rides the model-id suffix), and all agents inherit the session model; the cursor slots in `TIER_PROJECTIONS` are model-only, dormant, should a plan-independent pinning mechanism appear.
 
 ### Tier cap (projection override)
@@ -183,12 +190,12 @@ L = Lead, S = Support
 
 Agent display names and example knowledge files are authoritative in each agent's `.md` frontmatter via the `display_name` and `examples` fields — no TypeScript edits required. See [Contributing: Adding an Agent](11-contributing.md#adding-an-agent) for the full recipe (required frontmatter fields, verification steps, and what validates automatically vs. manually). Quick summary of the steps:
 
-1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `tier`. Never author raw `model:`/`effort:` in core frontmatter -- they are projection outputs (see Agent Tiers above). An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
-   The installed agents directory (`.claude/agents/`, `.kiro/agents/`, `.cursor/agents/`, …) is shared with the host, which reads its own subagents from it. `loadAgents()` treats a file as an AI-DLC persona when its name starts with `aidlc-` or its frontmatter carries any of `display_name`, `examples`, `tier`, or `plugin`, and holds such a file to the full schema. Any other file is the host's: AI-DLC does not load it, cannot name it as a stage's `lead_agent`, and does not attach stage rules when it is dispatched. `aidlc doctor --verbose` lists those files as an advisory.
+1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `description`, `disallowedTools` (including `Task`), `tier`, plus `examples` if the agent has suggested knowledge files. Never author raw `model:`/`effort:` in core frontmatter -- they are projection outputs (see Agent Tiers above). An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
+   The installed agents directory (`.claude/agents/`, `.kiro/agents/`, `.cursor/agents/` and the rest) is shared with the host, which reads its own subagents from it. `loadAgents()` treats a file as an AI-DLC persona when its name starts with `aidlc-` or its frontmatter carries any of `display_name`, `examples`, `tier`, or `plugin`, and requires such a file to carry `name` and `display_name`. Any other file is the host's: AI-DLC does not load it, cannot name it as a stage's `lead_agent`, and does not attach stage rules when it is dispatched. `aidlc doctor --verbose` lists those files as an advisory.
 2. Add knowledge files to `core/knowledge/{name}-agent/`
 3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit generated output.
 4. Materialize the ignored local distributions with `bun scripts/package.ts`, then run `--check` to build twice and verify deterministic output.
-5. Add the agent→examples row to the hand-maintained knowledge tables (the space-level team-knowledge dir is `aidlc/knowledge/{name}-agent/`, created by the team when it has content — the engine does not scaffold it)
+5. Add the agent-to-examples row to the hand-maintained knowledge tables (the agent's team-knowledge folder is `aidlc/spaces/<space>/knowledge/{name}-agent/`, created by the team when it has content; the engine does not scaffold it)
 6. Update tests: smoke tests for file existence, feature tests for stage-agent cross-references
 7. Update documentation in this file and [reference/agents/](agents/)
 

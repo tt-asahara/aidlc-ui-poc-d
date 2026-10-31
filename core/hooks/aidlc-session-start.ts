@@ -1,7 +1,7 @@
 // SessionStart hook: Emit session events (SESSION_STARTED / SESSION_RESUMED)
 // and inject workflow context for the model on resume/compaction.
 //
-// Session events are hook-owned because only Claude Code knows when a
+// Session events are hook-owned because only the harness knows when a
 // conversation begins. Workflow events are state-tool-owned and live on a
 // separate stream. See docs/reference/12-state-machine.md.
 //
@@ -34,12 +34,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
-import { addRootBlocks, repointHarnessIncludes, trackedKiroIdeSteeringAsk } from "../tools/aidlc-includes.ts";
+import {
+  ACTIVE_MEMORY_DIR,
+  activeMemoryCopyDrift,
+  addRootBlocks,
+  inlineMemoryFiles,
+  refreshActiveMemory,
+  trackedKiroIdeSteeringAsk,
+} from "../tools/aidlc-includes.ts";
+import { kiroCliWorkflowsAsk, kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
   intentDisplayLabel,
-  readUnitScopeStamp,
   activeIntent,
   activeIntentUuid,
   activeSpace,
@@ -64,7 +72,6 @@ import {
   clearSessionPlanApprovalBypass,
   recordSessionPlanApprovalBypass,
   recordSessionPresenceBypass,
-  recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
@@ -72,31 +79,36 @@ import {
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
-  workflowParticipation,
-  readActiveIntentCursor,
+  classifyFirstContact,
   listIntents,
   type SessionBindingSource,
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  dropSessionSelectionNotice,
+  SELECTION_NOTICE_FOLLOW,
   writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
-import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { backOnInstructions, switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
-// opens by saying so. Never blocks startup.
+// opens by saying so, and the agent is handed the command a yes runs, after the
+// lines it says word for word. Never blocks startup.
 function switchOffContext(projectDir: string): string {
   try {
     const lines = switchesOffLines(projectDir);
     return lines.length === 0
       ? ""
-      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
-        "word for word, in your first reply.\n" +
-        lines.map((line) => `- ${line}\n`).join("");
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each \"- \" line to the user once, " +
+        "word for word, in your first reply, unless that reply turns its check back on: then say what the command " +
+        "printed instead.\n" +
+        lines.map((line) => `- ${line}\n`).join("") +
+        backOnInstructions(projectDir).map((line) => `${line}\n`).join("");
   } catch {
     return "";
   }
@@ -148,7 +160,7 @@ if (!process.stdin.isTTY) {
       }
     }
   } catch {
-    // stdin read itself failed — treat as startup (no payload available)
+    // Payload processing failed - retain the source parsed so far.
   }
 }
 
@@ -164,8 +176,10 @@ try {
 }
 
 // Record the live conversation on EVERY fire, including a pre-workflow start.
-// intent-create reads this marker and binds an unstamped session to the first
-// intent it creates. Separate from the per-session intent stamp below.
+// Tools with no session of their own fall back to it (intent switch, archive,
+// recompose settings); intent-create never reads it: the creating chat is bound
+// from the session it resolves, else from the creation receipt the PostToolUse
+// hook consumes. Separate from the per-session intent stamp below.
 if (sessionId) {
   writeCurrentSessionId(projectDir, sessionId);
   try {
@@ -179,8 +193,8 @@ if (sessionId) {
 }
 
 // Resolve one session-local workflow target before any state read. An existing
-// binding wins; a first-seen session inherits the shared cursors and records
-// that fallback immediately, including an intent:null cold workspace.
+// binding supplies the target; classifyFirstContact below decides participation
+// before the selection is recorded, including an intent:null cold workspace.
 const preExistingBinding =
   sessionId ? readSessionBinding(projectDir, sessionId) : null;
 const preExistingStamp =
@@ -215,10 +229,11 @@ const resolved = stampedTarget
 // a joined session is stamped, and a chat left open across an upgrade carries
 // only that stamp. A record name the binding cannot carry does not join.
 const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampedTarget.dirName);
-const joined =
-  joinsByStamp || (!stampedTarget && workflowParticipation(projectDir, resolved) === "participant");
+// The rule a new chat follows (classifyFirstContact) lives in the library, where
+// resolveChat applies it to a chat the engine first meets in a command.
+const contact = stampedTarget ? null : classifyFirstContact(projectDir, resolved);
+const joined = joinsByStamp || (contact?.joined ?? false);
 const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
-// The record a previously bound conversation can rejoin explicitly.
 const rejoinRecord =
   !joined && resolved.intent !== null && preExistingBinding?.intent === resolved.intent
     ? resolved
@@ -229,15 +244,11 @@ function bindingSource(): SessionBindingSource | undefined {
     return resolved.intent === null ? preExistingBinding?.source ?? "none" : "unjoined";
   }
   if (joinsByStamp) return "stamp";
-  // An unchanged binding keeps its source, and an absent one stays absent.
+  // An unchanged binding keeps its source.
   if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
     return preExistingBinding.source;
   }
-  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return "cursor";
-  const unitScope = readUnitScopeStamp(projectDir);
-  return unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
-    ? "unit-claim"
-    : "worktree";
+  return contact?.source;
 }
 
 // Persist the selection before any early return. A cold session must retain
@@ -247,17 +258,51 @@ if (sessionId) {
   writeSessionBinding(projectDir, sessionId, selection.space, selection.intent, bindingSource());
 }
 
-// Atomically materialize a clone's missing gitignored cursor, then align the
-// harness-native includes before the no-workflow early exit. A copy that
-// config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
-// after the team's own content, so a part written here is aligned too.
+// Atomically materialize a clone's missing gitignored cursor, then bring the
+// copy the harness includes read up to date with the session's space, before
+// the no-workflow early exit. A copy that config never ran in first gets
+// AI-DLC's part of .gitignore and AGENTS.md, after the team's own content.
 ensureActiveSpaceCursor(projectDir);
-// A file written here may be one the host already read for this chat.
+// A file written here may be one the host already read for this chat. Kiro
+// CLI and opencode read the copy again with every request, so a copy written
+// here reaches their next request as it is, and the Kiro IDE tree never reads
+// it (its chats read the steering file); every other host read its include
+// when the chat loaded.
 let includeRepointed = addRootBlocks(projectDir).length > 0;
+let copyBehind: string[] = [];
 try {
-  if (repointHarnessIncludes(projectDir, selection.space).length > 0) includeRepointed = true;
+  copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
+  const written = refreshActiveMemory(projectDir, selection.space);
+  if (!written.includes(ACTIVE_MEMORY_DIR)) copyBehind = [];
+  const noOlderCopyInChat = ["kiro", "opencode", "kiro-ide"].includes(runtimeHarnessName(projectDir));
+  if (written.some((path) => path !== ACTIVE_MEMORY_DIR || !noOlderCopyInChat)) includeRepointed = true;
 } catch {
-  // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
+  // non-fatal: the copy is written again at the next /aidlc, switch or --doctor
+}
+
+// Claude Code and Copilot read their @-imports before this hook runs (measured
+// live on Claude Code 2.1.293: a fresh clone's first chat, and the chat after an
+// edit of a memory file, held the copy as it was before). When the copy was
+// written just now, this chat is told: with the text of the files written when
+// it fits in the hook's context (Claude Code keeps about 10 KB of it, measured:
+// 9 KB arrives whole and 15 KB is cut), else by name, to read before acting on
+// AI-DLC work. Nothing is added when the copy was current, and an AI-DLC step
+// carries its rules in full either way.
+const HANDOFF_MAX_BYTES = 8 * 1024;
+let memoryHandoff = "";
+if (copyBehind.length > 0) {
+  try {
+    if (["claude", "copilot"].includes(runtimeHarnessName(projectDir))) {
+      const written = `The method files this chat's instructions import (${ACTIVE_MEMORY_DIR}/) were written for space ` +
+        `\`${selection.space}\` just now, after the instructions were read`;
+      const inline = inlineMemoryFiles(projectDir, selection.space, copyBehind);
+      memoryHandoff = inline !== null && inline.bytes <= HANDOFF_MAX_BYTES
+        ? `\n\n${written}. This is their text now:\n\n${inline.parts.join("\n")}`
+        : `\n\n${written}: ${copyBehind.join(", ")}. Read them from that folder before acting on AI-DLC work or on a question about the team's practices.`;
+    }
+  } catch {
+    // The first step sends the rules in full.
+  }
 }
 
 // What the host loaded into this chat, so `next` can tell whether the chat
@@ -272,24 +317,63 @@ if (sessionId && !rebindCheckOnly) {
 }
 
 // Kiro IDE: a repo that committed the steering file before AI-DLC wrote the
-// memory text into it keeps tracking it; the person is asked once.
+// memory text into it keeps tracking it; the person is asked once. With Kiro's
+// Workflows feature on, AI-DLC's reviews and helpers cannot run in the chat;
+// the person is asked once per machine whether to turn it off: in a Kiro IDE
+// chat about Kiro IDE's switch, in a Kiro CLI chat about Kiro CLI's own.
 let trackedSteeringAsk = "";
 if (sessionId && !rebindCheckOnly) {
+  const asks: string[] = [];
   try {
-    trackedSteeringAsk = trackedKiroIdeSteeringAsk(projectDir);
+    asks.push(trackedKiroIdeSteeringAsk(projectDir));
   } catch {
     // Asked at a later start.
   }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroCliWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  // Kiro's terminal is Command Prompt: the question once per machine, and in
+  // every chat the mechanics and the one setter (a chat that was never asked
+  // otherwise knows nothing of it and tells the person it switched when it did not).
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") {
+      recordKiroTerminalShell();
+      asks.push(kiroIdeTerminalAsk(aidlcInvocation()));
+      asks.push(kiroIdeTerminalStandingLine(aidlcInvocation()));
+    }
+  } catch {
+    // Asked at a later start.
+  }
+  // AI-DLC's status line asks nothing here: a project that already had it
+  // keeps it for this clone, and the person whose own status line it covers is
+  // told once. Nothing is added anywhere else (#1407).
+  try {
+    const statusHarness = statusLineHarness(runtimeHarnessName(projectDir));
+    const kept = statusHarness ? applyStatusLineDefault(projectDir, statusHarness) : null;
+    if (kept?.line) {
+      asks.push(`TELL ONCE: in your first reply, tell the person this, in their language: "${kept.line}"`);
+    }
+  } catch {
+    // Kept at a later start.
+  }
+  trackedSteeringAsk = asks.filter(Boolean).join("\n");
 }
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
-// No workflow joined — retain only the session identity recorded above.
+// No joined workflow state - return setup context without a session event.
 if (!existsSync(stateFile)) {
   if (sessionId) {
     let rejoin = "";
-    // The per-prompt rebind probe relays an offer through a blocking channel, so
-    // it offers a given rejoin once.
+    // The per-prompt rebind probe queues a selection notice, so it offers a given
+    // rejoin once.
     const rejoinSignature = rejoinRecord?.intent ? `rejoin:${rejoinRecord.space}/${rejoinRecord.intent}` : "";
     const offerNow = rejoinSignature !== "" &&
       (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
@@ -316,20 +400,22 @@ if (!existsSync(stateFile)) {
             `To pick ${slug} up again, run ${command}.`,
         );
       }
+      // This offer is about the same divergence a follow question waiting for
+      // this chat would ask about, so the person is asked once, here.
+      dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
     }
     process.stdout.write(hookContextLine(
       "SessionStart",
-      `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation." +
+      `AIDLC Runtime Session: ${sessionId}` +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)) +
-        (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : ""),
+        (trackedSteeringAsk ? `\n${trackedSteeringAsk}` : "") +
+        memoryHandoff,
     ));
   }
   return 0;
 }
 
-// Write health heartbeat
 const healthDir = hooksHealthDir(
   projectDir,
   selection.intent ?? undefined,
@@ -390,19 +476,19 @@ if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
   }
 }
 
-// --- Resume rebind (P8) -------------------------------------------------------
+// --- Resume rebind ------------------------------------------------------------
 //
 // A conversation works ONE intent; the active-intent cursor is durable + shared
 // across sessions. So resuming an A-chat after the cursor moved to B would
 // inject B's context silently (vision §3, the central multi-space hazard). We
-// fix it with a per-session→intent stamp (aidlc/.aidlc-sessions/<id>):
+// fix it with a per-session binding and intent stamp (aidlc/.aidlc-sessions/):
 //   - On a STARTED-class event, stamp the working intent's UUID for this
 //     session so a later resume can detect a cursor drift.
-//   - On RESUMED, if the stamped UUID differs from the live cursor AND still
-//     names a real intent, OFFER a rebind. The offer is a print directive in
-//     additionalContext. The stamp follows the live intent by default (the No
-//     path); on Yes, the named intent-switch command moves both cursor and stamp
-//     back together. No session_id (TTY/empty stdin) → no-op.
+//   - On RESUMED, if the owned UUID (the binding's, else the stamp's) differs
+//     from the live cursor AND still names a real intent, OFFER a rebind. The
+//     offer is a print directive in additionalContext. On No, the session keeps
+//     working its bound intent; on Yes, the named intent-switch command moves
+//     the shared cursor back. No session_id (TTY/empty stdin) -> no-op.
 const activeSp = activeSpace(projectDir);
 const liveDir = activeIntent(projectDir, activeSp);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
@@ -439,6 +525,9 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          // Asked once: this offer and a follow question left by a switch made
+          // somewhere else are the same divergence, read from opposite ends.
+          dropSessionSelectionNotice(projectDir, sessionId, SELECTION_NOTICE_FOLLOW);
           if (rebindCheckOnly) {
             // The prompt that ran this probe goes through on this chat's own
             // work: its binding (or, for a chat stamped by an earlier version,
@@ -457,8 +546,8 @@ if (sessionId) {
       clearSessionRebindOffer(projectDir, sessionId);
     }
 
-    // A binding owns attribution. Without one, preserve the legacy stamp that
-    // follows the live cursor after the offer.
+    // A binding owns attribution. Without one, a legacy stamp that still resolves
+    // is kept; otherwise the stamp follows the live cursor after the offer.
     if (binding && selectedUuid) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (binding && stampedUuid) {
@@ -486,12 +575,11 @@ if (rebindCheckOnly) {
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     }
-    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`));
+    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}${memoryHandoff}`));
   }
   return 0;
 }
 
-// Read and parse state file for context injection
 const content = readFileSync(stateFile, "utf-8");
 
 const phase = getField(content, "Lifecycle Phase") ?? "unknown";
@@ -533,16 +621,6 @@ const unitLine = activeUnit
       : "")
   : "";
 
-// Check for compaction recovery breadcrumb
-const recoveryFile = recoveryFilePath(
-  projectDir,
-  selection.intent ?? undefined,
-  selection.space,
-);
-const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
-  : "";
-
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from
 // the compiled stage-graph.json only, a stage `.md` added to disk without a
 // recompile is silently never executed. Surface it once at session start so the
@@ -562,16 +640,6 @@ try {
 }
 
 // Where the tool hides the Stop note from the person, the agent says its line.
-let hidesTheNote = false;
-try {
-  hidesTheNote = hidesStopNote(runtimeHarnessName(projectDir));
-} catch {
-  // An unreadable install keeps the default step.
-}
-const sayTheLine = hidesTheNote
-  ? ". This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
-  : ", and say nothing about it.";
-
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Runtime Session: ${sessionId || "(unavailable)"}
@@ -581,16 +649,15 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume: send the first \`next\` as \`next --resume\` and continue directly, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
+${unitLine}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
-FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
-- STEP 1: YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. \`/aidlc\` alone -> \`next --resume\` (this work is active). Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
-- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.
+- First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
+- When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
-- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} Follow the aidlc skill's "When AI-DLC carries on by itself" steps; in short: if you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
+- Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer, and say nothing about it. If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if the person asked to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end the turn; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 
-process.stdout.write(hookContextLine("SessionStart", context));
+process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;
 }
 

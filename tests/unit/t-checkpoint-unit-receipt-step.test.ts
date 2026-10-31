@@ -1,4 +1,4 @@
-// covers: function:unitReceiptOnlyStep, subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED
+// covers: function:unitReceiptOnlyStep, function:unitReviewStep, subcommand:aidlc-orchestrate:next, subcommand:aidlc-state:unit, audit:UNIT_COMPLETED
 //
 // Issue #2021: a new solo workflow (Construction Checkpoints on, unit-major,
 // autonomous) where the agent writes a Unit's files but never runs the Unit's
@@ -25,6 +25,11 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { artifactFilename, findStageBySlug } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -54,6 +59,7 @@ function state(reviewOverride: string | null): string {
 - **Revision Count**: 0
 - **Skeleton Stance**: off
 - **Construction Iteration**: unit-major
+- **Unit Ownership**: solo
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: autonomous
@@ -169,7 +175,6 @@ function bodyWithoutReceipts(reviews: boolean): void {
   if (reviews) reviewThroughLog(proj, FIRST);
 }
 
-// Run the commands `next` named and expect the Unit's next stage.
 function followStep(step: Record<string, unknown>, expected: string[]): void {
   expect(step.kind, nexts.join("\n")).toBe("print");
   const message = String(step.message);
@@ -189,6 +194,32 @@ describe("t-checkpoint-unit-receipt-step: a checkpoint-enabled Unit done without
   test("files and a READY review: next names start then complete, and the Unit moves on", () => {
     project(null);
     bodyWithoutReceipts(true);
+    followStep(next(proj), [START, COMPLETE]);
+  });
+
+  test("files and no review: next names the review step, not the stage again", () => {
+    // From live runs: the Unit's files were written and its review was never
+    // recorded, so every `next` handed back the same Unit step ("Now working
+    // on <unit>: the <stage> pass.") with nothing about the files or the
+    // review. The step names the review the stage is waiting for.
+    project(null);
+    const first = next(proj);
+    expect(first.kind, nexts.join("\n")).toBe("run-stage");
+    expect(first.stage).toBe(SLUG);
+    writeUnitArtifacts(proj, FIRST);
+    const step = next(proj);
+    expect(step.kind, nexts.join("\n")).toBe("print");
+    const message = String(step.message);
+    expect(message).toContain(
+      `Unit "${FIRST}"'s Functional Design work is written, but its review was never asked for: request it with`,
+    );
+    expect(message).toContain(
+      `review --stage ${SLUG} --reviewer ${findStageBySlug(SLUG)!.reviewer} --unit ${FIRST} --iteration 1`,
+    );
+    expect(message).toContain("then record the verdict.");
+    // Every later `next` names the same step: no loop back to the stage body.
+    expect(next(proj)).toEqual(step);
+    reviewThroughLog(proj, FIRST);
     followStep(next(proj), [START, COMPLETE]);
   });
 

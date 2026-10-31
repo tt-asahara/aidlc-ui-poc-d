@@ -1,5 +1,5 @@
 // Status line: Display aidlc workflow position in the terminal status area
-// Registered via statusLine setting in settings.json
+// Registered via statusLine setting in .claude/settings.local.json
 // Invoked via: {{INVOKE}} engine statusline
 import {
   existsSync,
@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
+import { unitProgress } from "../tools/aidlc-unit-walk-view.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +28,7 @@ type IntentRow = {
   slug?: unknown;
   status?: unknown;
   dirName?: unknown;
+  repos?: unknown;
 };
 
 type StatuslineIntent = {
@@ -437,8 +439,8 @@ const STAGE_DISPLAY: Record<string, string> = {
   "feedback-optimization": "Feedback & Optimization",
 };
 
-// Agent display names derive from `.claude/agents/*.md` frontmatter via
-// loadAgents(). The `orchestrator` pseudo-entry is seeded explicitly —
+// Agent display names derive from the harness's `agents/*.md` frontmatter via
+// loadAgentDisplayMap(). The `orchestrator` pseudo-entry is seeded explicitly -
 // state files can carry `Active Agent: orchestrator` during orchestrator-
 // driven transitions, but there's no corresponding agent file.
 function agentDisplayMap(projectDir: string): Record<string, string> {
@@ -474,43 +476,36 @@ function shownStep(stateFile: string, state: string, stage: string): { stage: st
   }
 }
 
-// Working one Unit at a time, the stage checkboxes tick only once every Unit
-// has finished a stage, so the stage count reads 0 until the last Unit. While
-// a Unit is still open the line counts Units instead: the one the person is
-// on, of the Units planned. The Units are the names in the Unit DAG's edge
-// block; a Unit counts as done from its approval (GATE_APPROVED at the
-// construction-unit checkpoint) until a later rejection of it.
-function unitProgress(stateFile: string, state: string): { current: number; total: number } | null {
-  if (extractField(state, "Construction Iteration") !== "unit-major") return null;
-  const record = dirname(stateFile);
+// How many of a long analysis's repositories are done, as the engine counted
+// them at its last link receipt (codekbReceiptNotes, aidlc-log.ts, keeps it in
+// the record's engine folder), while that stage is in progress: " 37/190". A
+// count of another set than the one the work records now (the person changed
+// it since) says nothing until a receipt counts the new set.
+function analysedCount(stateFile: string, state: string, stage: string): string {
   try {
-    const dag = readFileSync(join(record, "inception", "units-generation", "unit-of-work-dependency.md"), "utf-8");
-    const block = /## Machine-Readable Edge Block[\s\S]*?```ya?ml\r?\n([\s\S]*?)```/.exec(dag)?.[1] ?? "";
-    const units = [...block.matchAll(/^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s*$/gm)].map((m) => m[1]);
-    if (units.length === 0) return null;
-    const rows: Array<{ at: string; approved: boolean; unit: string }> = [];
-    const auditDir = join(record, "audit");
-    for (const name of readdirSync(auditDir).filter((file) => file.endsWith(".md"))) {
-      for (const entry of readFileSync(join(auditDir, name), "utf-8").split(/\n## /)) {
-        if (!/^\*\*Checkpoint\*\*: construction-unit$/m.test(entry)) continue;
-        const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(entry)?.[1] ?? "";
-        if (event !== "GATE_APPROVED" && event !== "GATE_REJECTED") continue;
-        const unit = /^\*\*Unit\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
-        const at = /^\*\*Timestamp\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
-        rows.push({ at, approved: event === "GATE_APPROVED", unit });
-      }
-    }
-    const done = new Set<string>();
-    for (const row of rows.sort((a, b) => a.at.localeCompare(b.at))) {
-      if (!units.includes(row.unit)) continue;
-      if (row.approved) done.add(row.unit);
-      else done.delete(row.unit);
-    }
-    if (done.size >= units.length) return null;
-    return { current: done.size + 1, total: units.length };
+    const counted = JSON.parse(
+      readFileSync(join(dirname(stateFile), ".aidlc-engine", "codekb-analysed.json"), "utf-8"),
+    ) as { stage?: unknown; done?: unknown; total?: unknown; repos?: unknown };
+    const { done, total } = counted;
+    if (counted.stage !== stage || typeof done !== "number" || typeof total !== "number") return "";
+    if (!Array.isArray(counted.repos) || counted.repos.join("\n") !== recordedRepos(stateFile).join("\n")) return "";
+    const inProgress = new RegExp(`^-\\s*\\[-\\]\\s*${stage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "m");
+    return Number.isInteger(done) && Number.isInteger(total) && done < total && inProgress.test(state)
+      ? ` ${done}/${total}`
+      : "";
   } catch {
-    return null;
+    return "";
   }
+}
+
+// The repositories the work whose state file this is records, sorted: its row
+// in the space's intents.json, beside the work's own folder.
+function recordedRepos(stateFile: string): string[] {
+  const record = dirname(stateFile);
+  const rows = JSON.parse(readFileSync(join(dirname(record), "intents.json"), "utf-8")) as unknown;
+  if (!Array.isArray(rows)) return [];
+  const row = (rows as IntentRow[]).find((entry) => recordDirMatches(entry, basename(record)));
+  return Array.isArray(row?.repos) ? row.repos.filter((repo): repo is string => typeof repo === "string").sort() : [];
 }
 
 function extractField(text: string, label: string): string {
@@ -579,8 +574,7 @@ export function fmtTokens(n: number): string {
 // null/zero/unknown (e.g. only unknown models), render tokens only - NEVER a
 // fabricated "$0". Renders ONLY when the ledger exists and carries data: an
 // install without the Claude fold hook (Kiro/Codex/opencode, or an upstream
-// session that never folded) sees no ledger and gets "", so the statusline is
-// byte-unchanged from before this feature.
+// session that never folded) sees no ledger and gets "".
 //
 // The ledger advances on each fold, so this segment reflects usage through the
 // last folded turn - it can lag the in-flight turn by up to one fold. That is
@@ -654,10 +648,8 @@ function buildRightSide(
 //   - the "<space> ·" segment renders ONLY when more than one space exists
 //     (listSpaces() always reports at least the always-present "default", so a
 //     single-team user — exactly one space — never sees the word "space");
-//   - the intent slug renders whenever a per-intent record is active. On the
-//     flat-legacy / pre-auto-create layout activeIntent() returns null, so the
-//     prefix is empty and the line reads exactly as it did before the workspace
-//     move (a flat project is unchanged).
+//   - the intent slug renders whenever a per-intent record is active; with no
+//     record resolved (the flat-legacy layout) the prefix is empty.
 // The intent SLUG comes from the registry (rename-stable) when the active
 // record has a registry row; otherwise it falls back to the record dir name
 // minus its `-id8` disambiguator (an orphan / hand-created record).
@@ -691,9 +683,6 @@ function printLine(left: string, right: { plain: string; formatted: string }): v
 }
 
 async function main(stdinText: string): Promise<void> {
-  // Skip stdin read when stdin is a TTY — Claude Code always pipes JSON,
-  // never runs the statusline with a terminal attached. Without this guard
-  // a direct run / test / debug-mode pipeline would block on terminal input.
   let input: Input = {};
   try {
     input = stdinText ? JSON.parse(stdinText) : {};
@@ -734,7 +723,8 @@ async function main(stdinText: string): Promise<void> {
   const shown = shownStep(stateFile, state, stage);
   const stageDisplay = shown.stage === ""
     ? ""
-    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}`;
+    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}` +
+      analysedCount(stateFile, state, shown.stage);
   // Active Agent follows Current Stage, so it is not shown beside another step.
   const agentDisplay = shown.stage === stage ? agentDisplayMap(projectDir)[agent] ?? agent : "";
   const { done, total } = phaseProgress(state, phase);
@@ -759,7 +749,9 @@ async function main(stdinText: string): Promise<void> {
   }
 
   let output = `[AIDLC] ${prefix}${phase}`;
-  const units = phase === "CONSTRUCTION" ? unitProgress(stateFile, state) : null;
+  const units = phase === "CONSTRUCTION"
+    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"))
+    : null;
   if (units) {
     output += ` Unit ${units.current} of ${units.total}`;
   } else {
@@ -773,6 +765,8 @@ async function main(stdinText: string): Promise<void> {
 }
 
 export async function run(input: string): Promise<number> {
+  // Claude Code always pipes JSON and never runs the statusline with a terminal
+  // attached, so a terminal on stdin carries no payload.
   await main(process.stdin.isTTY ? "" : input);
   return 0;
 }

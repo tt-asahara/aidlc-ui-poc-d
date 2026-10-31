@@ -17,6 +17,7 @@ import {
 import {
   shellCommandInvocationDetails,
   shellDirectoryChanges,
+  shellHomes,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -484,6 +485,11 @@ function protectedInvocation(
   if (HOOK_FILE.test(executable)) return true;
   const name = executableName(executable);
   if (/^aidlc(?:\.ts)?$/.test(name)) {
+    // A launcher can drop a `--` right after the script it runs (Bun does), so
+    // the dispatcher's own first argument may be the one after it
+    // (`bun aidlc.ts -- engine hook ...`). Read that way for every launcher: a
+    // binary that keeps the `--` refuses the line itself.
+    if (args[0] === "--") args = args.slice(1);
     // Host hooks reach these routes without a tool call; `engine adapter` is the
     // per-harness hook entry, so a model shell running it would mint the human
     // turn the host hook records. Global flags may precede the route. A route
@@ -500,7 +506,10 @@ function protectedInvocation(
     };
     return computed(0) ||
       route[0] === "engine" && (route[1] === "hook" || route[1] === "adapter" || computed(1)) ||
-      args.includes("--internal-aidlc-record-human-turn");
+      // The dispatcher runs its internal human-turn entry only as its first
+      // argument (aidlc.ts main); anywhere else, a `next` line's `--` included,
+      // the token is a word of the line.
+      args[0] === "--internal-aidlc-record-human-turn";
   }
   const kind = interpreter(name);
   if (!kind) return false;
@@ -1000,20 +1009,22 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
   return AUDIT_TRAIL_PATH.test(absolute) || AUDIT_TRAIL_PATH.test(canonicalExistingPath(absolute));
 }
 
-// The shared parser resolves a relative write against the hook's cwd and drops
-// a word it cannot resolve ($VAR, glob). For the audit trail that gap is too
-// wide: `cd <record> && ... >> audit/<shard>.md`, `>> $RECORD/audit/...`, or
+// The shared parser resolves a relative write against cwd and each literal
+// directory change, and drops a word it cannot resolve ($VAR, glob). For the
+// audit trail that gap is too wide: `>> $RECORD/audit/...` or
 // `P=<record>/audit/<shard>.md; ... >> $P` would forge the HUMAN_TURN evidence
 // human-presence checks read. So this pass re-reads each write word: literal
-// assignments made earlier in the command are expanded, a relative word is
-// resolved against every directory a literal cd or pushd could leave the
-// shell in, and each result is checked against the anchored audit-trail path,
-// so a project's own `src/audit/` stays writable. When a word still cannot be
-// decided (an unknown variable, a glob, a computed cd), it is refused if the
-// command could be aiming at the audit trail at all: the word or the command
-// names an `audit` segment. A backslash `\audit\` spelling, which a
-// PowerShell host resolves but the POSIX parser does not, is refused outright.
-// A false refusal only points at the owning commands.
+// assignments in the command are expanded, a relative word is resolved against
+// every directory a literal cd or pushd could leave the shell in, and each
+// result is checked against the anchored audit-trail path, so a project's own
+// `src/audit/` stays writable. When a word still cannot be decided (an unknown
+// variable, a glob, a computed cd), it is refused if the command could be aiming
+// at the audit trail at all: the word names an `audit` segment, or the command
+// names an `audit` directory (AUDIT_DIRECTORY_TEXT) or the AIDLC workspace. A
+// backslash `\audit\` spelling, which a PowerShell host resolves but the POSIX
+// parser does not, is refused outright. The folders the shell stands in and
+// above are cut out first (withoutOwnFolders): a project under a folder named
+// audit is the person's path, not the trail.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
 // protectedShell replaces a command substitution it cannot evaluate with this
 // placeholder, so it marks a computed word as surely as `$` does.
@@ -1115,16 +1126,17 @@ function expandWord(word: string, values: Map<string, Array<string | null>>): Ar
 }
 
 function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
-  // The walk's `visible` text turns unquoted braces into separators, which
-  // mangles `${NAME}`, so words, assignments and directory changes are also
-  // read from the command as written.
+  // The walk's `visible` text has rewritten what it evaluated (a substitution
+  // as its literal output or a placeholder, a heredoc as its header, unquoted
+  // parentheses and braces as separators), so words, assignments and directory
+  // changes are also read from the command as written.
   const words: string[] = [];
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);
   if (words.length === 0) return false;
-  if (/\\audit\\/i.test(command)) return true;
+  const outside = withoutOwnFolders(command, cwd);
+  if (/\\audit\\/i.test(outside)) return true;
   const values = literalAssignments(command, cwd);
-  // Every directory the shell could be in when a write runs.
   const roots = [cwd];
   let computedRoot = false;
   // The shared reading of each directory change; $HOME and a directory the
@@ -1141,13 +1153,58 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // command substitution can assemble it (`$(printf au)dit`), which no text
   // test sees. An undecided word therefore also fails closed whenever the
   // command reaches into the AIDLC workspace or already runs inside it.
-  const plain = command.replace(/["'\\]/g, "");
-  const namesAudit = /audit/i.test(plain) || AIDLC_WORKSPACE.test(plain) || AIDLC_WORKSPACE.test(cwd);
+  const plain = outside.replace(/["'\\]/g, "");
+  // A Windows spelling keeps its backslashes as separators (`...\audit;`), so
+  // the folder tests also read the text with only its quotes removed. That
+  // reading never refuses more than the substring rule it replaces: its
+  // workspace clause also needs audit named as a word.
+  const spelled = outside.replace(/["']/g, "");
+  const namesAudit = AUDIT_DIRECTORY_TEXT.test(plain) || AIDLC_WORKSPACE.test(plain) ||
+    AUDIT_DIRECTORY_TEXT.test(spelled) || (AIDLC_WORKSPACE.test(spelled) && AUDIT_WORD.test(spelled)) ||
+    AIDLC_WORKSPACE.test(cwd);
   return words.some((word) => expandWord(word, values).some((expanded) => {
-    if (expanded === null) return AUDIT_SEGMENT.test(word) || namesAudit;
+    if (expanded === null) return AUDIT_SEGMENT.test(withoutOwnFolders(word, cwd)) || namesAudit;
     if (roots.some((root) => protectedAuditTrailPath(resolve(root, expanded), cwd))) return true;
     return computedRoot && !isAbsolute(expanded) && AUDIT_SEGMENT.test(expanded);
   }));
+}
+
+// `audit` named as a directory in a command's text (`x/audit`, `audit/x`),
+// not as a word of its own (`npm audit`), a variable's name (`$AUDIT/x`) or
+// part of a longer name (`audit-service`, `audit.md`).
+const AUDIT_DIRECTORY_TEXT = /(?:^|[^\w.$-])audit[\\/]|[\\/]audit(?![\w.-])/i;
+// `audit` as a word or a folder of its own, not part of a longer name.
+const AUDIT_WORD = /(?:^|[^\w.-])audit(?![\w.-])/i;
+
+// The folders the shell stands in and above are the person's own path, so an
+// `audit` in their names (a project under ~/audit/) is never the trail, which
+// lies inside the project under aidlc/spaces; a cwd inside that workspace
+// fails closed on its own. Each spelling is cut only as a whole folder where a
+// word starts (a quote counts only when it opens the word), so `/audit` inside
+// `$R/audit/` or `"$R"/audit` is never taken for `/audit`.
+function withoutOwnFolders(text: string, cwd: string): string {
+  const fold = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  const homes = shellHomes(false).map((home) => fold(home.replaceAll("\\", "/").replace(/\/+$/, ""))).filter(Boolean);
+  let out = text;
+  for (let folder = cwd; folder && folder !== "." && dirname(folder) !== folder; folder = dirname(folder)) {
+    const forward = folder.replaceAll("\\", "/");
+    const spellings = new Set([folder, forward, folder.replaceAll("/", "\\")]);
+    // `~`, `$HOME` and `${HOME}` spell the same folders from the home folder
+    // the shell expands them to (shellHomes).
+    for (const home of homes) {
+      if (fold(forward) !== home && !fold(forward).startsWith(`${home}/`)) continue;
+      const rest = forward.slice(home.length);
+      for (const prefix of ["~", "$HOME", `\${HOME}`]) {
+        spellings.add(`${prefix}${rest}`);
+        spellings.add(`${prefix}${rest.replaceAll("/", "\\")}`);
+      }
+    }
+    for (const spelling of spellings) {
+      const escaped = spelling.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      out = out.replace(new RegExp(`(?<=(?:^|[\\s=;&|(<>])["']?)${escaped}(?=[\\\\/\\s"';&|)]|$)`, "gi"), () => ".");
+    }
+  }
+  return out;
 }
 
 // The shell walk answers one boolean through several recursive sites, so the
@@ -1156,9 +1213,13 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
 // every site returns on its first hit, the flag is set only when the hit that
 // ended the walk was an audit-trail target.
 let auditTrailMatched = false;
+let integrityTargetMatched: string | null = null;
 
 function protectedWriteTarget(path: string, cwd: string): boolean {
-  if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) return true;
+  if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) {
+    integrityTargetMatched ??= path;
+    return true;
+  }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
     return true;
@@ -1167,7 +1228,10 @@ function protectedWriteTarget(path: string, cwd: string): boolean {
 }
 
 function protectedDirectoryTarget(path: string, cwd: string): boolean {
-  if (protectedRuntimePath(path, cwd)) return true;
+  if (protectedRuntimePath(path, cwd)) {
+    integrityTargetMatched ??= path;
+    return true;
+  }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
     return true;
@@ -1372,6 +1436,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   const toolInput = input.tool_input;
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   auditTrailMatched = false;
+  integrityTargetMatched = null;
   if (toolName === "Bash") {
     const raw = toolInput?.command;
     if (typeof raw !== "string") return null;
@@ -1395,11 +1460,20 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
       }
     }
   }
-  if (targets.some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) {
+  const guarded = targets.find((path) =>
+    protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd));
+  if (guarded !== undefined) {
+    integrityTargetMatched ??= guarded;
     return "runtime";
   }
-  if (targets.some((path) => protectedAuditTrailPath(path, cwd))) return "audit";
-  return protectedContentWrite(toolName, toolInput, cwd) ? "content" : null;
+  const audited = targets.find((path) => protectedAuditTrailPath(path, cwd));
+  if (audited !== undefined) {
+    integrityTargetMatched ??= audited;
+    return "audit";
+  }
+  if (!protectedContentWrite(toolName, toolInput, cwd)) return null;
+  integrityTargetMatched ??= targets[0] ?? null;
+  return "content";
 }
 
 export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
@@ -1409,6 +1483,12 @@ export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
 /** The refusal class for a tool call, or null when the call is allowed. */
 export function runtimeIntegrityViolationKind(input: ClaudeCodeHookInput): RuntimeIntegrityViolation | null {
   return runtimeIntegrityViolation(input);
+}
+
+function displayTarget(path: string, cwd: string | undefined): string {
+  if (!isAbsolute(path)) return path;
+  const root = resolve(typeof cwd === "string" ? cwd : process.cwd());
+  return pathWithin(path, root) ? relative(root, path).replaceAll("\\", "/") : path;
 }
 
 /** Write the refusal for a violating tool call; true when the caller must exit 2. */
@@ -1422,6 +1502,9 @@ export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boo
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
     : "";
-  process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}\n`);
+  const matched = integrityTargetMatched === null
+    ? ""
+    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
+  process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}${matched}\n`);
   return true;
 }

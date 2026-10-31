@@ -50,8 +50,8 @@ When dispatched for trunk-based:
 
 ### Failure modes
 
-- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
-- **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
+- **Dirty tree on merge.** Local uncommitted changes on `main` in files the landing changes: git does not start it, and the tool names those files and the step (commit them, then run the same merge again); any other git failure carries git's message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
+- **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail, next}` and leaves the landing staged in the main checkout: combine those files there, `git add` them (`git rm` one that stays deleted) and run the same merge again, which finishes it; `git reset --merge` drops it.
 - **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's or doctor's `restore_operation`, invoking its engine route with the listed args exactly as argv, in the separate restored namespace. Rendered hints and commands are human display text only.
 - **Intent has no registry UUID.** Create refuses: `Intent record <relative record dir> has no registry identity (uuid); adopt or re-create the intent before Construction. Bolt worktrees are named by intent so parallel intents cannot collide.` Do not retry with a slug-only branch.
 - **Branch checked out elsewhere.** Before deleting a Bolt branch or its retained/parked refs, cleanup requires the branch to be checked out at its own Bolt directory or nowhere. A foreign-owner refusal names the owner path on stderr and records `(checked out in another worktree of this repository)` in the audit. Preserve that checkout and surface the refusal.
@@ -248,15 +248,46 @@ When the orchestrator dispatches aidlc-pipeline-deploy-agent for a worktree crea
   "strategy": "squash",
   "commit_sha": "<sha>",
   "audit_timestamp": "2026-05-18T12:34:56Z",
-  "notes": "<optional follow-up reminders>"
+  "notices": ["<one line per thing the person should hear, when there is one>"]
 }
 ```
+
+The landing runs with the person's own git: their hooks, filters and merge
+drivers run as for any commit they make. When what landed differs from the
+reviewed source (a formatter in a pre-commit hook, a smudge filter, a configured
+merge driver), the landing keeps that result, `notices` carries one line for the
+person ("Your pre-commit hook changed 3 files while landing Unit auth-mfa: ..."),
+and the `SWARM_SOURCE_MERGED` row records the files under `Landed changes` and
+`Driver merges` beside both commits. Say the line once; never refuse or undo it.
 
 If a merge error carries `[merge-succeeded:<sha>]` and says the
 `SWARM_SOURCE_MERGED` post-result audit row failed, the Git merge already
 landed but no aggregate source authority exists. Preserve the worktree and do
 not retry the same merge command. Restart the stage attempt, or use
 `AIDLC_SKIP_SOURCE_FRESHNESS=1` only after explicit human approval.
+
+### Merge response (the person's hook refused the commit)
+
+```json
+{
+  "status": "commit-refused",
+  "slug": "payments",
+  "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
+  "target": "main",
+  "strategy": "squash",
+  "staged": ["src/foo.ts"],
+  "output": "lint: src/foo.ts has a console.log",
+  "detail": "`git commit` refused the landing of Unit payments in /Users/dev/project; the landing is still staged there.",
+  "next": "Fix what it named (edit and `git add` in /Users/dev/project, or pass --message for a commit-message rule), then run this same merge again: it finishes the staged landing. To drop the staged landing instead: `git reset --merge` in /Users/dev/project."
+}
+```
+
+The main checkout is left exactly as git left it, with the landing staged, and
+the worktree is preserved. Tell the person in one line that their hook refused
+the landing and why (the `output` field's words), fix what it named in the
+staged landing, and run the same merge again; it finishes the landing and
+records the fix under `Landed changes`. If it cannot be fixed, stop and say
+what `staged` lists.
 
 ### Merge response (conflict)
 
@@ -266,11 +297,17 @@ not retry the same merge command. Restart the stage attempt, or use
   "slug": "payments",
   "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "conflict_files": ["src/foo.ts", "src/bar.ts"],
-  "detail": "Merge produced conflicts in worktree at <path>. Worktree preserved for inspection."
+  "detail": "Unit payments's landing clashes with what is already on main: it is staged in /Users/dev/project, and git could not merge 2 files: src/foo.ts (changed on both sides), src/bar.ts (changed on both sides).",
+  "next": "Combine both sides in those files and `git add` them in /Users/dev/project, then run this same merge again: it finishes the landing. To drop the landing instead: `git reset --merge` in /Users/dev/project."
 }
 ```
 
-The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
+The landing stays staged in the main checkout as git left it, and the worktree
+is preserved. Combine both sides in each listed file so each Unit keeps what its
+plan asked for, `git add` them and run the same merge again: it finishes the
+landing, records the combined files under `Landed changes` and returns one
+notice naming them. Run before they are combined, it returns this response
+again. A rebase landing's conflict is in the worktree, and its `detail` says so. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
 
 ### Discard response
 

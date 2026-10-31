@@ -102,7 +102,7 @@ export type Mode = "strict" | "relaxed" | "off";
 
 /** The one line the human hears when a relaxed or off policy carries source drift through. */
 export function driftNotice(count: string, paths: string): string {
-  return `${count} changed since this plan was approved: ${paths}. Carrying on. Do you want to look at the plan again and approve it first?`;
+  return `${count} changed since this plan was approved: ${paths}. Carrying on. Do you want me to go over the plan with you again?`;
 }
 
 /** The one line the human hears when other code moved after they approved, on any policy. */
@@ -238,7 +238,9 @@ export function approvalRows(project: string) {
   return readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
 }
 
-/** Compare every receipt, including any newly minted one, with the actual human approval. */
+/** Every receipt file, including any newly minted one, keyed by name, so a
+ * caller can compare the set before and after a step.
+ */
 export function receiptFiles(project: string): Record<string, string> {
   const dir = join(sessionsDir(project), "plan-approval");
   if (!existsSync(dir)) return {};

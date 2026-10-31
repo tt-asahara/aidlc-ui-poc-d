@@ -54,15 +54,12 @@ export interface GuardCell {
 
 /** The changes, each made where a person makes it. */
 export const GUARD_CHANGES = {
-  /** Unit 2's work edits a file Unit 1 made and the person approved, and claims it. */
   "later-unit-edit": "Unit 2 edits Unit 1's approved file and claims it",
   /** The same edit, left out of Unit 2's manifest. */
   "later-unit-edit-unclaimed": "Unit 2 edits Unit 1's approved file without claiming it",
-  /** The person tidies Unit 1's source by hand after approving it. */
   "hand-edit-source": "the person hand-edits Unit 1's approved source",
   /** The person adds a line to the approved requirements before the next stage. */
   "hand-edit-requirements": "the person hand-edits the approved requirements",
-  /** The person edits the code plan while its approval waits. */
   "plan-edit": "the person edits the plan while its approval waits",
   /** A pulled commit changes the requirements while Unit 2 generates. */
   pull: "a pulled commit changes the requirements mid-stage",
@@ -72,7 +69,6 @@ export const GUARD_CHANGES = {
   "second-review": "the person asks for a second review after one cycle",
   /** The person stops between Units, the engine is updated, and they resume. */
   "engine-update": "resume after the engine version changes",
-  /** While Unit 2's code plan waits, the person asks for Unit 1 to be reviewed again. */
   "review-while-plan-waits": "the person asks for a review of Unit 1 while Unit 2's plan waits",
   /** While Unit 2 builds, its agent edits Unit 1's functional design. */
   "doc-edit-agent": "Unit 2's agent edits Unit 1's functional design",
@@ -84,6 +80,8 @@ export const GUARD_CHANGES = {
   "plan-edit-after-approval-hand": "the person hand-edits Unit 1's approved code plan",
   /** While Unit 2 builds, Unit 1's functional design is deleted: it has to be made again. */
   "doc-delete": "Unit 1's functional design is deleted",
+  /** At the open Code Generation gate, after the review, the agent fixes its traceability record and shows the gate again. */
+  "gate-record-fix": "the agent fixes its reviewed traceability record at the open Code Generation gate",
 } as const;
 export type GuardChange = keyof typeof GUARD_CHANGES | "none";
 
@@ -100,7 +98,6 @@ export const DOCUMENT_CHANGES: ReadonlySet<GuardChange> = new Set<GuardChange>([
   "doc-edit-agent", "doc-edit-hand", "plan-edit-after-approval-agent", "plan-edit-after-approval-hand", "doc-delete",
 ]);
 
-/** The stages a change's cells leave out. */
 export function matrixSkip(change: GuardChange): string[] {
   return DOCUMENT_CHANGES.has(change) ? MATRIX_SKIP.filter((s) => s !== "functional-design") : MATRIX_SKIP;
 }
@@ -222,7 +219,7 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
       return {
         beforePlanAnswer: (_unit, agent) => once(agent.plans.size >= 2, () => {
           agent.person.say("before I approve the plan, have the reviewer look at Unit 1 again");
-          agent.reviewAgain("code-generation", MATRIX_UNITS[0]);
+          agent.reviewAgain("code-generation", MATRIX_UNITS[0], true);
         }),
       };
     case "doc-edit-agent":
@@ -235,6 +232,16 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
       return whileExtraBuilds((agent) => appendBy(agent, corePlan(agent), "- [x] Step 3: Note added by hand"));
     case "doc-delete":
       return whileExtraBuilds((agent) => rmSync(join(agent.host.proj, design(agent))));
+    case "gate-record-fix":
+      return {
+        atGate: (stage: string, _unit: string | null, agent: AgentStandIn) => once(stage === "code-generation", () => {
+          const step = [...agent.worked].reverse().find((d) => d.stage === "code-generation");
+          const trace = ((step?.produces as string[] | undefined) ?? []).find((p) => p.endsWith("traceability.json"));
+          if (!trace) agent.fail("Code Generation wrote no traceability.json");
+          agentAppends(agent, trace, "");
+          agent.report("code-generation", "--result", "awaiting-approval");
+        }),
+      };
     case "engine-update":
       return {
         afterCheckpoint: (unit, _kind, agent) => once(unit === "core", () => agent.stopForTheDay(() => updateEngine(agent.host.proj))),
@@ -256,7 +263,6 @@ export function updateEngine(proj: string): void {
   }
 }
 
-/** Unit 1's functional design, as its Functional Design wrote it. */
 export function docOf(agent: AgentStandIn): string {
   const fd = agent.worked.find((d) => d.stage === "functional-design" && d.unit === MATRIX_UNITS[0]);
   return ((fd?.produces as string[] | undefined) ?? []).find((p) => p.endsWith(".md") && !p.endsWith("-questions.md")) ?? "";
@@ -329,7 +335,6 @@ the work into Units, builds each Unit and runs Build and Test. Nothing else runs
   return { name, text, stages };
 }
 
-/** The core stages a plugin puts under its own scope, by phase. */
 const PLUGIN_STAGES: Record<string, string> = {
   "requirements-analysis": "inception",
   "units-generation": "inception",
@@ -420,7 +425,7 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       const then = beforeWaves?.(stage, agent);
       const walk = (mode: string, words: string) => {
         agent.person.say(words);
-        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode}`);
+        const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-iteration ${mode} --message ${agent.latestMessageId()}`);
         if (set.status !== 0) agent.fail(`${mode} was refused: ${set.stderr || set.stdout}`);
       };
       if (stage === "units-generation") walk("stage-major", "build it stage by stage: every Unit through each stage before the next");
@@ -440,7 +445,7 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       flags: composed ? ["--plan-approval", cell.plan] : options.shipped ? [] : cellFlags(cell, change),
       units: MATRIX_UNITS,
       followRefusals: true,
-      fullHost: options.fullHost ?? change === "review-while-plan-waits",
+      fullHost: options.fullHost ?? (change === "review-while-plan-waits" || change === "gate-record-fix"),
       ...hooks,
       afterApproval: afterAnyApproval,
       ...(composed
@@ -518,6 +523,12 @@ export function cellProblems(c: CellRun): string[] {
     else if (extraPlan !== -1 && extraPlan < done) problems.push(`the review of ${MATRIX_UNITS[0]} ran only after the plan was approved`);
   }
 
+  // The fix at the open gate happened: the gate's own report ran again after it.
+  if (c.change === "gate-record-fix" &&
+    run.host.calls.filter((call) => /orchestrate report --stage code-generation --result awaiting-approval/.test(call.what)).length < 2) {
+    problems.push("the agent never fixed its record at an open Code Generation gate");
+  }
+
   // What the person met because of the change.
   // The second review is asked for at Unit 2's checkpoint, so that checkpoint comes back once.
   const own = (key: string) => c.change === "second-review" && key === "unit checkpoint at code-generation for extra";
@@ -553,7 +564,9 @@ export function recordProblems(c: CellRun): string[] {
   const problems: string[] = [];
   const rows = auditEvents(c.run.proj).filter((e) => e.event === "CHANGE_ACCEPTED");
   const where = (e: { block: string }) => `${field(e.block, "Stage")}${field(e.block, "Unit") ? ` for ${field(e.block, "Unit")}` : ""}`;
-  const lines = c.run.agent.notices;
+  // change_notices also carries the lines that say where the work starts and where it picks up; they are not
+  // about a change.
+  const lines = c.run.agent.notices.filter((line) => !/^(Setting up |Picking up where we left off, )/.test(line));
   const policy = c.composed?.policyFromEngine ? resolvedPolicy(c) : c.policyAtChange;
   // No change, a second review the person asked for, or strict (which asks
   // for a fresh review instead of accepting the change): no row, no line.
@@ -590,7 +603,6 @@ export function resolvedPolicy(c: CellRun): string | null {
   return /^(off|relaxed|strict)\b/.exec(policy)?.[1] ?? null;
 }
 
-/** The audit rows a change leaves, for a test that checks the record itself. */
 export function changeRows(run: ScopeRun): { event: string; stage: string | null; unit: string | null }[] {
   return auditEvents(run.proj)
     .filter((e) => /^(CHANGE_ACCEPTED|GUARD_STOOD_ASIDE)$/.test(e.event))
@@ -599,7 +611,6 @@ export function changeRows(run: ScopeRun): { event: string; stage: string | null
 
 export const cellName = (cell: GuardCell) => `Guard Policy ${cell.policy}, review ${cell.review}, plan approval ${cell.plan}`;
 
-/** One cell of a matrix file: a change under one setting. */
 export interface MatrixCase {
   cell: GuardCell;
   change: GuardChange;

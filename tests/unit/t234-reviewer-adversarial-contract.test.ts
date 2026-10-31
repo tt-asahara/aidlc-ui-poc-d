@@ -1,4 +1,4 @@
-// Pins the adversarial review contract (reviewer-as-verifier, 2.4.0) in the
+// Pins the adversarial review contract (reviewer-as-verifier) in the
 // three authored surfaces that carry it:
 //   - core/aidlc-common/protocols/stage-protocol-reviewer.md §12a step 2 (the shared
 //     contract - written once so any future reviewer inherits it)
@@ -94,24 +94,24 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
   test("the revision path re-runs the reviewer on changed artifacts (Part 0 + module)", () => {
     // A rejection-driven revision edits produces[] AFTER the reviewer's
     // verdict landed; without this binding the gate reopens on a stale READY.
-    // The learnings ritual, when enabled, runs at the initial gate only - pin
-    // both so neither drifts.
+    // With learnings on, the change asked for is a correction the learnings
+    // step asks about before the revised gate - pin both so neither drifts.
     for (const path of [CORE_STATIC_PROTOCOL, DIST_STATIC_PROTOCOL]) {
       const src = readFileSync(path, "utf-8");
       expect(src).toContain(
-        "re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised",
+        "re-run the `stage-protocol-reviewer.md` section 12a reviewer step before reporting revised",
       );
       expect(src).toContain(
         "fresh `## Review` verdict replacing the stale one",
       );
       expect(src).toMatch(
-        /`learnings` module[^.]*ritual\b[^.]*not re-run for gate revisions/,
+        /`learnings` module, the change they asked for is a correction: [^.]*learnings step before `report --result revised`/,
       );
       // With learnings enabled, Part 0 opens the gate AFTER the logged answer;
       // without the module, it opens directly after the completion summary.
       // Core carries the {{INVOKE}} token; dist carries its channel expansion.
       expect(src).toMatch(
-        /After the learnings answer is logged[^:\n]*when the `learnings` module is absent: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
+        /After the learnings answer is logged[^:\n]*when the step asks nothing: `(?:\{\{INVOKE\}\}|bun |aidlc )/,
       );
       expect(src).not.toContain(
         "Before showing the completion message",
@@ -121,8 +121,7 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
       join(REPO_ROOT, "harness", "claude", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     );
-    // The CONTRACT is that a revision touching a produces[] artifact re-runs the
-    // The detailed reviewer contract is now loaded from its conditional module;
+    // The detailed reviewer contract is loaded from its conditional module;
     // the static SKILL pins the obligation and module path.
     expect(skill).toContain(
       "stage-protocol-reviewer.md",
@@ -134,7 +133,6 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(src).toContain("## Adversarial Posture");
     expect(src).toContain("REFUTE this artifact, not to confirm it");
     expect(src).toContain("not grounds for NOT-READY");
-    // The 2.2.17 identity-marker contract stays intact alongside the new section.
     expect(src).toContain("**Reviewer:** aidlc-product-lead-agent");
   });
 

@@ -1,4 +1,4 @@
-// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markTurnEnd, function:turnEndIsOpen, function:turnEndMarkerPath
+// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markTurnEnd, function:turnEndIsOpen, function:turnEndMarkerPath, function:markStageWorkLogged
 //
 // The turn-shape marker family: the transcript-free reading of the Stop hook's
 // tier-3 conversational carve-out. On harnesses that deliver no
@@ -13,10 +13,10 @@
 // makes t121 structurally incapable of pinning the LIB half of the contract:
 // its `.aidlc-engine/engine-touch` cannot be refreshed by the hook's probe no matter
 // what the spawn env carries, so an mtime-equality assertion there passes even
-// with the probe marking deleted (proved by mutation in review of #687). t121
-// now pins the HOOK half with an env witness; this file pins the LIB half
-// in-process. Both halves are needed: the carve-out is dead code if either the
-// hook forgets to mark its probe OR markEngineTouch forgets to honour the mark.
+// with the probe marking deleted. t121 pins the HOOK half with an env witness;
+// this file pins the LIB half in-process. Both halves are needed: the carve-out
+// is dead code if either the hook forgets to mark its probe OR markEngineTouch
+// forgets to honour the mark.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
@@ -33,17 +33,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
+  createIntent,
   turnEndIsOpen,
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
   turnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
   markTurnEnd,
   markEngineTouch,
   markHumanTurn,
+  readAuditShardEvents,
+  stageDir,
+  stateFilePath,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
 } from "../../core/tools/aidlc-lib.ts";
-import { setupIntegrationProject } from "../harness/fixtures.ts";
+import { FIXTURES_DIR, runOrchestrateNext, setupIntegrationProject } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -93,7 +99,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const proj = makeCreatedProject();
     process.env[STOP_HOOK_PROBE_ENV] = "1";
     markEngineTouch(proj);
-    expect(() => statSync(engineTouchMarkerPath(proj))).toThrow(); // never created
+    expect(() => statSync(engineTouchMarkerPath(proj))).toThrow();
   });
 
   test("markEngineTouch DOES write when the probe env var is absent (a real advance)", () => {
@@ -104,7 +110,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
 
   test("a probe-marked call does not REFRESH an existing marker either", () => {
     const proj = makeCreatedProject();
-    markEngineTouch(proj); // a real advance lays the marker down
+    markEngineTouch(proj);
     const path = engineTouchMarkerPath(proj);
     const before = Math.floor(Date.now() / 1000) - 300;
     utimesSync(path, before, before);
@@ -196,7 +202,7 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   // =========================================================================
   test("a failed engine-marker write clears the path instead of leaving a stale mtime", () => {
     const proj = makeCreatedProject();
-    markEngineTouch(proj); // a real advance lays a marker down
+    markEngineTouch(proj);
     const path = engineTouchMarkerPath(proj);
     const stale = Math.floor(Date.now() / 1000) - 3600;
     utimesSync(path, stale, stale);
@@ -223,7 +229,6 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const outside = mkdtempSync(join(tmpdir(), "aidlc-t259-outside-"));
     tempDirs.push(outside);
     const canary = join(outside, "canary");
-    // The marker leaf is a link to a file outside the record.
     const proj = makeCreatedProject();
     writeFileSync(canary, "keep\n", "utf-8");
     mkdirSync(join(engineTouchMarkerPath(proj), ".."), { recursive: true });
@@ -235,7 +240,6 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     markEngineTouch(proj);
     expect(readFileSync(canary, "utf-8")).toBe("keep\n");
     expect(turnEndIsOpen(proj)).toBe(false);
-    // The engine folder itself is a link to a folder outside the record.
     const other = makeCreatedProject();
     const engine = join(engineTouchMarkerPath(other), "..");
     rmSync(engine, { recursive: true, force: true });
@@ -291,16 +295,18 @@ describe("t259 the engine's last word ended the turn", () => {
   // is already in progress on ... How should I handle this?", and picked
   // "Chat about this". The Stop hook's own `next` returned Feasibility, the
   // reminder fired, and the agent went back to the old work, dropping the
-  // question. The turn now ends at the question.
+  // question. The turn ends at the question.
   test("the Stop hook lets the turn end at the new-work question, and nudges again once other work is handed out", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
-    const run = (args: string[], input?: string) =>
-      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const run = (args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
     const stop = () =>
-      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }), { AIDLC_UNATTENDED: "1" });
     markHumanTurn(proj);
     await Bun.sleep(20);
     // Words alone first get the re-entry readings; the agent reads them as new
@@ -319,13 +325,13 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(atQuestion.stdout).not.toContain('"decision":"block"');
 
     // The agent ran a bare next anyway and was handed the work in progress.
-    expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
+    expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).stage).toBe("feasibility");
     expect(stop().stdout).toContain('"decision":"block"');
   });
 
   // Live runs: after a read-only /aidlc --status, and after a scope change at a
   // gate, the reminder sent the agent into the next stage with no word from the
-  // person. A print the agent stops after now ends the turn; one that hands the
+  // person. A print the agent stops after ends the turn; one that hands the
   // agent back to `next` still does not.
   for (const copilot of [false, true]) {
     test(`the Stop hook lets the turn end after a print the agent stops after${copilot ? ", in a Copilot session" : ""}`, async () => {
@@ -341,13 +347,20 @@ describe("t259 the engine's last word ended the turn", () => {
         run(
           ["engine", "hook", "continue-workflow"],
           JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
-          copilot ? { AIDLC_COPILOT_SESSION_ID: "t259-stop" } : {},
+          // A run nobody attends, where the hook still carries handed-out work
+          // on (an attended, gated run ends its turn there too).
+          { AIDLC_UNATTENDED: "1", ...(copilot ? { AIDLC_COPILOT_SESSION_ID: "t259-stop" } : {}) },
         );
-      for (const [args, said] of [
-        [["--status"], "print its output verbatim, then stop"],
-        [["--scope", "mvp"], "to change scope, then print its output verbatim and stop"],
-        [["--depth", "minimal"], "to update the configuration, then print its output verbatim and stop"],
+      // The scope change is typed at the stage's open gate, as in the live run.
+      const statePath = stateFilePath(proj);
+      const running = readFileSync(statePath, "utf-8");
+      for (const [args, said, feasibility] of [
+        [["--status"], "print its output verbatim, then stop", "- [-] feasibility"],
+        // At the open gate the switch also hands over the gate's answer, if the reply gave one; the turn still ends.
+        [["--scope", "mvp"], "to change scope, then print its output verbatim. If their message also answered the open " +
+          "Feasibility & Constraints question", "- [?] feasibility"],
       ] as const) {
+        writeFileSync(statePath, running.replace("- [-] feasibility", feasibility));
         markHumanTurn(proj);
         await Bun.sleep(20);
         const printed = JSON.parse(run(["engine", "orchestrate", "next", ...args]).stdout);
@@ -357,14 +370,488 @@ describe("t259 the engine's last word ended the turn", () => {
         expect(atEnd.status, atEnd.stderr).toBe(0);
         expect(atEnd.stdout, args.join(" ")).not.toContain('"decision":"block"');
       }
-      // A jump's print hands the agent back to `next`, so the turn goes on.
+      writeFileSync(statePath, running);
+      // A jump returns the step of the stage it lands on, so the turn goes on
+      // into that stage's work.
       markHumanTurn(proj);
       await Bun.sleep(20);
       const jump = JSON.parse(run(["engine", "orchestrate", "next", "--stage", "requirements-analysis"]).stdout);
-      expect(jump.kind).toBe("print");
-      expect(jump.message).toMatch(/[Tt]hen re-run `next`/);
+      expect(jump.kind).toBe("run-stage");
+      expect(jump.stage).toBe("requirements-analysis");
       expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });
   }
+
+  // A live run: "turn the specialist reviewers off for the rest of this work"
+  // typed while Code Generation was running printed the setting's line and the
+  // turn ended; nothing happened until the person typed "ok, carry on". A
+  // setting over running work, with nothing waiting on the person, hands the
+  // agent back to `next`; at the stage's open gate it still ends the turn.
+  test("a setting typed while the stage runs hands the agent back to next; at a gate it ends the turn", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
+    const stop = () =>
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }), { AIDLC_UNATTENDED: "1" });
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const midStage = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(midStage.kind).toBe("print");
+    expect(midStage.message).toContain("to update the configuration, then print its output verbatim and re-run next to carry on");
+    expect(midStage.message).not.toContain("and stop");
+    // Nothing paused, so no "picks up" line is said with the setting.
+    expect(midStage.narration).toBeUndefined();
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+    expect(stop().stdout).toContain('"decision":"block"');
+    // The way back the setter's line names is a typed /aidlc flag: the engine
+    // routes it to the same setter, and the setting goes back.
+    const off = run(["engine", "config", "set", "review", "none"]).stdout;
+    expect(off).toContain("Specialist reviews are off for the rest of this work. To turn them back on, say so or type /aidlc --review ");
+    const named = /type \/aidlc --review (\w+)\./.exec(off)?.[1];
+    expect(named, off).toBeDefined();
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const back = JSON.parse(run(["engine", "orchestrate", "next", "--review", named as string]).stdout);
+    expect(back.kind).toBe("print");
+    expect(back.message).toContain(`config set review ${named}`);
+    const restored = run(["engine", "config", "set", "review", named as string]).stdout;
+    expect(restored).toContain(`Specialist reviews are ${named} for the rest of this work (they were off).`);
+    expect(readFileSync(stateFilePath(proj), "utf-8")).not.toMatch(/^- \*\*Review Override\*\*:[ \t]*none[ \t]*$/m);
+    // At the stage's open gate the person must answer next, so the same
+    // setting ends the turn.
+    const statePath = stateFilePath(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- [-] feasibility", "- [?] feasibility"));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const atGate = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
+    expect(atGate.kind).toBe("print");
+    expect(atGate.message).toContain("to update the configuration, then print its output verbatim and stop");
+    // The person acts next, so the agent is told where the work picks up.
+    expect(atGate.narration).toMatch(/^The work picks up at /);
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    const gateEnd = stop();
+    expect(gateEnd.status, gateEnd.stderr).toBe(0);
+    expect(gateEnd.stdout).not.toContain('"decision":"block"');
+  });
+
+  // A live run: the person switched scope while Requirements Analysis ran,
+  // the turn ended, and the agent asked them to say go on. A switch over a
+  // running stage, with nothing waiting on the person, hands the agent back to
+  // `next` as a setting does.
+  test("a scope switch typed while the stage runs hands the agent back to next", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (args: string[], input?: string) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const switched = JSON.parse(run(["engine", "orchestrate", "next", "--scope", "mvp"]).stdout);
+    expect(switched.kind).toBe("print");
+    expect(switched.message).toContain("to change scope, then print its output verbatim and re-run next to carry on with the work.");
+    expect(switched.message).not.toContain("and stop");
+    expect(switched.narration).toBeUndefined();
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+    // Read where nobody attends, where the hook still carries handed-out work
+    // on (an attended, gated run ends its turn there; the print is what sends
+    // the agent back to `next`).
+    const stopped = spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "hook", "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
+      encoding: "utf-8",
+      env: { ...env, AIDLC_UNATTENDED: "1" },
+    });
+    expect(stopped.stdout).toContain('"decision":"block"');
+  });
+
+  // A live Claude Code run: "switch this to the mvp plan", typed while the
+  // agent wrote Intent Capture's questions, ended the turn with "The work picks
+  // up at Intent Capture & Framing." before any question was on screen, and
+  // the person had to say go on. A questions file written after the person's
+  // last turn has not been in front of them, so the setting or switch carries
+  // on to the questions. Once a question is shown (logged), or the file was
+  // there before they typed, or no turn of theirs is marked, the turn ends.
+  test("a setting or switch typed while the agent writes the stage's questions carries on to them", () => {
+    const QUESTIONS = "# Feasibility & Constraints Questions\n\n## Q1. [architect] Where does it run?\nA. Laptop\nB. Cloud\nX. Other (please specify)\n\n[Answer]:\n";
+    for (const typed of [["--depth", "minimal"], ["--scope", "mvp"]]) {
+      for (const written of ["after their turn", "after their turn, then shown", "before their turn", "with no turn marked"] as const) {
+        const label = `${typed.join(" ")}, questions written ${written}`;
+        const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+        tempDirs.push(proj);
+        const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+        delete env[STOP_HOOK_PROBE_ENV];
+        const run = (args: string[]) =>
+          spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, encoding: "utf-8", env });
+        const dir = stageDir(proj, "ideation", "feasibility");
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, "feasibility-questions.md");
+        writeFileSync(file, QUESTIONS);
+        if (written === "with no turn marked") {
+          expect(existsSync(humanTurnMarkerPath(proj)), label).toBe(false);
+        } else {
+          markHumanTurn(proj);
+          const turn = statSync(humanTurnMarkerPath(proj)).mtimeMs / 1000;
+          const at = written === "before their turn" ? turn - 5 : turn + 5;
+          utimesSync(file, at, at);
+        }
+        if (written === "after their turn, then shown") {
+          const asked = run(["engine", "log", "decision", "--stage", "feasibility", "--decision", "Q1", "--options", "A. Laptop,B. Cloud,X. Other"]);
+          expect(asked.status, `${label}: ${asked.stdout}${asked.stderr}`).toBe(0);
+        }
+        const printed = JSON.parse(run(["engine", "orchestrate", "next", ...typed]).stdout);
+        expect(printed.kind, label).toBe("print");
+        const command = /`bun \.claude\/tools\/aidlc\.ts (engine [^`]*)`/.exec(printed.message)?.[1];
+        expect(command, `${label}: ${printed.message}`).toBeDefined();
+        if (written === "after their turn") {
+          expect(printed.message, label).toContain("print its output verbatim and re-run next to carry on with the work.");
+          expect(printed.narration, label).toBeUndefined();
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(false);
+          // The same turn goes on to the stage, whose questions the agent asks
+          // (past the stage's rules, when they come ahead of it).
+          expect(run(command!.split(" ")).status, label).toBe(0);
+          const after = runOrchestrateNext(join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), proj, [], { cwd: proj, env }).directive;
+          expect([after?.kind, after?.stage], label).toEqual(["run-stage", "feasibility"]);
+        } else {
+          expect(printed.message, label).toContain("print its output verbatim and stop.");
+          expect(printed.narration, label).toBe("The work picks up at Feasibility & Constraints.");
+          expect(existsSync(turnEndMarkerPath(proj)), label).toBe(true);
+        }
+      }
+    }
+  });
+
+  // A plan proposal waiting for the person's approve, edit or reject is a stop
+  // the engine itself put up: the Stop hook honours its marker while it is
+  // fresh. A setting typed under it must not hand the agent back to the work
+  // and walk past their pick; a stale orphan is no gate, as the hook reads it.
+  test("a setting typed while a plan proposal waits ends the turn, and a stale marker does not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const setting = () => {
+      markHumanTurn(proj);
+      return JSON.parse(spawnSync(process.execPath, [
+        ".claude/tools/aidlc.ts", "engine", "orchestrate", "next", "--depth", "minimal",
+      ], { cwd: proj, encoding: "utf-8", env }).stdout);
+    };
+    const marker = composeMarkerPath(proj);
+    writeFileSync(marker, "{}\n", "utf-8");
+    await Bun.sleep(20);
+    const waiting = setting();
+    expect(waiting.kind).toBe("print");
+    expect(waiting.message).toContain("print its output verbatim and stop");
+    expect(waiting.message).not.toContain("re-run next");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
+    // Older than the freshness window the hook honours: no gate, so the work
+    // carries on as it does with no proposal at all.
+    const stale = (Date.now() - COMPOSE_MARKER_TTL_MS - 60_000) / 1000;
+    utimesSync(marker, stale, stale);
+    await Bun.sleep(20);
+    const orphaned = setting();
+    expect(orphaned.message).toContain("re-run next to carry on");
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+  });
+});
+
+// Live runs on the transcript-free hosts (Kiro CLI, Kiro IDE, opencode): after
+// `/aidlc intent <older work>` whose record had no engine mark (work made before
+// the markers shipped, or a fresh clone, since .aidlc-engine/ is not committed),
+// a plain question's turn was blocked with "AI-DLC is carrying on with <first
+// stage>." and the agent started that stage unasked. A switch leaves the
+// mark on the work it selects, as `intent create` does on new work.
+describe("t259 a switch leaves the engine mark on the work it selects", () => {
+  function markless(proj: string, label: string): string {
+    const record = createIntent(proj, label, "default", "feature").dirName;
+    writeFileSync(stateFilePath(proj, record, "default"), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    rmSync(engineTouchMarkerPath(proj, record, "default"), { force: true });
+    return record;
+  }
+
+  function tools(proj: string) {
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (tool: string, args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [`.claude/tools/${tool}`, ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
+    const stop = () =>
+      run("aidlc.ts", ["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-switch" }), { AIDLC_UNATTENDED: "1" });
+    return { run, stop };
+  }
+
+  test("an intent switch writes the mark, so a plain question on the older work ends its turn; work handed out still does not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const older = markless(proj, "older-work");
+    const { run, stop } = tools(proj);
+    const switched = run("aidlc-utility.ts", ["intent", "switch", "older-work", "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(switched.stdout).toContain("Now working on");
+    expect(existsSync(engineTouchMarkerPath(proj, older, "default"))).toBe(true);
+    await Bun.sleep(20);
+    markHumanTurn(proj);
+    const ended = stop();
+    expect(ended.status, ended.stderr).toBe(0);
+    expect(ended.stdout).not.toContain('"decision":"block"');
+    // Work the engine hands out after that still keeps the turn going.
+    expect(JSON.parse(run("aidlc.ts", ["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
+    expect(stop().stdout).toContain('"decision":"block"');
+  });
+
+  // A new chat's first command names the work already selected (`/aidlc intent
+  // <it>`, `/aidlc space` for the current space, or the resume offer's Yes): a
+  // self-switch, which writes no switch receipt. On marked work mid-stage the
+  // turn ends at "Now working on ...": the switch never refreshes a mark the
+  // record already has.
+  test("a self-switch on marked work leaves the mark alone, so its turn ends", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const { run, stop } = tools(proj);
+    markEngineTouch(proj);
+    await Bun.sleep(20);
+    markHumanTurn(proj);
+    const before = statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs;
+    for (const args of [["intent", "switch", record], ["space", "switch", "default"]]) {
+      const switched = run("aidlc-utility.ts", [...args, "--project-dir", proj]);
+      expect(switched.status, switched.stderr).toBe(0);
+      expect(statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs, args.join(" ")).toBe(before);
+      const ended = stop();
+      expect(ended.status, ended.stderr).toBe(0);
+      expect(ended.stdout, args.join(" ")).not.toContain('"decision":"block"');
+    }
+  });
+
+  // The same first command on work with no mark yet (a fresh clone): the mark
+  // the switch writes is dated before the person's turn, so the switch itself
+  // is never read as the engine's unfinished turn.
+  test("a self-switch on markless work dates the new mark before the person's turn, so its turn ends", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const { run, stop } = tools(proj);
+    rmSync(engineTouchMarkerPath(proj, record, "default"), { force: true });
+    markHumanTurn(proj);
+    const switched = run("aidlc-utility.ts", ["intent", "switch", record, "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    const mark = statSync(engineTouchMarkerPath(proj, record, "default")).mtimeMs;
+    expect(mark).toBeLessThan(statSync(humanTurnMarkerPath(proj, record, "default")).mtimeMs);
+    const ended = stop();
+    expect(ended.status, ended.stderr).toBe(0);
+    expect(ended.stdout).not.toContain('"decision":"block"');
+  });
+
+  test("a space switch writes the mark on the record its cursor names", () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const { run } = tools(proj);
+    const created = run("aidlc-utility.ts", ["space", "create", "other", "--project-dir", proj]);
+    expect(created.status, created.stderr).toBe(0);
+    const record = createIntent(proj, "other-work", "other", "feature").dirName;
+    writeFileSync(stateFilePath(proj, record, "other"), readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"), "utf-8");
+    rmSync(engineTouchMarkerPath(proj, record, "other"), { force: true });
+    const switched = run("aidlc-utility.ts", ["space", "switch", "other", "--project-dir", proj]);
+    expect(switched.status, switched.stderr).toBe(0);
+    expect(existsSync(engineTouchMarkerPath(proj, record, "other"))).toBe(true);
+  });
+});
+
+// #2400, Kiro IDE: the turn after the person answered the stage's questions
+// recorded the answer, requested the review and recorded READY, all through
+// `aidlc log`, then ended before the gate. The marks still read the person's
+// prompt as the newest thing, so the Stop hook let it go as chat. A log call
+// that recorded the stage's work leaves the engine mark; one that recorded
+// nothing, a read, and a logged question (which waits on the person) do not.
+describe("t259 the stage's work recorded through log leaves the engine mark", () => {
+  test("a recorded log answer leaves the mark; a refused one, `log answers` and `log decision` do not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    // The same reading under any host the suite runs in: no agent host's
+    // variables, no presence switch, and the person's turns come through the
+    // prompt hook, so the presence check runs as it does in a chat.
+    const env: Record<string, string | undefined> = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) =>
+        !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+    );
+    env.CLAUDE_PROJECT_DIR = proj;
+    const log = (...args: string[]) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "log", ...args], { cwd: proj, encoding: "utf-8", env });
+    const person = (prompt: string) => {
+      const replied = spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"], {
+        cwd: proj, encoding: "utf-8", env,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t259-log", prompt }),
+      });
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+    };
+    markEngineTouch(proj);
+    await Bun.sleep(20);
+    person("Which team should own the scraper?");
+    await Bun.sleep(20);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+
+    // A refused answer records nothing: no mark.
+    const refused = log("answer", "--stage", "feasibility", "--checkpoint", "no-such-checkpoint", "--details", "Team A");
+    expect(refused.status, refused.stdout).not.toBe(0);
+    expect(refused.stdout).not.toContain("emitted");
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // A read records nothing.
+    const read = log("answers", "--stage", "feasibility");
+    expect(read.status, read.stderr).toBe(0);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // A logged question waits on the person; its own carve-out lets the turn end.
+    const asked = log("decision", "--stage", "feasibility", "--decision", "Which team?", "--options", "Team A,Team B");
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // The person replies (the prompt hook moves the human mark), and the
+    // answer recorded after it is the stage's work going on.
+    await Bun.sleep(20);
+    person("Team A");
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    await Bun.sleep(20);
+    const answered = log("answer", "--stage", "feasibility", "--details", "Team A");
+    expect(answered.status, answered.stderr).toBe(0);
+    expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(turnMarkersShowConversational(proj)).toBe(false);
+
+    // A reply that answers the last question and asks one back: the agent
+    // answers it and ends the turn (--ends-turn), so the turn-end mark is
+    // left instead of the engine mark and the stop is allowed.
+    const next = log("decision", "--stage", "feasibility", "--decision", "Which region?", "--options", "us-east-1,eu-west-1");
+    expect(next.status, next.stderr).toBe(0);
+    await Bun.sleep(20);
+    person("us-east-1. What does that change for latency?");
+    await Bun.sleep(20);
+    const askedBack = log("answer", "--stage", "feasibility", "--details", "us-east-1", "--ends-turn");
+    expect(askedBack.status, askedBack.stderr).toBe(0);
+    expect(askedBack.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(turnEndIsOpen(proj)).toBe(true);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+  }, 120_000);
+
+  // The learnings question's Add a note is answered by the person next (the
+  // note, or what follows it), so the turn ends at the ask; Nothing to add goes
+  // on to the gate. The question is known by its kind; one recorded before the
+  // kind existed has none, and its exact options are its form (an upgrade
+  // leaves it pending). Whether the person's reply already holds the note is
+  // the agent's to read, so the note says to take it from their reply, kept on
+  // the row, and ask only otherwise. The agent may log the whole learnings box
+  // as one question and record each pick (stage-protocol.md's batch form, with
+  // or without the Q<n>: labels): the box is still known by its two exact
+  // options, and Add a note by its exact pick.
+  test("Add a note on the learnings question ends the turn; Nothing to add and other questions do not", async () => {
+    const box = "Keep none of these,brownfield first scan (NO_STORE),Nothing to add,Add a note";
+    for (const [options, kind, reply, picked, ends] of [
+      [box, null, "Keep none of these, Add a note", "Keep none of these; Add a note", true],
+      [box, null, "Q1: 1, Q2: 2", "Q1: Keep none of these; Q2: Add a note", true],
+      [box, null, "Q1: 1, Q2: 1", "Q1: Keep none of these; Q2: Nothing to add", false],
+      ["Nothing to add,Add a note", "learnings-note", "Keep none, Add a note", "Keep none of these; Add a note", true],
+      ["Nothing to add,Add a note", "learnings-note", "Add a note", "Add a note", true],
+      ["Nothing to add,Add a note", "learnings-note", "Add a note: always run lint", "Add a note", true],
+      ["Nothing to add,Add a note", "learnings-note", "Nothing to add", "Nothing to add", false],
+      ["Nothing to add,Add a note", null, "Add a note", "Add a note", true],
+      ["Nothing to add,Add a note", null, "Nothing to add", "Nothing to add", false],
+      ["Add a note,Skip it", null, "Add a note", "Add a note", false],
+    ] as const) {
+      const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+      tempDirs.push(proj);
+      const env: Record<string, string | undefined> = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) =>
+          !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+      );
+      env.CLAUDE_PROJECT_DIR = proj;
+      // The chat the person typed in, as a real run's command resolves it.
+      env.AIDLC_SESSION_OVERRIDE = "t259-note";
+      const run = (args: string[], input?: string) =>
+        spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
+      markEngineTouch(proj);
+      const asked = run(["log", "decision", "--stage", "feasibility", "--decision", "Anything to add for next time?",
+        "--options", options, ...(kind ? ["--question-kind", kind] : [])]);
+      expect(asked.status, asked.stderr).toBe(0);
+      await Bun.sleep(20);
+      const replied = run(["hook", "record-human-turn"],
+        JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t259-note", prompt: reply }));
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+      await Bun.sleep(20);
+      const answered = run(["log", "answer", "--stage", "feasibility", "--details", picked]);
+      const label = `${options} (${kind ?? "no kind"}) -> ${reply}`;
+      expect(answered.status, `${label}: ${answered.stderr}`).toBe(0);
+      expect(turnEndIsOpen(proj), label).toBe(ends);
+      const agentNote = String((JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note ?? "");
+      expect(agentNote.includes("When their reply already says what the note is, that is the note"), label).toBe(ends);
+      expect(agentNote.includes("Otherwise ask what the note should say"), label).toBe(ends);
+      expect(turnMarkersShowConversational(proj), label).toBe(ends);
+      if (reply.includes("always run lint")) {
+        const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1);
+        expect(row?.block, label).toContain("always run lint");
+      }
+    }
+  }, 180_000);
+
+  // Picked in a question box, the person's own pick decides, as the hook
+  // recorded it, however the agent logged the box: here as a live Claude Code
+  // run did, one question with its options joined by " | ", no kind, and each
+  // pick under a label of its own. Claude Code hands the box over as the tool's
+  // answers; Codex's adapter as picker_reply.
+  test("Add a note picked in the question box ends the turn however the agent logged the box", async () => {
+    const keep = "Which notes from this step should I keep as practices for future work?";
+    const note = "Anything to add for next time?";
+    for (const [harness, choice, ends] of [
+      ["claude", "Add a note", true],
+      ["codex", "Add a note", true],
+      ["claude", "Nothing to add", false],
+      ["codex", "Nothing to add", false],
+    ] as const) {
+      const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+      tempDirs.push(proj);
+      const env: Record<string, string | undefined> = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) =>
+          !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+      );
+      env.CLAUDE_PROJECT_DIR = proj;
+      const run = (args: string[], input?: string) =>
+        spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
+      markEngineTouch(proj);
+      const asked = run(["log", "decision", "--stage", "feasibility", "--decision", `${keep}; ${note}`,
+        "--options", "Keep none of these,client-only SPA, no backend | Nothing to add,Add a note"]);
+      expect(asked.status, asked.stderr).toBe(0);
+      await Bun.sleep(20);
+      const box = harness === "claude"
+        ? {
+          tool_name: "AskUserQuestion",
+          tool_input: { questions: [
+            { question: keep, multiSelect: true, options: [{ label: "Keep none" }, { label: "Client-only SPA note" }] },
+            { question: note, options: [{ label: "Nothing to add" }, { label: "Add a note" }] },
+          ] },
+          tool_response: { answers: { [keep]: "Keep none", [note]: choice } },
+        }
+        : {
+          tool_name: "request_user_input",
+          tool_input: { questions: [
+            { id: "keep", question: keep, options: ["Keep none", "Client-only SPA note"] },
+            { id: "note", question: note, options: ["Nothing to add", "Add a note"] },
+          ] },
+          tool_response: { answer: `Keep none, ${choice}` },
+          picker_reply: { answers: { keep: { answers: ["Keep none"] }, note: { answers: [choice] } } },
+        };
+      const replied = run(["hook", "record-human-turn"],
+        JSON.stringify({ hook_event_name: "PostToolUse", session_id: "t259-box", ...box }));
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+      await Bun.sleep(20);
+      const answered = run(["log", "answer", "--stage", "feasibility", "--details",
+        `Which notes to keep: Keep none of these; Anything to add: ${choice}`]);
+      const label = `${harness} -> ${choice}`;
+      expect(answered.status, `${label}: ${answered.stderr}`).toBe(0);
+      expect(turnEndIsOpen(proj), label).toBe(ends);
+      const agentNote = String((JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note ?? "");
+      expect(agentNote.includes("Otherwise ask what the note should say"), label).toBe(ends);
+    }
+  }, 180_000);
 });

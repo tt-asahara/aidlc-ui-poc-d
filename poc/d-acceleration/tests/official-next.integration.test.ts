@@ -36,6 +36,7 @@ function functionalDesignState(): string {
 - **State Version**: 8
 - **Skeleton Stance**: on
 - **Construction Iteration**: stage-major
+- **Unit Ownership**: solo
 - **Review Override**: none
 
 ## Scope Configuration
@@ -87,6 +88,13 @@ function seedWaveProject(project: string): string {
     ],
     [["alpha", "beta"]],
   );
+  // Upstream v2.11.2 asks each wave Unit's questions in the chat (QUESTION-ONLY)
+  // before any builder runs; these Units' questions are already answered.
+  for (const unit of ["alpha", "beta"]) {
+    const dir = join(recordDir, "construction", unit, "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "functional-design-questions.md"), `# Functional Design Questions: ${unit}\n\n## Q1 Which data store?\nA) In memory\nB) File\n\n[Answer]: A\n`);
+  }
   return project;
 }
 
@@ -255,7 +263,18 @@ describe("official next adapter integration", () => {
       expect(run.status, `${run.stdout}\n${run.stderr}`).toBe(0);
       const result = JSON.parse(run.stdout);
       expect(result.status).toBe("official-host-action-required");
-      expect(result.directive).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
+      // Upstream may deliver the gate's rules ahead of it in load-steering parts;
+      // the host applies them and `continue`s, exactly as the skill says.
+      let gate = result.directive;
+      while (gate.kind === "load-steering") {
+        expect(gate.stage).toBe("functional-design");
+        const continued = spawnSync(process.execPath, [orchestrate, "continue", gate.receipt, "--project-dir", project], {
+          cwd: project, env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+        });
+        expect(continued.status, `${continued.stdout}\n${continued.stderr}`).toBe(0);
+        gate = JSON.parse(continued.stdout);
+      }
+      expect(gate).toMatchObject({ kind: "run-stage", stage: "functional-design", gate: true });
       expect(result.workerRuns[0].result.records).toHaveLength(2);
     },
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

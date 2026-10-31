@@ -254,6 +254,21 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
     expect(brown.out).toContain("Strict (recompose) mode");
   });
 
+  // Windows PowerShell 5.1 writes UTF-8 with a byte order mark; the composer's
+  // proposal written that way is the same proposal (#2452), not unreadable.
+  test("a proposal written with a byte order mark and CRLF is read as written", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(
+      proposal,
+      `﻿${JSON.stringify(fixtureGrid({ alpha: "EXECUTE" }), null, 2).replace(/\n/g, "\r\n")}\r\n`,
+      "utf-8",
+    );
+    const r = runValidateGrid(proposal, [], { AIDLC_STAGE_GRAPH: graphPath });
+    expect(r.out).not.toContain("cannot read");
+    expect(r.rc, r.out).toBe(0);
+  });
+
   test("accepts the {stages: {...}} wrapper shape (a scope-grid entry verbatim)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
@@ -277,9 +292,10 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
 
 // ===========================================================================
 // --keywords: the gate-time collision check (composed-scope keyword grants).
-// Compares against loadScopeMapping's keywords - the same data inference
-// reads - so a granted keyword that would shadow an existing scope is a hard
-// ERROR naming the incumbent, never a silent write.
+// Compares against loadScopeMapping's keywords. Nothing picks a plan by a
+// hint any more (the plan proposal lists every plan's hints for the agent), so
+// a granted hint another plan has is a note naming that plan, and the grid
+// still validates.
 // ===========================================================================
 describe("t190 validate-grid --keywords - collision check", () => {
   // A mapping fixture with two scopes claiming known keywords, riding the
@@ -299,7 +315,7 @@ describe("t190 validate-grid --keywords - collision check", () => {
     return { AIDLC_SCOPE_MAPPING: mappingPath };
   }
 
-  test("a colliding keyword is a hard error naming both the keyword and the incumbent scope", () => {
+  test("a hint another plan already has is a note naming that plan, and the grid still validates", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
     writeFileSync(
@@ -311,17 +327,16 @@ describe("t190 validate-grid --keywords - collision check", () => {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
     });
-    expect(r.rc).toBe(1);
-    const body = JSON.parse(r.out) as { valid: boolean; errors: string[] };
-    expect(body.valid).toBe(false);
-    const collision = body.errors.find((e) => e.includes('Keyword "fix"'));
-    expect(collision).toBeDefined();
-    expect(collision).toContain("bugfix");
-    // The non-colliding keyword in the same grant raises no error.
-    expect(body.errors.some((e) => e.includes('"tune-up"'))).toBe(false);
+    expect(r.rc).toBe(0);
+    const body = JSON.parse(r.out) as { valid: boolean; errors: string[]; advisories: string[] };
+    expect(body.valid).toBe(true);
+    expect(body.errors).toEqual([]);
+    expect(body.advisories).toContain('The hint "fix" is also bugfix\'s; the plan proposal lists it under both.');
+    // The hint no other plan has gets no note.
+    expect(body.advisories.some((e) => e.includes('"tune-up"'))).toBe(false);
   });
 
-  test("collision matching is case-insensitive (matches findScopeByKeyword)", () => {
+  test("a shared hint is found whatever its case", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");
     writeFileSync(
@@ -333,8 +348,8 @@ describe("t190 validate-grid --keywords - collision check", () => {
       AIDLC_STAGE_GRAPH: graphPath,
       ...seamEnv(dir),
     });
-    expect(r.rc).toBe(1);
-    expect(r.out).toContain("bugfix");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { advisories: string[] }).advisories.some((e) => e.includes("bugfix"))).toBe(true);
   });
 
   test("non-colliding keywords pass (exit 0, valid:true, no errors)", () => {
@@ -388,7 +403,7 @@ describe("t190 validate-grid --keywords - collision check", () => {
     expect(r.out).toContain("--keywords requires");
   });
 
-  test("keyword collision composes with grid validation (both error families in one result)", () => {
+  test("a shared hint's note rides beside the grid's own errors", () => {
     const { graphPath, dir } = writeFixture();
     // beta requires ghost-artifact (TRUE orphan) AND the grant collides.
     const proposal = join(dir, "p.json");
@@ -402,8 +417,113 @@ describe("t190 validate-grid --keywords - collision check", () => {
       ...seamEnv(dir),
     });
     expect(r.rc).toBe(1);
-    const body = JSON.parse(r.out) as { errors: string[] };
+    const body = JSON.parse(r.out) as { errors: string[]; advisories: string[] };
     expect(body.errors.some((e) => e.includes("no stage in the graph produces it"))).toBe(true);
-    expect(body.errors.some((e) => e.includes('Keyword "bug"'))).toBe(true);
+    expect(body.errors.some((e) => e.includes('"bug"'))).toBe(false);
+    expect(body.advisories.some((e) => e.includes('The hint "bug" is also bugfix'))).toBe(true);
+  });
+});
+
+// ===========================================================================
+// The plan offer's one risk line. A stock scope leaves some required inputs
+// unmade by design (t66 pins those edges), so the composer's final --custom run
+// names only what the plan's own changes leave unmade against the stock scope
+// it runs on, as summary.skipped_inputs: each skipped stage with every kept
+// stage that uses what it makes, in the names the person reads. The composer
+// copies summary verbatim, and the conductor says it once on the offer.
+// ===========================================================================
+describe("t190 validate-grid --custom names the stages a plan skips that a stage it keeps uses", () => {
+  const SETTINGS = {
+    sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial",
+  };
+  type Body = {
+    valid: boolean;
+    advisories: string[];
+    routing?: string;
+    base_scope?: string;
+    summary: { skipped_inputs?: Array<{ stage: string; used_by: string[] }> };
+  };
+  function stock(scope: string, edits: Record<string, "EXECUTE" | "SKIP"> = {}): Record<string, string> {
+    const grids = require("../../dist/claude/.claude/tools/data/scope-grid.json") as Record<string, { stages: Record<string, string> }>;
+    return { ...grids[scope].stages, ...edits };
+  }
+  // The composer's final run: --custom or --matched with the members they require.
+  function finalRun(
+    stages: Record<string, string>,
+    route: string[],
+    opts: { projectType?: string; depth?: string } = {},
+  ): Body {
+    tmp = mkdtempSync(join(tmpdir(), "aidlc-t190-gaps-"));
+    const proposal = join(tmp, "p.json");
+    writeFileSync(
+      proposal,
+      JSON.stringify({ stages, scopeSettings: SETTINGS, guardPolicy: "strict", depth: opts.depth ?? "comprehensive" }),
+      "utf-8",
+    );
+    const r = runValidateGrid(proposal, [...route, "--project-type", opts.projectType ?? "greenfield"], { AIDLC_PROJECT_DIR: tmp });
+    expect(r.rc, r.out).toBe(0);
+    return JSON.parse(r.out) as Body;
+  }
+  const SKIP = "SKIP" as const;
+  const EXECUTE = "EXECUTE" as const;
+  const UNITS = { stage: "Units Generation", used_by: ["Contract Design", "Functional Design", "Code Generation"] };
+
+  test("the live run's plan on a new project names Units Generation and the three stages that use it", () => {
+    const body = finalRun(stock("classic", {
+      "reverse-engineering": SKIP, "user-stories": SKIP, "refined-mockups": SKIP, "units-generation": SKIP,
+      "delivery-planning": SKIP, "intent-capture": EXECUTE, feasibility: EXECUTE, "scope-definition": EXECUTE,
+      "approval-handoff": EXECUTE,
+    }), ["--custom"]);
+    expect(body).toMatchObject({ valid: true, routing: "custom", base_scope: "classic" });
+    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+    // The validator's own words stay in the advisories, beside the stage table.
+    expect(body.advisories.filter((a) => a.includes("[units-generation]")).length).toBe(4);
+  });
+
+  test("a matched stock plan says nothing: its unmade inputs are the scope's design", () => {
+    const body = finalRun(stock("bugfix"), ["--matched", "bugfix"]);
+    expect(body.routing).toBe("matched");
+    expect(body.advisories.length).toBeGreaterThan(0);
+    expect(body.summary).not.toHaveProperty("skipped_inputs");
+  });
+
+  test("a custom plan that leaves unmade only what its base already does says nothing", () => {
+    const body = finalRun(stock("classic", { "user-stories": SKIP }), ["--custom"]);
+    expect(body.base_scope).toBe("classic");
+    expect(body.advisories.some((a) => a.includes('"refined-mockups"'))).toBe(true);
+    expect(body.summary).not.toHaveProperty("skipped_inputs");
+  });
+
+  test("a stage the plan adds whose producer its base skips names that producer with every stage that uses it", () => {
+    const body = finalRun(stock("express", { "functional-design": EXECUTE }), ["--custom"], { depth: "minimal" });
+    expect(body.base_scope).toBe("express");
+    // Express runs Code Generation without Units Generation by design; once the
+    // plan's own Functional Design needs it too, the line names both users.
+    expect(body.summary.skipped_inputs).toEqual([
+      { stage: "Domain Design", used_by: ["Functional Design"] },
+      { stage: "Units Generation", used_by: ["Functional Design", "Code Generation"] },
+    ]);
+  });
+
+  test("existing code: the project type reaches the walk and the same gap is named", () => {
+    const body = finalRun(
+      stock("classic", { "units-generation": SKIP, "delivery-planning": SKIP }),
+      ["--custom"],
+      { projectType: "brownfield" },
+    );
+    expect(body.base_scope).toBe("classic");
+    expect(body.summary.skipped_inputs).toEqual([UNITS]);
+  });
+
+  test("two skipped stages are named in the plan's order, each with the stages that use it", () => {
+    const body = finalRun(
+      stock("classic", { "units-generation": SKIP, "delivery-planning": SKIP, "nfr-design": SKIP }),
+      ["--custom"],
+    );
+    expect(body.base_scope).toBe("classic");
+    expect(body.summary.skipped_inputs).toEqual([
+      UNITS,
+      { stage: "NFR Design", used_by: ["Infrastructure Design"] },
+    ]);
   });
 });

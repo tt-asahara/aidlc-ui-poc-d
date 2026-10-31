@@ -1,23 +1,18 @@
-// fixtures.ts — TS port of tests/lib/fixtures.sh's project-scaffolding.
+// fixtures.ts - project-scaffolding helpers.
 //
-// Ports the project-creation / teardown helpers so the SDK harness can build
-// and tear down temp AIDLC projects from TypeScript, the same way the shell
-// suite did from bash. The bytes of the scaffolding match fixtures.sh:
-//   - create_test_project   -> createTestProject()  (now seeds the per-intent
-//                                                     workspace shell, not flat
-//                                                     aidlc-docs/)
-//   - seed_state_file        -> seedStateFile()
-//   - seed_audit_file        -> seedAuditFile()
-//   - reset_aidlc_env        -> resetAidlcEnv()
-//   - cleanup_test_project   -> cleanupTestProject()
-//   - setup_integration_project -> setupIntegrationProject()
-//   - sed_i                  -> sedReplaceInFile() (portable in-place edit)
+// Project-creation / teardown helpers so the SDK harness can build
+// and tear down temp AIDLC projects from TypeScript:
+//   - createTestProject() seeds the per-intent workspace shell
+//   - seedStateFile()
+//   - seedAuditFile()
+//   - resetAidlcEnv()
+//   - cleanupTestProject()
+//   - setupIntegrationProject()
+//   - sedReplaceInFile() (portable in-place edit)
 //
-// DELIBERATELY NOT PORTED: run_claude. The SDK driver (sdk-drive.ts
-// driveAidlc) replaces it entirely — there is no `claude -p` subprocess, no
-// exit-124 timeout heuristic, no CLAUDE_OUTPUT/CLAUDE_RC globals.
+// The SDK driver (sdk-drive.ts driveAidlc) owns live Claude execution.
 //
-// Path layout (mirrors fixtures.sh:5-8, resolved from tests/harness/):
+// Path layout (resolved from tests/harness/):
 //   REPO_ROOT    = tests/harness/../..            (the worktree root)
 //   AIDLC_SRC    = <REPO_ROOT>/dist/claude/.claude
 //   FIXTURES_DIR = <REPO_ROOT>/tests/fixtures
@@ -54,15 +49,15 @@ const requireHere = createRequire(import.meta.url);
 export const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 
-// The per-intent WORKSPACE layout the fixtures seed (P9 — the flat aidlc-docs/
-// layout is retired). A fixture project gets a SEED-style shell (aidlc/active-space
-// + spaces/default/) plus ONE default intent record so the path helpers resolve
-// the record dir rather than the bare space root. The slug is fixed + SLUG_RE-valid
-// and the id8 is all-hex so it matches the `<slug>-<id8>` record-dir shape. Tests
-// resolve the seeded paths via seededRecordDir()/seededStateFile() below (or
-// import recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
+// The per-intent WORKSPACE layout the fixtures seed. A fixture project gets a
+// SEED-style shell (aidlc/active-space + spaces/default/) plus ONE default
+// intent record so the path helpers resolve the record dir rather than the
+// bare space root. The slug is fixed + SLUG_RE-valid and the directory suffix
+// is all-hex; the registry binds it to the UUID through dirName. Tests resolve
+// the seeded paths via seededRecordDir()/seededStateFile() below (or import
+// recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
 export const DEFAULT_SPACE = "default";
-// Retain the seeded record's historical 16-hex directory suffix; the registry's
+// Retain the seeded record's 16-hex directory suffix; the registry's
 // explicit dirName joins it to the UUID. Bolt names use the independent 8-hex
 // idSuffix(uuid), resolved by fixtureIntentId8 rather than this record dirname.
 export const DEFAULT_INTENT_UUID = "00000000-0000-7000-8000-000000000001";
@@ -75,15 +70,14 @@ export const DEFAULT_RECORD_DIR = `fixture-${DEFAULT_RECORD_ID8}`;
 // subprocess. On a real project the token is minted + gitignored per clone; a
 // fixture wants it stable across the test process and the tools it spawns.
 export const FIXTURE_CLONE_ID = "fixturecloneid01";
-// The relocated method ("memory") ships at the dist tree ROOT (beside .claude/),
+// The method ("memory") ships at the dist tree ROOT (beside .claude/),
 // at aidlc/spaces/default/memory/. A fixture project must copy this alongside
 // .claude/ so the resolver's default (join(<harness>/tools, "..", "..",
-// aidlc/spaces/default/memory)) finds the rule layers. (NOTE: P5 copies the
-// shipped method tree as-is; P9 owns the full per-intent fixture re-root.)
+// aidlc/spaces/default/memory)) finds the rule layers.
 export const AIDLC_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 export const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 
-const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+export const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 function resetSelectionSensitiveCaches(): void {
   // fixtures.ts is imported by sandbox tests that copy no core/ tree, so core/
@@ -126,8 +120,7 @@ export function withEnvAndFreshCaches<T>(
 
 /**
  * Unset AIDLC-related env vars that a developer's shell (or a prior test) may
- * have leaked, so fixture-defined defaults aren't shadowed. Mirrors
- * reset_aidlc_env (fixtures.sh:16-18).
+ * have leaked, so fixture-defined defaults aren't shadowed.
  */
 export function resetAidlcEnv(): void {
   delete process.env.AWS_AIDLC_DEFAULT_SCOPE;
@@ -136,12 +129,11 @@ export function resetAidlcEnv(): void {
 
 /**
  * Create a bare temp project dir seeded with the per-intent workspace shell
- * (aidlc/active-space + spaces/default/ + one default intent record). Mirrors
- * create_test_project (fixtures.sh:20-33). On Windows (Git Bash / MSYS) the
- * raw mktemp path is a POSIX path native Bun cannot resolve; cygpath -m
- * rewrites it to an absolute Windows path with forward slashes that both Git
- * Bash and native Bun understand and that round-trips through JSON. We
- * replicate that cygpath step here for parity.
+ * (aidlc/active-space + spaces/default/ + one default intent record). On Windows
+ * (Git Bash / MSYS) the raw mkdtemp path is a POSIX path native Bun cannot
+ * resolve; cygpath -m rewrites it to an absolute Windows path with forward
+ * slashes that both Git Bash and native Bun understand and that round-trips
+ * through JSON.
  *
  * Canonicalise the path (realpathSync) before returning — on macOS mkdtemp
  * hands back /tmp/... or /var/folders/... but those are symlinks to
@@ -167,7 +159,6 @@ export function createTestProject(): string {
   return proj;
 }
 
-/** Copy the shipped default-space method into an existing test project. */
 export function seedAidlcMemory(proj: string): void {
   if (existsSync(AIDLC_MEMORY_SRC)) {
     cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
@@ -196,7 +187,7 @@ export interface OrchestrateTestResult {
 
 /**
  * Spawn `next`, silently consume deterministic load-steering continuations,
- * and return the first non-steering directive. Older engine contract tests can
+ * and return the first non-steering directive. Engine contract tests can
  * then keep asserting the routing result while t248 owns the transport details.
  */
 export function runOrchestrateNext(
@@ -273,6 +264,35 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
   return join(proj, "aidlc", "spaces", space, "intents");
 }
 
+/** Which piece of work and stage a learnings selections file is bound to. */
+export interface LearningsSelectionsBinding {
+  space: string;
+  intent: string | null;
+  stage_slug: string;
+}
+
+/**
+ * Where `learnings surface` names the selections file for a space, intent, and
+ * stage: the only place `persist` reads it (#1592). The record's engine folder,
+ * or with no intent record the space's intents engine folder.
+ */
+export function learningsSelectionsPath(proj: string, binding: LearningsSelectionsBinding): string {
+  const intents = intentsDirOf(proj, binding.space);
+  const root = binding.intent === null ? intents : join(intents, binding.intent);
+  return join(root, ".aidlc-engine", "learnings", `${binding.stage_slug}-selections.json`);
+}
+
+/** Write a learnings selections file at that path and return the path. */
+export function writeLearningsSelections(
+  proj: string,
+  selections: LearningsSelectionsBinding & { [field: string]: unknown },
+): string {
+  const path = learningsSelectionsPath(proj, selections);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(selections), "utf-8");
+  return path;
+}
+
 /**
  * The default intent's RECORD directory a fixture seeds:
  * `<proj>/aidlc/spaces/default/intents/<DEFAULT_RECORD_DIR>`. The data-path
@@ -338,7 +358,6 @@ export interface BoltDagUnit {
   depends_on?: string[];
 }
 
-/** Seed the active intent's cached Bolt DAG. */
 export function seedBoltDag(
   proj: string,
   units: Array<string | BoltDagUnit>,
@@ -365,6 +384,17 @@ export function seedBoltDag(
   );
 }
 
+// Each Unit's questions for a wave stage, answered in the chat before the wave
+// hands it to a builder: the evidence the engine's hold reads when the summary
+// guard is off (the runner's fixture profile).
+export function seedAnsweredUnitQuestions(proj: string, stage: string, units: readonly string[]): void {
+  for (const unit of units) {
+    const dir = join(seededRecordDir(proj), "construction", unit, stage);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${stage}-questions.md`), "# Questions\n\n## Q1. Who can see a saved item?\n\n[Answer]: Its owner\n", "utf-8");
+  }
+}
+
 /** Seed a Bolt DAG whose topological batches are already known. */
 export function seedBoltDagBatches(proj: string, batches: string[][]): void {
   seedBoltDag(proj, batches.flat(), batches);
@@ -372,12 +402,11 @@ export function seedBoltDagBatches(proj: string, batches: string[][]): void {
 
 /**
  * Seed a SEED-style workspace shell plus ONE default intent record + cursors +
- * registry, so the path helpers resolve the per-intent record. This is the
- * per-intent analog of the old `mkdir aidlc-docs/`. The record dir holds no
- * aidlc-state.md until a seeder writes one (a bare createTestProject leaves an
- * empty record, matching the old empty aidlc-docs/).
+ * registry, so the path helpers resolve the per-intent record. The record dir
+ * holds no aidlc-state.md until a seeder writes one (a bare createTestProject
+ * leaves an empty record).
  */
-function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
+export function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   const intentsDir = intentsDirOf(proj, space);
   mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
   mkdirSync(seededRecordDir(proj, space), { recursive: true });
@@ -408,8 +437,7 @@ function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
 /**
  * Remove the seeded workspace record + cursor so the no-workspace (no active
  * intent) path is tested. Leaves the shell (active-space + spaces/default/) so a
- * resolver still finds the space; the record dir + cursor + registry go. Mirrors
- * the old `rm -rf aidlc-docs/` no-layout option.
+ * resolver still finds the space; the record dir + cursor + registry go.
  */
 export function removeWorkspaceRecord(proj: string, space = DEFAULT_SPACE): void {
   const intentsDir = intentsDirOf(proj, space);
@@ -418,8 +446,7 @@ export function removeWorkspaceRecord(proj: string, space = DEFAULT_SPACE): void
 
 /**
  * On Windows, rewrite a POSIX-ish temp path to a mixed-mode Windows path via
- * `cygpath -m`. No-op on platforms without cygpath. Mirrors the
- * `command -v cygpath` guard in create_test_project.
+ * `cygpath -m`. No-op on platforms without cygpath.
  */
 export function toPortablePath(p: string): string {
   if (process.platform !== "win32") return p;
@@ -506,19 +533,24 @@ export function recordArtifactWriteViaHook(
 }
 
 /**
- * Recursively remove a temp project dir. Mirrors cleanup_test_project
- * (fixtures.sh:58-61) — guards against empty/non-existent paths.
+ * The `## ` section lines a worker brief carries, as `aidlc-testing-posture.ts brief`
+ * prints them (fence on): the plan-approval guard's handoff check wants one line of
+ * each family, so a fixture that hands the developer the marker lines by hand
+ * appends these. The real brief is dispatched in t265, which catches drift.
+ */
+export const WORKER_BRIEF_SECTIONS_FIXTURE =
+  "\n## Files and commands\n\n## The plan file\n\n## Approved plan\n\n## Approved unit-test instructions\n";
+
+/**
+ * Recursively remove a temp project dir; guards against empty/non-existent paths.
  */
 export function cleanupTestProject(proj: string | undefined): void {
   if (proj && existsSync(proj)) removeTreeWithRetry(proj);
 }
 
 /**
- * Portable in-place text replace. The shell version (sed_i, fixtures.sh:38-43)
- * shells out to sed via a tempfile to dodge BSD/GNU `-i` differences; in TS we
- * just read/replace/write. `pattern` may be a string (replaced once) or a
- * RegExp (use the `g` flag for replace-all). Provided for parity with the
- * `--strip-env-scope` path below.
+ * Portable in-place text replace. `pattern` may be a string (replaced once) or a
+ * RegExp (use the `g` flag for replace-all).
  */
 export function sedReplaceInFile(
   file: string,
@@ -530,29 +562,26 @@ export function sedReplaceInFile(
 }
 
 // ============================================================================
-// Worktree fixtures — TS port of tests/lib/worktree-helpers.sh.
+// Worktree fixtures.
 //
 // aidlc-worktree.ts runs REAL `git worktree add/remove/list` and asserts it is
-// invoked from the main checkout (assertNotSiblingWorktree, aidlc-worktree.ts
-// :101). So a worktree-tier test needs an actual git repo on `main` with one
+// invoked from the main checkout (assertNotSiblingWorktree, aidlc-worktree.ts).
+// So a worktree-tier test needs an actual git repo on `main` with one
 // commit, plus the per-intent workspace shell for the audit emit. These helpers
-// build and tear that down, mirroring setup_worktree_fixture /
-// cleanup_worktree_fixture.
+// build and tear that down.
 // ============================================================================
 
 /** Basename prefix every worktree fixture lives under; cleanup refuses any
- *  path whose basename doesn't start with it (defence-in-depth, mirrors
- *  WORKTREE_FIXTURE_PREFIX_NAME in worktree-helpers.sh:15). */
+ *  path whose basename doesn't start with it (defence-in-depth). */
 export const WORKTREE_FIXTURE_PREFIX = "aidlc-worktree-";
 
 /**
  * Create a fresh git repo in a tempdir with one commit on `main`, plus the
  * per-intent workspace shell. Returns the canonical (realpath) project path — git
  * worktree list --porcelain emits canonical paths, so callers comparing to
- * this path need the canonical form too (macOS /var -> /private/var). Mirrors
- * setup_worktree_fixture (worktree-helpers.sh:21-52): init + symbolic-ref main
- * (not `git init -b`, which needs git >= 2.28) + seed commit. Throws on any
- * git failure rather than returning a bad path.
+ * this path need the canonical form too (macOS /var -> /private/var). Runs
+ * init + symbolic-ref main (not `git init -b`, which needs git >= 2.28) + a
+ * seed commit. Throws on any git failure rather than returning a bad path.
  */
 export function setupWorktreeFixture(): string {
   const base = process.env.TMPDIR || tmpdir();
@@ -591,10 +620,9 @@ export function setupWorktreeFixture(): string {
 }
 
 /**
- * Remove a worktree fixture: detach + remove every child worktree (errors
- * swallowed so a partially-set-up fixture still cleans), then rm -rf the
- * parent. Refuses any path whose basename doesn't start with the fixture
- * prefix. Mirrors cleanup_worktree_fixture (worktree-helpers.sh:80-111).
+ * Remove a worktree fixture: remove every child worktree (errors swallowed so a
+ * partially-set-up fixture still cleans), then rm -rf the parent. Refuses any
+ * path whose basename doesn't start with the fixture prefix.
  */
 export function cleanupWorktreeFixture(proj: string | undefined): void {
   if (!proj?.trim()) return;
@@ -652,11 +680,10 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** Options for setupIntegrationProject — the flags from setup_integration_project. */
 export interface IntegrationProjectOptions {
   /** Seed aidlc-state.md from this fixture (path or FIXTURES_DIR-relative name). */
   withState?: string;
-  /** Seed audit.md from audit-sample.md. */
+  /** Seed the audit shard from audit-sample.md. */
   withAudit?: boolean;
   /** Remove the scaffolded intent record + cursor (test the no-workspace path). */
   noAidlcDocs?: boolean;
@@ -677,7 +704,7 @@ export interface IntegrationProjectOptions {
   /**
    * Seed the Harness-Engineer custom harness (custom scope + two chained stages
    * + sensor + project rule) into the copied .claude/ and recompile the stage
-   * graph. The Phase-5 two-driver prerequisite — see
+   * graph. The two-driver prerequisite - see
    * tests/harness/custom-harness.ts.
    */
   customHarness?: boolean;
@@ -686,12 +713,9 @@ export interface IntegrationProjectOptions {
 /**
  * Scaffold a full integration project: a temp dir with the shipped
  * dist/claude/.claude/ copied into <proj>/.claude, plus any requested
- * fixtures. Mirrors setup_integration_project (fixtures.sh:133-181).
+ * fixtures.
  *
- * Hooks/tools are .ts run via bun and need no executable bit (the shell
- * version's chmod +x on *.sh is a no-op now that hooks are TypeScript — see
- * the shipped CLAUDE.md "All 9 hooks are TypeScript ... No executable bits
- * required"), so this port skips the chmod.
+ * Hooks/tools are .ts run via bun and need no executable bit.
  *
  * Returns the (portable) project path.
  */
@@ -700,9 +724,8 @@ export function setupIntegrationProject(
 ): string {
   const proj = createTestProject();
   cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
-  // Copy the relocated method tree (aidlc/spaces/default/memory/) to the project
-  // root beside .claude/ — the resolver reads the rule layers from there now
-  // (P5 relocation). Absent in a tree built before P5, so guard it.
+  // Copy the method tree (aidlc/spaces/default/memory/) to the project
+  // root beside .claude/ - the resolver reads the rule layers from there.
   seedAidlcMemory(proj);
 
   if (opts.withState) seedStateFile(proj, opts.withState);
@@ -715,8 +738,6 @@ export function setupIntegrationProject(
   if (opts.stripEnvScope) {
     const settings = join(proj, ".claude", "settings.json");
     if (existsSync(settings)) {
-      // Drop the line carrying "AWS_AIDLC_DEFAULT_SCOPE": ... — mirrors the
-      // sed_i '/"AWS_AIDLC_DEFAULT_SCOPE":/d' delete in --strip-env-scope.
       const kept = readFileSync(settings, "utf8")
         .split("\n")
         .filter((l) => !l.includes('"AWS_AIDLC_DEFAULT_SCOPE":'))
@@ -770,23 +791,24 @@ export function setupIntegrationProject(
 
   // customHarness is seeded LAST so it edits + recompiles against the final
   // .claude/ (after every other stub has landed). Mutates scope metadata,
-  // stage-graph.json, the stages tree, sensors/, and rules/, then recompiles.
+  // stage-graph.json, the stages tree, sensors/, and the workspace memory, then
+  // recompiles.
   if (opts.customHarness) seedCustomHarness(proj);
 
   return proj;
 }
 
 // ============================================================================
-// Workspace-journey fixture (P10 / Stage E) — the net-new harness piece.
+// Workspace-journey fixture.
 //
-// The live multi-repo·intent·space journey needs a workspace whose shape the
+// The live multi-repo / intent / space journey needs a workspace whose shape the
 // per-intent fixtures above never model: TWO sibling code repos under one
 // workspace root, the shipped harness shell, and NO pre-created intent (the
 // journey's step 1 auto-creates it live). setupWorkspaceJourney() builds that.
 //
 // Why a fresh tmpdir root (not createTestProject's reuse): the journey's
 // construction beat forks git worktrees INSIDE the sibling repos, and
-// assertNotSiblingWorktree (aidlc-worktree.ts:112) is a STRUCTURAL git check
+// assertNotSiblingWorktree (aidlc-worktree.ts) is a STRUCTURAL git check
 // (`git rev-parse --show-toplevel` vs `dirname(--git-common-dir)`) keyed on the
 // target repo's cwd. Scaffolding under .claude/worktrees/ would leave the
 // spawned tool inside this very worktree's git tree; an os.tmpdir() root with
@@ -892,4 +914,81 @@ export function cleanupWorkspaceJourney(journey: WorkspaceJourney | undefined): 
     return;
   }
   if (existsSync(journey.root)) removeTreeWithRetry(journey.root);
+}
+
+/**
+ * The plan question for a request typed with no plan named: the agent's two
+ * engine calls, as the orchestrator skill has it run them. `next <words>`
+ * returns the plan proposal step (a print for the agent naming every plan),
+ * the agent proposes `plan` with `next --propose <plan> --request <id>`, and
+ * the engine renders the question (`scope-confirm`, or the `compose-offer` for
+ * `plan === "compose"`). Where work is here but none is selected, the first
+ * call returns the none-selected reading print instead, whose "new work"
+ * reading is `next --request <id> --propose <plan>`; that is followed the same
+ * way. A first call that is already a question (or any other step) is returned
+ * as it is.
+ */
+export function planOffer(
+  tool: string,
+  proj: string,
+  words: string[],
+  plan: string = proposePlanLikeTheAgent(words.join(" ")),
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+): OrchestrateTestResult {
+  return followProposal(runOrchestrateNext(tool, proj, words, options), tool, proj, options, plan);
+}
+
+/**
+ * The agent's step after the plan proposal print, for a test: `next --propose
+ * <plan> --request <id>`, with the plan a test names or the stand-in below
+ * reads from the request. Any other result (a question, a reading print of
+ * another shape, an error) is returned as it came, so a test that is about
+ * the print itself sees it.
+ */
+export function followProposal(
+  first: OrchestrateTestResult,
+  tool: string,
+  proj: string,
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
+  plan?: string,
+): OrchestrateTestResult {
+  const argv = proposalFollowUp(first.directive, plan);
+  return argv === null ? first : runOrchestrateNext(tool, proj, argv, options);
+}
+
+/**
+ * The `next` arguments the agent's proposal step runs after the plan proposal
+ * print (`--propose <plan> --request <id>`), or null when `directive` is not
+ * that print. For a test helper that spawns the engine its own way.
+ */
+export function proposalFollowUp(directive: unknown, plan?: string): string[] | null {
+  const d = directive as { kind?: unknown; message?: unknown } | null | undefined;
+  const message = d?.kind === "print" ? String(d.message ?? "") : "";
+  if (!message.includes("--propose <plan> --request")) return null;
+  const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+  if (id === undefined) return null;
+  // Beside finished work the print opens "The person said:" instead.
+  const request = /^The person (?:asked for new work|said): "([^"]*)"/.exec(message)?.[1] ?? "";
+  return ["--propose", plan ?? proposePlanLikeTheAgent(request), "--request", id];
+}
+
+/**
+ * A stand-in for the agent's reading of a request, for tests only: the engine
+ * hands every plan to the agent and never reads the words itself (the plan
+ * proposal step, t-plan-proposed-by-the-agent), and a test cannot run a model,
+ * so this names the plan a reasonable agent proposes for the requests the
+ * tests type. Each test may name the plan it wants instead.
+ */
+export function proposePlanLikeTheAgent(request: string): string {
+  const words = request.toLowerCase();
+  const says = (...needles: string[]): boolean => needles.some((needle) => new RegExp(`\\b${needle}\\b`).test(words));
+  if (says("refactor", "clean up", "simplify")) return "refactor";
+  if (says("cve", "vulnerability", "security")) return "security-patch";
+  if (says("proof of concept", "prototype", "poc", "spike")) return "poc";
+  if (says("mvp", "minimum viable")) return "mvp";
+  if (says("workshop", "lab", "training")) return "workshop";
+  if (says("infrastructure", "infra", "deploy", "deployment")) return "infra";
+  if (says("express", "lightweight")) return "express";
+  if (says("fix", "bug", "broken", "crash", "bugfix")) return "bugfix";
+  return "compose";
 }

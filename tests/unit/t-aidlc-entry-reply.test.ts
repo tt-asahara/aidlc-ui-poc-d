@@ -18,6 +18,7 @@ import {
   CEREMONY_FLAGS,
   KNOWLEDGE_VERBS,
   ORCHESTRATOR_VERBS,
+  nextFlagShape,
   READ_ONLY_FLAGS,
   splitKiroCommandArgs,
   validScopes,
@@ -35,13 +36,20 @@ function parserFlags(): string[] {
   const end = source.indexOf("\n}\n", start);
   const body = source.slice(start, end);
   const compared = [...body.matchAll(/\ba === "(--[a-z][a-z-]*)"/g)].map((match) => match[1]);
-  const lookedUp = [...body.matchAll(/args\.indexOf\("(--[a-z][a-z-]*)"\)/g)].map((match) => match[1]);
+  const lookedUp = [...body.matchAll(/(?:args|beforeDelimiter\(args\))\.indexOf\("(--[a-z][a-z-]*)"\)/g)].map((match) => match[1]);
   return [...new Set([...compared, ...lookedUp])];
 }
 
 const words = (text: string) => nextArgsAreOnlyWords(splitKiroCommandArgs(text));
 
 describe("words typed after /aidlc are a reply unless the dispatcher reads a command in them", () => {
+  // #2401: a quoted request that opens with a flag-shaped word is still the
+  // person's words, so Kiro IDE's prompt hook gives the first engine step for it.
+  test("a quoted request opening with a flag-shaped word is words, so Kiro IDE bootstraps it", () => {
+    expect(words('"--name the work after the bank"')).toBe(true);
+    expect(words('"--description should be added to the CLI"')).toBe(true);
+  });
+
   test("every flag the parser knows keeps the message a command, with or without a value, unless a utility flag sits among the person's words", () => {
     const flags = [...parserFlags(), ...READ_ONLY_FLAGS, ...Object.values(CEREMONY_FLAGS)];
     expect(flags.length).toBeGreaterThan(20);
@@ -49,14 +57,25 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
     // flag with nothing after it as task text: in both cases `next` reads
     // words, and so does the reply.
     const doctorArgs = new Set(["--export", "--output", "--verbose"]);
+    // A flag `next` takes with a value its own table does not hold has two
+    // readings (a value they mistyped, or their own words), so it goes to the
+    // agent whole and the words stay the person's: the reply is still a reply.
+    const refuses = (flag: string, value: string): boolean => {
+      const shape = nextFlagShape(flag);
+      return shape?.value === "words" && shape.words?.includes(value) === false;
+    };
     for (const flag of flags) {
       const lead = doctorArgs.has(flag) ? ["--doctor"] : [];
-      expect(nextArgsAreOnlyWords([...lead, flag, "standard"]), `${flag} standard`).toBe(false);
+      expect(nextArgsAreOnlyWords([...lead, flag, "standard"]), `${flag} standard`)
+        .toBe(refuses(flag, "standard"));
       if (lead.length === 0) {
         // Among the person's own words a utility flag is one of their words
-        // ("add a --version flag ..."), so the message stays their reply.
+        // ("add a --version flag ..."), so the message stays their reply. So is
+        // a flag `next` takes with a value its own table does not hold: the
+        // line has two readings, the agent picks, and their approval is still
+        // theirs ("approve, but add a --verbose flag").
         expect(nextArgsAreOnlyWords(["approve", "it", flag, "off"]), `approve it ${flag} off`).toBe(
-          READ_ONLY_FLAGS.has(flag),
+          READ_ONLY_FLAGS.has(flag) || refuses(flag, "off"),
         );
       }
     }
@@ -73,11 +92,17 @@ describe("words typed after /aidlc are a reply unless the dispatcher reads a com
       ["help"],
       ["-h"],
       ["unpark"],
-      ...[...validScopes()].map((scope) => [scope, "fix", "the", "login", "crash"]),
     ];
     expect(validScopes().size).toBeGreaterThan(5);
     for (const args of leading) expect(nextArgsAreOnlyWords(args), args.join(" ")).toBe(false);
     expect(nextArgsAreOnlyWords([])).toBe(false);
+    // A plan's name alone is the plan; with their own words after it, unmarked,
+    // the two readings go to the agent and the words stay the person's, so a
+    // reply typed that way is still a reply.
+    for (const scope of validScopes()) {
+      expect(nextArgsAreOnlyWords([scope]), scope).toBe(false);
+      expect(nextArgsAreOnlyWords([scope, "fix", "the", "login", "crash"]), scope).toBe(true);
+    }
   });
 
   test("the person's own words are a reply", () => {

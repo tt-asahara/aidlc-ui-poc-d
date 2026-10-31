@@ -84,19 +84,24 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   auditLockDir,
+  markHumanTurn,
   readAllAuditShards,
   reviewArtifactFingerprint,
   renderReviewVerdictCommand,
   resolveStage,
   scopeCostSummary,
+  turnEndIsOpen,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -115,7 +120,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCH_TOOL = join(TOOLS_DIR, "aidlc-orchestrate.ts");
@@ -128,7 +133,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh temp project seeded from one of the on-disk state fixtures. */
 function projWithState(fixture: string): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -139,11 +143,10 @@ function projWithState(fixture: string): string {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
-/** Spawn `bun aidlc-orchestrate.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function orchestrate(
   args: string[],
   p: string,
@@ -163,7 +166,6 @@ function orchestrateNext(p: string): CliResult {
   return { status: res.status, out: res.out, stdout: res.stdout };
 }
 
-/** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" ...`. */
 function state(
   args: string[],
   p: string,
@@ -190,7 +192,7 @@ function openGateWithoutReview(p: string): CliResult {
   );
 }
 
-// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// Per-intent layout: state lives in the active intent's record (seedStateFile
 // seeds it so the cursor resolves for the spawned report/approve tools); the
 // audit trail is a DIR of per-clone shards. report→approve threads the RESOLVED
 // active intent, so its events land under the record and its audit lock keys the
@@ -221,7 +223,6 @@ function auditEvents(p: string): string {
   return events.length > 0 ? `${events.join(" ")} ` : "";
 }
 
-/** Count audit rows of one event type. Mirrors the .sh's count_event grep -c. */
 function countEvent(p: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
   return readAllAuditShards(p)
@@ -234,29 +235,18 @@ function continues(r: CliResult): boolean | undefined {
   return (JSON.parse(r.stdout.trim()) as { workflow_continues?: boolean }).workflow_continues;
 }
 
-/** Total **Event**: rows (any type). Mirrors the .sh's `grep -c '\*\*Event\*\*:'`. */
 function totalEvents(p: string): number {
   return readAllAuditShards(p)
     .split("\n")
     .filter((l) => l.startsWith("**Event**:")).length;
 }
 
-/** Audit blocks (split on the `\n---\n` separator) carrying the given event,
- *  in file order — for asserting per-block fields like `**Recovered**: true`. */
 function auditBlocksFor(p: string, ev: string): string[] {
   return readAllAuditShards(p)
     .split("\n---\n")
     .filter((b) => b.includes(`**Event**: ${ev}`));
 }
 
-/**
- * The per-project audit lock dir. Mirrors the .sh's lock_dir helper, which in
- * turn mirrors aidlc-lib.ts auditLockDir:
- *   $TMPDIR/.aidlc-audit-<md5(projectDir)[:8]>.lock
- * The .sh shells out to `md5`/`md5sum`; createHash("md5") is the bun parity the
- * .sh comment notes is verified. TMPDIR falls back to /tmp exactly as the .sh's
- * `${TMPDIR:-/tmp}`.
- */
 function lockDir(p: string): string {
   // report→approve threads the RESOLVED active intent (the seeded default
   // record), so the lock keys the PER-INTENT bucket, NOT the workspace sentinel.
@@ -267,7 +257,7 @@ function lockDir(p: string): string {
 }
 
 // ============================================================
-// Argument / precondition errors (.sh Tests 1-3)
+// Argument / precondition errors
 // ============================================================
 
 describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-orchestrate-report.sh, plan 22)", () => {
@@ -314,9 +304,7 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
   });
 
   test("3: report with no state file emits an error directive", () => {
-    // create_test_project scaffolds aidlc-docs but no state file; the .sh then
-    // rm -f's the state file. Here we use a bare project (no seed) for the
-    // identical effect — aidlc-state.md is absent.
+    // Use a bare project (no seed): aidlc-state.md is absent.
     const p = createTestProject();
     tempDirs.push(p);
     const r = orchestrate(["report", "--result", "approved"], p);
@@ -328,11 +316,11 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
 });
 
 // ============================================================
-// ARGUMENT REFUSALS — report used to parse its flags with an if/else-if chain
-// that had no final else, so anything it did not recognise vanished without a
-// word and the report committed a DIFFERENT transition than the one that was
+// ARGUMENT REFUSALS - parsing flags with an if/else-if chain
+// that has no final else makes anything unrecognised vanish without a
+// word and lets report commit a DIFFERENT transition than the one that was
 // typed: a rejection with its feedback silently dropped, or a per-unit gate
-// closed against no unit at all. Every argument report cannot act on is now an
+// closed against no unit at all. Every argument report cannot act on is an
 // error directive, before anything commits.
 // ============================================================
 
@@ -467,6 +455,9 @@ describe("t115 routed skip (report -> aidlc-state skip --route)", () => {
 
     expect(r.out).toContain('"kind":"error"');
     expect(r.out).toContain("only a CONDITIONAL stage can report skipped");
+    // A skip the person asked for goes through the step that names it.
+    expect(r.out).toContain("If the person asked to skip it, run `");
+    expect(r.out).toContain(" next --skip scope-definition`: its step skips it the way they asked.");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
     expect(countEvent(p, "STAGE_SKIPPED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -776,7 +767,7 @@ describe("t115 initialization stages reject gate lifecycle outcomes", () => {
 });
 
 // ============================================================
-// GATED APPROVE round-trip (.sh Tests 4-9) — feasibility, mid-ideation.
+// GATED APPROVE round-trip - feasibility, mid-ideation.
 // report --result approved dispatches `aidlc-state.ts approve`, which OWNS the
 // full transition (GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED), no separate
 // advance. Explicit `--stage` also lets report recover a missing gate before
@@ -805,24 +796,21 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
       p,
     );
 
-    // .sh T5: report on a gated stage emits a done directive.
     expect(report.out).toContain('"kind":"done"');
     // The workflow goes on to scope-definition, and the done says so (#1411).
     expect(continues(report)).toBe(true);
 
-    // .sh T6: gated approve emits GATE_APPROVED then STAGE_COMPLETED then
+    // Gated approve emits GATE_APPROVED then STAGE_COMPLETED then
     // STAGE_STARTED in taxonomy order (approve self-delegates to advance, which
     // emits STAGE_STARTED for scope-definition).
     expect(auditEvents(p)).toContain("GATE_APPROVED STAGE_COMPLETED STAGE_STARTED");
 
-    // .sh T7: exactly one STAGE_STARTED (no double-advance after approve).
+    // Exactly one STAGE_STARTED (no double-advance after approve).
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
 
-    // .sh T8: the follow-up next reflects the advanced stage.
     const after = orchestrateNext(p);
     expect(after.out).toContain('"stage":"scope-definition"');
 
-    // .sh T9: no orphan audit lock dir after report (gated path).
     expect(existsSync(lockDir(p))).toBe(false);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -945,7 +933,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
 });
 
 // ============================================================
-// NON-GATED ADVANCE (.sh Tests 10-11) — workspace-detection, an init stage.
+// NON-GATED ADVANCE - workspace-detection, an init stage.
 // report --result completed dispatches `aidlc-state.ts advance` (NOT approve),
 // emitting STAGE_COMPLETED then STAGE_STARTED, with no GATE_APPROVED.
 // ============================================================
@@ -955,23 +943,21 @@ describe("t115 non-gated advance (report -> aidlc-state advance)", () => {
     const p = projWithState("state-pre-workspace-detection.md");
     const report = orchestrate(["report", "--result", "completed"], p);
 
-    // .sh T10: the done reason names the dispatched subcommand. quotes are
+    // The done reason names the dispatched subcommand. quotes are
     // JSON-escaped in stdout, so match the quote-free substring.
     expect(report.out).toContain("Committed advance for");
-    // S1: STRONGER — also pin the directive kind and a clean exit.
     expect(report.out).toContain('"kind":"done"');
     expect(report.status).toBe(0);
     expect(continues(report)).toBe(true);
 
-    // .sh T11: non-gated advance emits STAGE_COMPLETED then STAGE_STARTED.
     expect(auditEvents(p)).toContain("STAGE_COMPLETED STAGE_STARTED");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
-// NON-GATED PHASE BOUNDARY (.sh Tests 12-15) — state-init -> ideation.
+// NON-GATED PHASE BOUNDARY - state-init -> ideation.
 // state-init is the last initialization stage; advancing it crosses the
-// init -> ideation boundary, so advance emits the full boundary quartet
+// init -> ideation boundary, so advance emits the full boundary trio
 // PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED around the stage events.
 // ============================================================
 
@@ -981,12 +967,10 @@ describe("t115 non-gated phase-boundary advance (report -> aidlc-state advance)"
     const report = orchestrate(["report", "--result", "completed"], p);
     expect(report.status).toBe(0);
 
-    // .sh T12-T14: each boundary event emitted exactly once.
     expect(countEvent(p, "PHASE_COMPLETED")).toBe(1);
     expect(countEvent(p, "PHASE_VERIFIED")).toBe(1);
     expect(countEvent(p, "PHASE_STARTED")).toBe(1);
 
-    // .sh T15: the events land in taxonomy order.
     expect(auditEvents(p)).toContain(
       "STAGE_COMPLETED PHASE_COMPLETED PHASE_VERIFIED PHASE_STARTED STAGE_STARTED",
     );
@@ -994,7 +978,7 @@ describe("t115 non-gated phase-boundary advance (report -> aidlc-state advance)"
 });
 
 // ============================================================
-// FINAL COMPLETE-WORKFLOW (.sh Tests 16-18) — feedback-optimization, gated.
+// FINAL COMPLETE-WORKFLOW - feedback-optimization, gated.
 // Its gate approval routes approve -> complete-workflow in-process (finality),
 // emitting STAGE_COMPLETED + PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED
 // and setting Status=Completed. No STAGE_STARTED — there is no next stage.
@@ -1008,62 +992,52 @@ describe("t115 final gated approve -> complete-workflow (report -> aidlc-state a
     expect(gs.status).toBe(0);
 
     const report = orchestrate(["report", "--result", "approved"], p);
-    expect(report.out).toContain('"kind":"done"'); // committed cleanly
+    expect(report.out).toContain('"kind":"done"');
     // The real end: no marker that the workflow goes on.
     expect(continues(report)).toBeUndefined();
 
-    // .sh T16: final gated approve emits WORKFLOW_COMPLETED exactly once.
     expect(countEvent(p, "WORKFLOW_COMPLETED")).toBe(1);
 
-    // .sh T17: final completion event order.
     expect(auditEvents(p)).toContain(
       "STAGE_COMPLETED PHASE_COMPLETED PHASE_VERIFIED WORKFLOW_COMPLETED",
     );
 
-    // .sh T18: final completion sets Status=Completed (read back via the tool's
-    // get subcommand — the .sh's `aidlc-state.ts get "Status"`).
     const status = state(["get", "Status"], p);
     expect(status.stdout.trim()).toBe("Completed");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
-// DOUBLE-COMMIT REPLAY GUARD (.sh Tests 19-21).
+// DOUBLE-COMMIT REPLAY GUARD.
 // report shells out to `aidlc-state.ts advance <slug>`, whose replay guard
 // short-circuits a re-commit of the same completed slug: it emits ZERO new audit
 // events and returns "replay":true rather than erroring. Exercised at the exact
-// subcommand report dispatches (advance), driven directly as the .sh does.
+// subcommand report dispatches (advance), driven directly.
 // ============================================================
 
 describe("t115 advance replay guard (aidlc-state advance double-commit)", () => {
   test("19-21: a double-commit returns replay:true, emits zero new events, no ERROR_LOGGED", () => {
     const p = projWithState("state-pre-workspace-detection.md");
 
-    // First commit succeeds.
     const first = state(["advance", "workspace-detection"], p);
     expect(first.status).toBe(0);
 
     const before = totalEvents(p);
 
-    // Second commit of the same completed slug -> replay guard fires.
     const replay = state(["advance", "workspace-detection"], p);
 
-    // .sh T19: replay guard returns replay:true on a double-commit.
     expect(replay.out).toContain('"replay":true');
 
-    // .sh T20: replay guard emits zero new audit events.
     expect(totalEvents(p)).toBe(before);
 
-    // .sh T21: a replayed commit is not an error (no ERROR_LOGGED).
     expect(countEvent(p, "ERROR_LOGGED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
 
 // ============================================================
-// RE-REPORT ON A COMPLETED WORKFLOW (.sh Test 22).
-// Once Completed, the active stage is [x]; a stray second report dispatches
-// approve on an already-completed stage, which aidlc-state.ts rejects. The engine
-// surfaces a clean error directive — no crash, no half-emitted directive.
+// RE-REPORT ON A COMPLETED WORKFLOW.
+// Once Completed, a stray second report returns an idempotent done
+// without spawning another state transition or emitting new audit events.
 // ============================================================
 
 describe("t115 re-report on a completed workflow", () => {
@@ -1073,7 +1047,6 @@ describe("t115 re-report on a completed workflow", () => {
     const gs = state(["gate-start", "feedback-optimization"], p);
     expect(gs.status).toBe(0);
 
-    // First report completes the workflow.
     const first = orchestrate(["report", "--result", "approved"], p);
     expect(first.out).toContain('"kind":"done"');
     const before = totalEvents(p);
@@ -1115,7 +1088,6 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(readFileSync(statePath(p), "utf-8")).toContain("[?] scope-definition");
     const before = totalEvents(p);
 
-    // The stale replay: re-report the already-[x] feasibility.
     const replay = orchestrate(["report", "--stage", "feasibility", "--result", "approved"], p);
 
     expect(replay.status).toBe(0);
@@ -1126,14 +1098,13 @@ describe("t115 stale re-report guard (report on a completed stage after the work
     expect(continues(replay)).toBe(true);
     // The held gate survives — no [?] -> [-] demotion.
     expect(readFileSync(statePath(p), "utf-8")).toContain("[?] scope-definition");
-    // ZERO new audit rows — in particular no second STAGE_STARTED.
     expect(totalEvents(p)).toBe(before);
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("stale re-report with next revising [R] is an idempotent done: [R] preserved, zero new rows", () => {
     const p = projAtHeldGate();
-    expect(state(["reject", "scope-definition", "--feedback", "x"], p).status).toBe(0); // [?] -> [R]
+    expect(state(["reject", "scope-definition", "--feedback", "x"], p).status).toBe(0);
     expect(readFileSync(statePath(p), "utf-8")).toContain("[R] scope-definition");
     const before = totalEvents(p);
 
@@ -1210,9 +1181,11 @@ describe("t115 report-path gate backfill carries Recovered", () => {
 });
 
 // ============================================================
-// Reviewer precondition (RFC Track 1 / §12a). A stage that declares a
-// `reviewer` cannot be approved until a terminal REVIEW_COMPLETED row for it
-// exists in the audit tail. requirements-analysis declares
+// Reviewer precondition. A stage that declares a `reviewer` cannot be approved
+// until a terminal REVIEW_COMPLETED row for its current output exists in the
+// audit tail; the person's own approval goes over a review with no verdict
+// unless the team locked Guard Policy strict (R5), and a recorded Review
+// Override none lifts the precondition (R16). requirements-analysis declares
 // reviewer: aidlc-product-lead-agent, so it is the test subject. The gate is
 // HARD on the review having happened, SOFT on the verdict (NOT-READY still
 // satisfies it). feasibility (no reviewer) is the negative control — its
@@ -1319,9 +1292,8 @@ function appendAudit(event: string, fields: Record<string, string>, p: string): 
 
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
   // Requesting a review and recording its verdict are the same command with
-  // --verdict added. Nothing the conductor sees between the two used to say so,
-  // and an unclosed request only surfaces much later, as a refused stage
-  // completion that reads as unrelated. So the request returns the exact
+  // --verdict added. An unclosed request only surfaces much later, as a refused
+  // stage completion that reads as unrelated. So the request returns the exact
   // command that closes it.
   test("R0a: the review request returns the command that records its verdict", () => {
     const p = projWithState("state-mid-inception.md");
@@ -1354,6 +1326,11 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(req.status).toBe(0);
     const emitted = JSON.parse(req.stdout.trim().split("\n").pop()!);
     expect(emitted.emitted).toBe("REVIEW_REQUESTED");
+    // The time the reviewer's `**Date:**` line carries, handed over here so
+    // the reviewer runs no command for it (two live runs had the reviewer
+    // subagent call the engine by absolute path, which asked the person to
+    // allow an AI-DLC internal step).
+    expect(emitted.reviewed_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
     expect(emitted.recordVerdict).toBe(
       "bun .claude/tools/aidlc-log.ts review --stage requirements-analysis " +
         "--reviewer aidlc-product-lead-agent --iteration 1 " +
@@ -1441,12 +1418,13 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
     );
     expect(result.status).toBe(0);
-    // The happy-path print, with the next stage and where the output is.
     const printed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
     expect(printed.kind).toBe("print");
-    expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
+    expect(printed.message).toStartWith('Recorded awaiting-approval for "requirements-analysis".');
     expect(typeof printed.next_stage).toBe("string");
-    expect(String(printed.narration)).toStartWith("Requirements Analysis is ready for your review: what it produced is in ");
+    expect(String(printed.narration)).toMatch(
+      /^Requirements Analysis is ready for your review\. (It produced .+, in|Its output goes in) aidlc\//,
+    );
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1465,7 +1443,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(r.out).toContain(
       '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
     );
-    // The transition was NOT committed — no GATE_APPROVED emitted.
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1494,7 +1471,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
   // A live poc run read "Progress: 1/8 in-scope stages complete (4/33 overall) | 1/7 IDEATION" after the first of
   // the five stages it showed the person: the agent counted Initialization in one number and not the other, and
-  // the whole phase in the third. The engine now counts the line and the approval's reply carries it.
+  // the whole phase in the third. The engine counts the line and the approval's reply carries it, over the plan's
+  // own stages only: a count against every stage and a phase word gave the person nothing to act on.
   test("R2p: the approval's reply carries the progress line, counted over the stages the plan runs", () => {
     const p = projWithState("state-mid-inception.md");
     completeReview(
@@ -1509,10 +1487,8 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     const done = JSON.parse(r.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
     expect(done.kind, r.out).toBe("done");
     // bugfix past Initialization: reverse-engineering and requirements-analysis (done), then code-generation,
-    // build-and-test, deployment-pipeline and deployment-execution; 3 Initialization stages count overall.
-    expect(done.narration).toBe(
-      "Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation",
-    );
+    // build-and-test, deployment-pipeline and deployment-execution.
+    expect(done.narration).toBe("Progress: 2 of 6 stages done. Next: Code Generation.");
     // The same count the work started with: "6 stages, 6 approval gates".
     expect(scopeCostSummary("bugfix")?.shown).toBe(6);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -1668,6 +1644,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
 
     const stateBefore = readFileSync(statePath(p), "utf-8");
     const auditBefore = readAllAuditShards(p);
+    // The person's message that led here: the engine's answer decides whether
+    // the agent's turn ends after it.
+    markHumanTurn(p);
     const result = orchestrate(
       [
         "report",
@@ -1686,8 +1665,54 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
     );
     // First time, a fresh review is the agent's own work: nothing is put to
-    // the person, and no question is published for them to answer.
+    // the person, and no question is published for them to answer. The turn
+    // goes on: the agent requests the review itself instead of stopping with
+    // nothing on screen until the person types "carry on".
     expect(result.out).toContain('"agent_work":true');
+    expect(turnEndIsOpen(p)).toBe(false);
+    // Where nobody attends, the Stop hook hands the work back instead of letting
+    // the agent go quiet: Claude Code's Stop through the dispatcher, and Codex's
+    // through its adapter (the same core hook). In an attended run the turn ends
+    // there. Its probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(p, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(p, dir), { recursive: true });
+    }
+    // Each stop is its own turn's event (Codex replays a byte-identical delivery).
+    let stops = 0;
+    const stop = (tree: "claude" | "codex", unattended: "0" | "1") => spawnSync(BUN, tree === "claude"
+      ? [join(TOOLS_DIR, "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(p, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: p,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t115-agent-work", cwd: p, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: tree === "claude" ? p : undefined,
+        CODEX_THREAD_ID: undefined,
+        CODEX_SESSION_ID: undefined,
+        AIDLC_STOP_HOOK_PROBE: undefined,
+        AIDLC_UNATTENDED: unattended,
+      },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(p), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(p), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const attended = stop(tree, "0");
+      expect(attended.stdout.trim(), `${tree}: ${attended.stderr}\n${traces()}`).toBe("");
+      const handedBack = stop(tree, "1");
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+    }
     expect(result.out).toContain("Request review iteration 1 against the current artifact");
     expect(result.out).not.toContain("Request Changes");
     expect(result.out).not.toContain("Record the verdict for pending review");
@@ -1710,12 +1735,18 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(again.out).toContain('Otherwise ask \\"What should change?\\"');
     expect(again.out).not.toContain("Request review iteration 1");
     expect(published()).toBe(true);
+    // A question for the person ends the turn, and the Stop hook lets it.
+    expect(turnEndIsOpen(p)).toBe(true);
+    for (const tree of ["claude", "codex"] as const) {
+      const atQuestion = stop(tree, "1");
+      expect(atQuestion.status, `${tree}: ${atQuestion.stderr}`).toBe(0);
+      expect(atQuestion.stdout, `${tree}: ${traces()}`).not.toContain('"decision":"block"');
+    }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // R6 (blocker 1): the guard lives in handleApprove, so a DIRECT
-  // `aidlc-state.ts approve` — the recovery path that bypasses report — is
-  // refused too. This is the bypass the reviewer reproduced (report errored but
-  // state approve committed with GATE_APPROVED=1, REVIEW_COMPLETED=0).
+  // R6: the guard lives in handleApprove, so a DIRECT `aidlc-state.ts approve`
+  // (the recovery path that bypasses report) is refused too. Without it, report
+  // errored but state approve committed with GATE_APPROVED=1, REVIEW_COMPLETED=0.
   test("R6: a DIRECT aidlc-state.ts approve is also refused without a review (not just report)", () => {
     const p = projWithState("state-mid-inception.md");
     expect(openGateWithoutReview(p).status).toBe(0);
@@ -1726,9 +1757,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // R7 (blocker 2): a review recorded, then the stage is rejected/revised, then
-  // re-approved with NO new review — the stale review must NOT satisfy the
-  // re-approve. The GATE_REJECTED floors the read past the old review.
+  // R7: a review recorded, then the stage is rejected/revised, then re-approved
+  // with NO new review - the stale review must NOT satisfy the re-approve. The
+  // GATE_REJECTED floors the read past the old review.
   test("R7: a review before a GATE_REJECTED does not satisfy the re-approve", () => {
     const p = projWithState("state-mid-inception.md");
     completeReview(
@@ -1753,7 +1784,6 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(r.out).toContain("has not reviewed the current output");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
 
-    // A fresh review after the reject unblocks it.
     completeReview(
       ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"],
       p,
@@ -1763,9 +1793,9 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "GATE_APPROVED")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // R8 (finding S1): a review row naming the WRONG reviewer (a typo, or the
-  // conductor self-certifying) must not satisfy the precondition — the guard
-  // matches Reviewer as well as Stage.
+  // R8: a review row naming the WRONG reviewer (a typo, or the conductor
+  // self-certifying) must not satisfy the precondition - the guard matches
+  // Reviewer as well as Stage.
   test("R8: a review recorded with the wrong reviewer name does not satisfy", () => {
     const p = projWithState("state-mid-inception.md");
     const wrong = log(
@@ -2174,10 +2204,13 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     const opened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], p, noReview);
     expect(opened.status, opened.out).toBe(0);
     expect(lastDirective(opened.stdout)).toMatchObject({ kind: "print", next_stage: "Scope Definition" });
-    // Where the stage's output is, said with the gate.
-    expect(String(lastDirective(opened.stdout).narration)).toMatch(
-      /^Feasibility[^:]* is ready for your review: what it produced is in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
+    // Where the stage's output is, said with the gate; a check that still fails
+    // on one of its outputs follows on its own line, so the sentence stays whole.
+    const [produced, ...checks] = String(lastDirective(opened.stdout).narration).split("\n");
+    expect(produced).toMatch(
+      /^Feasibility[^.]* is ready for your review\. It produced .*feasibility-questions\.md.*, in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
     );
+    for (const line of checks) expect(line).toMatch(/^The [a-z-]+ check reports /);
 
     // Scope Definition is taken off the plan while Feasibility is still open.
     const q = feasibilityDone();
@@ -2211,8 +2244,8 @@ describe("t115 the gate and a skip say what the plan does next", () => {
       AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
     });
     expect(opened.status, opened.out).toBe(0);
-    expect(String(lastDirective(opened.stdout).narration)).toMatch(
-      /^Reverse Engineering is ready for your review: what it produced is in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
+    expect(String(lastDirective(opened.stdout).narration).split("\n")[0]).toMatch(
+      /^Reverse Engineering is ready for your review\. It produced .+, in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
     );
   });
 
@@ -2231,7 +2264,8 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     expect(lastDirective(skipped.stdout).narration).toBeUndefined();
     const next = runOrchestrateNext(ORCH_TOOL, p, [], { env: { ...process.env, ...chat } });
     expect(next.directive?.kind, next.out).toBe("run-stage");
-    expect(String(next.directive?.narration)).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\. /);
-    expect(String(next.directive?.narration)).not.toContain("approve every gate");
+    const told = ((next.directive?.change_notices ?? []) as string[]).join(" ");
+    expect(told).toMatch(/^Feasibility[^.]* does not apply here, so I skipped it\.$/);
+    expect(`${told} ${next.directive?.narration ?? ""}`).not.toContain("approve every gate");
   });
 });

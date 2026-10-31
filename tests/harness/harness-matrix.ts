@@ -28,11 +28,12 @@ type HarnessCapabilities = {
   plugin: {
     kind: "store" | "kiro" | "kiro-ide" | "cursor";
     manifestDir: string;
+    marketplaceDir: string;
     wiringFile: string | null;
   };
   memoryInclude:
     | "claude-import"
-    | "codex-env"
+    | "codex-engine"
     | "copilot-agents-md"
     | "cursor-rule"
     | "kiro-resources"
@@ -60,6 +61,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "store",
       manifestDir: ".claude-plugin",
+      marketplaceDir: ".claude-plugin",
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "claude-import",
@@ -80,9 +82,10 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "store",
       manifestDir: ".codex-plugin",
+      marketplaceDir: ".agents/plugins",
       wiringFile: "hooks/hooks.json",
     },
-    memoryInclude: "codex-env",
+    memoryInclude: "codex-engine",
     kiroAgentJson: false,
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
@@ -100,6 +103,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "store",
       manifestDir: ".plugin",
+      marketplaceDir: ".plugin",
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "copilot-agents-md",
@@ -120,6 +124,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "cursor",
       manifestDir: ".cursor-plugin",
+      marketplaceDir: ".cursor-plugin",
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "cursor-rule",
@@ -140,6 +145,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "kiro-ide",
       manifestDir: ".kiro-plugin",
+      marketplaceDir: ".kiro-plugin",
       wiringFile: ".kiro/hooks/aidlc-test-pro-compose.json",
     },
     memoryInclude: "kiro-steering",
@@ -160,11 +166,12 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "kiro",
       manifestDir: ".kiro-plugin",
+      marketplaceDir: ".kiro-plugin",
       wiringFile: null,
     },
     memoryInclude: "kiro-resources",
     kiroAgentJson: true,
-    ideAgentTools: false,
+    ideAgentTools: true,
     reviewerScopeRegistration: "kiro-agent-json",
   },
   opencode: {
@@ -180,6 +187,7 @@ const HARNESS_CAPABILITIES = {
     plugin: {
       kind: "store",
       manifestDir: ".opencode-plugin",
+      marketplaceDir: ".opencode-plugin",
       wiringFile: "hooks/hooks.json",
     },
     memoryInclude: "opencode-instructions",
@@ -279,15 +287,14 @@ function validateManifest(
     fail(name, "kiroAgentJson does not agree with manifest harnessFiles");
   }
   if (
-    (capabilities.memoryInclude === "kiro-resources") !==
-      (hasKiroAgentJson && !capabilities.ideAgentTools) ||
+    (capabilities.memoryInclude === "kiro-resources") !== hasKiroAgentJson ||
     (capabilities.memoryInclude === "kiro-steering") !==
       manifest.harnessFiles.some(
         (file) => file.dst === "steering/aidlc-active-memory.md",
       ) ||
     (capabilities.memoryInclude === "claude-import") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
-    (capabilities.memoryInclude === "codex-env") !==
+    (capabilities.memoryInclude === "codex-engine") !==
       (manifest.orchestratorSkillPath === ".agents/skills/aidlc/SKILL.md") ||
     (capabilities.memoryInclude === "opencode-instructions") !==
       manifest.harnessFiles.some((file) => file.dst === "opencode.json") ||
@@ -307,7 +314,8 @@ function validateManifest(
   if (
     manifest.plugin &&
     (manifest.plugin.kind !== capabilities.plugin.kind ||
-      manifest.plugin.manifestDir !== capabilities.plugin.manifestDir)
+      manifest.plugin.manifestDir !== capabilities.plugin.manifestDir ||
+      (manifest.plugin.marketplaceDir ?? manifest.plugin.manifestDir) !== capabilities.plugin.marketplaceDir)
   ) {
     fail(name, "plugin metadata does not agree with the manifest plugin block");
   }

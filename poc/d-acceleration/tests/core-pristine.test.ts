@@ -1,5 +1,5 @@
 // Repository-owner rule: `core/` stays byte-identical to upstream AI-DLC
-// v2.11.0 (commit 6a378b53). D and the C UI plugin extend AI-DLC only through
+// v2.11.2 (commit 10a9bc9d). D and the C UI plugin extend AI-DLC only through
 // the supported extension surfaces (poc/, plugins, contributions, sensors,
 // D-owned tools). This guard fails on any committed, staged, unstaged, or
 // untracked difference under core/.
@@ -8,12 +8,12 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const UPSTREAM_CORE_COMMIT = "6a378b53";
+export const UPSTREAM_CORE_COMMIT = "10a9bc9d";
 const root = join(import.meta.dir, "..", "..", "..");
 const git = (...args: string[]) => spawnSync("git", args, { cwd: root, encoding: "utf8" });
 const upstreamPresent = git("cat-file", "-e", `${UPSTREAM_CORE_COMMIT}^{commit}`).status === 0;
 
-describe("core/ is pristine upstream AI-DLC v2.11.0", () => {
+describe("core/ is pristine upstream AI-DLC v2.11.2", () => {
   if (!upstreamPresent) {
     // A shallow or foreign clone cannot prove the rule; say so instead of passing silently.
     console.warn(`core-pristine: upstream commit ${UPSTREAM_CORE_COMMIT} is absent from this clone; guard SKIPPED`);

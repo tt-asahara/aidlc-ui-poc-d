@@ -75,10 +75,10 @@ describe the full roster.
 | feature          | All 2.1--2.9                                                   |
 | mvp              | 2.1 (if brownfield), 2.2, 2.3, 2.4, 2.5 (if UI), 2.6, 2.7, 2.8, 2.9 |
 | poc              | 2.1 (if brownfield), 2.3 (minimal)                             |
-| bugfix           | 2.1 (always -- find the bug), 2.3 (minimal -- bug description) |
-| refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
+| bugfix           | 2.1 (if brownfield -- find the bug), 2.3 (minimal -- bug description) |
+| refactor         | 2.1 (if brownfield -- understand current code), 2.3 (minimal)  |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
-| security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
+| security-patch   | 2.1 (if brownfield -- find vulnerability context), 2.3 (minimal) |
 | classic          | 2.1--2.9                                                       |
 | workshop         | 2.1--2.9                                                       |
 | express          | 2.1 (if brownfield), 2.3                                      |
@@ -129,7 +129,9 @@ and working-tree fingerprint before scanning. The fingerprint leaves out
 AI-DLC's own install, settings, and the root files it writes into, so an AI-DLC
 update or setting change does not make a store stale. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
-legacy, or mismatched stores require a full or focused rescan. Full rescans
+legacy, or mismatched stores require a full or focused rescan. A store this
+run of the stage already scanned and published (a new chat picking the stage
+up) is not offered back: the stage goes on to its approval. Full rescans
 replace the store; focused rescans merge newly analyzed areas into it while
 preserving prior prose. For multi-repo intents, all decisions are resolved
 before one stage-level lifecycle report.
@@ -147,9 +149,8 @@ before one stage-level lifecycle report.
    reverse engineer"`. The engine records `[S]` and routes onward atomically.
 
 2. **Developer Code Scan** -- Delegate to Task tool with the aidlc-developer-agent
-   subagent (`subagent_type="aidlc-developer-agent"`). Include aidlc-developer-agent persona from
-   `agents/aidlc-developer-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-developer-agent/` in the delegation prompt.
+   subagent (`subagent_type="aidlc-developer-agent"`). The agent's persona and
+   knowledge load automatically; the conductor does not inject the persona.
    Include workspace state from `aidlc-state.md` as context.
 
    The developer scans the entire codebase for:
@@ -161,26 +162,45 @@ before one stage-level lifecycle report.
    - Code quality indicators (linting, CI/CD, documentation)
    - Technical debt signals
 
-   Developer returns structured scan results following the Developer Code Scan
-   Template in
-   `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`.
+   The developer writes its scan, following the Developer Code Scan Template in
+   `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`, to a
+   durable handoff file: `<record>/inception/reverse-engineering/developer-scan.md`
+   for the project-root repo, or `developer-scan-<repo>.md` for a registered
+   repo. Its return names that path and any concerns, not the scan body.
 
 3. **Architect Synthesis** -- Delegate to Task tool with the aidlc-architect-agent
-   subagent (`subagent_type="aidlc-architect-agent"`). Include aidlc-architect-agent persona from
-   `agents/aidlc-architect-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-architect-agent/` in the delegation prompt. Pass
-   the complete developer scan results as context. Include workspace state from
+   subagent (`subagent_type="aidlc-architect-agent"`); its persona and knowledge
+   also load automatically. Pass the developer's handoff path (the architect
+   reads the file) and the template path, plus workspace state from
    `aidlc-state.md`. Resolve the repository's output directory with
    `aidlc engine workspace codekb --repo <repo>`.
    Immediately before the scan, capture source/store generations with
-   `codekb-snapshot`. Pass the existing store plus its snapshot to the
-   architect.
+   `codekb-snapshot`, and pass the existing store plus its snapshot to the
+   architect. In a brownfield project with no store yet:
+
+   ```text
+   $ aidlc engine workspace codekb-snapshot --repo shop-api --paths ./ --json
+   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b","head_commit":"0107291c4e5f2a8b9d3e6f1a7c8b2d4e5f6a7b8c"}
+   ```
 
    The architect synthesizes scan results into the 9 output artifacts (see
-   Outputs below) in a temporary complete candidate directory. The engine
-   publishes that candidate with `codekb-publish`, which refuses a source
-   change or concurrent shared-store generation and requires a fresh scan or
-   re-merge before retrying.
+   Outputs below) in a complete candidate directory,
+   `<record>/.aidlc-engine/codekb-stage-<repo>/`. `codekb-publish` then swaps it
+   into the store, with the snapshot's values passed back:
+
+   ```text
+   aidlc engine workspace codekb-publish --repo shop-api \
+     --staged <record>/.aidlc-engine/codekb-stage-shop-api/ \
+     --paths ./ --expect-store none \
+     --expect-source git:bc8ac8583f61da1edd5bdc681a9db722a937848b --json
+   ```
+
+   It refuses with `CODEKB_STORE_CHANGED` when another intent published to
+   the store after the snapshot (re-read the store, re-merge, take a fresh
+   snapshot and retry). Under Guard Policy strict it also refuses with
+   `CODEKB_SOURCE_CHANGED` when the code changed after the snapshot (scan
+   again); under relaxed or off it publishes the scan as taken and returns a
+   change notice.
 
 4. **Prepare Completion** -- Verify all nine artifacts exist. Do not edit
    `aidlc-state.md`; lifecycle completion belongs to the report after the gate.
@@ -194,7 +214,7 @@ before one stage-level lifecycle report.
 
 All 9 artifacts for each repository are written to
 `aidlc/spaces/<active-space>/codekb/<repo>/`, using the exact directory printed
-by `aidlc-utility.ts codekb-path --repo <repo>`:
+by `aidlc engine workspace codekb --repo <repo>`:
 
 | #  | File                             | Contents                                                    |
 |----|----------------------------------|-------------------------------------------------------------|
@@ -210,24 +230,23 @@ by `aidlc-utility.ts codekb-path --repo <repo>`:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
-**Request Changes**.
+Standard 2-option gate: **Approve** / **Request Changes**. The stage file
+labels Approve "continue to Requirements Analysis"; the engine routes to the
+next stage the plan runs, which is Practices Discovery in the scopes that
+include it.
 
 ### Notes
 
 - **Rerun guard:** This stage verifies each brownfield repository's recorded
-  scope and fingerprint before the human chooses reuse or rescan. It is a
-  deliberate deviation from the upstream reference, documented in SKILL.md's
-  "Deliberate Deviations" section.
+  scope and fingerprint before the human chooses reuse or rescan.
 - **Two-link pipeline:** The aidlc-developer-agent performs the raw code
   scan (link 1, the lead), then the aidlc-architect-agent synthesizes the scan
   into structured artifacts and writes them (link 2, the final link). This separation ensures the scan is thorough (developer
   perspective) and the synthesis is architecturally informed (architect
   perspective).
-- For bugfix and refactor scopes, this stage always executes (even for what
-  might be borderline greenfield) because understanding existing code is
-  essential.
-- For security-patch scope, this stage executes to find vulnerability context.
+- In bugfix, refactor and security-patch it runs on brownfield work, to
+  understand the code being fixed or changed; on greenfield work creation sets
+  it to SKIP, as in every scope.
 - The 9 artifacts produced here are consumed by Requirements Analysis (2.3),
   User Stories (2.4), Domain Design (2.6), and Units Generation (2.7).
 - The `architecture.md` artifact must include Interaction Diagrams showing how
@@ -338,7 +357,16 @@ On affirmation, content is promoted to:
    promotion occurs.
 7. **Promote After Human Approval** -- Only after the human chooses Approve,
    run the deterministic promotion into active-space `team.md` and
-   `project.md`. It writes `project.md` first and `team.md` second and emits
+   `project.md`:
+
+   ```text
+   aidlc engine state practices-promote \
+     --team-practices <record>/inception/practices-discovery/team-practices.md \
+     --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
+     --affirming-user "<user>"
+   ```
+
+   It writes `project.md` first and `team.md` second and emits
    `PRACTICES_AFFIRMED`. If promotion fails, it emits `PRACTICES_OVERRIDE`,
    leaves the stage `[?]` with the gate open, and does not report approval.
 8. **Verify Receipt, Then Report** -- Successful promotion atomically records
@@ -359,9 +387,9 @@ gate open and the stage incomplete.
 
 ### Notes
 
-- The `replaceSection` helper in `.claude/tools/aidlc-lib.ts` was added in milestone 8
-  specifically to support the team.md cross-row promotion (the existing
-  `appendUnderHeading` accumulates duplicates across re-runs).
+- The promotion replaces each `team.md` section's body and keeps its heading
+  (`replaceSection` in `.claude/tools/aidlc-markdown.ts`), so a re-run does not
+  pile up duplicates the way `appendUnderHeading` would.
 - `org.md` and `team.md` share one Title Case heading set
   (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
   `## Deployment`, `## Code Style`). The stage reads each section from
@@ -411,13 +439,16 @@ large scope with significant unknowns.
 
 - Reverse Engineering artifacts from Stage 2.1
   (`aidlc/spaces/<active-space>/codekb/<repo>/`), if brownfield
-- User's project description from the intent's `audit/` shards
+- The authoritative project description from the `project-description`
+  utility (never rebuilt from an audit `Request`)
+- Intent statement and scope document from Ideation, and team practices from
+  Practices Discovery, when those stages ran
 
 ### Steps
 
 1. **Load Prior Context** -- If brownfield: read RE artifacts from
-   `aidlc/spaces/<active-space>/codekb/<repo>/`. Read user's project
-   description from the intent's `audit/` shards.
+   `aidlc/spaces/<active-space>/codekb/<repo>/`. Read the project description
+   with `project-description`.
 
 2. **Analyze User Request** -- Assess the request for:
    - **Clarity**: How well-defined is the request?
@@ -461,7 +492,7 @@ large scope with significant unknowns.
    all six dimensions. Create
    `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
-   A-E options. Every ordinary clarifying question must end with `X. Other (please specify)` as
+   A-E options (A-D on Claude Code). Every ordinary clarifying question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
 
    Offer the tri-mode question flow: Guide Me / Edit File / Chat.
@@ -500,9 +531,12 @@ large scope with significant unknowns.
     with :mag: emoji and review path. The approval gate has two variants:
 
     **If User Stories is set to SKIP in the execution state:** 3-option gate:
-    Approve / Request Changes / Add User Stories (include the currently
-    skipped User Stories stage). If "Add User Stories" is selected, run
-    `aidlc engine recompose --add user-stories`; do not edit the checkbox directly.
+    Approve / Request Changes / Approve, and add User Stories next (include the
+    currently skipped User Stories stage and start it). On that pick, run
+    `aidlc engine orchestrate next --add user-stories` and follow its step, which
+    names the report that records the approval; do not edit the checkbox directly.
+    A request to add User Stories with no approval in it is the same
+    `next --add`, with the gate asked once more.
 
     **If User Stories is NOT set to SKIP:** Standard 2-option gate: Approve /
     Request Changes.
@@ -515,13 +549,14 @@ All artifacts written to `<record>/inception/requirements-analysis/`:
 |--------------------------------------|---------------------------------------------------------|
 | `requirements.md`                    | Formal requirements: intent analysis, functional/non-functional requirements, constraints, assumptions, out-of-scope, open questions |
 | `requirements-analysis-questions.md` | Clarifying questions with `[Answer]:` tags (input artifact) |
+| `traceability.json`                  | The FR and NFR IDs `requirements.md` defines, spelled as it spells them, each with its `kind` and, for a sub-requirement, the requirement it belongs to (`of`); later stages trace from this list |
 
 ### Approval Gate
 
 Conditional gate format:
 
 - **If User Stories is skipped:** 3-option gate -- **Approve** / **Request
-  Changes** / **Add User Stories**
+  Changes** / **Approve, and add User Stories next**
 - **If User Stories is not skipped:** Standard 2-option gate -- **Approve** /
   **Request Changes**
 
@@ -551,7 +586,7 @@ Conditional gate format:
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
-| Mode             | mob (the 2.5.0 mob-elaboration showcase; lead only when collaborators are off) |
+| Mode             | mob (lead only when collaborators are off)                             |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -567,8 +602,7 @@ leads, and the design, developer, and quality agents are dispatched as
 independent collaborators against the lead's draft - blind round, integrate,
 one bounded objection round - with the Product Leader reviewing afterwards.
 The aidlc-design-agent's user-experience perspective is a deliberate addition
-not in the upstream reference, documented in SKILL.md's "Deliberate
-Deviations" section.
+not in the upstream reference.
 
 ### Inputs
 
@@ -579,8 +613,8 @@ Deviations" section.
 
 ### Steps
 
-1. **Load the Lead Persona** -- Load aidlc-product-agent persona from
-   `agents/aidlc-product-agent.md` and knowledge from
+1. **Load the Lead Persona** -- The step carries the aidlc-product-agent
+   persona (`lead_persona`); read its knowledge from
    `.claude/knowledge/aidlc-product-agent/`. The support agents (design,
    developer, quality) are NOT loaded inline - this is a mob stage; they are
    dispatched as independent collaborators during generation.
@@ -684,6 +718,7 @@ All artifacts written to `<record>/inception/user-stories/`:
 | `stories.md`                   | User stories with acceptance criteria, priority, dependencies, INVEST notes |
 | `personas.md`                  | User persona definitions, relationships, priority ranking    |
 | `user-stories-assessment.md`   | Execute/skip decision with rationale and factors considered   |
+| `traceability.json`            | Every `FR` and `NFR` ID from `requirements.md` (a requirement with sub-requirements through its `FR{n}.{m}` IDs) mapped to stories (`OK`), or marked `Deferred` with a named downstream stage or `N/A` with a justification; checked by the `traceability` sensor |
 | `user-stories-questions.md`    | Story plan with clarifying questions using `[Answer]:` tags (input artifact) |
 | `contributions/aidlc-{design,developer,quality}-agent.md` | Mutually blind support contributions integrated by the lead before the gate |
 
@@ -706,9 +741,9 @@ Changes**.
   mandatory ensemble evidence; approval is refused until the lead has
   integrated all three. A lead-only run owes none.
 - Stories produced here are consumed by Refined Mockups (2.5), Domain
-  Design (2.6), Units Generation (2.7), and Delivery Planning (2.9).
-- The aidlc-design-agent support is a deliberate addition for UX-informed
-  development, noted in SKILL.md's Deliberate Deviations section.
+  Design (2.6), Units Generation (2.7), Delivery Planning (2.9), and
+  Functional Design (3.1), which traces each Unit's acceptance criteria.
+- The aidlc-design-agent support adds a UX view to the stories.
 
 ---
 
@@ -720,7 +755,7 @@ Changes**.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.5                                                                    |
-| Condition        | CONDITIONAL -- skip for non-UI, API-only, or infrastructure-only initiatives |
+| Condition        | CONDITIONAL -- execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against stories)                              |
 | Mode             | inline                                                                 |
@@ -737,7 +772,8 @@ checklists.
 For non-UI initiatives (API-only, backend), the stage refines interaction
 diagrams into an API developer experience specification.
 
-This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
+When Stage 1.6 (Rough Mockups) did not run, as in classic and workshop, it
+designs the refined mockups from the stories and requirements.
 
 ### Inputs
 
@@ -800,8 +836,9 @@ Standard 2-option gate: **Approve** / **Request Changes**.
 
 ### Notes
 
-- Skip condition: non-UI, API-only, or infrastructure-only initiatives. Also
-  typically skipped if Stage 1.6 (Rough Mockups) was skipped.
+- Runs for user-facing UI; for an API it refines interaction diagrams into an
+  API developer experience specification. When Rough Mockups did not run
+  (classic, workshop), it designs from the stories and requirements instead.
 - For mvp scope, this stage executes only if the project has UI.
 - The mockups produced here feed into Domain Design (2.6) and ultimately
   into Construction's Code Generation (3.5) for UI components.
@@ -879,9 +916,10 @@ dependencies; the aidlc-design-agent contributes UI component structure.
 6. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
    architectural decisions highlighted, and review path. 3-option approval
-   gate: Approve / Request Changes / Add Units Generation (if it was skipped
-   in execution plan). Selecting Add Units Generation runs
-   `aidlc engine recompose --add units-generation`; it never edits the state checkbox
+   gate: Approve / Request Changes / Approve, and add Units Generation next (if
+   it was skipped in execution plan). That pick runs
+   `aidlc engine orchestrate next --add units-generation` and its step, which
+   names the report that records the approval; it never edits the state checkbox
    directly.
 
 ### Outputs
@@ -892,7 +930,7 @@ The artifacts written to `<record>/inception/domain-design/`:
 |-----------------------------------|-----------------------------------------------------------|
 | `components.md`                   | Fenced `yaml` component catalogue (source of truth): each component's `behaviour`, `responsibilities`, `depends_on`/`dependents`, `external_dependencies`, and owned `entities` (with `identifier`, attributes, and cross-component `references`). Followed by the derived human view: mermaid Component Diagram, Component Summary, Entity Ownership, External Dependencies, and Rationale tables |
 | `decisions.md`                    | The ADR log — architecture decision records capturing key design decisions and their rationale |
-| `traceability.json`               | Coverage table mapping each upstream `USx.y` (or fallback `FR`) to the component or entity in `components.md` that realizes it; validated by the `traceability` sensor |
+| `traceability.json`               | Coverage table mapping each upstream `USx.y` (or fallback `FR`, a requirement with sub-requirements through its `FR{n}.{m}` IDs) to the component or entity in `components.md` that realizes it; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -906,9 +944,9 @@ Special 3-option gate:
 
 - **Approve** -- Continue to next stage
 - **Request Changes** -- Provide revision feedback
-- **Add Units Generation** -- Include the currently skipped Units Generation
-  stage (if it was skipped in the execution plan) via
-  `aidlc-utility.ts recompose --add units-generation`
+- **Approve, and add Units Generation next** -- Approve, and include the
+  currently skipped Units Generation stage (if it was skipped in the execution
+  plan) via `aidlc engine orchestrate next --add units-generation`
 
 ### Notes
 
@@ -1017,7 +1055,7 @@ actual unit artifacts.
 7. **Present Completion & Request Approval** -- Display completion message
    with :wrench: emoji, summary of units defined, dependencies mapped, stories
    assigned, and review path. Standard 2-option approval gate: Approve
-   (continue to Construction phase) / Request Changes.
+   (continue to the next stage the engine names) / Request Changes.
 
 ### Outputs
 
@@ -1027,7 +1065,7 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
-| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
+| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, a requirement with sub-requirements by its `FR{n}.{m}` IDs, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
 | `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
@@ -1038,8 +1076,8 @@ Additionally, a questions file is created as input:
 
 ### Approval Gate
 
-Standard 2-option gate: **Approve** (continue to Construction phase) /
-**Request Changes**.
+Standard 2-option gate: **Approve** (continue to the next stage the engine
+names) / **Request Changes**.
 
 ### Notes
 
@@ -1080,7 +1118,7 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
 | Lead Agent       | aidlc-architect-agent                                                        |
 | Support Agents   | aidlc-aws-platform-agent                                                    |
 | Mode             | inline                                                                 |
-| Completion Emoji | :building_construction:                                                |
+| Completion Emoji | :handshake:                                                            |
 
 ### Purpose
 
@@ -1242,10 +1280,10 @@ All Inception phase artifacts:
    `--checkpoint verification-command --command-file verification-command.txt`
    and find the session they run in.
    Record the decision before asking and wait for the human's **Approve** /
-   **Request Changes** reply in that session. Record the answer with the same
-   stage/checkpoint/command/session; only **Approve** authorizes the receipt.
-   An unrelated reply, **Request Changes**, or a reply from another session does
-   not. Never write `--details "Approve"` unless the human chose it; only then run
+   **Request Changes** reply, in that chat or a new one while it is the newest
+   question asked. Record the answer with the same stage/checkpoint/command;
+   only **Approve** authorizes the receipt. An unrelated reply, **Request
+   Changes**, or a reply to another question does not. Never write `--details "Approve"` unless the human chose it; only then run
    `state set-construction-verification-command --command-file verification-command.txt`. **Request Changes** means
    propose another command. The receipt must precede the state field; never use
    generic `state set` or auto-approve. This command is reused for all Unit/batch
@@ -1253,12 +1291,10 @@ All Inception phase artifacts:
    If no runnable check exists yet (greenfield), the human may defer; the first
    checkpoint then asks before verification. See the
    [exact recording commands](../../guide/12-cli-commands.md#construction-verification-command-record-human-authorization).
-   Then ask whether one session or several teams own Units;
-   team ownership records `set-unit-ownership team` (unit-major and serial
-   required) and asks whether approvals happen after every stage
-   (`set-unit-gate-rhythm per-stage`, default) or once after the Unit chain
-   (`unit-end`). The user-facing questions explain those choices without
-   exposing field/enum names.
+   Who builds the Units is not this stage's question: with two or more Units,
+   the engine asks it once at the first step into Construction, after this
+   stage's approval (see
+   [Construction Execution](../03-orchestrator.md#construction-execution)).
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /
@@ -1412,7 +1448,3 @@ See `docs/guide/04-phases-and-stages.md` for the current Construction walk.
 - **Construction Phase**: `docs/reference/04-stages/construction.md` — conditional
   checkpoint default, explicit execution choices, and preserved legacy paths;
   `bolt-plan.md` is planning, not the runtime walk source
-- **Deliberate Deviations**: SKILL.md documents intentional differences from
-  the upstream reference, including the RE scope/fingerprint rerun guard,
-  aidlc-design-agent support additions, ADR artifacts, and the Delivery
-  Planning expansion

@@ -104,7 +104,7 @@ That `report` call owns every lifecycle transition and advancement; never perfor
 
 Completion emoji: :white_check_mark:
 Review path: `<record>/ideation/approval-handoff/`
-Approval gate: Approve (proceed to Inception) / Request Changes / Reject Initiative (end workflow).
+Approval gate: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes / Reject Initiative (end workflow).
 
 ## Sensors
 
@@ -118,6 +118,6 @@ Upstream targets: `intent-statement`, `stakeholder-map`, `scope-document`, `inte
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

@@ -147,7 +147,10 @@ describe("clean-target D install, parity, and update", () => {
     await expect(update(SRC, product)).rejects.toThrow("ui-poc-c-routing.cjs");
     git("revert", "--no-edit", "HEAD");
     const result = await update(SRC, product) as Record<string, any>;
-    expect(result.replacedComposeOwned.length).toBeGreaterThan(20);
+    // Upstream v2.11.2's official config keeps unmodified composed stage sources
+    // (plan: preserve), so none is a conflict and none needs replacing; a
+    // team-edited one is still refused above.
+    expect(result.replacedComposeOwned).toEqual([]);
     expect(result.parity.ok).toBeTrue();
     expect(git("status", "--porcelain", "--", ".claude/aidlc-common")).toBe("");
   }, TIMEOUT);

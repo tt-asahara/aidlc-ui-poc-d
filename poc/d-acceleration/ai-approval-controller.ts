@@ -15,7 +15,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { auditBlockField, latestPersonTurn } from "../../core/tools/aidlc-lib.ts";
+import { auditBlockField } from "../../core/tools/aidlc-lib.ts";
+import { latestPersonTurn } from "./person-turn.ts";
 import { resolveDAiApproval } from "./d-config.ts";
 import stagePolicy from "./stage-policy.json";
 
@@ -260,7 +261,7 @@ function assertUnchanged(snapshots: Snapshot[]): void {
 
 /**
  * The latest HUMAN_TURN the record-human-turn hook wrote for the active
- * Intent, read through core's read-only `latestPersonTurn` plus the row's
+ * Intent, read through D's read-only `latestPersonTurn` (person-turn.ts) plus the row's
  * Session field (so a settler can find the same row again). Null when no turn
  * with kept words is on record.
  */

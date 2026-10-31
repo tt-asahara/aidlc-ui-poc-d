@@ -14,8 +14,8 @@ conditionally write per unit, see the field reference in
 and resolvable to its producer. A helper in
 `core/tools/aidlc-graph.ts` reads the compiled stage graph and
 returns the union as a set — the same pattern used for scopes
-(`validScopes()` at `aidlc-lib.ts:772`) and for agents (`loadAgents()` at
-`aidlc-lib.ts:794`). Keeping the registry out of this chapter prevents the
+(`validScopes()` in `aidlc-lib.ts`) and for agents (`loadAgents()` in
+`aidlc-lib.ts`). Keeping the registry out of this chapter prevents the
 drift that parallel hand-maintained lists invite.
 
 ---
@@ -29,8 +29,8 @@ unconsumed names may be shared by stages that write independent files under
 their own record directories. The identifier is a short kebab-case string — no
 file extension, no folder prefix, no slash.
 
-Concrete example from milestone 4's worked example in
-`core/aidlc-common/protocols/stage-definition.md`:
+Concrete example, from the Scope Definition stage's frontmatter
+(`core/aidlc-common/stages/ideation/scope-definition.md`):
 
 ```yaml
 slug: scope-definition
@@ -44,12 +44,15 @@ consumes:
     required: true
   - artifact: feasibility-assessment
     required: false
+  - artifact: constraint-register
+    required: false
 ```
 
 Here `scope-document`, `intent-backlog`, `scope-definition-questions` are
-artifacts the scope-definition stage produces; `intent-statement` and
-`feasibility-assessment` are artifacts it consumes (produced by other
-stages — `intent-capture` and `feasibility` respectively).
+artifacts the scope-definition stage produces; `intent-statement`,
+`feasibility-assessment` and `constraint-register` are artifacts it consumes
+(produced by other stages: `intent-capture` for the first, `feasibility` for
+the other two).
 
 Things that are **not** artifacts in this registry:
 
@@ -59,8 +62,8 @@ Things that are **not** artifacts in this registry:
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
   to match (they usually do, except at collisions).
-- **State plumbing.** `aidlc-state.md`, `audit.md`, and
-  `.aidlc-engine/recovery.md` are managed by tools (`aidlc-state.ts`, hook
+- **State plumbing.** `aidlc-state.md` and the `audit/` shards
+  are managed by tools (`aidlc-state.ts`, hook
   scripts), not by stages via `produces[]`. They never appear in the
   registry.
 - **Runtime values.** Strings like "user's prose answer" or
@@ -130,9 +133,10 @@ same consumed concept is emitted by two stages, pick distinct names that
 disambiguate.
 
 Shared names are valid when no stage consumes them. The shipped `traceability`
-artifact follows this pattern: eight stages each write their own
+artifact follows this pattern: nine stages each write their own
 `traceability.json` under their own record directory, and no downstream stage
-resolves `traceability` through `producersOf()`.
+resolves `traceability` through `producersOf()` (the traceability check reads
+Requirements Analysis' record by its path).
 
 Today's one example: both `build-and-test` (Construction) and
 `performance-validation` (Operation) write a file called `test-results.md`.
@@ -140,8 +144,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `integration-test-instructions`, `performance-test-instructions`,
-  `security-test-instructions`, `build-and-test-summary`.
+  `build-and-test-summary`, and the strategy-dependent
+  `integration-test-instructions`, `performance-test-instructions` and
+  `security-test-instructions`, which that stage declares under
+  `optional_produces`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
 - `source-manifest.json` is the engine-required per-unit companion to
@@ -204,7 +210,7 @@ review, with the engine-owned findings list as of that review in place of the
 reviewer's report, at `<stage dir>/reviews/review-NN.md` beside the reviewed artifact;
 the copy is for people, is not an artifact, and is never read back. The stage's `review_artifact` names which declared
 artifact the review is about (the gate's `**Review:**` path and the
-`--reject-finding` / `--reopen-finding <artifact>#R-NN` selector key); the reviewer never writes to
+`--reject-finding` / `--reopen-finding` / `--fix-finding <artifact>#R-NN` selector key); the reviewer never writes to
 it. A terminal `## Review` section inside an artifact is a review recorded
 before review records existed: readable for migration, never written anew.
 
@@ -229,7 +235,12 @@ every intent in the space, keyed by repo rather than by intent. The path is
 resolved outside the record-relative rule via the `isCodekb` branch in
 `resolveArtifactPath` (`core/tools/aidlc-orchestrate.ts`), and
 the same directory is printed by the read-only native route
-`aidlc engine workspace codekb`.
+`aidlc engine workspace codekb`. In a piece of work that records more than one
+repo, a step names each of these artifacts once, as
+`aidlc/spaces/<space>/codekb/{repo}/<name>.md`, and its `repos_note` says which
+repos `{repo}` stands for (`resolveArtifactPaths`), so a workspace of any size
+fits in one step; the completion check and the sensors still read every repo's
+files.
 
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form
@@ -248,9 +259,20 @@ aidlc engine graph artifacts
 
 Prints one canonical name per line, alphabetically sorted.
 
-Pre-PR-8 output is empty — stages haven't migrated to YAML yet and
-`produces:` isn't populated. Post-PR-8 the output grows to roughly 119
-names across 30 non-initialisation stages.
+It reads the compiled graph, so it lists what the last compile saw. On a
+native install of this release it prints 122 names (output trimmed):
+
+```text
+$ aidlc engine graph artifacts
+accessibility-checklist
+alarms
+anomaly-config
+api-documentation
+approval-handoff-questions
+...
+$ aidlc engine graph artifacts | wc -l
+122
+```
 
 Pipe through `wc -l` for a count, `grep` for a filter, or `diff` against
 an expected baseline for a drift check.
@@ -265,15 +287,17 @@ No edit to this chapter required — the registry is derived.
 
 1. Edit the producing stage's `.md` file and add the canonical name to
    its `produces:` list.
-2. Run `aidlc engine graph artifacts` to confirm it appears.
-3. Run `/aidlc --doctor` to confirm no consumer references a name that no
+2. Recompile the graph (`aidlc engine graph compile` in the installed project
+   you check): `artifacts` reads the compiled graph, not the stage file.
+3. Run `aidlc engine graph artifacts` to confirm it appears.
+4. Run `/aidlc --doctor` to confirm no consumer references a name that no
    longer exists (the "Graph references" check).
 
 **To rename an artifact:**
 
 1. Rename it in the producing stage's `produces:` entry.
 2. Rename it in every consuming stage's `consumes[].artifact` entry.
-3. `/aidlc --doctor` (post-PR-11) catches any consumer you forgot to
+3. Recompile, then `/aidlc --doctor` catches any consumer you forgot to
    update — the old name becomes a missing-producer error.
 
 Stage-graph CI drift detection (`aidlc-graph compile --check`) catches
@@ -284,14 +308,10 @@ sources.
 
 ## Stability
 
-The live registry at v1.0 ship time is the stability baseline for the
-framework's artifact surface. The stability policy for artifact names is:
+The stability policy for artifact names is:
 
-- **Renames** and **removals** are major-version changes — v1.x → v2.0.
-- **Additions** ship in minor versions — v1.0 → v1.1, etc.
-- **In-flight until v1.0**: the current v0.3.0 Foundation set is the
-  starting point; later v0.4.0–v0.11.0 releases may add, rename, or drop
-  names as the methodology evolves.
+- **Renames** and **removals** are major-version changes.
+- **Additions** ship in minor versions.
 
 The policy is enforceable against live data: a drift between the registry
 at tag time and the registry at HEAD is a one-line `diff`.

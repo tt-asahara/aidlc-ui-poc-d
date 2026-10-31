@@ -24,17 +24,7 @@ one consistent owner. See `docs/contract.md` ("Unit-scoped matrices").
 ## Ordinary D dogfooding start
 
 Start the same way as any normal project; describe the application, not the
-internal workflow. A short ASCII request (five words or fewer) that names a UI
-keyword (`web app`, `dashboard`, `website`, `frontend`, `user interface`,
-`mobile app`) is proposed `ui-poc-application` automatically:
-
-```text
-/aidlc
-Build a budget web app
-```
-
-A long or Japanese request gets the standard scope proposal instead, for
-example:
+internal workflow, in any language:
 
 ```text
 /aidlc
@@ -47,16 +37,18 @@ category summaries, and a responsive user interface.
 家計管理のWebアプリを作りたい
 ```
 
-Both show the stock proposal (or the compose offer) at the official scope
-confirmation. Select `ui-poc-application` there, or name it up front with
+AI-DLC reads the request and proposes the plan that fits it from the
+install's plan list, where `ui-poc-application` appears with its description
+and hints (`web app`, `dashboard`, `website`, `frontend`, `user interface`,
+`mobile app`). The person confirms the proposal at the official scope
+question, picks another plan there, or names one up front with
 `/aidlc --scope ui-poc-application`; either way the rest of the run is the same.
 
-Why: scope inference is the unmodified upstream resolver, because core/ stays
-byte-identical to AI-DLC v2.11.0 (`6a378b53`). For requests longer than five
-words that resolver accepts only its own built-in high-specificity keywords,
-which a plugin scope cannot extend, and its keyword match uses ASCII word
-boundaries, so `Webアプリ` and other Japanese text never match a plugin keyword.
-Changing either would be a core change, which this PoC does not make.
+Why: plan choice is the unmodified upstream flow, because core/ stays
+byte-identical to AI-DLC v2.11.2 (`10a9bc9d`). Since v2.11.2 the engine no
+longer classifies requests by keyword: the agent proposes the plan and the
+person decides, so long and Japanese requests reach the UI scope the same way
+short English ones do.
 
 `ui-poc-application` retains the C rough/refined HTML evidence handoff.
 Explicit scopes, explicit serial execution, and non-UI requests keep their
@@ -102,8 +94,7 @@ and answers stage questions from the documents; see
 ## Requirements-only loop
 
 To grow requirements and the `/aidlc --doc` design document set without
-building, select the requirements loop explicitly (the `requirements-loop`
-keyword routes only short ASCII requests):
+building, select the requirements loop explicitly (or accept it when AI-DLC proposes it):
 
 ```text
 /aidlc --scope ui-poc-requirements

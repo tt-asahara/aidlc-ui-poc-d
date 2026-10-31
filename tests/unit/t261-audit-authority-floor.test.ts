@@ -1,7 +1,7 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:selfAttributedDecisionMarker, function:isAutonomousConstructionDecision
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:proveMessage, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:isAutonomousConstructionDecision
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
-// Four related guarantees, each with a REFUSE case and an ALLOW case so the
+// Five related guarantees, each with a REFUSE case and an ALLOW case so the
 // floor neither leaks nor over-blocks:
 //
 //   1. The public audit CLI cannot forge authority-bearing receipts: `append`
@@ -12,29 +12,23 @@
 //      `**Event**:` line would spoof the multiline event queries). Diagnostic
 //      events and free-form notes stay CLI-appendable; fixtures mint receipts
 //      through the same library API used by their owning emitters.
-//   2. `aidlc-bolt set-autonomy --mode autonomous` requires a fresh HUMAN_TURN
-//      (the ladder answer) and the grant CONSUMES the turn (a second
-//      escalation without a new turn refuses); de-escalation to gated never
-//      needs presence.
+//   2. `aidlc-bolt set-autonomy --mode autonomous` requires the person's
+//      message that chose it (the ladder answer), named with --message and
+//      proved, and the grant CONSUMES that message (a second escalation on it
+//      refuses); de-escalation to gated never needs presence.
 //   3. humanActedSinceGate fails CLOSED when a candidate human turn shares one
 //      second-precision timestamp with any latest resolution in a DIFFERENT
 //      shard (filename order carries no execution order), while same-shard
 //      same-second sequences keep append order.
-//   4. Cancellation boilerplate is not a decision: `aidlc-log answer` refuses
-//      it as an interview answer (including the issue's named repro:
-//      status=completed with answer "Cancelled"), `approve --user-input` and
-//      `reject --feedback` refuse it at the gate. Substantive answers that
-//      merely CONTAIN a cancellation word pass.
-//   5. A conductor-AUTHORED decision is not a human decision either (issue
-//      742). humanActedSinceGate proves PRESENCE, not INTENT, so a deadlocked
-//      conductor can satisfy it while writing the human's decision itself —
-//      observed in the field as GATE_REJECTED rows carrying "AGENT-INITIATED,
-//      NOT A HUMAN REJECTION" (the only event that resets an advisory review
-//      budget), plus self-approvals and self-answers as "CONDUCTOR DEFAULT,
-//      session unattended". All three call sites refuse the self-attributed
-//      text, leave no partial receipt, and do not consume the human's turn;
-//      substantive prose that merely discusses agent-initiated code or a
-//      conductor default setting passes; autonomous Construction is exempt.
+//   4. An answer with no words in it is not a decision: `aidlc-log answer`
+//      refuses it. A cancellation word ("Cancelled", "Timed out") is what the
+//      person typed (no host writes one into a reply), so it is recorded as
+//      their answer, and `approve --user-input` and `reject --feedback` take it.
+//   5. What a decision's text says about who decided is not read (issue 742's
+//      "AGENT-INITIATED, NOT A HUMAN REJECTION" and "CONDUCTOR DEFAULT,
+//      session unattended"): approve, reject and answer record the text as the
+//      agent passed it when the person replied since the question, and refuse
+//      it on presence alone when they did not.
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1
 // and AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 for the whole suite. This test DELETES
@@ -44,7 +38,7 @@
 //
 // Source under test (dist/claude/.claude/tools/):
 //   aidlc-audit.ts  CLI_PROTECTED_EVENT_TYPES + RESERVED_FIELD_KEYS floors,
-//   aidlc-bolt.ts   handleSetAutonomy presence gate,
+//   aidlc-bolt.ts   handleSetAutonomy message proof,
 //   aidlc-lib.ts    humanActedSinceGate (per-shard, cross-shard fail-closed),
 //   aidlc-log.ts    handleAnswer non-answer floor,
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
@@ -68,11 +62,12 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry, CLI_PROTECTED_EVENT_TYPES } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   findAllEvents,
   humanActedSinceGate,
   isAutonomousConstructionDecision,
   readAllAuditShards,
-  selfAttributedDecisionMarker,
+  readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -82,6 +77,7 @@ const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
 
 // Spawn a tool with the two authority bypasses CLEARED (the artifact-guard
@@ -109,11 +105,13 @@ function guardedAsync(
   tool: string,
   args: string[],
   proj: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<{ rc: number; out: string }> {
   return new Promise((resolve) => {
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
+    Object.assign(env, extraEnv);
     const child = spawn(BUN, [tool, ...args, "--project-dir", proj], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -201,7 +199,6 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
       expect(r.out).toMatch(/authority-bearing receipt|reserved for its owning hook\/tool/);
       expect(r.out).toContain(event);
     }
-    // nothing landed on disk
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_UNANSWERED");
@@ -375,17 +372,45 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   });
 });
 
-describe("t261 set-autonomy escalation requires and consumes a human turn", () => {
+describe("t261 set-autonomy escalation requires and consumes the person's message", () => {
+  // Every command runs from the one chat the person types in.
+  const CHAT = "01995000-7a11-7000-8000-000000000261";
+  const inChat = { AIDLC_SESSION_OVERRIDE: CHAT };
+  const bolt = (args: string[]) => guarded(BOLT, args, proj, inChat);
+  const grant = (message?: string) =>
+    bolt(["set-autonomy", "--mode", "autonomous", ...(message === undefined ? [] : ["--message", message])]);
+  // The engine's times are to the second, and a grant in the same second as
+  // the message is no decision after it: a grant that uses it up comes later.
+  const tick = () => Bun.sleepSync(1100);
+
+  // The person types `prompt` in the chat; the shipped human-turn hook keeps
+  // it. Returns the id of the message it kept.
+  function said(p: string, prompt: string): string {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p, ...inChat };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: p,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: CHAT, prompt }),
+      env,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+    expect(id).not.toBeNull();
+    return id as string;
+  }
+
   function constructionProject(): string {
     const p = createTestProject();
     // Deliberately NOT seeding `Construction Autonomy Mode`. The fixture omits
     // it exactly as the generated state file does, so these tests exercise the
-    // real production shape: set-autonomy has to CREATE the line. An earlier
-    // version of this helper appended `- **Construction Autonomy Mode**: gated`
-    // here, which manufactured the one precondition the production path lacks
-    // and made every assertion below incapable of catching issue #1045 (the
-    // grant threw `Field not found in state file` before reaching the audit
-    // emission).
+    // real production shape: set-autonomy has to CREATE the line. Appending
+    // `- **Construction Autonomy Mode**: gated` here would manufacture the one
+    // precondition the production path lacks and make every assertion below
+    // incapable of catching issue #1045 (the grant threw `Field not found in
+    // state file` before reaching the audit emission).
     seedStateFile(p, join(FIXTURES, "state-construction.md"));
     // Seed one row so the empty-ledger fail-open path does not apply.
     const seed = guarded(AUDIT, ["append", "ERROR_LOGGED", "--field", "Details=seed"], p);
@@ -393,37 +418,54 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     return p;
   }
 
-  test("escalation without a human turn refuses; after a turn it commits", () => {
+  test("escalation naming no message refuses; their message named commits it", () => {
     proj = constructionProject();
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const refused = grant();
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("Refusing to switch Construction to autonomous");
     // Run when the person chooses it; never a scripted re-ask.
-    expect(refused.out).toContain("Run it after they choose it.");
+    expect(refused.out).toContain("Run it with --message <id> after they choose it.");
     expect(refused.out).not.toContain("Ask the human to confirm");
 
-    mintHumanTurn(proj);
-    const granted = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
-    expect(granted.rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    // With their message on record, the refusal leads with the retry naming it.
+    const unnamed = grant();
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(`If their message ${id} (sent `);
+    expect(unnamed.out).toContain("run the same command with --message <id>");
+    expect(unnamed.out).not.toContain("Run it on its own from here.");
+
+    const granted = grant(id);
+    expect(granted.rc, granted.out).toBe(0);
     expect(granted.out).toContain('"state_updated":true');
+    const row = readAuditShardEvents(proj).filter((r) => r.event === "AUTONOMY_MODE_SET").at(-1);
+    expect(row === undefined ? null : auditBlockField(row.block, "Mode")).toBe("autonomous");
+    expect(row === undefined ? null : auditBlockField(row.block, "Message Id")).toBe(id);
   });
 
-  // The grant answers the ladder prompt: a turn that was only a command to
-  // AIDLC ("skip plan approval?") is no answer to it.
-  test("escalation after only a command turn refuses; the person's reply commits it", () => {
+  // The grant answers the ladder prompt: a message that was only a command to
+  // AIDLC is no answer to it.
+  test("a command to AIDLC named as the message refuses; the person's reply commits it", () => {
     proj = constructionProject();
-    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const command = said(proj, "/aidlc --status");
+    const refused = grant(command);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("a command to AIDLC, not a reply to this question");
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    expect(refused.out).toContain(`message ${command} carried no words of the person's own (a command to AIDLC`);
+    // Nothing of theirs a grant can stand on, so the refusal names no message.
+    const unnamed = grant();
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain("Run it with --message <id> after they choose it.");
+    expect(unnamed.out).not.toContain("If their message");
+    const reply = said(proj, "Yes, run it on its own.");
+    const granted = grant(reply);
+    expect(granted.rc, granted.out).toBe(0);
   });
 
-  test("the grant consumes the turn: re-escalation refuses without a fresh turn", () => {
+  test("the grant consumes the message: re-escalation on it refuses", () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    tick();
+    expect(grant(id).rc).toBe(0);
     // flip back to gated so a second escalation is a real transition
     const statePath = seededStateFile(proj);
     writeFileSync(
@@ -434,21 +476,23 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
       ),
       "utf-8",
     );
-    const again = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const again = grant(id);
     expect(again.rc).not.toBe(0);
+    expect(again.out).toContain(`message ${id} arrived before the last approval or decision`);
   });
 
   test("de-escalation to gated never needs presence", () => {
     proj = constructionProject();
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+    expect(bolt(["set-autonomy", "--mode", "gated"]).rc).toBe(0);
   });
 
-  test("concurrent grants consume one turn exactly once", async () => {
+  test("concurrent grants on one message consume it exactly once", async () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
+    const id = said(proj, "Run it on its own from here.");
+    tick();
     const results = await Promise.all([
-      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
-      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous", "--message", id], proj, inChat),
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous", "--message", id], proj, inChat),
     ]);
     expect(results.filter((result) => result.rc === 0).length).toBe(1);
     expect(results.filter((result) => result.rc !== 0).length).toBe(1);
@@ -468,8 +512,8 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     const before = readFileSync(seededStateFile(proj), "utf-8");
     expect(before).not.toContain("Construction Autonomy Mode");
 
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    expect(grant(id).rc).toBe(0);
 
     const after = readFileSync(seededStateFile(proj), "utf-8");
     // Section membership, not line ordering: the insert lands at the end of the
@@ -485,9 +529,9 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
 
   test("a second grant updates the field in place instead of duplicating it", () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    expect(grant(id).rc).toBe(0);
+    expect(bolt(["set-autonomy", "--mode", "gated"]).rc).toBe(0);
 
     const after = readFileSync(seededStateFile(proj), "utf-8");
     expect(after.match(/Construction Autonomy Mode/g)?.length).toBe(1);
@@ -503,7 +547,7 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
       readFileSync(statePath, "utf-8").replace("## Current Status", "## Current Status Renamed"),
       "utf-8",
     );
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj);
+    const refused = bolt(["set-autonomy", "--mode", "gated"]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("State update failed");
     expect(readFileSync(statePath, "utf-8")).not.toContain(
@@ -612,22 +656,31 @@ describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
   });
 });
 
-describe("t261 cancellation boilerplate is not a decision", () => {
+describe("t261 an answer with no words is not a decision; a cancellation word is one", () => {
   function ideationProject(): string {
     const p = createTestProject();
     seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));
     return p;
   }
 
-  test("answer 'Cancelled' (the completed-widget repro) refuses; empty refuses", () => {
+  test("an answer with no words in it refuses; a cancellation word is the person's answer like any other", () => {
     proj = ideationProject();
     mintHumanTurn(proj);
-    for (const details of ["Cancelled", "cancelled", "user dismissed", "Timed out", "   "]) {
+    for (const details of ["   ", "\t"]) {
       const r = guarded(LOG, ["answer", "--stage", "feasibility", "--details", details], proj);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Cannot record reply");
     }
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+    // No host hands the hook dismissal text (measured on Claude Code and Codex,
+    // 2026-10-12), so these are words a person typed, and the agent's reading of
+    // them is recorded as any other answer.
+    for (const details of ["Cancelled", "cancelled", "user dismissed", "Timed out"]) {
+      mintHumanTurn(proj);
+      const r = guarded(LOG, ["answer", "--stage", "feasibility", "--details", details], proj);
+      expect(r.rc, r.out).toBe(0);
+      expect(r.out).toContain("QUESTION_ANSWERED");
+    }
   });
 
   test("summary confirmation refusal quotes and truncates the reply and names both valid choices", () => {
@@ -668,44 +721,37 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     expect(r.out).toContain("QUESTION_ANSWERED");
   });
 
-  test("approve --user-input and reject --feedback refuse cancellation boilerplate", () => {
+  // The person's words at a gate are theirs whatever they are: "cancelled" and
+  // "Timed out" are what they typed, and the agent's reading of them is recorded.
+  test("reject --feedback that is a cancellation word records it as the person's feedback", () => {
     proj = ideationProject();
     const direct = { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" };
     expect(guarded(STATE, ["gate-start", "feasibility"], proj, direct).rc).toBe(0);
     mintHumanTurn(proj);
-
-    const ap = guarded(STATE, ["approve", "feasibility", "--user-input", "cancelled"], proj, direct);
-    expect(ap.rc).not.toBe(0);
-    expect(ap.out).toContain('the reply \\"cancelled\\"');
-    expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original held gate with every offered choice");
-
     const rj = guarded(
       STATE,
-      [
-        "reject",
-        "feasibility",
-        "--user-input",
-        "Request Changes",
-        "--feedback",
-        "Timed out",
-      ],
+      ["reject", "feasibility", "--user-input", "Request Changes", "--feedback", "Timed out"],
       proj,
       direct,
     );
-    expect(rj.rc).not.toBe(0);
-    expect(rj.out).toContain('revision feedback \\"Timed out\\"');
-    expect(rj.out).toContain("cancellation boilerplate");
-    expect(rj.out).toContain("original held gate with every offered choice");
+    expect(rj.rc, rj.out).toBe(0);
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain("GATE_REJECTED");
+    expect(audit).toContain("Timed out");
+  });
 
-    // the real choice still commits (same turn: neither refusal consumed it)
-    const ok = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, direct);
-    expect(ok.rc).toBe(0);
+  test("approve --user-input that is a cancellation word is the agent's reading of their words, and commits", () => {
+    proj = ideationProject();
+    const direct = { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, direct).rc).toBe(0);
+    mintHumanTurn(proj);
+    const ap = guarded(STATE, ["approve", "feasibility", "--user-input", "cancelled"], proj, direct);
+    expect(ap.rc, ap.out).toBe(0);
     expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
   });
 });
 
-describe("t261 explicit decision self-attribution tripwire", () => {
+describe("t261 a decision's text is recorded as passed; the person's reply decides", () => {
   const DIRECT = {
     AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
@@ -767,24 +813,20 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     expect(attributed.out).not.toContain("decision self-attribution blocked");
   });
 
-  // This is deliberately a high-confidence tripwire, not proof of human
-  // authorship. It rejects explicit self-attribution observed in issue 742 and
-  // closely equivalent decision-noun variants.
+  // The agent's text is recorded as it passed it, whatever it says about who
+  // decided: the check behind every decision is that the person replied (issue
+  // 742's phrases, now recorded with a reply behind them, refused without one).
   const SELF_ATTRIBUTED_REJECTIONS = [
     "AGENT-INITIATED, NOT A HUMAN REJECTION. The human approved at 08:50; completion is blocked by a circular guard dependency and this reopen exists solely to obtain a review budget.",
     "NOT a human rejection. Recorded by the conductor to reopen the revision cycle honestly: the produces[] artifacts were revised after the reviewer's receipt.",
-    "NOT a human rejection. Conductor-recorded to reopen the cycle so the corrected document can get a genuine third review.",
     "B. Request Changes - CONDUCTOR DEFAULT, session unattended, taking the conductor's own stated recommendation.",
     "This rejection was generated by the AI.",
-    "Model-authored rejection to reopen the review cycle.",
     "I, the conductor, am rejecting this.",
-    "The assistant chose this rejection.",
   ];
 
-  test.each(SELF_ATTRIBUTED_REJECTIONS)("reject refuses explicit self-attribution (%#)", (feedback) => {
+  test.each(SELF_ATTRIBUTED_REJECTIONS)("reject records the agent's text with the person's reply behind it (%#)", (feedback) => {
     proj = ideationProject();
     openGate(proj);
-    const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
     const r = guarded(
       STATE,
       [
@@ -798,51 +840,33 @@ describe("t261 explicit decision self-attribution tripwire", () => {
       proj,
       DIRECT,
     );
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("--feedback says it was written by the assistant");
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(stateBefore);
-    const shards = readAllAuditShards(proj);
-    expect(shards).not.toContain("GATE_REJECTED");
-    expect(shards).not.toContain("STAGE_REVISING");
-    expect(shards).toContain("ERROR_LOGGED");
+    expect(r.rc, r.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
   });
 
-  test("approve --user-input refuses a self-attributed approval", () => {
+  test("an approval and an answer that say the agent chose record with a reply behind them, and refuse without one", () => {
+    const approval = ["approve", "feasibility", "--user-input", "Approve - CONDUCTOR DEFAULT, session unattended."];
+    const answer = ["answer", "--stage", "feasibility", "--details", "A. Nothing to add - chosen by the assistant."];
     proj = ideationProject();
-    openGate(proj);
-    const r = guarded(
-      STATE,
-      [
-        "approve",
-        "feasibility",
-        "--user-input",
-        "Approve - CONDUCTOR DEFAULT, session unattended. Reviewer returned READY on the third pass.",
-      ],
-      proj,
-      DIRECT,
-    );
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("--user-input says the choice came from the assistant");
-    expect(readAllAuditShards(proj)).not.toContain("GATE_APPROVED");
-  });
-
-  test("answer --details refuses a self-attributed interview answer", () => {
-    proj = ideationProject();
+    expect(guarded(STATE, ["gate-start", "feasibility"], proj, DIRECT).rc).toBe(0);
+    const unbacked = guarded(STATE, approval, proj, DIRECT);
+    expect(unbacked.rc).not.toBe(0);
+    expect(unbacked.out).toContain("no new human reply");
     mintHumanTurn(proj);
-    const r = guarded(
-      LOG,
-      [
-        "answer",
-        "--stage",
-        "feasibility",
-        "--details",
-        "A. Nothing to add - CONDUCTOR DEFAULT, session unattended. Grounds: candidate 1 is already a standing rule.",
-      ],
-      proj,
-    );
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("--details says it was chosen by the assistant");
-    expect(readAllAuditShards(proj)).not.toContain("QUESTION_ANSWERED");
+    const approved = guarded(STATE, approval, proj, DIRECT);
+    expect(approved.rc, approved.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
+
+    cleanupTestProject(proj);
+    proj = ideationProject();
+    expect(guarded(LOG, ["decision", "--stage", "feasibility", "--decision", "Anything to add?", "--options", "A,B"], proj).rc).toBe(0);
+    const unanswered = guarded(LOG, answer, proj);
+    expect(unanswered.rc).not.toBe(0);
+    expect(unanswered.out).toContain("no new human reply");
+    mintHumanTurn(proj);
+    const answered = guarded(LOG, answer, proj);
+    expect(answered.rc, answered.out).toBe(0);
+    expect(readAllAuditShards(proj)).toContain("QUESTION_ANSWERED");
   });
 
   const SUBSTANTIVE = [
@@ -894,100 +918,6 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     expect(readAllAuditShards(proj)).toContain("GATE_REJECTED");
   });
 
-  test("the helper pins the fail-open limitation for unlabelled decisions", () => {
-    for (const text of [
-      "Approve",
-      "Request changes: reopen for another review",
-      "The implementation needs another pass",
-    ]) {
-      expect(selfAttributedDecisionMarker(text, "approval")).toBeNull();
-      expect(selfAttributedDecisionMarker(text, "rejection")).toBeNull();
-    }
-  });
-
-  test("the helper detects explicit actor variants for each decision kind", () => {
-    expect(selfAttributedDecisionMarker(
-      "This approval was generated by the AI.",
-      "approval",
-    )?.category).toBe("model-authored-decision");
-    expect(selfAttributedDecisionMarker(
-      "I, the conductor, am rejecting this.",
-      "rejection",
-    )?.category).toBe("model-authored-decision");
-    expect(selfAttributedDecisionMarker(
-      "The assistant chose this answer.",
-      "answer",
-    )?.category).toBe("model-authored-decision");
-    expect(selfAttributedDecisionMarker(
-      "It's not a human rejection; that's deliberate.",
-      "rejection",
-    )?.category).toBe("non-human-decision");
-    for (const text of [
-      "This isn't a human rejection.",
-      "This isn’t a human rejection.",
-      "NOT A HUMAN’S REJECTION.",
-      "NOT A HUMAN REJECTION — reopening for review.",
-      "This rejection was generated by an AI.",
-      "The AI rejected this.",
-      "The AI rejected this to reopen the review.",
-      "The assistant chose this rejection - reopening for review.",
-      "I, as the conductor, am rejecting this.",
-      "CONDUCTOR DEFAULT.",
-      "CONDUCTOR DEFAULT!",
-      "CONDUCTOR DEFAULT?",
-      "CONDUCTOR DEFAULT。",
-      "NOT A HUMAN’S REJECTION。",
-    ]) {
-      expect(selfAttributedDecisionMarker(text, "rejection"), text).not.toBeNull();
-    }
-    expect(selfAttributedDecisionMarker(
-      "```text\nNOT A HUMAN REJECTION.\n```\nNOT A HUMAN REJECTION.",
-      "rejection",
-    )?.category).toBe("non-human-decision");
-  });
-
-  test("a refusal does not consume the turn: the human's own choice still commits", () => {
-    proj = ideationProject();
-    openGate(proj);
-    const forged = guarded(
-      STATE,
-      ["approve", "feasibility", "--user-input", "Approve - CONDUCTOR DEFAULT, session unattended."],
-      proj,
-      DIRECT,
-    );
-    expect(forged.rc).not.toBe(0);
-    const real = guarded(STATE, ["approve", "feasibility", "--user-input", "Approve"], proj, DIRECT);
-    expect(real.rc).toBe(0);
-    expect(readAllAuditShards(proj)).toContain("GATE_APPROVED");
-  });
-
-  test("an autonomous field does not exempt an Ideation decision", () => {
-    proj = createTestProject();
-    seedStateFile(proj, join(FIXTURES, "state-mid-ideation.md"));
-    const statePath = seededStateFile(proj);
-    writeFileSync(
-      statePath,
-      `${readFileSync(statePath, "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
-      "utf-8",
-    );
-    openGate(proj);
-    const r = guarded(
-      STATE,
-      [
-        "reject",
-        "feasibility",
-        "--user-input",
-        "Request Changes",
-        "--feedback",
-        "NOT a human rejection.",
-      ],
-      proj,
-      DIRECT,
-    );
-    expect(r.rc).not.toBe(0);
-    expect(readAllAuditShards(proj)).not.toContain("GATE_REJECTED");
-  });
-
   test("autonomous exemption is phase-scoped to Construction", () => {
     const state = "- **Construction Autonomy Mode**: autonomous\n";
     expect(isAutonomousConstructionDecision(state, "initialization")).toBe(false);
@@ -997,7 +927,7 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     expect(isAutonomousConstructionDecision(state, "operation")).toBe(false);
   });
 
-  test("autonomous Construction reject and ordinary answer use the phase-scoped exemption", () => {
+  test("autonomous Construction reject and ordinary answer record the conductor's text", () => {
     proj = autonomousConstructionProject();
     expect(guarded(STATE, ["gate-start", "build-and-test"], proj, DIRECT).rc).toBe(0);
     const rejected = guarded(
@@ -1018,17 +948,5 @@ describe("t261 explicit decision self-attribution tripwire", () => {
     );
     expect(answered.rc, answered.out).toBe(0);
     expect(readAllAuditShards(proj)).toContain("QUESTION_ANSWERED");
-  });
-
-  test("the floor rides the same off-switch as the other authority guards", () => {
-    proj = ideationProject();
-    expect(guarded(STATE, ["gate-start", "feasibility"], proj, DIRECT).rc).toBe(0);
-    const r = guarded(
-      STATE,
-      ["reject", "feasibility", "--feedback", "NOT a human rejection. Conductor-recorded."],
-      proj,
-      { ...DIRECT, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
-    );
-    expect(r.rc).toBe(0);
   });
 });

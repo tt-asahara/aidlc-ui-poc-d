@@ -4,9 +4,7 @@
 //
 // Test harness / dev-only tooling. Lives in tests/harness/ beside its SDK
 // sibling sdk-drive.ts (logic vs render), assert.ts, and fixtures.ts — NOT in
-// the shipped dist/claude/.claude/tools/ distributable. (Relocated from
-// the repo-root tools/aidlc-tui-drive.ts spike; the aidlc- prefix is dropped to
-// match sdk-drive.ts.)
+// the shipped dist/claude/.claude/tools/ distributable.
 //
 // This is the deterministic half of the harness ("three concerns, three
 // mechanisms": the send/capture/assert loop is a tool; the thing it drives
@@ -96,9 +94,9 @@
 //                                          when BOTH state fields match. Approve
 //                                          writes Last Completed Stage before
 //                                          handleAdvance writes Current Stage
-//                                          (aidlc-state.ts:5719 and :4506;
-//                                          verified 2026-09-13). Wait for both to
-//                                          avoid stopping in that two-write window.
+//                                          (aidlc-state.ts handleApprove and
+//                                          handleAdvance). Wait for both to avoid
+//                                          stopping in that two-write window.
 //            --assert-file-absent-at-option <label>
 //            --assert-file-absent <relpath>
 //                                          When the named option is first painted,
@@ -107,8 +105,7 @@
 //                                          together. The run also fails if the
 //                                          option is never observed.
 //            (neither)                     STOP on the practices-affirmation
-//                                          timestamp (the workshop default;
-//                                          existing callers unchanged).
+//                                          timestamp (the workshop default).
 //          One implementation, both backends: it only drives capture + send. The
 //          screen DETECTS a waiting menu; the disk signal TERMINATES the loop (the
 //          transcript is not a leading event bus — §1.1). The per-gate/overall
@@ -139,8 +136,9 @@ import {
   submittedToPersonTurnSession,
   typedIntoPersonTurnSession,
 } from "./person-turns.ts";
-import { stateFilePathFor } from "./sdk-drive.ts";
+import { defaultChoice, stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
+import { keepLegAudit, keepTranscriptWords } from "./leg-evidence.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
 import { selectedTuiBackend } from "./tui-runtime.ts";
 import { tuiOperationDeadline } from "./tui-time-budget.ts";
@@ -160,7 +158,7 @@ const DEFAULT_TIMEOUT_MS = LIVE_COMMAND_TIMEOUT_MS;
 const DEFAULT_STABLE_MS = 600;
 const DEFAULT_STARTUP_TIMEOUT_MS = LIVE_STARTUP_TIMEOUT_MS;
 const DEFAULT_DEAD_TIMEOUT_MS = NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS;
-const DEFAULT_TUI_SETTING_SOURCES = "project";
+const DEFAULT_TUI_SETTING_SOURCES = "project,local";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
 const ANSWER_REPAINT_WAIT_MS = 5_000;
 const MENU_SETTLE_MS = 500;
@@ -405,7 +403,9 @@ const LAUNCHING_SESSION_MARKERS = ["CLAUDE_CODE_CHILD_SESSION"];
 
 /**
  * Keep live TUI runs isolated from developer/user-level Claude settings and
- * hooks by default, mirroring sdk-drive's `settingSources: ["project"]`.
+ * hooks by default. A real launch also reads the project's own
+ * .claude/settings.local.json, where the person's choice of AI-DLC's status
+ * line lives (#1407), so the fixture's local settings load beside the project's.
  * Explicit command flags win, and AIDLC_TUI_SETTING_SOURCES=default opts a
  * focused calibration run back into Claude CLI defaults.
  */
@@ -659,8 +659,7 @@ export function preseedClaudeOnboarding(
 }
 
 // ---------------------------------------------------------------------------
-// Backend selection — the one os.platform() switch. Everything above the line
-// is platform-agnostic.
+// Backend selection.
 // ---------------------------------------------------------------------------
 
 function selectBackend(): Backend {
@@ -826,6 +825,99 @@ export async function declineOwnedModelUpgrade(
   return true;
 }
 
+const KIRO_V3_OFFER_TITLE_RE = /You're using Kiro CLI V2\.\s+Switch to V3 today\./;
+const KIRO_V3_OFFER_OPTIONS = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
+const KIRO_V3_REMIND_LATER = 1;
+
+/**
+ * The key that moves Kiro CLI's V3 offer (2.33.1, at launch) to "Remind me later", or takes it.
+ * Its caret is U+276F, or an ASCII `>` on Windows Server.
+ */
+export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  // The offer paints before the chat; an agent's reply quoting it sits above the input footer.
+  if (!KIRO_V3_OFFER_TITLE_RE.test(screen) || /ask a question or describe a task/.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*([❯>]\s*)?(Switch to V3 and upgrade my configs|Remind me later|Don't ask again)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], label: match[2] }] : [];
+  });
+  if (
+    options.map((option) => option.label).join("\0") !== KIRO_V3_OFFER_OPTIONS.join("\0") ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  return selected === KIRO_V3_REMIND_LATER ? "Enter" : KIRO_V3_REMIND_LATER > selected ? "Down" : "Up";
+}
+
+/**
+ * Answer Kiro CLI's V3 offer "Remind me later", the answer the live legs give: it writes only
+ * Kiro's snooze date (v3Prompt.snoozeUntil in its data.sqlite3), none of its
+ * configs, so no fixture gate applies; the release journey's project is not
+ * one. The other two answers change the machine's Kiro and are never sent:
+ * Enter goes only on a settled screen with "Remind me later" selected, and
+ * only one key is ever on its way, so the painted caret is Kiro's own. The
+ * answer returns only once the offer is off the screen, so no later poll or
+ * wait reads the answered offer as a new one; no one-attempt marker, since an
+ * offer a later launch paints is answered again. The Enter goes into the drive's record of the person's turns
+ * as one more empty turn at its start, the same as the trust prompt's Enter.
+ */
+export async function remindKiroV3OfferLater(
+  backend: Pick<Backend, "capture" | "send">,
+  session: string,
+  screen: string,
+  timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  if (!kiroV3OfferNavigation(screen)) return false;
+  const now = timing.now ?? Date.now;
+  const pause = timing.sleep ?? sleep;
+  const deadline = now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: timing.deadlineMs, phase: "Kiro V3 offer" })!;
+  let previous = "";
+  let stableSince = now();
+  const moves: string[] = [];
+  while (now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    const navigation = kiroV3OfferNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = now();
+    previous = screen;
+    if (now() - stableSince < DEFAULT_STABLE_MS) {
+      await pause(POLL_INTERVAL_MS);
+      continue;
+    }
+    if (navigation === "Enter") {
+      const answered = screen;
+      await backend.send(session, "Enter", false, true);
+      // Kiro keeps the answered offer painted while it starts its chat, whose
+      // first screen takes a second Enter as "No, exit".
+      while (now() < deadline) {
+        await pause(POLL_INTERVAL_MS);
+        screen = await backend.capture(session, false, "physical");
+        if (!kiroV3OfferNavigation(screen)) {
+          writeTuiTrace(session, "kiro_v3_offer_remind_later", { keys: [...moves, "Enter"], screen: answered });
+          return true;
+        }
+      }
+      throw new Error(`Kiro did not take Remind me later on its V3 offer; refusing another Enter\n---- last pane ----\n${screen}`);
+    }
+    if (moves.length === 2) break;
+    moves.push(navigation);
+    await backend.send(session, navigation, false, true);
+    // A frame painted before this key arrived still shows the old caret; a key
+    // that never paints may be late rather than lost, so it is not sent again.
+    const paintBy = Math.min(now() + ANSWER_REPAINT_WAIT_MS, deadline);
+    let painted: ReturnType<typeof kiroV3OfferNavigation> = navigation;
+    while (painted === navigation && now() < paintBy) {
+      await pause(POLL_INTERVAL_MS);
+      screen = await backend.capture(session, false, "physical");
+      painted = kiroV3OfferNavigation(screen);
+    }
+    if (painted === navigation) {
+      throw new Error(`Kiro did not paint ${navigation} on its V3 offer; refusing another key\n---- last pane ----\n${screen}`);
+    }
+    previous = "";
+  }
+  throw new Error(`Kiro's V3 offer never settled on Remind me later; refusing Enter\n---- last pane ----\n${screen}`);
+}
+
 type TuiPatternView = TuiTextLayout | "auto";
 
 function patternView(a: Args): TuiPatternView {
@@ -838,7 +930,7 @@ function patternView(a: Args): TuiPatternView {
 
 async function captureTextViews(backend: Backend, session: string): Promise<TuiTextViews> {
   if (backend.captureViews) return await backend.captureViews(session);
-  // Legacy Windows has always exposed only physical rows, without wrap metadata.
+  // Without captureViews a backend exposes only physical rows, no wrap metadata.
   const text = await backend.capture(session, false, "physical");
   return { physical: text, logical: text };
 }
@@ -887,7 +979,10 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     }
     lastViews = views;
     const screen = views.physical;
-    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
+    if (
+      await declineOwnedModelUpgrade(backend, session, screen, deadline) ||
+      await remindKiroV3OfferLater(backend, session, screen, { deadlineMs: deadline })
+    ) {
       prev = "";
       stableSince = 0;
       continue;
@@ -1220,7 +1315,18 @@ async function cmdCapture(backend: Backend, a: Args): Promise<void> {
 async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
+  let fixture: string | null = null;
+  try {
+    fixture = backend.fixtureCwd(session);
+  } catch {
+    // A session with no readable record keeps nothing more.
+  }
   await backend.kill(session);
+  // The session is over and its project still on disk (tests/harness/leg-evidence.ts).
+  if (fixture) {
+    keepLegAudit(fixture);
+    keepTranscriptWords(fixture);
+  }
   process.stdout.write(`killed session '${session}'\n`);
 }
 
@@ -1264,14 +1370,14 @@ async function cmdWaitDead(backend: Backend, a: Args): Promise<void> {
 // answer-gate — the shared AskUserQuestion answer loop (§3, D-TUI-3).
 //
 // One implementation, both backends: it only uses backend.capture + backend.send,
-// so the Bun and tmux paths drive it identically. It is the value of the
-// whole exercise — the per-tab Enter loop proven in tmp/auq-loop.sh, made reusable.
+// so the Bun and tmux paths drive it identically.
 //
 // Detection is SCREEN-based (the `Enter to select` / `Submit answers` footer on
-// the captured grid); termination is the ON-DISK affirmation timestamp. The
+// the captured grid); termination is the configured ON-DISK signal, or the
+// unanswered approval menu with --stop-at-approval-gate. The
 // transcript JSONL is NOT a leading event bus (the AUQ tool_use is written on
 // RESOLUTION, not presentation — §1.1), so an event-driven detect-loop would
-// deadlock. Disk is the terminator; the screen only tells us WHEN to press Enter.
+// deadlock. Disk is the default terminator; the screen tells us WHEN to press Enter.
 // ---------------------------------------------------------------------------
 
 // Read the active intent record's aidlc-state.md and report whether practices affirmation has
@@ -1303,12 +1409,10 @@ function affirmedOnDisk(projectDir: string): boolean {
 // intent-statement, a memory.md, a state field reaching a value. So the
 // terminator is PLUGGABLE: a test names its journey's real on-disk completion
 // signal, and the SAME keystroke loop (Enter = Recommended per menu) drives ANY
-// gated journey to it. This is the generalisation of the workshop-only affirmed
-// terminator — the keystroke STRATEGY was always journey-agnostic; only the
-// TERMINATOR was hardcoded.
+// gated journey to it.
 //
 // Flags (all relative to --project-dir; the affirmation default holds when none
-// is given, so existing callers are unchanged):
+// is given):
 //   --until-file <relpath>          terminate when this file exists & is non-empty
 //                                   (a glob segment `*` matches within one dir level)
 //   --until-state-field <name=re>   terminate when aidlc-state.md's
@@ -1318,9 +1422,9 @@ function affirmedOnDisk(projectDir: string): boolean {
 //   (none)                          terminate on the practices-affirmation timestamp
 //
 // --also-state-field closes the approve tool's two-write window: handleApprove
-// writes Last Completed Stage (aidlc-state.ts:5719), then handleAdvance writes
-// Current Stage (aidlc-state.ts:4506; verified 2026-09-13). Wait for both before
-// returning, so a caller's session kill cannot land between those writes.
+// writes Last Completed Stage, then handleAdvance writes Current Stage (both in
+// aidlc-state.ts). Wait for both before returning, so a caller's session kill
+// cannot land between those writes.
 type Terminator = { describe: string; done: () => boolean };
 
 export type PortablePathKind =
@@ -1463,7 +1567,6 @@ export function fileSignalMet(
   const platform = portablePathPlatform();
   const resolved = resolvePortablePathPattern(root, rel, platform);
   const joinPath = platform === "win32" ? win32.join : posix.join;
-  // Walk the path segment by segment, expanding a `*` segment to its dir entries.
   let dirs = [resolved.root];
   const segs = resolved.segments;
   for (let i = 0; i < segs.length; i++) {
@@ -1472,7 +1575,6 @@ export function fileSignalMet(
     const next: string[] = [];
     for (const d of dirs) {
       if (seg.includes("*")) {
-        // glob this segment against the dir's entries
         let entries: string[] = [];
         try {
           entries = existsSync(d) ? readdirSync(d) : [];
@@ -1490,7 +1592,6 @@ export function fileSignalMet(
     dirs = next;
     if (dirs.length === 0) return false;
     if (!isLast) {
-      // keep only existing directories to descend into
       dirs = dirs.filter((p) => {
         try {
           return existsSync(p) && statSync(p).isDirectory();
@@ -1500,7 +1601,6 @@ export function fileSignalMet(
       });
     }
   }
-  // Any matched terminal path that is an existing, non-empty file = signal met.
   for (const p of dirs) {
     try {
       if (
@@ -1757,6 +1857,13 @@ export function reviewedPicks(grid: string): string[] {
   return Array.from({ length: ticked }, () => "");
 }
 
+// The option on the menu's caret row, the one Enter takes (a lone
+// multi-select ticks that row too), without its checkbox.
+export function menuPick(grid: string): string {
+  const row = unglueRules(grid).split("\n").findLast((line) => AUQ_CARET_OPTION.test(line)) ?? "";
+  return /^\s*❯\s+\d+\.\s+(?:\[[ ✔]\]\s*)?(.*\S)/.exec(row)?.[1].trim() ?? "";
+}
+
 // Is the painted question a MULTI-SELECT ("select all that apply")? The AUQ key
 // model, confirmed from the claude bundle AND by live single-keystroke probing of
 // the real widget (2026-06-06):
@@ -1804,7 +1911,6 @@ function parseMenuOptions(grid: string): { num: number; label: string }[] {
   return out;
 }
 
-/** True when the painted menu contains an option with the given label text. */
 export function gridHasOption(grid: string, optionLabel: string): boolean {
   const wanted = optionLabel.trim().toLowerCase();
   return (
@@ -1830,6 +1936,34 @@ function pickMenuOption(grid: string, label: RegExp): number | null {
     if (label.test(opt.label)) return opt.num;
   }
   return null;
+}
+
+// The keys that move the caret of the menu on screen to the option `choose`
+// picks from its labels, and that option's label. The menu is the last run of
+// options numbered from 1 above its footer, so a numbered list earlier in the
+// chat is not read as one. Null when nothing is chosen.
+export function caretKeysTo(
+  grid: string,
+  choose: (labels: string[]) => string | undefined,
+): { keys: Array<"Up" | "Down">; label: string } | null {
+  const range = actionableMenuRange(grid);
+  if (!range) return null;
+  const lines = unglueRules(grid).split("\n").slice(0, range[1] + 1);
+  const options = parseMenuOptions(lines.join("\n"));
+  const menu = options.slice(Math.max(0, options.findLastIndex((option) => option.num === 1)));
+  const label = choose(menu.map((option) => option.label));
+  const target = menu.find((option) => option.label === label);
+  const caret = Number(/^\s*❯\s+(\d+)\./.exec(lines[range[0]])?.[1]);
+  if (!target || !Number.isFinite(caret)) return null;
+  const moves = target.num - caret;
+  return { keys: Array.from({ length: Math.abs(moves) }, () => (moves > 0 ? "Down" : "Up")), label: target.label };
+}
+
+async function sendCaretKeys(backend: Backend, session: string, keys: readonly string[]): Promise<void> {
+  for (const key of keys) {
+    await backend.send(session, key, false, true);
+    await sleep(120);
+  }
 }
 
 async function chooseNumberedMenuOption(
@@ -1861,9 +1995,8 @@ function gridLooksLikeRevisionFreeTextPrompt(grid: string): boolean {
   return /which artifact needs fixing|what(?:'|’)s wrong with it|tell me the file/i.test(grid);
 }
 
-// After "Request changes" on an approval gate, the v0.6.0 engine no longer asks
-// for revision feedback as FREE TEXT. It paints a RECOVERY MENU (verified live
-// 2026-06-09) — e.g. `1. Actually approve & continue` (which UN-rejects), then
+// After "Request changes" on an approval gate, the engine can paint a RECOVERY
+// MENU - e.g. `1. Actually approve & continue` (which UN-rejects), then
 // real revise directives (`2. Narrow root cause…`, `3. Drop … steer`, `4. Add
 // more detail`), plus generic `Type something` / `Chat about this` trailers.
 // Picking the right option is what makes `reject --feedback` fire (Revision
@@ -2041,8 +2174,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // engineering) legitimately runs minutes with no menu, and runs SLOWER on a slower
   // box, so any fixed per-stage number eventually false-fires on a working run (it
   // killed t50's RE stage at 360s on the Windows box, mid-work, 2026-06-06). Folding
-  // it into the overall deadline means the only thing that can trip it is a genuine
-  // wedge (nothing ever reaches the disk terminator), and bun's own test timeout is
+  // it into the overall deadline means the only thing that can trip it is a run that
+  // never reaches the disk terminator in time, and bun's own test timeout is
   // the hard ceiling above it. An explicit --per-gate-timeout-ms still overrides for
   // the rare case that wants faster wedge-detection.
   let overallMs: number;
@@ -2099,14 +2232,13 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // of the run. This is the ONLY way to drive a reject→revise→approve cycle: the
   // gate must be distinguished from the clarifying-QUESTION menus that precede it
   // (which carry A–E option text, never "Request changes"), so a blind pre-loop
-  // keystroke can't target it (it lands on a question — the t128 finding,
-  // 2026-06-07). Keyed on the option label "Request changes"
-  // (stage-protocol.md:42), the option unique to an approval gate. Once consumed,
-  // the loop is approve-only, so the rejected stage re-presents its gate and gets
-  // approved on the next pass — the full cycle, driven like a human.
+  // keystroke can't target it (it lands on a question). Keyed on the option label
+  // "Request changes" (stage-protocol.md), the option unique to an approval gate.
+  // Once consumed, the loop is approve-only, so the rejected stage re-presents its
+  // gate and gets approved on the next pass - the full cycle, driven like a human.
   // Bare valueless flag → parseArgs stores it in `bools`, not `flags` (see how
-  // --literal / --no-enter / --ansi are read). Reading a.flags here was the bug
-  // that left this always-false (the t128 third-red finding, 2026-06-07).
+  // --literal / --no-enter / --ansi are read). Reading a.flags here would leave
+  // this always-false.
   let rejectFirstGate = a.bools["reject-first-gate"] === true;
   const stopAtApprovalGate =
     a.bools["stop-at-approval-gate"] === true;
@@ -2386,7 +2518,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
-        nextPersonTurnCarriesPicks(session, 1);
+        nextPersonTurnCarriesPicks(session, 1, menuPick(grid));
         await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
@@ -2397,22 +2529,20 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         requestChangesNeedsSubmit,
         screen: grid,
       });
-      // The FIRST approval gate, once: select "Request changes" (option 2) rather
-      // than the highlighted "Approve" (option 1). Down moves the caret to option
-      // 2; Enter selects it → handleReject (GATE_REJECTED + STAGE_REVISING +
-      // Revision Count++). Consume the one-shot so every later gate is approved.
-      await backend.send(session, "Down", false, true);
-      await sleep(150);
+      // The FIRST approval gate, once: move the caret to "Request Changes", wherever
+      // the agent put it, rather than the approval; Enter selects it, and handleReject
+      // records GATE_REJECTED, STAGE_REVISING and Revision Count++. Consume the one-shot so
+      // every later gate is approved.
+      const reject = caretKeysTo(grid, (labels) => labels.find((label) => /\bRequest Changes\b/i.test(label)));
+      await sendCaretKeys(backend, session, reject?.keys ?? ["Down"]);
       nextPersonTurnCarriesPicks(session, requestChangesNeedsSubmit ? 0 : 1);
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
-      // What the engine does NEXT changed in v0.6.0, so we READ the screen and
-      // respond to whatever actually painted instead of blind-typing a fixed
-      // string (the old code typed free-text feedback unconditionally; against
-      // the new recovery MENU that text landed in the filter slot, the reject
-      // never committed, and Revision Count stayed 0 — the t139 finding,
-      // 2026-06-09). A multi-tab form must be submitted first: after selecting
+      // We READ the screen and respond to whatever actually painted instead of
+      // blind-typing a fixed string (free-text feedback typed against a recovery MENU
+      // lands in the filter slot, the reject never commits, and Revision Count stays
+      // 0). A multi-tab form must be submitted first: after selecting
       // Request Changes the user still needs to answer later tabs such as
       // Learnings and press Submit before the real revision prompt appears.
       if (requestChangesNeedsSubmit) {
@@ -2424,14 +2554,20 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else {
+      // The person's default pick by its label (defaultChoice), wherever the agent
+      // put it in the menu.
+      const choice = caretKeysTo(grid, defaultChoice);
       writeTuiTrace(session, "answer_gate_action", {
         answered,
         action: "single_select_default",
+        choice: choice?.label ?? null,
         screen: grid,
       });
+      await sendCaretKeys(backend, session, choice?.keys ?? []);
       // A pick on one tab of a form is counted with the form's Submit.
-      nextPersonTurnCarriesPicks(session, gridIsMultiTabForm(grid) ? 0 : 1);
-      await backend.send(session, "Enter", false, true); // select Recommended + advance
+      const tab = gridIsMultiTabForm(grid);
+      nextPersonTurnCarriesPicks(session, tab ? 0 : 1, tab ? "" : choice?.label ?? menuPick(grid));
+      await backend.send(session, "Enter", false, true); // select it + advance
     }
     answered++;
 

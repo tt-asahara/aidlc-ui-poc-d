@@ -21,11 +21,11 @@ export const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
 // A run of fully-qualified emoji, optionally ZWJ-joined, then whitespace is
 // decoration, so an information-sign emoji before `Sources` still names the
 // `Sources` section. A bare text-presentation symbol (copyright, trademark, a
-// play triangle) is not decoration. The claim-sources sensor and the summary
-// confirmation digest both read contract headings through this one rule.
+// play triangle) is not decoration. The claim-sources sensor, the
+// required-sections sensor's template check and the summary confirmation
+// digest all read contract headings through this one rule.
 const LEADING_EMOJI_DECORATION = /^\p{RGI_Emoji}(?:\u200D?\p{RGI_Emoji})*[ \t]+/v;
 
-/** The section name a contract heading gives, read past a leading emoji decoration. */
 export function headingKey(heading: string): string {
   return heading.replace(LEADING_EMOJI_DECORATION, "").trim();
 }

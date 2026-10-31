@@ -1,6 +1,98 @@
-import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// The environment the engine runs in, settled before anything else in this
+// module or any module that imports it (the dispatcher, aidlc-lib and every
+// adapter import this module first, so every entry evaluates this block before
+// its own body). Bun loads the `.env` files of the folder a process runs in into
+// process.env, and AI-DLC's hooks and tools run in the person's project. A
+// repository the person clones could therefore set any name the engine reads: a
+// check of theirs switched off, records pointed at another folder, a tool run
+// from a directory of the repository's choosing. The installed engine is built
+// with that autoload off, so nothing in its environment came from a file and
+// nothing is dropped there. A Bun-run tree cannot carry a build flag, so here
+// every AI-DLC or host-tool name a `.env` file in the working directory assigns
+// is removed again before any read; a child Bun process loads the files again
+// and runs this again on its first import.
+//
+// Bun never overrides a name the shell already set, and once a file names a
+// variable there is no telling the two apart. So the drop is narrow: the
+// engine's own namespace and the host tools' names that steer where it reads,
+// writes or runs. The person's application names (an AWS profile, a database
+// URL, whatever their tests need) stay as the shell had them, so a command the
+// engine runs for them sees the same environment their terminal does. Two
+// declarations only a host makes are kept even when the file names them: the
+// unattended driver's flag (dropping it would let a driver's turns pass for a
+// person's) and the dispatcher's internal tokens to its own children.
+//
+// ponytail: an AI-DLC name set in both the shell and the repository's .env is
+// dropped too (a lost setting, never a loosened guard); the environment is the
+// documented place for those names, a project .env is not.
+export const BUN_DOTENV_FILES = [
+  ".env",
+  ".env.local",
+  ".env.development",
+  ".env.development.local",
+  ".env.production",
+  ".env.production.local",
+  ".env.test",
+  ".env.test.local",
+];
+
+const DOTENV_ASSIGNMENT = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/gm;
+// Names the engine reads as its own, or that the host tools use to tell it
+// where the project, the person's settings, a plugin or a git configuration is.
+const DOTENV_GUARDED = /^(?:AIDLC_|AWS_AIDLC_|CLAUDE_|KIRO_|CODEX_|CURSOR_|COPILOT_|XDG_|GIT_CONFIG)/i;
+// Declarations only the host makes: kept even when a file names them.
+const DOTENV_HOST_ONLY = /^AIDLC_(?:UNATTENDED$|INTERNAL_)/i;
+
+/** Whether Bun loaded the folder's dotenv files into this process at all. */
+export function dotenvLoaded(): boolean {
+  return !isCompiledExecutable() && !process.execArgv.includes("--no-env-file");
+}
+
+/** Every name the folder's Bun dotenv files assign, in file order, duplicates included. */
+export function dotenvAssignedNames(dir = process.cwd()): string[] {
+  const names: string[] = [];
+  for (const file of BUN_DOTENV_FILES) {
+    let text: string;
+    try {
+      text = readFileSync(join(dir, file), "utf-8");
+    } catch {
+      continue;
+    }
+    for (const match of text.matchAll(DOTENV_ASSIGNMENT)) names.push(match[1]);
+  }
+  return names;
+}
+
+/** Whether a dotenv file in the folder assigns the name, in any casing (Windows reads names case-insensitively). */
+export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
+  const wanted = name.toUpperCase();
+  return dotenvAssignedNames(dir).some((assigned) => assigned.toUpperCase() === wanted);
+}
+
+/**
+ * Remove from `env` every AI-DLC or host-tool name the folder's dotenv files
+ * assign, host-only declarations excepted; returns what was dropped. Nothing is
+ * dropped when Bun loaded no file (`loaded` false): then everything present
+ * came from the host.
+ */
+export function dropDotenvNames(env: NodeJS.ProcessEnv = process.env, dir = process.cwd(), loaded = dotenvLoaded()): string[] {
+  if (!loaded) return [];
+  const dropped: string[] = [];
+  for (const name of dotenvAssignedNames(dir)) {
+    if (!DOTENV_GUARDED.test(name) || DOTENV_HOST_ONLY.test(name) || !(name in env)) continue;
+    delete env[name];
+    dropped.push(name);
+  }
+  return dropped;
+}
+
+dropDotenvNames();
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
@@ -142,6 +234,40 @@ export function compiledExecutable(
   return isCompiledExecutable(moduleUrl, executable) ? executable : null;
 }
 
+// A package the project installed itself, as Node resolves it from cwd:
+// node_modules, a link out of it, or NODE_PATH. Bun's resolver can also answer
+// from its own install cache, a copy that cannot run and that the project never
+// chose, so that answer is none. The code sensors run the project's own tool
+// through this.
+export function projectPackage(cwd: string, name: string): { root: string; major: number } | null {
+  try {
+    const manifestPath = createRequire(join(cwd, "package.json")).resolve(`${name}/package.json`);
+    if (inBunInstallCache(manifestPath)) return null;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    if (manifest.name !== name || typeof manifest.version !== "string") return null;
+    return { root: dirname(manifestPath), major: Number(manifest.version.split(".")[0]) };
+  } catch {
+    return null;
+  }
+}
+
+function bunInstallCache(): string {
+  const explicit = process.env.BUN_INSTALL_CACHE_DIR?.trim();
+  if (explicit) return explicit;
+  return join(process.env.BUN_INSTALL?.trim() || join(homedir(), ".bun"), "install", "cache");
+}
+
+function inBunInstallCache(path: string): boolean {
+  let cache: string;
+  try {
+    cache = realpathSync(bunInstallCache());
+  } catch {
+    return false;
+  }
+  const rel = relative(cache, realpathSync(path));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 // Child calls and human-facing command rendering describe the same dispatcher
 // operations. Child calls use argv and an absolute source path so neither cwd
 // changes nor a native executable's process.execPath can turn a script into a
@@ -163,18 +289,79 @@ export function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
+// A repo is named by its folder directly in the workspace, as the person named
+// it, so a name resolves only to an immediate child of the workspace and never
+// escapes it. A name is left out only where it breaks something named here, in
+// words that finish "its name ...": why a typed name is refused and a folder
+// found on disk is left out of the work. Null when the name can be a repo's.
+export function repoNameProblem(name: string): string | null {
+  if (name === "" || name === "." || name === ".." || /[/\\\0]/.test(name)) {
+    return 'is not one folder\'s name (no "/" or "\\", not "." or "..")';
+  }
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: finding them is the point
+  if (/[\u0001-\u001f\u007f\u2028\u2029]/.test(name)) return "has a control character, which AI-DLC's records cannot keep";
+  if (name.trim() !== name) return "starts or ends with a space, which AI-DLC's records cannot keep";
+  // A teammate's clone on Windows could not check out the records named after it.
+  const windows = /[<>:"|?*]/.exec(name);
+  if (windows) return `has "${windows[0]}", which a folder name on Windows cannot have`;
+  // A native Windows install runs every AI-DLC command through aidlc.cmd, whose
+  // cmd.exe reads these again, however the command quotes them.
+  const cmd = /[&^%]/.exec(name);
+  if (cmd) return `has "${cmd[0]}", which breaks AI-DLC's commands on Windows`;
+  // Cursor's adapter stops a delegated agent's own AI-DLC command holding
+  // these, quoted or not (runsAdmittedAidlcCommand).
+  const cursor = /[()[\]{};$`]/.exec(name);
+  if (cursor) return `has "${cursor[0]}", which stops AI-DLC's commands on Cursor`;
+  if (name.includes(",")) return 'has ",", which AI-DLC puts between repo names';
+  if (name === "-") return 'is "-", which AI-DLC\'s records use for no repo';
+  if (name.startsWith("--")) return 'starts with "--", which AI-DLC\'s commands read as an option';
+  if (name.endsWith("@checkout")) return 'ends with "@checkout", which names a checkout AI-DLC records';
+  // On Windows the agent's shell is PowerShell or Git Bash, and only double
+  // quotes read an apostrophe alike in both (quoteCommandArgument); these end
+  // or act inside them.
+  const apostrophe = /['\u2018-\u201b]/.exec(name);
+  const alongside = /[!\u201c-\u201e]/.exec(name);
+  if (apostrophe && alongside) {
+    return `has "${apostrophe[0]}" with "${alongside[0]}", which AI-DLC cannot quote one way for both PowerShell and Git Bash on Windows`;
+  }
+  return null;
+}
+
+// The refusal of a typed name that cannot be a repo's, after its flag or field.
+export function repoNameRefusal(what: string, name: string): string {
+  return `${what} "${name}": its name ${repoNameProblem(name) ?? "cannot be a repo's"}.`;
+}
+
+// Text bash, zsh, PowerShell and cmd.exe all read as written inside double
+// quotes: nothing in it expands or ends the quotes (PowerShell ends them at a
+// typographic double quote too), and nothing acts in cmd.exe when PowerShell
+// hands the word on without them.
+export function readsAlikeInDoubleQuotes(value: string): boolean {
+  return /^[^"\u201c-\u201e$`\\%!^&|<>\r\n]+$/.test(value);
+}
+
+// The characters PowerShell reads as a single quote: the apostrophe and the
+// typographic ones a pasted name can hold.
+const POWERSHELL_SINGLE_QUOTE = /['\u2018-\u201b]/;
+
 // One argument of a command we print for someone to run: bare when it cannot
 // expand, else single-quoted so no shell substitutes into it. It stays one
 // line of plain text: a control character is shown as "?", never emitted.
+// "windows" is the agent's shell on Windows, which may be PowerShell or Git Bash
+// (Claude Code's).
 export function quoteCommandArgument(
   value: string,
-  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+  shell: "posix" | "powershell" | "windows" = process.platform === "win32" ? "windows" : "posix",
 ): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
-  return shell === "powershell"
-    ? `'${value.replaceAll("'", "''")}'`
+  // PowerShell reads a bare word that starts with "@" as splatting a variable.
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value) && !(shell !== "posix" && value.startsWith("@"))) return value;
+  // The two shells quote an apostrophe differently, so it is double-quoted
+  // when both read that alike.
+  if (shell === "windows" && POWERSHELL_SINGLE_QUOTE.test(value) && readsAlikeInDoubleQuotes(value)) return `"${value}"`;
+  return shell !== "posix"
+    ? `'${value.replaceAll(new RegExp(POWERSHELL_SINGLE_QUOTE.source, "g"), "$&$&")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
@@ -197,6 +384,22 @@ export function entrySkillInvocation(): string {
 
 export function aidlcDispatcherInvocation(route: string): string {
   return `${aidlcInvocation()} engine ${route}`;
+}
+
+// The command a parallel batch's worker or reviewer runs for the tests the
+// person approved: AI-DLC's own `swarm check` with the command's output shown,
+// run from the project's main folder for the Unit's worktree. It names no
+// folder, so no shell has a path to quote (cmd.exe hands a quoted one on with
+// its quotes).
+export function swarmUnitTestCommand(unit: string): string {
+  return aidlcDispatcherInvocation(`swarm check ${quoteCommandArgument(unit)} --show-output`);
+}
+
+// The command that runs one check by hand, in the sensor tool's usage and each
+// check script's: the dispatcher hands the script the stage's templates and
+// inputs and records the result, which the script run bare does not.
+export function sensorFireUsage(id = "<id>"): string {
+  return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
 }
 
 export function aidlcToolInvocation(
@@ -297,7 +500,7 @@ export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
   } catch {
     // A tree without readable metadata still has its conductor file.
   }
-  if (existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
+  if (existsSync(join(harnessRoot, "agents", "aidlc-aidlc.md")) || existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
   if (existsSync(join(harnessRoot, "agents", "aidlc.json"))) return "agent-v1";
   return null;
 }
@@ -352,12 +555,15 @@ export function runtimeHarnessName(
   return "claude";
 }
 
-// The tools that hide a Stop-hook block's reason from the person: Kiro CLI
-// shows none of it, opencode hands it to the agent as a hidden synthetic part,
-// and Kiro IDE (whose tree Kiro CLI v3 also runs) drops Stop output. There the
-// agent says the carrying-on line itself.
-export function hidesStopNote(harnessName: string): boolean {
-  return harnessName === "kiro" || harnessName === "kiro-ide" || harnessName === "opencode";
+/**
+ * Pin the harness a command names (`--harness-dir`) for this process and the
+ * tools it loads: a compiled aidlc has already pinned the first one installed
+ * here, which in a project with Claude Code beside it is .claude.
+ */
+export function pinNamedHarness(projectDir: string, harnessDir: string): void {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  delete process.env.AIDLC_HARNESS_NAME;
+  process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, harnessDir);
 }
 
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
@@ -443,7 +649,7 @@ const HOST_LABELS: Readonly<Record<string, string>> = {
   copilot: "GitHub Copilot",
   cursor: "Cursor",
   kiro: "Kiro CLI",
-  "kiro-ide": "Kiro IDE",
+  "kiro-ide": "Kiro",
   opencode: "opencode",
 };
 
@@ -558,8 +764,10 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
       ? projectDir
       : join(projectDir, harnessDir);
 
-  // Mutation is project-owned. Explicit/module/packaged roots are read
-  // fallbacks only and must never become a write target.
+  // Mutation goes to the project root when a project dir was named (location,
+  // AIDLC_RUNTIME_PROJECT_DIR or --project-dir), else to this module's own
+  // harness root when it has one, else the project root. Explicit and packaged
+  // roots are read fallbacks only and must never become a write target.
   if (location.mutable) {
     const root = location.projectDir !== undefined || explicitRuntimeProjectDir()
       ? projectRoot

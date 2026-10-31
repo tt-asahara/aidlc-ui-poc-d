@@ -4,6 +4,9 @@ import { basename, join } from "node:path";
 import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import { type Tier, TIER_PROJECTIONS, TIERS } from "../../core/tools/aidlc-tiers.ts";
+import { parseStageFrontmatter } from "../../core/tools/aidlc-lib.ts";
+import { compareVersions } from "../../core/tools/aidlc-channel.ts";
+import { validateStageFrontmatter } from "../../core/tools/aidlc-stage-schema.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -167,6 +170,15 @@ const scopeNames = readdirSync(at("core", "scopes"))
 const scopeGrid = JSON.parse(
   read("dist", "claude", ".claude", "tools", "data", "scope-grid.json"),
 ) as Record<string, { stages: Record<string, string> }>;
+// A scope's size as the person reads it: the stages it runs after
+// Initialization, of the stages after it (`/aidlc --help`, and the plan offer on
+// existing code).
+const afterSetup = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+  slug: string;
+  phase: string;
+}>).filter((stage) => stage.phase !== "initialization").map((stage) => stage.slug);
+const runsAfterSetup = (stages: Record<string, string>): number =>
+  afterSetup.filter((slug) => stages[slug] === "EXECUTE").length;
 const reviewerNames = [
   ...new Set(
     filesBelow(at("core", "aidlc-common", "stages"), ".md").flatMap((file) =>
@@ -234,7 +246,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(115);
+    expect(eventTypes.length).toBe(126);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -342,11 +354,12 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("Kiro IDE documentation names only IDE-native enforcement and configuration surfaces", () => {
     const skill = read("harness", "kiro-ide", "skills", "aidlc", "SKILL.md");
+    // The dispatch-record rule is per Unit, in the per-Unit review module.
     const reviewerProtocol = read(
       "core",
       "aidlc-common",
       "protocols",
-      "stage-protocol-reviewer.md",
+      "stage-protocol-reviewer-unit.md",
     );
     const questionRendering = read(
       "harness",
@@ -401,8 +414,8 @@ describe("documentation parity derives current behavior from authored implementa
       "#[[file:aidlc/spaces/default/memory/org.md]]",
     );
     const includesSource = read("core", "tools", "aidlc-includes.ts");
-    expect(includesSource).toContain('if (harness === ".kiro")');
-    expect(includesSource).toContain("repointKiroSteeringReferences");
+    expect(includesSource).toContain("export function refreshKiroIdeSteering");
+    expect(includesSource).toContain("export function refreshActiveMemory");
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {
@@ -573,9 +586,7 @@ describe("documentation parity derives current behavior from authored implementa
     for (const row of rows) {
       const stages = scopeGrid[row.scope]?.stages;
       expect(stages, `missing compiled grid entry for ${row.scope}`).toBeDefined();
-      const total = Object.keys(stages).length;
-      const executed = Object.values(stages).filter((value) => value === "EXECUTE").length;
-      expect(row.stages, `${row.scope} stage count`).toBe(`${executed} / ${total}`);
+      expect(row.stages, `${row.scope} stage count`).toBe(`${runsAfterSetup(stages)} / ${afterSetup.length}`);
 
       const scopeFile = read("core", "scopes", `aidlc-${row.scope}.md`);
       const depth = frontmatterScalar(scopeFile, "depth");
@@ -589,12 +600,39 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("onboarding and the scope-save example give a scope's size after setup", () => {
+    const onboarding = read("docs", "guide", "onboarding.md");
+    const rows = [...onboarding.matchAll(/^\| [^|]+ \| `([a-z][a-z-]+)` \| (\d+ \/ \d+) \|$/gm)];
+    expect(rows.length, "the onboarding scope table lists at least one scope").toBeGreaterThan(0);
+    for (const [, scope, count] of rows) {
+      const stages = scopeGrid[scope]?.stages;
+      expect(stages, `missing compiled grid entry for ${scope}`).toBeDefined();
+      expect(count, `${scope} stage count`).toBe(`${runsAfterSetup(stages)} / ${afterSetup.length}`);
+    }
+    expect(normalized(onboarding)).toContain(`A full \`feature\` runs all ${runsAfterSetup(scopeGrid.feature.stages)} stages after setup.`);
+    // The example saves a plan running mvp; the line counts what that scope runs after setup.
+    expect(read("docs", "guide", "12-cli-commands.md")).toContain(
+      `Saved as scope quick-fix (${runsAfterSetup(scopeGrid.mvp.stages)} stages, `,
+    );
+  });
+
   test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
     // It runs under strict only; relaxed and off accept the change with one line.
     const stale = /exception holds under every (?:Guard Policy|value)/;
     const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
       .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
     expect(copies).toEqual([]);
+  });
+
+  test("no copy says headless copilot -p runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS", () => {
+    // Trust alone runs the hooks in `copilot -p` on Copilot CLI 1.0.74 and 1.0.96, and `=1` does nothing.
+    const copies = [...filesBelow(at("docs"), ".md"), at("README.md")]
+      .filter((file) => readFileSync(file, "utf8").includes("GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS"));
+    expect(copies).toEqual([]);
+    expect(normalized(read("docs", "guide", "15-troubleshooting.md"))).toContain(
+      'A headless `copilot -p` run never asks: start `copilot` in the folder once and choose "Yes, and remember ' +
+        'this folder for future sessions".',
+    );
   });
 
   test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
@@ -924,6 +962,24 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("documented ars: examples are valid stage frontmatter as written", () => {
+    // Authors copy these blocks into a stage: each must parse whole, comments
+    // included, keep every documented child, and validate.
+    const stage = (block: string): string =>
+      `---\nslug: syn-example\nphase: construction\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-quality-agent\nmode: inline\n${block}inputs: a\noutputs: b\n---\n`;
+    for (const doc of ["docs/reference/15-stage-definition.md", "docs/harness-engineering/10-authoring-a-plugin.md"]) {
+      const blocks = [...read(doc).matchAll(/```yaml\n(ars:\n[\s\S]*?)```/g)].map((match) => match[1]);
+      expect(blocks.length, doc).toBeGreaterThan(0);
+      for (const block of blocks) {
+        const parsed = parseStageFrontmatter(stage(block)) as { ars?: Record<string, unknown> };
+        const result = validateStageFrontmatter(parsed);
+        expect(result.valid ? [] : result.errors, `${doc}:\n${block}`).toEqual([]);
+        const documented = [...block.matchAll(/^ {2}([a-z_]+):/gm)].map((match) => match[1]);
+        expect(Object.keys(parsed.ars ?? {}).sort(), doc).toEqual([...new Set(documented)].sort());
+      }
+    }
+  });
+
   test("documented agent stage-involvement matrix matches stage frontmatter", () => {
     const lead = new Map<string, number>();
     const support = new Map<string, number>();
@@ -1009,17 +1065,16 @@ describe("documentation parity derives current behavior from authored implementa
     const stageCount = (scope: string): string => {
       const stages = scopeGrid[scope]?.stages;
       if (!stages) throw new Error(`missing compiled grid entry for ${scope}`);
-      const values = Object.values(stages);
-      return `${values.filter((value) => value === "EXECUTE").length} / ${values.length}`;
+      return `${runsAfterSetup(stages)} / ${afterSetup.length}`;
     };
 
     const rows = [...guide.matchAll(/^\| [^|]+ \| `\/aidlc ([a-z][a-z-]+) [^`]*` \| (\d+ \/ \d+) \|$/gm)];
     expect(rows.length, "the side-task table lists at least one scope").toBeGreaterThan(0);
     for (const [, scope, count] of rows) expect(count, `${scope} stage count`).toBe(stageCount(scope));
-    // The guide reads the human-turn row as "not ready although marked ok";
-    // that holds only while doctor prints it as a passing advisory row.
+    // The guide reads the replies row as a warning; that holds only while
+    // doctor prints it as one.
     expect(read("core", "tools", "aidlc-utility.ts")).toMatch(
-      /pass: true,\s*label: `Human-turn receipts: 0 HUMAN_TURN rows[^`]*\(advisory\)/,
+      /severity: "warn",\s*label: `Your replies are not being recorded: /,
     );
     expect(flat).toContain(`\`feature\` runs every stage (${stageCount("feature")})`);
     const [classicRan, classicTotal] = stageCount("classic").split(" / ");
@@ -1065,7 +1120,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hooks last fired: ",
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
-      "Human-turn receipts: 0 HUMAN_TURN rows",
+      "Your replies are not being recorded: ",
       "Plan Approval authority is ambiguous or stale",
       "cannot select one approval target",
       "Select Construction Execution: serial",
@@ -1084,5 +1139,20 @@ describe("documentation parity derives current behavior from authored implementa
     expect(onboarding).not.toContain("None is a bug");
     expect(read("docs", "reference", "06-hooks-and-tools.md")).not.toContain("can never trap the session");
     expect(read("docs", "guide", "harnesses", "copilot.md")).not.toContain("the doctor pins the floor");
+  });
+
+  test("every version a page tells you to switch or pin to is one the native install can select", () => {
+    // 2.8.0 is the first release published with native binaries; `aidlc use`
+    // and `aidlc config --pin` stop with "No published native release" on one
+    // before it.
+    const pages = [...filesBelow(at("docs"), ".md"), at("README.md")];
+    const named: string[] = [];
+    for (const page of pages) {
+      for (const match of readFileSync(page, "utf8").matchAll(/(?:aidlc use|--pin) (\d+\.\d+\.\d+(?:-preview\.\d{8}\.\d+)?)/g)) {
+        named.push(match[1]);
+        expect(compareVersions(match[1], "2.8.0"), `${basename(page)} names ${match[0]}`).toBeGreaterThanOrEqual(0);
+      }
+    }
+    expect(named.length).toBeGreaterThan(0);
   });
 });

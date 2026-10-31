@@ -1,19 +1,19 @@
 // harness/codex/emit.ts — the Codex CLI per-shell emission plugin.
 //
-// The unified packager copies core/ → dist/codex/.codex/ (rules → aidlc-rules)
-// and runs graph compile, then calls this emit() for everything that is CODE,
-// not declarative data: the Codex config, hook wiring, trust pre-seed, the
-// onboarding skills-path rewrite, per-agent TOML transpositions, and .agents/skills/
-// tree (orchestrator + generated runners + session skills + openai.yaml guards).
+// The unified packager copies core/ -> dist/codex/.codex/ (rules prose ->
+// aidlc-rules) and runs graph compile, then calls this emit() for everything
+// that is CODE, not declarative data: the Codex config, hook wiring, trust
+// pre-seed, the onboarding skills-path rewrite, per-agent TOML transpositions,
+// and .agents/skills/ tree (orchestrator + generated runners + session
+// skills + openai.yaml guards).
 //
-// Ported faithfully from the proven scripts/package-codex.ts emission half
-// (spike tip d465886). The ONE transform class is the harness-dir token /
-// anchored-prefix family, exposed via ctx.substituteToken plus a local
-// aidlc-rules rename mirroring the packager's. Nothing here invents a new sed.
+// The harness-dir token / anchored-prefix transform is exposed via
+// ctx.substituteToken, plus a local aidlc-rules rename mirroring the
+// packager's (rewriteProse).
 //
-// emit() also owns the codex compiled-data + skills layout: skills do NOT ship
-// in .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so
-// the manifest sets skipRunnerGen and emit composes the runners here.
+// emit() also owns the codex skills layout: skills do NOT ship in
+// .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so the
+// manifest sets skipRunnerGen and emit composes the runners here.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, win32 } from "node:path";
@@ -23,6 +23,7 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
+import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 import { codexHookTrustHash } from "../../core/tools/aidlc-command.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
@@ -39,22 +40,21 @@ import {
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "record-human-turn" },
-  // POSIX Codex commands receive the validated payload session directly, so
-  // sandboxed macOS does not depend on `ps` ancestry for workflow isolation.
-  { event: "PreToolUse", matcher: "Bash", target: "bind-bash-session" },
+  // One matcher-free group runs the four PreToolUse checks in one process: the
+  // state-transition, reviewer-scope, review-freeze and plan-approval guards.
+  // Codex starts every matching handler at once, and each guard's child engine
+  // doubled it, so five rows cost nine engine loads per shell call (#2066).
+  // Nothing rewrites the command: Codex gives every command it runs the session
+  // as CODEX_THREAD_ID (0.145.0 and later), and the tools read it from there, so
+  // the shipped rules/default.rules prefixes match the words the agent wrote. No matcher: each member self-filters on tool_name
+  // (Bash, apply_patch, and spawn_agent naming the developer agent; Codex read
+  // access rides the shell tool anyway), so a renamed Codex tool cannot
+  // silently drop a guard, and the group beats in the record before each
+  // engine command (hook health reads that heartbeat). Verified on 0.142.5:
+  // subagent tool calls carry agent_type, and a PreToolUse exit 2 + stderr
+  // blocks the call with the reason relayed.
+  { event: "PreToolUse", target: "guard-tool-call" },
   { event: "PreToolUse", matcher: "spawn_agent", target: "deliver-stage-rules" },
-  { event: "PreToolUse", target: "state-transition-guard" },
-  // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
-  // everything else exits 0 instantly), and Codex read access rides the shell
-  // tool anyway. Verified on 0.142.5: subagent tool calls carry agent_type,
-  // and a PreToolUse exit 2 + stderr blocks the call with the reason relayed.
-  { event: "PreToolUse", target: "reviewer-scope" },
-  // No matcher for the same reason: the review-freeze target self-filters to
-  // apply_patch and mutation-capable Bash commands.
-  { event: "PreToolUse", target: "review-freeze" },
-  // No matcher: the plan-approval-guard target self-filters to spawn_agent
-  // naming the developer agent plus mutation-capable Bash/apply_patch calls.
-  { event: "PreToolUse", target: "plan-approval-guard" },
   { event: "PostToolUse", matcher: "request_user_input", target: "record-human-turn" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "sync-workflow-state" },
@@ -126,7 +126,7 @@ tool_output_token_limit = 20000
 # Sandbox: workspace-write keeps <workspace>/.git read-only BY DESIGN;
 # interactive sessions escalate (deny -> approve -> retry unsandboxed) and the
 # shipped rules/default.rules pre-allows git worktree/commit/add prefixes so
-# escalations vanish. HEADLESS runs (codex exec workers, CI, test drivers)
+# escalations vanish. HEADLESS runs (CI, test drivers)
 # cannot escalate: uncomment writable_roots with the MAIN repo's absolute
 # .git path (linked worktrees resolve into <main>/.git/worktrees/*).
 sandbox_mode = "workspace-write"
@@ -139,18 +139,13 @@ sandbox_mode = "workspace-write"
 # session, start Codex with -c features.default_mode_request_user_input=false.
 suppress_unstable_features_warning = true
 
-# The AIDLC method (the markdown rule layers: org/team/project + phases/) now
-# lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
+# The AIDLC method (the markdown rule layers: org/team/project + phases/) lives
+# at the workspace root under aidlc/spaces/<space>/memory/, the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
-# copy under .codex/). The AIDLC_RULES_DIR seam below ships pointed at the
-# always-present default space; /aidlc space <name> re-points it IN PLACE so
-# the next session's resolver follows the active space (a byte-identical no-op at
-# default). Codex also auto-merges the root AGENTS.md and the orchestrator
-# injects an @aidlc/spaces/<space>/memory/... prompt mention to pull specific
-# method files into context on demand. (.codex/rules/ remains Codex's native
-# Starlark permission-rules dir — D-10 — distinct from the AIDLC method.)
-[shell_environment_policy]
-set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }
+# copy under .codex/). Codex has no ambient include for it: the engine reads the
+# active space's files and hands each step its rules. Codex also auto-merges
+# the root AGENTS.md. (.codex/rules/ remains Codex's native Starlark
+# permission-rules dir, D-10, distinct from the AIDLC method.)
 
 [sandbox_workspace_write]
 network_access = true
@@ -171,10 +166,12 @@ experimental_request_user_input = { enabled = true }
 [features]
 default_mode_request_user_input = true
 
-# Statusline (D-6): predefined item IDs only; task-progress is fed by the
-# update_plan tool, which the orchestrator skill keeps current per stage.
-[tui]
-status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]
+# Release 2.11.0 shipped AIDLC_RULES_DIR in this table, pointed at a space, and
+# its own refresh of a copied project cannot take one member out of the table,
+# so the member stays, empty: the engine reads an empty AIDLC_RULES_DIR as none.
+# It can go when no supported project refreshes with a 2.11.0 tool.
+[shell_environment_policy]
+set = { AIDLC_RULES_DIR = "" }
 `;
 }
 
@@ -186,11 +183,25 @@ export function emitDefaultRules(
   const trustedPattern = ["aidlc", trustedNamespace]
     .map((token) => JSON.stringify(token))
     .join(", ");
+  // Codex compares whole words, so the copy channel names the dispatcher's
+  // engine namespace and each tool script a copy channel pre-approves
+  // (copyChannelToolScripts), as AI-DLC runs them. An allowed command also runs
+  // outside the sandbox; a config change and a script behind a machine-changing
+  // command stay in it and get Codex's own ask.
+  const enginePattern = ["bun", `${harnessDir}/tools/aidlc.ts`, trustedNamespace]
+    .map((token) => JSON.stringify(token))
+    .join(", ");
+  const scripts = copyChannelToolScripts()
+    .map((script) => `    ${JSON.stringify(`${harnessDir}/tools/${script}`)}`)
+    .join(",\n");
   const runtimeRules = invoke === "aidlc"
     ? `# Native runtime allowlist: framework commands invoke the self-contained binary.
 prefix_rule(pattern = [${trustedPattern}], decision = "allow")`
-    : `# Bun copy-channel allowlist: deterministic framework tools stay under the harness tree.
-prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")`;
+    : `# Bun copy-channel allowlist: AI-DLC's engine commands and its tool scripts.
+prefix_rule(pattern = [${enginePattern}], decision = "allow")
+prefix_rule(pattern = ["bun", [
+${scripts}
+]], decision = "allow")`;
   return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
 # layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
@@ -219,7 +230,7 @@ const SNAKE: Record<string, string> = {
 };
 
 // Trust entries keyed on "<abs hooks.json path>:<event_snake>:<group>:<idx>".
-// Exported so the `trust` subcommand (aidlc-codex-trust.ts) can print
+// Exported so the `trust` subcommand (scripts/package.ts) can print
 // installer-substituted entries.
 export function trustEntries(
   projectDir: string,
@@ -287,7 +298,7 @@ export function emitTrustSeed(
 }
 
 // --- Agent transposition: persona .md → .codex/agents/*.toml ----------------
-// The old D7 model map is DERIVED from the tier projection module. Codex reads
+// The model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
 // is OMITTED: the spawned role inherits the session value. Judgment and
@@ -313,8 +324,12 @@ function parseAgentMd(raw: string): { fm: Record<string, string>; body: string }
   return { fm, body: raw.slice(m[0].length) };
 }
 
+// A multi-line basic string: a backslash is an escape character, so every
+// backslash in the text is doubled first (a bare `\|` in a Markdown table
+// note made Codex refuse the whole agent file as malformed TOML), then a
+// run of three quotes is escaped so it cannot close the string early.
 function tomlMultiline(s: string): string {
-  return `"""\n${s.replace(/"""/g, '\\"\\"\\"')}\n"""`;
+  return `"""\n${s.replace(/\\/g, "\\\\").replace(/"""/g, '\\"\\"\\"')}\n"""`;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +481,7 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // (a) authored orchestrator shell with the standard token projection.
-  for (const f of ["SKILL.md", "question-rendering.md", "composer.md"]) {
+  for (const f of ["SKILL.md", "question-rendering.md", "composer.md", "tables.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
       content: () =>

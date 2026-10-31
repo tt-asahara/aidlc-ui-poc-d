@@ -17,12 +17,11 @@
 //     after produces:.
 //   - validate: a valid kebab list passes; a non-kebab entry is rejected with
 //     the field-named error; the unknown-key rule does NOT fire for the key.
-//   - compile: the SHIPPED graph carries optional_produces on exactly the two
-//     annotated Construction stages (functional-design, infrastructure-design)
-//     and their produces[] no longer lists the conditional artifact.
-//   - registry: artifactsRegistry() still contains both conditional names and
-//     producersOf resolves them to their producer stage (the union keeps the
-//     vocabulary whole; t66's 122-artifact pin depends on it).
+//   - compile: the SHIPPED graph carries optional_produces on functional-design
+//     and its produces[] does not list the conditional artifact.
+//   - registry: artifactsRegistry() still contains frontend-components and
+//     infrastructure-specification, and producersOf resolves them to their
+//     producer stages.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
@@ -63,7 +62,6 @@ outputs: b
 # body
 `;
 
-// The same stage with NO optional_produces key at all.
 const WITHOUT_OPTIONAL = `---
 slug: functional-design
 phase: construction
@@ -200,12 +198,34 @@ describe("t205 optional_produces frontmatter", () => {
       expect(infra?.optional_produces).toBeUndefined();
     });
 
-    test("functional-design is the only stage carrying optional_produces", () => {
+    test("the strategy-dependent test instructions are optional on build-and-test", () => {
+      const buildAndTest = loadGraph().find((s) => s.slug === "build-and-test");
+      expect(buildAndTest).toBeDefined();
+      expect(buildAndTest?.optional_produces).toEqual([
+        "integration-test-instructions",
+        "performance-test-instructions",
+        "security-test-instructions",
+      ]);
+      for (const name of buildAndTest?.optional_produces ?? []) {
+        expect(buildAndTest?.produces).not.toContain(name);
+        expect(producersOf(name).map((stage) => stage.slug)).toEqual(["build-and-test"]);
+      }
+    });
+
+    // functional-design's frontend-components is written only for a UI Unit;
+    // build-and-test's test instructions only at the strategy that calls for
+    // them; requirements-analysis's traceability record is optional so a run
+    // with no record (work begun before it existed) still reviews and approves.
+    test("functional-design, build-and-test and requirements-analysis are the stages carrying optional_produces", () => {
       const carriers = loadGraph()
         .filter((s) => s.optional_produces !== undefined)
-        .map((s) => s.slug)
+        .map((s) => `${s.slug}:${s.optional_produces?.join(",")}`)
         .sort();
-      expect(carriers).toEqual(["functional-design"]);
+      expect(carriers).toEqual([
+        "build-and-test:integration-test-instructions,performance-test-instructions,security-test-instructions",
+        "functional-design:frontend-components",
+        "requirements-analysis:traceability",
+      ]);
     });
   });
 

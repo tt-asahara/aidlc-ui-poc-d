@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededStateFile } from "../../../tests/harness/fixtures.ts";
@@ -303,9 +303,21 @@ function swarmIntent(lifecycle: "CONSTRUCTION" | "INCEPTION"): string {
   const stateFile = seededStateFile(project); mkdirSync(dirname(stateFile), { recursive: true }); writeFileSync(stateFile, state);
   writeFileSync(join(dirname(dirname(stateFile)), "active-intent"), `${basename(dirname(stateFile))}\n`);
   seedBoltDag(project, [{ name: "alpha", kind: "service" }, { name: "beta", kind: "service" }], [["alpha", "beta"]]);
+  // Upstream v2.11.2 asks each wave Unit's questions in the chat before any
+  // builder runs; in Construction these Units' questions are already answered.
+  if (construction) for (const unit of ["alpha", "beta"]) {
+    const dir = join(dirname(stateFile), "construction", unit, "functional-design"); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "functional-design-questions.md"), `# Functional Design Questions: ${unit}\n\n## Q1 Which data store?\nA) In memory\nB) File\n\n[Answer]: A\n`);
+  }
   setParallel(project, false);
   return project;
 }
+/** The Message Id the record-human-turn hook gave the person's latest turn (what the host names with --message). */
+const latestMessageId = (project: string) => {
+  const audit = join(dirname(seededStateFile(project)), "audit");
+  const rows = readdirSync(audit).map((name) => readFileSync(join(audit, name), "utf8")).join("\n");
+  return [...rows.matchAll(/\*\*Message Id\*\*: ([0-9a-f]{8})|Message Id: ([0-9a-f]{8})/g)].map((m) => m[1] ?? m[2]).at(-1);
+};
 const ENGINE = join(AIDLC_SRC, "tools");
 const execution = (project: string) => readFileSync(seededStateFile(project), "utf8").match(/\*\*Construction Execution\*\*: (\w+)/)?.[1];
 const officialNext = (project: string) => { const result = runOrchestrateNext(join(ENGINE, "aidlc-orchestrate.ts"), project, [], { env: cleanEnv() }); expect(result.status, result.stderr).toBe(0); return result.directive as any; };
@@ -338,7 +350,12 @@ describe("parallel.enabled=false: existing official stage-major/swarm Intent", (
     const env = cleanEnv({ AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project });
     const turn = spawnSync(process.execPath, [join(ENGINE, "aidlc.ts"), "engine", "hook", "record-human-turn"], { cwd: project, env, encoding: "utf8", input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "parallel-off", prompt: "Build the Units one after another, no parallel swarm." }) });
     expect(turn.status, `${turn.stdout}${turn.stderr}`).toBe(0);
-    const guard = enforceParallelOff({ projectDir: project, engineDir: ENGINE, directive: swarmDirective, env });
+    // The setter needs the person's message named; D only forwards what the host passes.
+    const refused = enforceParallelOff({ projectDir: project, engineDir: ENGINE, directive: swarmDirective, env });
+    expect(refused).toMatchObject({ action: "stop", construction: { serialization: "refused" } });
+    const messageId = latestMessageId(project);
+    expect(messageId).toBeString();
+    const guard = enforceParallelOff({ projectDir: project, engineDir: ENGINE, directive: swarmDirective, env, messageId });
     expect(guard).toMatchObject({ action: "refresh", construction: { executionBefore: "swarm", serialization: "set-serial" } });
     expect(execution(project)).toBe("serial");
     const fresh = officialNext(project);

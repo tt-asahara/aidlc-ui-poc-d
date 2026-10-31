@@ -2,19 +2,19 @@
 // after every transition-class audit emit.
 //
 // Fires after every Bash tool call from the agent. Filters cheaply on
-// the command — only direct transition tools plus `aidlc-orchestrate.ts report`
-// get past the early exit. On match, tail-reads the LAST 3
-// audit blocks (one approve writes up to 3 audit rows in a single Bash
-// call), regex-matches `**Event**: (GATE_APPROVED|STAGE_STARTED|
-// AUDIT_MERGED|WORKFLOW_COMPLETED)` against any of them, and dispatches
+// the command (classifyRuntimeCompileCommand in aidlc-lib.ts owns the
+// allowlist). On match, tail-reads the LAST 3 audit blocks (a normal approve
+// writes 3 audit rows in a single Bash call), regex-matches `**Event**:
+// (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|
+// UNIT_MERGED|WORKFLOW_COMPLETED)` against any of them, and dispatches
 // `aidlc-runtime.ts compile` on match.
 //
 // WORKFLOW_COMPLETED is in the transition set so the final-stage approve
-// fires the compile (handleCompleteWorkflow at aidlc-state.ts:572-590
-// emits 5 audit rows ending with WORKFLOW_COMPLETED — without it in the
-// regex, the last 3 blocks would be PHASE_COMPLETED + PHASE_VERIFIED +
-// WORKFLOW_COMPLETED, none in the original transition set, and the
-// runtime-graph would never record the final stage as approved).
+// fires the compile (handleCompleteWorkflow in aidlc-state.ts ends its audit
+// rows with WORKFLOW_COMPLETED - without it in the regex, the last 3 blocks
+// would be PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED, none in the
+// transition set, and the runtime-graph would never record the final stage as
+// approved).
 //
 // Recursion guard: `aidlc-runtime.ts` is excluded from the command-regex
 // matcher set, AND MEMORY_EMPTY is not in the event-class regex. The
@@ -25,10 +25,17 @@
 // canonical `error` directive the engine emitted, the message is handed to the
 // human byte for byte through the harness's hook-to-human channel (a
 // `systemMessage` on Claude Code and Codex, a toast via the opencode plugin).
-// The same line carries a PostToolUse `additionalContext` note telling the
-// model the person has seen it; the Claude and Codex skills then add no copy
-// of their own. It needs no workflow state: the engine errors before any
-// intent exists too.
+// On Claude Code and Codex the same line carries a PostToolUse
+// `additionalContext` note telling the model the person has seen it; the
+// Claude and Codex skills then add no copy of their own. It needs no workflow
+// state: the engine errors before any intent exists too.
+//
+// Say-once note: when the setter switched a check of the person's off in their
+// name from this chat, it left the order to say its lines once, with the lines
+// (leaveSayOnceNote), instead of printing it where the tool panel draws it. The
+// hook hands that note to the model as PostToolUse `additionalContext` once,
+// on the chat's next shell call, the setter's own as a rule (sayOnceNoteLine),
+// and never beside a relay line.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { statSync } from "node:fs";
@@ -59,6 +66,7 @@ import {
   runtimeGraphPath,
   validSessionId,
   harnessDir,
+  sayOnceNoteLine,
   writeEngineErrorRelay,
   writeSessionIntentHandoff,
   writeSessionBinding,
@@ -153,16 +161,26 @@ function bindCreatedIntentToInvokingSession(
 // engine orchestrate command, and stdout that is exactly the canonical `error`
 // directive. writeEngineErrorRelay decides per harness whether any channel
 // would show the line; where none does, the skill's verbatim-print rule stands.
-function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): void {
+function relayEngineError(projectDir: string, parsed: ClaudeCodeHookInput): boolean {
   const message = engineErrorRelayMessage(
     parsed.tool_input?.command ?? "",
     parsed.tool_response,
   );
-  if (message === null) return;
+  if (message === null) return false;
   hookDebug(projectDir, "rebuild-stage-graph", "engine-error-relay", {
     bytes: Buffer.byteLength(message, "utf-8"),
   });
-  writeEngineErrorRelay(message);
+  return writeEngineErrorRelay(message);
+}
+
+// The setter's say-once note, taken by the chat's next shell call. A host that
+// gets two lines from one hook reads neither, so it is never written beside a
+// relay.
+function handSayOnceNote(projectDir: string, parsed: ClaudeCodeHookInput): void {
+  const line = sayOnceNoteLine(projectDir, parsed.session_id);
+  if (line === null) return;
+  hookDebug(projectDir, "rebuild-stage-graph", "say-once-note");
+  process.stdout.write(line);
 }
 
 export async function run(input: string): Promise<number> {
@@ -188,7 +206,9 @@ const command: string = parsed.tool_input?.command ?? "";
 //     workflow state, so it runs before the command/audit filters below. An
 //     orchestrate `next` is not a transition-class command and exits at the
 //     next gate; its error directive must already have been relayed by then.
-relayEngineError(projectDir, parsed);
+//     The setter's say-once note is not a transition either, and goes the
+//     same way when no relay line was written.
+if (!relayEngineError(projectDir, parsed)) handSayOnceNote(projectDir, parsed);
 
 // Session ownership is independent of runtime-graph compilation and must run
 // before the command/audit filters below. Most intent-create calls are not
@@ -196,17 +216,18 @@ relayEngineError(projectDir, parsed);
 bindCreatedIntentToInvokingSession(projectDir, parsed);
 
 // 3. Command filter - only dispatch on the audit-emit-side seam for both
-//    legacy tool-file commands and the new `aidlc ...` grammar.
+//    legacy tool-file commands and the `aidlc ...` grammar.
 //    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
 //    at the command level - a positive-only allowlist would let composites like
 //    `{{INVOKE}} engine runtime compile && {{INVOKE}} engine state approve` through and
-//    loop). aidlc-log.ts emits only chatty in-stage events
-//    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
-//    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.
+//    loop). aidlc-log.ts emits in-stage events (DECISION_RECORDED,
+//    QUESTION_ANSWERED, REVIEW_REQUESTED, REVIEW_COMPLETED and the like), none
+//    transition-class. aidlc-worktree.ts emits WORKTREE_* and
+//    SWARM_SOURCE_MERGED events, none transition-class either.
 //    `aidlc-orchestrate.ts report` is included because the conductor calls it
 //    as the public transition surface; the state-tool emit happens in its
 //    subprocess, which PostToolUse cannot see as a separate Bash command. The
-//    new report allowlist keeps that same public-transition surface.
+//    report allowlist keeps that same public-transition surface.
 // IDE audit-tail mode: Kiro IDE does not surface the shell command, so the
 // command-based filter cannot run. The adapter sets source="ide-audit-sync" to
 // signal "skip the command filter and gate purely on the audit tail" (steps
@@ -224,13 +245,11 @@ if (!ideAuditMode) {
 }
 
 // 4. Audit read — across EVERY per-clone shard of the ACTIVE intent, NOT this
-//    hook process's own PID/clone shard. The state tool that wrote the
-//    transition runs in a SEPARATE process; on the new layout a bare
-//    auditFilePath(projectDir) would resolve a per-process/PID shard the hook
-//    never wrote, so the transition would be invisible and the runtime-graph
-//    would never refresh after a transition (the major). Resolve the active
-//    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
-//    shards. Exit cleanly before init (no audit yet → "").
+//    hook process's own clone shard. A transition can arrive from another
+//    clone; auditFilePath(projectDir) resolves only this clone's shard, so that
+//    transition would be invisible and the runtime-graph would never refresh
+//    after it. Resolve the session's selected intent and glob-merge its shards.
+//    Exit cleanly before init (no audit yet -> "").
 const selection = resolveWorkflowSelection(projectDir, {
   sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
@@ -245,18 +264,18 @@ if (audit.length === 0) {
 }
 
 // 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
-//    Kept at the bare (workspace-level) health dir to match where --doctor reads
-//    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
-//    is a per-hook liveness probe, not per-intent state.
+//    Kept at the selected record's health dir (the heartbeat is a per-hook
+//    liveness probe for that record); --doctor reads heartbeats through
+//    hookLiveness in aidlc-lib.ts, which resolves the workflow's record.
 const healthDir = hooksHealthDir(projectDir, intent, space);
 writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 
-// 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
-//    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
-//    one Bash call. Terminal-WORKFLOW approve writes 5 rows; the last 3
-//    are PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED. In the common
-//    single-clone case the merged buffer is one shard, so the last 3 blocks are
-//    the just-written transition rows.
+// 6. Tail-read last 3 audit blocks. Three covers a normal approve's
+//    GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in one Bash call.
+//    Terminal-WORKFLOW approve writes 5 rows; the last 3 are PHASE_COMPLETED +
+//    PHASE_VERIFIED + WORKFLOW_COMPLETED. In the common single-clone case the
+//    merged buffer is one shard, so the last 3 blocks are the just-written
+//    transition rows.
 const blocks = audit.split(/\n---\n/);
 const last3 = blocks.slice(-3);
 
@@ -319,7 +338,7 @@ if (ideAuditMode) {
 
 // 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the
-//    parent Bash call (mirrors aidlc-write-audit-log.ts:95-101).
+//    parent Bash call (mirrors aidlc-write-audit-log.ts).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
 try {
   // Same reason as the Stop hook: a bare "bun" child never exists in a native

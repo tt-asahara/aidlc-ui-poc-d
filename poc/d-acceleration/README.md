@@ -63,7 +63,7 @@ generates one summary payload per Intent from the D question-answer ledger
 `decisions/ai-question-answers.jsonl` (missing or empty → `nothing-to-publish`)
 and is default-off; publication requires
 the person's exact permission words as the latest host-recorded human turn
-(read through the engine's own read-only `latestPersonTurn`), binding
+(read by D's `person-turn.ts` from the engine's HUMAN_TURN row and message record), binding
 repository, Intent, and payload hash, and it never replaces the repository record.
 
 ## Core restore (re-homed and dropped)
@@ -75,7 +75,7 @@ extension surfaces:
 | Feature | Outcome |
 | --- | --- |
 | UI concurrency proposal at Delivery Planning | Re-homed: ui-poc contribution fragment `before-step:6` spliced by compose, so it precedes Step 6's Construction iteration choice. |
-| UI scope routing | Partly re-homed: plugin scope keywords route short ASCII requests. UI-specific high-specificity keywords, CJK keyword boundaries, and Japanese negation needed core and were dropped; long or Japanese prose gets the stock proposal and the person picks `ui-poc-application` at the official scope confirmation. |
+| UI scope routing | Upstream since v2.11.2: the engine no longer classifies requests by keyword; the agent proposes a plan from the install's plan list (the UI scopes appear there with their description and hints) and the person confirms it at the official scope question. No D or C code classifies the request. |
 | Generic `/aidlc --auto` bootstrap | Re-homed: the host runs the official print's `intent-create` command as for any print; `generic-auto-cli.ts bootstrap` binds only to an Intent proven created since `start` (absent from the Intent inventory `start` recorded, with its own `WORKFLOW_STARTED` audit row at or after `startedAt`); a switched-to or resumed Intent is refused in one line and its Construction policy is never touched. The typed `machine_action` field was core-only and is gone. |
 | Delegated low-risk question answers | Re-homed: D-owned grammar/settler `ai-question-answers.ts` and the D ledger `decisions/ai-question-answers.jsonl`; the `AI_QUESTION_ANSWERED` audit event was core-only and is gone. |
 | Decision summary permission and `HOST/owner/name` check | Re-homed into `decision-issue-summary.ts` (the `aidlc-state.ts verify-decision-summary-permission` verb was core-only). |

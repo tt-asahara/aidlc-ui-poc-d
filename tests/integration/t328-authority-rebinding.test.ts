@@ -32,7 +32,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -317,8 +317,8 @@ function presentPlan(
     "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n",
   );
   const questions = join(recordDir, "code-generation-questions.md");
-  // A re-presentation blanks the previous answer first: the fingerprint command
-  // refuses to regenerate while an approval answer is still recorded.
+  // A re-presentation blanks the previous answer, as the conductor writes the
+  // section anew.
   if (existsSync(questions)) {
     writeFileSync(
       questions,
@@ -530,8 +530,21 @@ describe("t328 (1) the reported sequence: approve a plan and have it stick", () 
 });
 
 describe("t328 (2) every legitimate action preserves the recorded decision", () => {
+  // The third member marks an action after which the engine issues the step
+  // again with different bytes: here the park row keeps the words the person
+  // typed before it ("Approve Plan", the reply that stands behind the park), and
+  // the step that resumes there carries them as parked_reply. A new issuance
+  // moves the marker revision and the code-generation authority revision
+  // (aidlc-lib.ts writeActiveDirectiveMarker: nextRevision = base.revision + 1;
+  // the authority revision is kept only across swarm-planning re-issues with the
+  // same Units), and the directive epoch hashes that revision
+  // (aidlc-testing-posture.ts resolveCodeGenerationAuthority, issuance_revision).
+  // The epoch is provenance on the receipt (runtimeProvenance: "help a human
+  // reading the store understand where a receipt came from"; aidlc-unit.ts checks
+  // only that the field is present), so the approval and its one receipt hold
+  // while the epoch and revision move with the step's text.
   const cases: Array<
-    [string, (p: Project) => void]
+    [string, (p: Project) => void, { carriesReply?: true }?]
   > = [
     ["asking the engine twice for the same state", (p) => {
       p.next();
@@ -542,7 +555,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
     }],
     ["parking and resuming", (p) => {
       const beforeDigest = stateDigest(readFileSync(p.statePath, "utf-8"));
-      const parked = spawn([BUN, p.tool("orchestrate"), "park", "--project-dir", p.dir], p.env, p.dir);
+      const parked = spawn([BUN, p.tool("orchestrate"), "park", "--person-asked", "--project-dir", p.dir], p.env, p.dir);
       expect(parked.code, parked.stderr).toBe(0);
       expect(stateDigest(readFileSync(p.statePath, "utf-8"))).not.toBe(beforeDigest);
       const unparked = spawn(
@@ -554,7 +567,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
       expect(stateDigest(readFileSync(p.statePath, "utf-8"))).toBe(beforeDigest);
       const resumed = p.next({}, ["--resume"]);
       expect(resumed.code, resumed.stderr).toBe(0);
-    }],
+    }, { carriesReply: true }],
     ["a new session", (p) => {
       spawn(
         [BUN, p.hook("session-start")],
@@ -603,7 +616,7 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
     }],
   ];
 
-  for (const [name, act] of cases) {
+  for (const [name, act, shape] of cases) {
     test(`the approval survives ${name}`, async () => {
       const { p, target } = await approvedProject();
       const beforeRevision = p.marker()?.revision;
@@ -614,8 +627,19 @@ describe("t328 (2) every legitimate action preserves the recorded decision", () 
 
       expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
       expect(p.receipts().length).toBe(1);
-      expect(authority(p, target).directiveEpoch).toBe(beforeEpoch);
-      expect(p.marker()?.revision).toBe(beforeRevision);
+      if (shape?.carriesReply) {
+        // The park row kept the person's words, so the resumed step was issued
+        // again with them: one new issuance, the decision untouched.
+        const audit = readdirSync(join(dirname(p.statePath), "audit"))
+          .map((name) => readFileSync(join(dirname(p.statePath), "audit", name), "utf-8")).join("\n");
+        expect(audit).toMatch(/\*\*Event\*\*: WORKFLOW_PARKED\n\*\*Stage\*\*: [^\n]+\n\*\*Person Reply\*\*: Approve Plan/);
+        expect(p.marker()?.directive_sha256).toBeDefined();
+        expect(p.marker()?.revision).toBe(Number(beforeRevision ?? 0) + 1);
+        expect(authority(p, target).directiveEpoch).not.toBe(beforeEpoch);
+      } else {
+        expect(authority(p, target).directiveEpoch).toBe(beforeEpoch);
+        expect(p.marker()?.revision).toBe(beforeRevision);
+      }
     });
   }
 
@@ -696,8 +720,8 @@ describe("t328 (3) the approval does not carry where it should not", () => {
 
     // The next `next` is the engine asking the person about the new attempt.
     // If the conductor writes the approval answer back ITSELF without asking
-    // anyone, nothing is approved, and the reason names the attempt rather than
-    // reading as "you never approved this".
+    // anyone, nothing is approved: the line approves nothing, and the step is
+    // next, which asks.
     const { directive: asked } = deliver(p);
     expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     writeFileSync(
@@ -707,10 +731,12 @@ describe("t328 (3) the approval does not carry where it should not", () => {
         "[Answer]: Approve Plan",
       ),
     );
-    expect(approval(p, target).reason).toContain("earlier stage attempt");
+    expect(approval(p, target)).toEqual({ ok: false, reason: "the plan is not approved yet; run next" });
 
-    // The real remedy: the person answers the question.
+    // The real remedy: the person answers the question, and the agent records it.
     expect(p.humanTurn("Approve Plan").code).toBe(0);
+    const recorded = spawn([BUN, p.tool("log"), "answer", ...presentation.decisionArgs, "--details", "Approve Plan"], p.env, p.dir);
+    expect(recorded.code, recorded.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   });
 
@@ -918,7 +944,7 @@ describe("t328 (5) the per-Unit walk", () => {
         /^- \*\*Revision Count\*\*:.*$/m,
         "- **Revision Count**: 0\n- **Construction Iteration**: unit-major",
       );
-      for (const slug of Object.keys(DESIGN_ARTIFACTS)) {
+      for (const slug of ["units-generation", ...Object.keys(DESIGN_ARTIFACTS)]) {
         state = state.replace(
           new RegExp(`^- \\[[ xSR?-]\\] ${slug}(\\s+\\S\\s+)EXECUTE$`, "m"),
           `- [x] ${slug}$1EXECUTE`,

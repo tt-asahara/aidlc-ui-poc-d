@@ -122,9 +122,11 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   shell, and state validation before compaction. The **PreToolUse guards**
   answer on Cursor's `{"permission":"allow"|"deny"}` stdout channel (`deny`
   may add `agent_message`) and register `failClosed: true`. Empty stdout is
-  invalid JSON, so the IDE blocks the call; malformed input, a missing guard,
-  or a crashing guard also denies the operation. Cursor names its shell tool `Shell`; the adapter
-  maps it to the core hooks' `Bash`. Cursor's
+  invalid JSON, so the IDE blocks the call; malformed input also denies the
+  operation. A guard that is missing or crashes refuses nothing, as on every
+  other harness, and `doctor` names it. Cursor names its shell tool `Shell`; the adapter
+  maps it to the core hooks' `Bash`. An edit that arrives as `StrReplace` with the file
+  in `path` is handled as `Edit`, so it is recorded and checked like any other edit. Cursor's
     first-class `Delete` tool (unique to this harness - everywhere else deletion
     goes through the shell) is presented to the reviewer-scope guard as a write so a
     unit-scoped reviewer cannot delete a sibling unit's artifacts. Shell payloads'
@@ -179,11 +181,14 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   fail closed rather than losing delegated-agent attribution. Delegates may use
   ordinary Shell commands, but general-purpose interpreters and dynamic command
   evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes. These delegate limits apply only while the
-  reviewer read-scope or state-transition check holds for the piece of work:
-  when both stand aside (Guard Policy off does that), delegates run builds,
-  tests and searches like the main conversation, a Task starts even when its
-  record cannot be written, and Cursor's own approval applies.
+  conversation run executable probes. AI-DLC's own commands that a delegate is
+  given, such as Reverse Engineering's scope fingerprint and its check, run as
+  their instructions spell them, one plain command at a time. These delegate
+  limits apply only while the reviewer read-scope or state-transition check
+  holds for the piece of work: when both stand aside (Guard Policy off does
+  that), delegates run builds, tests and searches like the main conversation, a
+  Task starts even when its record cannot be written, and Cursor's own approval
+  applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating
@@ -200,8 +205,9 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   matching phase file only when relevant (live-verified on cursor-agent: a
   phase-framed prompt loads exactly the matching phase rule, an unrelated
   prompt loads none). The `sessionStart` hook separately
-  injects live workflow context. `/aidlc space <name>` re-points all five rule
-  files in place.
+  injects live workflow context. All five rule files read
+  `aidlc/active-memory/`, the engine's git-ignored copy of the active
+  space's method; `/aidlc space <name>` rewrites the copy, never the rules.
 - **Construction swarm runs as task-tool fan-out only** (`AIDLC_USE_SWARM=1` is
   a loud no-op - no Workflow tool exists).
 - **No statusline / welcome message** - use `/aidlc-status` (or

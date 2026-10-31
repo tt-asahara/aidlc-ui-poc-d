@@ -31,6 +31,7 @@ import {
   copyFileSync, existsSync, unlinkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { hookGroupMemberNames } from "../../core/tools/aidlc-command.ts";
 
 type Json = Record<string, unknown>;
 export class SetupStop extends Error {}
@@ -177,7 +178,10 @@ function runtimeEntrypoints(P: string): string[] {
         const match = /\$CLAUDE_PROJECT_DIR\/([^"\s]+\.ts)/.exec(hook.command);
         if (match) entries.add(join(P, match[1]));
         const dispatch = /\bengine hook ([a-z0-9-]+)(?:\s|$)/.exec(hook.command);
-        if (dispatch) entries.add(join(P, ".claude", "hooks", `aidlc-${dispatch[1]}.ts`));
+        // A group target (upstream `guard-tool-call`) ships no file of its own:
+        // the dispatcher runs its member hooks, so those files are the entrypoints.
+        const members = dispatch ? hookGroupMemberNames(dispatch[1]) : [];
+        for (const name of dispatch ? (members.length ? members : [dispatch[1]]) : []) entries.add(join(P, ".claude", "hooks", `aidlc-${name}.ts`));
       }
     }
   }

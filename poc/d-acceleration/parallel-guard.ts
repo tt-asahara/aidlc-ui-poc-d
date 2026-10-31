@@ -16,6 +16,10 @@ import { runEngineSync } from "./execution.ts";
 //   set-construction-execution serial` setter. Its guards stay authoritative:
 //   when it refuses (for example an unattended run already in Construction),
 //   D does not hand off any swarm and returns the one-line recovery instead.
+//   In Construction the upstream setter needs `--message <id>`, the id of the
+//   person's message that asked for the change. D never picks that message
+//   itself: the host, which read the person's words, passes it as `--message`
+//   and D forwards it unchanged; without it the setter's refusal stands.
 // - AIDLC_USE_SWARM / flags.swarm only select the driver for an
 //   `invoke-swarm` the engine already decided to issue; they never enable a
 //   swarm by themselves. While D parallel is off no swarm hand-off proceeds,
@@ -37,7 +41,7 @@ export type ParallelGuardResult = {
 
 export const PARALLEL_OFF_RECOVERY =
   "D parallel.enabled is false in .claude/d-acceleration(.local).jsonc, but this Intent's official Construction Execution is still swarm. " +
-  "Ask to switch it to serial (aidlc-state.ts set-construction-execution serial), or set parallel.enabled to true; D hands off no swarm until then.";
+  "Ask to switch it to serial (aidlc-state.ts set-construction-execution serial, with --message <id> of the message they asked in), or set parallel.enabled to true; D hands off no swarm until then.";
 
 /** Current D master switch at this boundary. An unreadable configuration fails toward one worker. */
 export function currentDParallelEnabled(projectDir: string): boolean {
@@ -55,7 +59,7 @@ function officialExecution(stateTool: string, projectDir: string, env: NodeJS.Pr
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-export function enforceParallelOff(options: { projectDir: string; engineDir?: string; directive?: unknown; env?: NodeJS.ProcessEnv; parallelEnabled?: boolean }): ParallelGuardResult {
+export function enforceParallelOff(options: { projectDir: string; engineDir?: string; directive?: unknown; env?: NodeJS.ProcessEnv; parallelEnabled?: boolean; messageId?: string }): ParallelGuardResult {
   const env = options.env ?? process.env;
   const enabled = options.parallelEnabled ?? currentDParallelEnabled(options.projectDir);
   const swarmHandOff = options.directive !== undefined && isSwarmHandOff(options.directive);
@@ -66,7 +70,8 @@ export function enforceParallelOff(options: { projectDir: string; engineDir?: st
     executionBefore = officialExecution(stateTool, options.projectDir, env);
     if (executionBefore !== "swarm") serialization = "already-serial";
     else {
-      const set = runEngineSync(stateTool, ["set-construction-execution", "serial", "--project-dir", options.projectDir], { cwd: options.projectDir, env, encoding: "utf8", timeout: 30_000 });
+      const message = options.messageId && /^[0-9a-f]{8}$/.test(options.messageId) ? ["--message", options.messageId] : [];
+      const set = runEngineSync(stateTool, ["set-construction-execution", "serial", ...message, "--project-dir", options.projectDir], { cwd: options.projectDir, env, encoding: "utf8", timeout: 30_000 });
       if (set.status === 0) serialization = "set-serial";
       else { serialization = "refused"; detail = (set.stderr || set.stdout || "").trim().slice(0, 2000); }
     }
@@ -105,7 +110,7 @@ if (import.meta.main) {
     if (relative(resolve(projectDir), path).startsWith("..")) throw new Error("directive file escapes project");
     directive = JSON.parse(readFileSync(path, "utf8"));
   }
-  const result = enforceParallelOff({ projectDir, engineDir: value("--engine-dir"), directive });
+  const result = enforceParallelOff({ projectDir, engineDir: value("--engine-dir"), directive, messageId: value("--message") });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   if (result.action === "stop") process.exitCode = 2;
 }

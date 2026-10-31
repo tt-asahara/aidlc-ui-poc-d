@@ -52,9 +52,7 @@ that ship the neutral-only block. Keep those imports when merging project instru
     (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
     you to confirm folder trust before it takes a prompt; choose "Yes, and
     remember this folder for future sessions" to record it. `aidlc config`
-    tells you when the list does not cover the folder. Headless
-    `copilot -p` runs additionally need
-    `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
+    tells you when the list does not cover the folder.
   - VS Code agent mode never reads that list. Its hooks run only in a
     trusted workspace (VS Code Workspace Trust) with the **Chat: Use Hooks**
     setting (`chat.useHooks`) on. That setting is a preview feature your
@@ -154,15 +152,29 @@ then use the ignored local `dist/copilot/` output.
   The human's next chat message does; the questions FILE with `[Answer]:` tags
   stays the source of truth.
 - **Only what you type counts as your reply.** When the agent hands work to a
-  subagent (a reviewer, a builder), VS Code delivers the agent's written brief
-  to the hooks the same way it delivers your chat messages. AI-DLC recognizes
-  that brief and never records it as your turn: it does not satisfy an
-  approval, is not read as your answer or your requested changes, and does not
-  apply a typed switch. Anything you type, including while a subagent is still
-  running, counts as before. The exception is the first few seconds after a
-  subagent starts in your chat: a message then that AI-DLC cannot match to a
-  brief is taken to be that brief and is not counted, and if it was yours you
-  are asked to reply again.
+  subagent (a reviewer, a builder), VS Code and the Copilot CLI deliver the
+  agent's written brief to the hooks the same way they deliver your chat
+  messages. AI-DLC recognizes that brief and never records it as your turn: it
+  does not satisfy an approval, is not read as your answer or your requested
+  changes, and does not apply a typed switch. Anything you type, including
+  while a subagent is still running, counts as before. The exception, in VS
+  Code only, is the first few seconds after a subagent starts in your chat
+  while its brief has not arrived: a message then that AI-DLC cannot match to
+  a brief is taken to be that brief and is not counted, and if it was yours
+  you are asked to reply again. The Copilot CLI never sends a brief into your
+  chat, so there every message you type counts. AI-DLC's own note to the
+  agent when a turn ends with work still pending (such as "The last AI-DLC step
+  stopped on a problem: ...") is not your turn either: the Copilot CLI hands it
+  back as a chat message, and AI-DLC recognizes it and does not record it as
+  yours.
+- **Typing `/aidlc` with your request keeps your words.** Copilot hands a
+  skill you invoke by its slash name to AI-DLC as the skill's own text with
+  your words filled in, not as the line you typed. AI-DLC rebuilds that line
+  (`/aidlc` plus your words, taken verbatim from where the skill's text carries
+  them) when the text is exactly the installed skill file with your words in
+  it, so your request is on the record and reaches the work even when the
+  agent's first command carries none of it. Anything that is not exactly that
+  file is recorded as Copilot delivered it.
 - **AI-DLC's agents get the stage rules, and the builder waits for your plan
   approval.** Whether the agent starts one of AI-DLC's agents with VS Code's
   `runSubagent` tool or the CLI's `task` tool, AI-DLC hands it the current
@@ -204,10 +216,12 @@ then use the ignored local `dist/copilot/` output.
   `--doctor`) with the flags the engine names, `--version`, `--status`, and
   `--help`, AI-DLC's own checks (`engine sensor-traceability`,
   `sensor-required-sections`, `sensor-upstream-coverage`, and
-  `sensor-claim-sources`, which only read files), and the project commands in
+  `sensor-claim-sources`, which read files; the traceability check also
+  writes a stage's own coverage table in the record when the stage runs it to
+  start that table), and the project commands in
   AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
-  `engine learnings`, `engine testing-posture`, `engine intent list`, and the
-  rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
+  `engine learnings`, `engine testing-posture`, `engine intent list`,
+  `engine intent add-checkout`, and the rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
   The copy channel's `aidlc-utility.ts <verb>` gets the same answer as its
   `engine workspace <verb>` spelling. It answers only when all of these hold:
   - the call carries VS Code's chat session, every AI-DLC guard has passed,
@@ -233,10 +247,9 @@ then use the ignored local `dist/copilot/` output.
     itself, by its full path, may come first:
     `cd C:\work\app; aidlc engine orchestrate next` runs like
     `aidlc engine orchestrate next`, also while a plan waits for approval. A
-    `cd` to any other folder, a subfolder included, keeps the prompt, and
-    while a plan waits for approval it is refused, because the installed
-    `aidlc` takes the folder it runs in as the project. Run the command
-    without the `cd`, or `cd` to the project folder itself;
+    `cd` to any other folder, a subfolder included, keeps the prompt, because
+    the installed `aidlc` takes the folder it runs in as the project. Run the
+    command without the `cd`, or `cd` to the project folder itself;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
@@ -258,11 +271,16 @@ then use the ignored local `dist/copilot/` output.
     `engine recompose` when you have not replied since the last question
     (after you approve a plan change, the recompose that applies it runs
     without a click), `next --skip`, `next --add`, `engine jump execute`,
-    `engine scope change`, `engine intent create --skip`, `engine config set`
-    and `next config set`,
-    `engine bolt set-autonomy`, the `engine state` status changes, and the
+    `engine scope change`, `engine intent create --skip`,
+    `engine intent remove-checkout` (it takes code out of what the review
+    covers), `engine config set` and `next config set`,
+    `engine bolt set-autonomy`, the `engine state` status changes while the
+    state-transition check is off for that work (by you or by your Guard
+    Policy), since then the change would land, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints`, and
+    `set-skeleton-stance`, `set-status`). While that check is on, AI-DLC
+    refuses an `engine state` status change itself, so there is nothing to
+    click. `set-construction-checkpoints`, and
     `engine config set` for one of your checks (plan approval, summary
     confirmation, a fence, or Guard Policy), run without a click when you
     asked for that change in the chat since the last decision, and turning a
@@ -284,8 +302,9 @@ then use the ignored local `dist/copilot/` output.
   check stays click-free, and so does `doctor`, which may refresh its update
   check from the release feed as it does when you run it yourself. Skipping
   the click records no decision for you: before the engine records a stage
-  approval, you must have sent a chat message after the gate was shown, which
-  the prompt hook records. That check confirms you took a turn, not what you
+  approval, you must have sent a chat message since the stage started and
+  since the last decision, which the prompt hook records: after the gate was
+  shown, or one the agent names as your answer to it. That check confirms you took a turn, not what you
   meant, so read what the agent reports back. This does not use VS Code's own
   auto-approve, so it also works where an organization policy turns that off;
   it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot
@@ -391,8 +410,9 @@ then use the ignored local `dist/copilot/` output.
   the next SessionStart with inferred provenance (the codex pattern).
 - **The method include rides AGENTS.md `@`-imports** (live-verified on the
   CLI; VS Code documents `@`-import expansion but it has not been verified
-  live there). `/aidlc space <name>` re-points the block in place, including
-  the `.github/agents/` persona twins.
+  live there). The `@`-lines and the `.github/agents/` persona twins read
+  `aidlc/active-memory/`, the engine's git-ignored copy of the active
+  space's method; `/aidlc space <name>` rewrites the copy, never the block.
 - **No statusline**; use `/aidlc --status` and the progress lines at gates.
 - **Construction swarm is subagent fan-out only** (`AIDLC_USE_SWARM=1` is a
   loud no-op).
@@ -449,8 +469,8 @@ copilot -p "/aidlc --doctor" -s --allow-all-tools   # or run /aidlc --doctor in 
 ```
 
 The doctor checks the engine tree and every adapter dependency, root
-`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
-trust, and reminds about the headless env var. The Copilot CLI is optional: a
+`AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, and
+folder trust. The Copilot CLI is optional: a
 VS Code-only install reports `Harness CLI: optional copilot is not installed`
 and passes. VS Code puts its own stand-in `copilot` on its terminals' PATH
 that asks "Install GitHub Copilot CLI? (y/N)" when the CLI is absent, so the
@@ -460,5 +480,6 @@ floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
 `t-copilot-directive-budget.test.ts`;
-the live journey is `tests/e2e/t-exec-copilot-status.serial.test.ts`, gated
-on `AIDLC_COPILOT_EXEC_LIVE=1`.
+the live journeys are `tests/e2e/t-exec-copilot-status.serial.test.ts` and
+`tests/e2e/t-exec-copilot-release-journey.serial.test.ts`, gated on
+`AIDLC_COPILOT_EXEC_LIVE=1`; the Full Suite runs both on Linux, macOS and Windows.

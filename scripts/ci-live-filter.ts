@@ -23,23 +23,28 @@ export const FAMILIES = {
   codex: { env: { AIDLC_CODEX_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   opencode: { env: { AIDLC_OPENCODE_RUN_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   cursor: { env: { AIDLC_CURSOR_RUN_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true, reason: "no credential separation: vendor CLI reads the API key from the agent environment" },
-  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: [], hosting: "excluded", requireCoverage: true },
+  copilot: { env: { AIDLC_COPILOT_EXEC_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-tui": { env: { AIDLC_TUI_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "claude-sdk": { env: { AIDLC_CLAUDE_SDK_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: true },
   "release-contract": { env: { AIDLC_RELEASE_CONTRACT_LIVE: "1" }, platforms: hostedPlatforms, hosting: "hosted", requireCoverage: false },
 } as const satisfies Record<string, Family>;
 export type LiveFamily = keyof typeof FAMILIES;
-export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "opencode"] as const;
+export const VERIFICATION_FAMILIES = ["all", "claude-sdk", "claude-tui", "codex", "copilot", "opencode"] as const;
 export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
-  "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1,
+  "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1,
 };
-/** More shards where a family's files run on one OS only (the golden journeys run on Linux). */
+/**
+ * More shards where a family's files run on some OSes only: the Claude golden
+ * journeys on Linux and Windows and the answers corpus on Linux, the Codex
+ * golden journey on Linux and Windows, so each shard stays under the one-hour
+ * role session.
+ */
 export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {
-  "claude-sdk": { linux: 4 },
+  "claude-sdk": { linux: 5, win32: 3 },
+  codex: { linux: 2, win32: 2 },
 };
 
-/** The shards a family gets on one OS. */
 export function liveShardCount(family: LiveFamily, platform: NodeJS.Platform): number {
   return LIVE_PLATFORM_SHARD_COUNTS[family]?.[platform] ?? LIVE_SHARD_COUNTS[family] ?? 1;
 }
@@ -78,7 +83,6 @@ export function discoverLiveFiles(root: string): Map<string, Set<AllowedLiveGate
   return files;
 }
 
-/** Precedence assigns each file from its own live gates or derived Claude dependency. */
 export function classifyLiveFiles(root: string): Map<LiveFamily, string[]> {
   const claude = new Set(discoverClaudeRequiredTests(join(root, "tests")).map(({ file }) => file));
   const partition = new Map<LiveFamily, string[]>(Object.keys(FAMILIES).map((family) => [family as LiveFamily, []]));
@@ -102,9 +106,21 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   "tests/e2e/t-acp-kiro-new-work-routing.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-journey-orientation-windows.serial.test.ts": ["win32"],
   "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts": ["win32"],
-  // The golden journeys run nightly on Linux; stage logic is the same on every OS.
-  "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
-  "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
+  // The golden journeys run nightly on Linux and Windows; macOS shares Linux's
+  // paths. A live file keeps its retry only under 25 minutes (tests/lib/file-retry.ts),
+  // so a journey that runs longer than that on Windows stays on Linux: Copilot's
+  // ran past 40 there.
+  "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux", "win32"],
+  "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux", "win32"],
+  "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
+  "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux"],
+  "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": ["linux", "win32"],
+  // The answers corpus opens on the family's gate in a live job too: one item
+  // per question a night, by a date rotation, on Linux (its own shard).
+  "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],
+  // On demand only: this opens with its own switch (AIDLC_INPUT_LIVE), which no
+  // live job sets, so no platform runs it.
+  "tests/e2e/t-live-aidlc-input-corpus.serial.test.ts": [],
 };
 
 const LIVE_RUNNERS = { linux: "ubuntu-latest", darwin: "macos-15", win32: "windows-latest" } as const;
@@ -140,7 +156,6 @@ export function assignLiveShards(files: string[], family: LiveFamily, platform: 
   });
 }
 
-/** A bounded group per shard; exact diagnostics still select just one owned file. */
 export function selectedLiveFiles(family: LiveFamily, platform: NodeJS.Platform, shard?: string, selectedTest = ""): string[] {
   const files = eligibleLiveFiles(liveInvocationFiles(), family, platform);
   if (shard === undefined) {
@@ -188,7 +203,6 @@ export function liveMatrix(
     }
   }
   if (!include.length) throw new Error(`${kind} has no selected live files`);
-  // Start the first file for every family before its second file.
   include.sort((a, b) => Number(a.shard.split("/")[0]) - Number(b.shard.split("/")[0]));
   // Filter only after discovery and shard assignment; N/M and slice identities
   // stay identical to the full run for the selected family.
@@ -226,7 +240,6 @@ function requiresProductionGuards(file: string): boolean {
 /** Live file and run ceiling; bounded by the one-hour credential session. */
 export const LIVE_RUN_CEILING_SECONDS = 3600;
 
-/** A retry's ceiling: whole seconds, at least one minute, never past the session. */
 export function liveCeiling(value: string): number {
   const seconds = Number(value);
   if (!/^[1-9][0-9]*$/.test(value) || seconds < 60 || seconds > LIVE_RUN_CEILING_SECONDS) {

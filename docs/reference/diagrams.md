@@ -6,16 +6,16 @@ This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven
 >
 > - Diagrams 1 and 7: [Architecture](01-architecture.md)
 > - Diagram 8: [Orchestrator](03-orchestrator.md) -- Session Management section
-> - Diagram 9: [Orchestrator](03-orchestrator.md) -- Scope Routing section
+> - Diagram 9: [Orchestrator](03-orchestrator.md) -- Scope-to-Stage Mapping section
 > - Diagram 10: [Knowledge System](10-knowledge-system.md)
 > - Diagram 11: [Stage Protocol](04-stage-protocol.md) -- Approval Gates section
-> - Diagram 12: [Orchestrator](03-orchestrator.md) -- State Tracking section
+> - Diagram 12: [Orchestrator](03-orchestrator.md) -- State File Schema section
 
 ---
 
 ## 1. End-to-End Lifecycle
 
-The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 33 stages across the five phases, with scope determining which stages actually execute.
+The AI-DLC methodology organizes work into five sequential phases. The boundaries after Ideation, Inception and Construction each get a verification check, written by the stage that ends the phase (Approval & Handoff, Delivery Planning, CI Pipeline) when the plan runs it; Initialization hands off to the first phase with no check. The full lifecycle spans 33 stages across the five phases, with scope determining which stages actually execute.
 
 ```mermaid
 graph LR
@@ -66,7 +66,7 @@ graph LR
 
 ## 2. Ideation Flow
 
-The Ideation phase captures business intent, validates feasibility, defines scope, forms the team, creates rough mockups, and produces an initiative brief for approval. Stages marked ALWAYS execute for every scope; CONDITIONAL stages are skipped for certain scopes (e.g., poc, bugfix, refactor skip Market Research). Solid arrows indicate ALWAYS routing; dashed arrows indicate CONDITIONAL routing.
+The Ideation phase captures business intent, validates feasibility, defines scope, forms the team, creates rough mockups, and produces an initiative brief for approval. Stages marked ALWAYS run in every scope that includes them; which stages a scope includes comes from its plan. bugfix, refactor, infra, security-patch, classic, workshop and express run no Ideation; poc runs only Intent Capture; mvp leaves out Market Research, Team Formation and Approval & Handoff. mvp and poc leave Ideation with no phase check, since only Approval & Handoff writes it. Solid arrows indicate ALWAYS routing; dashed arrows indicate CONDITIONAL routing.
 
 ```mermaid
 flowchart TD
@@ -79,13 +79,13 @@ flowchart TD
     S17["1.7 Approval & Handoff\n(aidlc-delivery-agent)"]
     VG1{{"Verification Gate:\nIdeation --> Inception"}}
 
-    S11 ==>|ALWAYS| S12
-    S11 -.->|"skip: poc, bugfix,\nrefactor, infra,\nsecurity-patch"| S14
+    S11 -.->|"CONDITIONAL\n(enterprise, feature)"| S12
+    S11 -.->|"mvp: no 1.2"| S13
     S12 -.->|CONDITIONAL| S13
     S12 -.->|"skip if no\nfeasibility needed"| S14
     S13 -.->|CONDITIONAL| S14
-    S14 ==>|ALWAYS| S15
-    S14 -.->|"skip: poc,\nbugfix, refactor"| S17
+    S14 -.->|"CONDITIONAL\n(enterprise, feature)"| S15
+    S14 -.->|"mvp: no 1.5"| S16
     S15 -.->|CONDITIONAL| S16
     S15 -.->|"skip if no UI"| S17
     S16 -.->|CONDITIONAL| S17
@@ -324,7 +324,7 @@ flowchart TD
 
 ## 7. Execution Model
 
-This implementation uses four active execution modes for stages. **Inline** stages execute directly within the orchestrator conversation (user can interact). **Subagent** stages delegate to a single agent via the Claude Code Task tool (hub-and-spoke when the stage declares support agents). **Pipeline** stages chain agents sequentially, each link advancing the work product (Reverse Engineering is the shipped example). **Mob** stages convene all support agents in parallel rounds (User Stories is the shipped example).
+This implementation uses four active execution modes for stages. **Inline** stages execute directly within the orchestrator conversation (user can interact). **Subagent** stages delegate to a single agent through the harness's subagent tool (the Task tool on Claude Code), hub-and-spoke when the stage declares support agents. **Pipeline** stages chain agents sequentially, each link advancing the work product (Reverse Engineering is the shipped example). **Mob** stages convene the support agents in bounded rounds, each contribution blind to the others (in parallel where the harness can dispatch several at once, one after another where it cannot); User Stories is the shipped example.
 
 ```mermaid
 flowchart LR
@@ -381,7 +381,7 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it carries on from the checkpoint (the first call is `next --resume`), and the person can ask to redo, jump to a stage, or start fresh at any time. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-engine/recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it carries on from the checkpoint (the first call is `next --resume`), and the person can ask to redo, jump to a stage, or start fresh at any time. If not found, it creates the first intent.
 
 ```mermaid
 flowchart TD
@@ -389,9 +389,6 @@ flowchart TD
     ARG_CHECK{"Arguments\nprovided?"}
     STATUS_CHECK{"Argument =\n--status?"}
     STATE_EXISTS{"Active intent\nexists?"}
-    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
-    CORRUPTION{"State matches\nrecovery file?"}
-    WARN["Warn user about\npossible corruption"]
 
     CONTINUE["Carry on from the\ncheckpoint:\nnext --resume"]
     OTHER["Person asks to redo,\njump, or start fresh:\nreport --result resumed"]
@@ -399,7 +396,7 @@ flowchart TD
     STATUS_DISPLAY["Display read-only\nstatus summary"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
     KNOWN_SCOPE["Use explicit scope"]
-    FREEFORM["Auto-detect scope\nfrom keywords"]
+    FREEFORM["Agent proposes\nthe plan"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
     CREATE["Create the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
@@ -410,13 +407,8 @@ flowchart TD
     STATUS_CHECK -->|Yes| STATUS_DISPLAY
     STATUS_CHECK -->|No| STATE_EXISTS
 
-    STATE_EXISTS -->|Yes| RECOVERY_CHECK
+    STATE_EXISTS -->|Yes| CONTINUE
     STATE_EXISTS -->|No| SCOPE_DETECT
-
-    RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| CONTINUE
-    CORRUPTION -->|Mismatch| WARN --> CONTINUE
-    CORRUPTION -->|Match| CONTINUE
 
     CONTINUE -.->|"any time"| OTHER
     OTHER -->|"start fresh: confirm"| CREATE
@@ -429,7 +421,6 @@ flowchart TD
     style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
-    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
 ---
@@ -444,7 +435,7 @@ flowchart TD
 
 Each stage loads knowledge in a strict 6-step order. This ensures guardrails take precedence, followed by shared methodology, then agent-specific knowledge, then team customizations, and finally prior stage artifacts. The sequence diagram below shows the loading order for any stage activation.
 
-> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step. On inline stages and for the inline lead of a mob, `inline_context_paths` lists the team knowledge (steps 4-5) right after the personas and before the shared and agent methodology (steps 2-3), and the size cap trims methodology first; dispatched agents load in the order below.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step. On inline stages and for the inline lead of a mob, the step carries the lead's persona itself (`lead_persona`), and `inline_context_paths` lists the team knowledge (steps 4-5) right after the support personas and before the shared and agent methodology (steps 2-3), and the size cap trims methodology first; dispatched agents load in the order below.
 
 ```mermaid
 sequenceDiagram
@@ -468,11 +459,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load aidlc/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load aidlc/spaces/<active-space>/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load aidlc/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load aidlc/spaces/<active-space>/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 
@@ -506,7 +497,7 @@ flowchart TD
     REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
-    PROGRESS["Display progress line:\nN/total overall"]
+    PROGRESS["Display progress line:\nN of M stages done"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]
@@ -604,7 +595,7 @@ flowchart TD
         CO3["[x] Completed\nor [-] In Progress"]
         NS3["[ ] Not Started"]
         IP3["[-] In Progress"]
-        CO3 -->|"user requests redo\n(delete artifacts)"| NS3
+        CO3 -->|"user requests redo\n(state reset, files kept)"| NS3
         NS3 -->|"re-execute stage"| IP3
     end
 

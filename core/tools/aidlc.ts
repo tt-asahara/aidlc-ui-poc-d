@@ -1,16 +1,20 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, writeSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, writeSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CONFIG_SECTIONS,
   dispatcherWorkspaceUtilityArgv,
+  type HookGroupMember,
+  hookGroupMembers,
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
   launcherRouteUsesPin,
+  nextFlagTakesFollowing,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
+  TRUSTED_ROUTE_NAMESPACE,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -30,6 +34,7 @@ import {
   packagedDistributionRoot,
   discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
+  runtimeProjectDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
 
@@ -90,6 +95,8 @@ export type Route = {
   all?: readonly string[];
   helpSummary?: string;
   helpSections?: readonly HelpSection[];
+  /** The tool answers `<verb> --help` with that verb's flags (#2449). */
+  verbHelp?: true;
 };
 
 export type NamespaceHelpOptions = {
@@ -209,7 +216,7 @@ export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
   usage: "aidlc system <noun> <verb> [args]",
-  header: "Operations on this user's aidlc installation; never a system-wide or root install:",
+  header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
 // ROUTES_TABLE_START
@@ -326,6 +333,20 @@ export const ROUTES: readonly Route[] = [
     all: ["now"],
   },
   {
+    // The installed orchestrator skill, whole. A host command template prints
+    // it into itself where the host cuts the skill tool's output (opencode).
+    id: "top-skill-text",
+    group: "top",
+    kind: "top-passthrough",
+    classification: "passthrough",
+    verbs: ["skill-text"],
+    tool: TOOLS.utility,
+    ...HIDDEN_ENGINE,
+    namespace: "engine",
+    mutationScope: "none",
+    all: ["skill-text [--harness-dir <dir>]"],
+  },
+  {
     id: "top-doctor",
     namespace: "public",
     group: "top",
@@ -399,10 +420,11 @@ export const ROUTES: readonly Route[] = [
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
-      "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-cli-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
+      "config --statusline <on|off> [--harness <claude|codex>] [--dry-run] [--json] [--project-dir <path>]",
       "config --unpin",
       "config --channel [stable|preview]",
     ],
@@ -478,7 +500,7 @@ export const ROUTES: readonly Route[] = [
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "uninstall [--purge]", summary: "remove the machine installation" }],
-    all: ["uninstall [--purge] [--yes] [--json|--quiet]"],
+    all: ["uninstall [--purge] [--yes] [--allow-root] [--json|--quiet]"],
   },
   {
     id: "top-completions",
@@ -573,6 +595,8 @@ export const ROUTES: readonly Route[] = [
       "finalize",
       "complete-workflow",
       "gate-start",
+      // The review request runs it (aidlc-log.ts, completionChecksHold).
+      "completion-checks",
       "approve",
       "reject",
       "revise",
@@ -744,6 +768,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["list", "describe", "fire"],
     tool: TOOLS.sensor,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -762,6 +787,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"],
     tool: TOOLS.bolt,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -771,6 +797,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"],
     tool: TOOLS.worktree,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -789,6 +816,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["decision", "answer", "answers", "review", "link"],
     tool: TOOLS.log,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -823,13 +851,13 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo", "set-repos", "add-checkout", "remove-checkout"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
     human: [
       {
-        command: "intent [list|switch|create|archive|unarchive]",
-        summary: "list, switch, create, archive, or unarchive intent context",
+        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo|set-repos|add-checkout|remove-checkout]",
+        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos or recorded checkouts, or set exactly which repos it covers",
       },
     ],
     all: [
@@ -839,6 +867,11 @@ export const ROUTES: readonly Route[] = [
       "create [args]",
       "archive <name> [--reason <text>]",
       "unarchive <name>",
+      "add-repo <name> [--url <address>] [--reason <text>]",
+      "remove-repo <name>",
+      "set-repos <name,...> | --all",
+      "add-checkout <path>",
+      "remove-checkout <path>",
     ],
   },
   {
@@ -955,10 +988,10 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin select [names]", summary: "set enabled plugins" },
       { command: "plugin list [--verbose|--json]", summary: "compare installed and composed plugins" },
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
-      { command: "plugin validate [path]", summary: "validate an authored plugin" },
+      { command: "plugin validate [path] [--with <base-root>]", summary: "validate an authored plugin" },
       { command: "plugin build <harness> [outDir]", summary: "build an authored plugin for a harness" },
     ],
-    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path]", "build <harness> [outDir]"],
+    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path] [--with <base-root>]", "build <harness> [outDir]"],
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
@@ -980,7 +1013,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -1064,6 +1097,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["review", "context", "summary"],
     tool: TOOLS.reviewBrief,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -1186,12 +1220,19 @@ export const ROUTES: readonly Route[] = [
 export type Action =
   | { type: "delegate"; tool: string; args: string[] }
   | { type: "hook"; name: string; path: string; projectDir?: string }
+  | {
+    type: "hook-group";
+    name: string;
+    members: ReadonlyArray<HookGroupMember & { path: string }>;
+    projectDir?: string;
+  }
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
   | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
   | { type: "version"; json: boolean }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
+  | { type: "noun-help"; message: string }
   | { type: "error"; message: string; humanMessage?: string; code: number };
 
 function text(fd: number, value: string | Uint8Array): void {
@@ -1480,6 +1521,11 @@ export function renderCommandHelp(command: PublicCommand): string {
       sectionRow("flags", "Default scope, swarm, hook debug, sensor timeout, and bypasses"),
       sectionRow("project", "Plugins, MCP servers, and shell completions"),
       "",
+      heading("THE PIECE OF WORK YOU ARE ON", out),
+      `  ${cmd(`${invoke} config set <key> <value>`, out)}   Change one of its settings (depth, review, guard-policy, guard.<fence>, sensors, ...)`,
+      `  ${cmd(`${invoke} config get <key>`, out)}           Print one setting`,
+      `  ${cmd(`${invoke} config list`, out)}                List them all`,
+      "",
       heading("COMMON FLAGS", out),
       "  --pin <version>   Pin this project to an installed release",
       "  --download        Fetch and verify the release this project needs, if it is missing",
@@ -1514,7 +1560,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${invoke} update --channel preview`,
     ],
     use: [`  ${invoke} use 2.6.2`],
-    uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`],
+    uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
   return [
     descriptions[command],
@@ -1703,6 +1749,19 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
   };
 }
 
+// `engine <noun> --help` (#2449): the noun's verbs, from the routes that own
+// them. A verb's tool owns its flags, so the way to them is named only where
+// every route of the noun says its tool answers `<verb> --help`.
+function nounHelp(noun: string, routes: readonly Route[], namespace: "engine" | "system"): Action {
+  const invoke = `${aidlcInvocation()} ${namespace} ${noun}`;
+  const verbHelp = routes.every((route) => route.verbHelp === true);
+  return {
+    type: "noun-help",
+    message: `usage: ${invoke} <verb> [flags]\nverbs: ${routes.flatMap((route) => route.verbs).join(", ")}\n` +
+      (verbHelp ? `For a verb's flags, run '${invoke} <verb> --help'.\n` : ""),
+  };
+}
+
 function requireValue(noun: string, verb: string, value: string | undefined): Action | undefined {
   if (value) return undefined;
   return nounError(noun, verb);
@@ -1818,6 +1877,19 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
         target,
         extraArgs: argv.slice(3),
         path: resolveHookPath(adapterFile(harness), harness),
+      };
+    }
+    // One registration, several hooks: the checks a host would start as its own
+    // process each run here, in this process (aidlc-command.ts HOOK_GROUPS).
+    const members = hookGroupMembers(name);
+    if (members !== null) {
+      return {
+        type: "hook-group",
+        name,
+        members: members.map((member) => ({
+          ...member,
+          path: resolveHookPath(`aidlc-${member.hook}.ts`),
+        })),
       };
     }
     return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
@@ -1942,6 +2014,7 @@ function resolveNoun(argv: string[], namespace: Exclude<RouteNamespace, "public"
 
   const custom = routes.find((route) => route.kind === "custom");
   if (custom) return handleCustom(custom, argv);
+  if (argv[1] === "--help" || argv[1] === "-h") return nounHelp(noun, routes, namespace);
   return nounError(noun, argv[1], namespace);
 }
 
@@ -1973,7 +2046,25 @@ function resolveEngine(argv: string[]): Action {
   );
   if (routeOnly) return handleRouteOnly(routeOnly, argv);
 
-  return topLevelError(`engine ${argv[0]}`);
+  return engineNounError(argv[0]);
+}
+
+// An engine noun the route table does not hold: the nearest one by spelling
+// (`sensors` is `sensor`, which an agent guessed live), and the engine's own
+// help, never the public one, which lists no engine noun.
+function engineNounError(noun: string): Action {
+  const invoke = aidlcInvocation();
+  const nouns = new Set(ROUTES.filter((route) => route.namespace === "engine")
+    .flatMap((route) => route.group === "top" ? route.verbs : [route.group]));
+  const nearest = [...nouns]
+    .map((candidate) => ({ candidate, distance: editDistance(noun, candidate) }))
+    .sort((left, right) => left.distance - right.distance || left.candidate.localeCompare(right.candidate))[0];
+  const tip = nearest && nearest.distance <= 2 ? ` did you mean '${invoke} engine ${nearest.candidate}'?` : "";
+  return {
+    type: "error",
+    code: 2,
+    message: `aidlc: unknown command or noun 'engine ${noun}';${tip} try '${invoke} engine --help'\n`,
+  };
 }
 
 function resolveSystem(argv: string[]): Action {
@@ -2038,6 +2129,13 @@ function resolveActionWithoutGlobalFlags(argv: string[]): Action {
   const alias = resolveAlias(argv);
   if (alias) return alias;
 
+  // The settings of the piece of work, typed at a terminal without `engine`
+  // (`config set guard.review-freeze off`, `config get depth`, `config list`):
+  // the same verbs the skills run. They used to fail as an unknown section.
+  if (argv[0] === "config" && ["set", "get", "list"].includes(argv[1] ?? "")) {
+    return resolveEngine(argv);
+  }
+
   const top = resolveTop(argv);
   if (top) return top;
 
@@ -2065,15 +2163,144 @@ function canonicalizeLegacyCopilotHookArgv(argv: string[]): string[] {
     : argv;
 }
 
+/**
+ * Where the person's own words begin on this line, as an index into `argv`: the
+ * first word after the route the resolver named and the subcommand's own verb.
+ * Everything from there on is the subcommand's argv, which is where a request of
+ * theirs lives, so a token that looks like one of this launcher's flags among
+ * those words is one of their words and stays exactly where they typed it.
+ *
+ * `route` is how many leading tokens the resolver read as the route (the
+ * delegate's own argv is what is left), so the grammar decides the boundary and
+ * nothing here mirrors it. `verbOnLine` is false for a shortcut that opens the
+ * line with one of `next`'s own flags (`aidlc --resume`), which stands for the
+ * route and the verb. A flag's value is never a word of theirs, and a flag
+ * `next` takes with no value takes no word: the rule nextArgsCarryRequestWords
+ * reads in aidlc-lib.ts (nextFlagTakesFollowing).
+ */
+function theirWordsBegin(argv: readonly string[], route: number, verbOnLine = true): number | undefined {
+  let named = 0;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--") return i;
+    if (token.startsWith("-")) {
+      if (nextFlagTakesFollowing(token, argv[i + 1])) i++;
+      continue;
+    }
+    // A leading `compose` after the verb is the engine's own, as the
+    // orchestrator's launcher reads it (requestWordsBeginAt).
+    if (named === route + 1 && token === "compose") continue;
+    named++;
+    if (named > route + (verbOnLine ? 1 : 0)) return i;
+  }
+  return undefined;
+}
+
+// Whether the dispatcher words after `engine` route to a command in `admitted`
+// (the state-transition guard's delegateAdmittedVerbs): Kiro IDE builds each
+// persona's shell deny from it, and the Cursor adapter lets a delegate run that
+// command. It lives here, not in the guard, so the guard loads without the
+// dispatcher, as a guard that cannot load refuses nothing.
+export function admittedEngineRoute(
+  admitted: Readonly<Record<string, readonly string[]>>,
+  words: readonly string[],
+): boolean {
+  const action = resolveAction([TRUSTED_ROUTE_NAMESPACE, ...words]);
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
+}
+
 export function resolveAction(
   rawArgv: string[],
   compiled = isCompiledExecutable(),
 ): Action {
+  const first = resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY);
+  const words = first.words;
+  // What is wrong with one of our own options is the person's to act on only
+  // where our options are read. Among their own words that token is their word,
+  // and the line still carries the request they typed.
+  if (first.grammar !== undefined && (words === undefined || first.grammar.at < words)) {
+    return { type: "error", code: 2, message: first.grammar.message };
+  }
+  // Their words begin after the route and the verb. When one of our own flags
+  // sat among them, read the line again and leave that one alone.
+  if (words === undefined) return first.action;
+  if (first.ourFlagsFrom === undefined || first.ourFlagsFrom < words) {
+    return first.action;
+  }
+  return resolveActionFrom(rawArgv, compiled, words).action;
+}
+
+/**
+ * Where our own options stop being ours on this line: the index their words
+ * begin at, or infinity when the line carries none. The same boundary
+ * resolveAction reads, so one answer serves both.
+ */
+function ourFlagLimit(
+  rawArgv: string[],
+  compiled = isCompiledExecutable(),
+): number {
+  return resolveActionFrom(rawArgv, compiled, Number.POSITIVE_INFINITY).words ??
+    Number.POSITIVE_INFINITY;
+}
+
+/**
+ * A request of the person's own rides on one route: `next`, the orchestrator's,
+ * where everything after its verb is a word of theirs. The rest of the grammar
+ * is this engine's own words in a fixed shape (`intent switch <name>`), and
+ * those commands refuse an extra word rather than hand it on, so our options
+ * stay ours there wherever they sit.
+ *
+ * A `next` line that is one of the workspace commands, whole, is one of those
+ * too, by the rule the whole engine reads it with: a leading `intent` or
+ * `space` with that command's own shape after it is its argv, while the same
+ * word opening a sentence is theirs (aidlc-lib.ts, parseNextFlags and the
+ * harness seams). A line that leads with the noun but does not have the shape
+ * is left to the engine to read, with every word of theirs still on it.
+ */
+function theirWordsOn(
+  rawArgv: readonly string[],
+  route: number | undefined,
+  routeArgs: readonly string[] | undefined,
+  verbOnLine: boolean,
+): number | undefined {
+  if (route === undefined || routeArgs === undefined) return undefined;
+  const [verb, ...rest] = routeArgs;
+  if (verb !== "next") return undefined;
+  const workspace = parseDispatcherWorkspaceCommand(rest).kind;
+  if (workspace !== "not-workspace" && workspace !== "error") return undefined;
+  return theirWordsBegin(rawArgv, route, verbOnLine);
+}
+
+interface ResolvedWithRoute {
+  action: Action;
+  /** Leading tokens the resolver read as the route, for a delegate. */
+  route?: number;
+  /** The lowest index in `argv` where one of our own flags was taken. */
+  ourFlagsFrom?: number;
+  /** The first thing wrong with our --project-dir grammar, and where. */
+  grammar?: { at: number; message: string };
+  /** A delegate's argv as the route produced it, before anything of ours. */
+  routeArgs?: readonly string[];
+  /** Where the person's own words begin in `argv`, when the line carries them. */
+  words?: number;
+}
+
+/**
+ * `limit`: our own flags are this launcher's only before this index in `argv`.
+ * At or after it the tokens are the subcommand's, so they pass through whole.
+ */
+function resolveActionFrom(
+  rawArgv: string[],
+  compiled: boolean,
+  limit: number,
+): ResolvedWithRoute {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   const clean: string[] = [];
   const globalFlags: string[] = [];
   let projectDir: string | undefined;
   let literalArgs = false;
+  let ourFlagsFrom = Number.POSITIVE_INFINITY;
+  let grammar: { at: number; message: string } | undefined;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--") {
       literalArgs = true;
@@ -2082,41 +2309,55 @@ export function resolveAction(
     }
     if (
       !literalArgs &&
+      i < limit &&
       LAUNCHER_GLOBAL_FLAGS.has(argv[i])
     ) {
       globalFlags.push(argv[i]);
+      ourFlagsFrom = Math.min(ourFlagsFrom, i);
       continue;
     }
-    if (!literalArgs && argv[i].startsWith("--project-dir=")) {
-      return {
-        type: "error",
-        code: 2,
+    if (!literalArgs && i < limit && argv[i].startsWith("--project-dir=")) {
+      grammar ??= {
+        at: i,
         message: "aidlc: --project-dir takes a separate path value; use --project-dir <path>\n",
       };
-    }
-    if (literalArgs || argv[i] !== "--project-dir") {
       clean.push(argv[i]);
       continue;
     }
-    const value = argv[++i];
+    if (literalArgs || i >= limit || argv[i] !== "--project-dir") {
+      clean.push(argv[i]);
+      continue;
+    }
+    const value = argv[i + 1];
+    // Nothing is refused from inside this loop: resolveAction holds the
+    // boundary, and only there is it known whether the flag was ours at all.
     if (!value || value.startsWith("--")) {
-      return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir requires a path value\n",
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir requires a path value\n" };
+      clean.push(argv[i]);
+      continue;
     }
     if (projectDir !== undefined) {
-      return {
-        type: "error",
-        code: 2,
-        message: "aidlc: --project-dir may be specified only once\n",
-      };
+      grammar ??= { at: i, message: "aidlc: --project-dir may be specified only once\n" };
+      clean.push(argv[i]);
+      continue;
     }
+    ourFlagsFrom = Math.min(ourFlagsFrom, i);
+    i++;
     projectDir = value;
   }
 
   const action = resolveActionWithoutGlobalFlags(clean);
+  // What the resolver read as the route: the clean tokens it did not hand to the
+  // delegate. The boundary for our own flags comes from this, never from a list
+  // of words kept here. A route word that stands for two (`compose` for
+  // `next compose`) hands back more than it read, and one route word is the
+  // least it read, so never below zero.
+  const route = action.type === "delegate"
+    ? Math.max(0, clean.length - action.args.length)
+    : undefined;
+  // Read before anything of ours is put back on the line below.
+  const routeArgs = action.type === "delegate" ? [...action.args] : undefined;
+  const words = theirWordsOn(argv, route, routeArgs, !(clean[0]?.startsWith("-") ?? false));
   if (action.type === "version" && globalFlags.includes("--json")) {
     action.json = true;
   }
@@ -2126,8 +2367,15 @@ export function resolveAction(
       : resolve(process.cwd(), projectDir);
     if (action.type === "delegate") {
       const delimiter = action.args.indexOf("--");
+      // Right after `next`, never after their sentence: the delegate reads its
+      // own option only ahead of the person's words, so one appended behind
+      // them would not be read at all, and no word of theirs is ever read as
+      // its value. Every authored caller builds the line this way too
+      // (aidlc-state.ts, aidlc-continue-workflow.ts, the Kiro IDE adapter).
       if (delimiter >= 0) action.args.splice(delimiter, 0, "--project-dir", absoluteProjectDir);
-      else action.args.push("--project-dir", absoluteProjectDir);
+      else if (action.args[0] === "next") {
+        action.args.splice(1, 0, "--project-dir", absoluteProjectDir);
+      } else action.args.push("--project-dir", absoluteProjectDir);
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
@@ -2147,7 +2395,7 @@ export function resolveAction(
     // project. Pin the host's project: its project environment, else the
     // directory it launched the command in. The statusline and the adapters
     // resolve a project from their host first and hand it to what they run.
-    action.projectDir = dispatcherProjectDirFrom(argv);
+    action.projectDir = dispatcherProjectDirFrom(argv, limit);
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -2156,12 +2404,19 @@ export function resolveAction(
     // so when the caller gave none the resolved directory is pinned ahead of
     // the delimiter. The literal text stays byte-for-byte intact.
     if (delimiter >= 0 && !projectDir) {
-      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv));
+      action.args.splice(delimiter, 0, "--project-dir", dispatcherProjectDirFrom(argv, limit));
     }
     if (delimiter >= 0) action.args.splice(action.args.indexOf("--"), 0, ...globalFlags);
     else action.args.push(...globalFlags);
   }
-  return action;
+  return {
+    action,
+    ...(route === undefined ? {} : { route }),
+    ...(Number.isFinite(ourFlagsFrom) ? { ourFlagsFrom } : {}),
+    ...(grammar === undefined ? {} : { grammar }),
+    ...(routeArgs === undefined ? {} : { routeArgs }),
+    ...(words === undefined ? {} : { words }),
+  };
 }
 // TRANSLATION_LOGIC_END
 
@@ -2174,7 +2429,7 @@ function bunExecutable(): string {
 }
 
 function delegatedProjectDir(args: readonly string[]): string | undefined {
-  return projectDirFlag(args).value;
+  return projectDirFlag(args.slice(0, ourFlagLimit([...args]))).value;
 }
 
 function runDelegateDev(tool: string, args: string[]): number {
@@ -2500,7 +2755,6 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       input = await readStdin();
     } else if (
       action.target === "audit-and-sensors" ||
-      action.target === "enforce-approval-gate" ||
       action.target === "log-subagent" ||
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||
@@ -2512,12 +2766,18 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       action.target === "verb-intercept" ||
       action.target === "terminal-command-guard" ||
       action.target === "guard-tool-call" ||
+      action.target === "person-message" ||
+      action.target === "catch-up" ||
       action.target === "after-shell"
     ) {
       // Mirror the adapter entry point's dual-generation channel contract.
       // IDE 0.12 provides USER_PROMPT and leaves stdin open forever, so consume
       // a non-empty env payload immediately. IDE 1.x leaves USER_PROMPT empty
-      // and writes+closes stdin; the timeout is only a broken-channel ceiling.
+      // and writes+closes stdin: the read waits for that close, so a message
+      // handed over late is read whole; the limit ends only a channel that
+      // never closes (60 s, Kiro's own default budget for a command hook; the
+      // adapter's stdinTimeoutMs says why). On the limit the read yields "",
+      // never a half payload.
       const legacyPayload = process.env.USER_PROMPT ?? "";
       if (legacyPayload.trim().length > 0) {
         input = legacyPayload;
@@ -2525,7 +2785,7 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
         // AIDLC_IDE_STDIN_TIMEOUT_MS mirrors the adapter's test seam so both
         // entry points share one contract.
         const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
-        const ceiling = Number.isFinite(override) && override > 0 ? override : 2000;
+        const ceiling = Number.isFinite(override) && override > 0 ? override : 60_000;
         input = await readStdinWithTimeout(ceiling);
       }
     }
@@ -2542,6 +2802,110 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
     else process.env.AIDLC_COMPILED_EXECUTABLE = previousExecutable;
   }
+}
+
+// One registration that runs several hooks, in this process.
+//
+// Each member runs for the tools its own matcher selected, in order, and every
+// member runs even after one refuses, as the host ran every hook. The call is
+// refused when any member refuses (exit 2), carrying each refusal once; a
+// member that fails on its own (a damaged install, a hook that throws) refuses
+// nothing, exactly as its own failed process refused nothing. The whole group
+// goes through runHookModule, so the harness's own refusal channel (on Claude
+// Code, the deny decision built from stderr) is unchanged.
+async function runHookGroup(
+  action: Extract<Action, { type: "hook-group" }>,
+): Promise<number> {
+  const input = await readStdin();
+  const code = await runHookModule(() => runGroupMembers(action, input), input);
+  // The group's own run ended, with the code the host reads. A reader of the
+  // phase trace (the release check's hooksTracedToCompletion among them) sees
+  // the same begin/load/end shape here as for a hook that runs on its own.
+  hookTrace("hook-run-end", { code });
+  return code;
+}
+
+async function runGroupMembers(
+  action: Extract<Action, { type: "hook-group" }>,
+  input: string,
+): Promise<number> {
+  let toolName: string | null = null;
+  try {
+    const parsed = JSON.parse(input) as { tool_name?: unknown };
+    if (typeof parsed.tool_name === "string") toolName = parsed.tool_name;
+  } catch {
+    // A payload this process cannot read goes to every member, which judges it.
+  }
+  let code = 0;
+  const refusals: string[] = [];
+  const failures: string[] = [];
+  for (const member of action.members) {
+    if (toolName !== null && !new RegExp(member.matcher).test(toolName)) continue;
+    const said = await runGroupMember(member, input);
+    if (said.code === 2) {
+      code = 2;
+      if (said.reason && !refusals.includes(said.reason)) refusals.push(said.reason);
+    } else if (said.code !== 0) {
+      if (code === 0) code = said.code;
+      if (said.reason && !failures.includes(said.reason)) failures.push(said.reason);
+    }
+  }
+  const said = code === 2 ? refusals : failures;
+  // Through process.stderr, not the file descriptor: the harness refusal
+  // channel around this group reads what the hooks wrote there (on Claude Code
+  // it builds the deny decision from it), so a direct descriptor write would
+  // reach the person's terminal but leave that decision without its reason.
+  if (said.length > 0) process.stderr.write(said.join(""));
+  return code;
+}
+
+// One member, with what it said collected so the group can carry each refusal
+// once. A missing or unloadable hook file answers as its own process did: the
+// same line on stderr and exit 1, never a refusal.
+async function runGroupMember(
+  member: HookGroupMember & { path: string },
+  input: string,
+): Promise<{ code: number; reason: string }> {
+  if (!existsSync(member.path)) {
+    return {
+      code: 1,
+      reason: `aidlc engine hook ${member.hook}: not available in this install\n`,
+    };
+  }
+  hookTrace("hook-group-member-begin", { hook: member.hook });
+  const collected: string[] = [];
+  const stderrWrite = process.stderr.write;
+  process.stderr.write = ((chunk: unknown) => {
+    collected.push(
+      typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8"),
+    );
+    return true;
+  }) as typeof process.stderr.write;
+  let code: number;
+  try {
+    // Named phases, because this process loads the hook's code where a hook of
+    // its own would: the trace shows which hook was loaded and that it was.
+    hookTrace("hook-import-begin", { hook: member.hook });
+    const mod = await import(pathToFileURL(member.path).href);
+    hookTrace("hook-import-end", { hook: member.hook });
+    if (typeof mod.run !== "function") {
+      collected.push(
+        `aidlc engine hook ${member.hook}: hook does not export run(input)\n`,
+      );
+      code = 1;
+    } else {
+      code = await (mod.run as (value: string) => number | Promise<number>)(input);
+    }
+  } catch (error) {
+    collected.push(
+      `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+    );
+    code = 1;
+  } finally {
+    process.stderr.write = stderrWrite;
+  }
+  hookTrace("hook-group-member-end", { hook: member.hook, code });
+  return { code, reason: collected.join("") };
 }
 
 async function runSensorScriptFile(
@@ -2576,9 +2940,94 @@ async function runSensorScriptFile(
   return typeof process.exitCode === "number" ? process.exitCode : 0;
 }
 
+/**
+ * `knowledge onboard <path>` for a document the person named outside the
+ * space's `documents/` folder: the copy happens here, at the command layer, and
+ * the verb then indexes the copy. Before this, the knowledge tool refused and
+ * told the person to make the folder and copy the file themselves, which is
+ * work the engine can do for them. The copy lives in aidlc-utility.ts, which
+ * already owns it for `document-input --onboard`; the knowledge module is left
+ * alone, so its own writes stay confined to `documentkb/`.
+ *
+ * Only a path inside the project is copied. A path outside it, a symlink that
+ * leaves it, and a path already under `documents/` all reach the verb
+ * unchanged: the first two are refused there as before, and the last is
+ * indexed where it lies. The returned args carry the copy's path and what to
+ * say about it. A document over the per-document cap, or a folder over a batch
+ * cap, is refused here instead: the refusal is said and nothing is copied, so
+ * the verb's own after-the-fact refusal no longer leaves copies behind.
+ */
+// The knowledge verbs' flags that take a value, so the path is found as the
+// one token that is neither a flag nor a flag's value.
+const KNOWLEDGE_VALUE_FLAGS = new Set([
+  "--space", "--to", "--text-file", "--source-revision", "--project-dir",
+  "--copied-from", "--copied-ignored", "--copied-left-out",
+]);
+
+function knowledgePositionalAt(args: readonly string[]): number {
+  for (let index = 1; index < args.length; index++) {
+    const token = args[index];
+    if (token.startsWith("--")) continue;
+    if (KNOWLEDGE_VALUE_FLAGS.has(args[index - 1])) continue;
+    // `--intent` takes an optional value: a token after it is that value.
+    if (args[index - 1] === "--intent") continue;
+    return index;
+  }
+  return -1;
+}
+
+async function withNamedDocumentCopied(args: string[]): Promise<string[] | { refusal: string }> {
+  if (args[0] !== "onboard") return args;
+  const at = knowledgePositionalAt(args);
+  try {
+    const kb = await import("./aidlc-knowledge.ts");
+    const utility = await import("./aidlc-utility.ts");
+    const projectDir = delegatedProjectDir(args) ?? runtimeProjectDir();
+    const spaceAt = args.indexOf("--space");
+    const space = kb.resolveSpaceFlag(spaceAt === -1 ? undefined : args[spaceAt + 1], projectDir);
+    // The folder the verb reads from is the person's to fill, and an empty one
+    // is not a refusal: a sweep of it simply finds nothing to add.
+    utility.ensureKnowledgeDocumentsFolder(projectDir, kb, space);
+    if (at === -1) return args;
+    const given = args[at];
+    const absolute = isAbsolute(given) ? given : resolve(projectDir, given);
+    if (!existsSync(absolute)) return args;
+    const real = realpathSync(absolute);
+    const inside = (root: string): boolean =>
+      real === root || real.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+    if (!inside(realpathSync(projectDir))) return args;
+    const documents = kb.documentsDir(projectDir, space);
+    if (existsSync(documents) && inside(realpathSync(documents))) return args;
+    const copied = utility.copyNamedDocumentIntoKnowledge(projectDir, kb, space, absolute);
+    // Over a cap: the person hears why in their own terms, and nothing was
+    // copied, so a retry adds no second folder.
+    if ("refusal" in copied) return copied;
+    const next = [...args];
+    next[at] = copied.target;
+    return [
+      ...next,
+      "--copied-from", given,
+      "--copied-ignored", copied.gitIgnored,
+      ...(copied.leftOut > 0 ? ["--copied-left-out", String(copied.leftOut)] : []),
+    ];
+  } catch {
+    // Nothing copied and nothing said: the verb runs on what it was given and
+    // reports its own refusal.
+    return args;
+  }
+}
+
 async function execute(action: Action): Promise<number> {
   const isCompiled = isCompiledExecutable();
   if (action.type === "delegate") {
+    if (action.tool === TOOLS.knowledge) {
+      const prepared = await withNamedDocumentCopied(action.args);
+      if (!Array.isArray(prepared)) {
+        text(2, `${prepared.refusal}\n`);
+        return 1;
+      }
+      action = { ...action, args: prepared };
+    }
     // Tool modules are imported lazily in compiled mode to keep dev-mode startup
     // fast and to avoid loading every tool for help/version calls.
     return isCompiled
@@ -2610,6 +3059,10 @@ async function execute(action: Action): Promise<number> {
     }
     return 0;
   }
+  if (action.type === "noun-help") {
+    text(1, action.message);
+    return 0;
+  }
   if (action.type === "version") {
     text(
       1,
@@ -2625,6 +3078,9 @@ async function execute(action: Action): Promise<number> {
   }
   if (action.type === "hook") {
     return await withProjectDir(action.projectDir, () => runHook(action));
+  }
+  if (action.type === "hook-group") {
+    return await withProjectDir(action.projectDir, () => runHookGroup(action));
   }
   if (action.type === "statusline") {
     return await withProjectDir(action.projectDir, () => runStatusline(action));
@@ -2759,6 +3215,30 @@ export function terminalDispatcherArgv(command: {
   return publicTop ? [command.subcommand, ...forwarded] : ["engine", command.subcommand, ...forwarded];
 }
 
+/**
+ * `config set|get|list` typed at a terminal are the engine's verbs for the
+ * piece of work: the same argv with `engine` in front, so route policy, the
+ * major check, pin dispatch and the launcher's pin classification all see one
+ * route (in a project pinned to another release, the pinned engine writes the
+ * work's settings). Global flags before the command stay where they are. Any
+ * other `config` argv (the install sections) is returned unchanged.
+ */
+export function normalizeTopLevelConfigVerbs(argv: readonly string[]): string[] {
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (token === "--project-dir") {
+      index++;
+      continue;
+    }
+    if (LAUNCHER_GLOBAL_FLAGS.has(token) || token === "--no-color") continue;
+    if (token === "config" && ["set", "get", "list"].includes(argv[index + 1] ?? "")) {
+      return [...argv.slice(0, index), "engine", ...argv.slice(index)];
+    }
+    return [...argv];
+  }
+  return [...argv];
+}
+
 export function routePolicyFor(argv: readonly string[]): Route | null {
   const clean = withoutProjectDirFlag(argv);
   const head = clean[0];
@@ -2841,8 +3321,20 @@ function routePinPolicy(argv: readonly string[]): PinPolicy {
   return route?.pinPolicy ?? "active";
 }
 
-function dispatcherProjectDirFrom(argv: readonly string[]): string {
-  const explicit = projectDirFlag(argv).value;
+/**
+ * `limit`: how far along the line our own options are read, for a caller that
+ * already knows it. Resolving the line computes it, so a caller inside that
+ * resolution must pass its own limit and never ask for it again.
+ */
+function dispatcherProjectDirFrom(
+  argv: readonly string[],
+  limit = ourFlagLimit([...argv]),
+): string {
+  // Only where our own options are read. A token of the person's own that looks
+  // like this one is a word of their request, never a folder to work in: every
+  // reader of the line takes the same slice, so none of them can answer them
+  // about an option they did not use.
+  const explicit = projectDirFlag(argv.slice(0, limit)).value;
   const value = explicit || process.env.AIDLC_PROJECT_DIR ||
     process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
   return value
@@ -3091,6 +3583,9 @@ async function publicCommandGrammarError(
   }
   const normalized = normalizePublicCommandArgv(argv, command, invocation);
   if (command === "config") {
+    // `config set|get|list` are the engine's verbs for the piece of work, routed
+    // by resolveActionWithoutGlobalFlags; the install sections' grammar is not theirs.
+    if (["set", "get", "list"].includes(normalized[1] ?? "")) return null;
     const { validatePublicConfigArgs } = await import("./aidlc-init.ts");
     return validatePublicConfigArgs(normalized);
   }
@@ -3112,14 +3607,7 @@ function renderPublicGrammarFailure(
     (process.stdin.isTTY || process.env.AIDLC_TEST_CONFIG_TTY === "1")
   ) {
     const invoke = aidlcInvocation();
-    const nearest = [
-      "models",
-      "runtime",
-      "providers",
-      "trust",
-      "flags",
-      "project",
-    ]
+    const nearest = [...CONFIG_SECTIONS]
       .map((candidate) => ({
         candidate,
         distance: editDistance(configSection, candidate),
@@ -3160,9 +3648,15 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
+  // Config there would set up a new project, so the line names the steps that
+  // reach the person's project. Our options are read only before the person's
+  // own words, so the flag goes right after the tool.
   return recognized
     ? null
-    : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
+    : `${route.id} requires an installed project harness or recognized project directory; ` +
+      `run it from the project folder, or add --project-dir <path> right after ${
+        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
+      }`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
@@ -3227,6 +3721,30 @@ async function standAsideInMachineRoot(argv: readonly string[]): Promise<number>
   return 0;
 }
 
+// Copilot CLI reads .claude/settings.json as its own repository settings and
+// runs the hooks registered there, beside the Copilot install's own wiring
+// (.github/hooks/aidlc.json), so each Claude registration would run a second
+// time and record each typed line twice (#2921). Copilot marks every process
+// it starts with COPILOT_CLI=1 and gives the hooks it runs from .claude
+// CLAUDE_PROJECT_DIR (its shell tool gets neither that nor CLAUDECODE).
+// Claude Code started from Copilot's shell sets CLAUDECODE=1 on its own hooks,
+// and an adapter pins its harness before it runs a core hook as a child, so
+// neither stands aside. The adapter spellings stay handleRouteOnly's.
+export function copilotRunsClaudeRegistration(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.COPILOT_CLI !== "1" || !env.CLAUDE_PROJECT_DIR || env.CLAUDECODE === "1") return false;
+  const pinned = env.AIDLC_HARNESS_NAME ?? "";
+  if (pinned !== "" && pinned !== "claude") return false;
+  try {
+    const action = resolveAction([...argv]);
+    return action.type === "hook" || action.type === "hook-group";
+  } catch {
+    return false;
+  }
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -3273,8 +3791,8 @@ export async function main(rawArgv: string[]): Promise<void> {
     return;
   }
   // Canonicalized before route policy so stdin buffering, pinning, and
-  // dispatch see `engine hook`.
-  const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
+  // dispatch see `engine hook`, and `config set|get|list` as `engine config`.
+  const argv = normalizeTopLevelConfigVerbs(canonicalizeLegacyCopilotHookArgv(rawArgv));
   process.exitCode = 0;
   bufferedStdin = null;
   const tracedHook = tracedHookRoute(argv);
@@ -3288,8 +3806,15 @@ export async function main(rawArgv: string[]): Promise<void> {
     });
     process.on("exit", (code) => hookTrace("exit", { code }));
   }
+  // Before anything reads the project or pins a harness. The payload is taken
+  // so Copilot does not meet a closed pipe, and nothing is said.
+  if (tracedHook === "hook" && copilotRunsClaudeRegistration(argv)) {
+    hookTrace("copilot-stand-aside");
+    await readStdin();
+    return;
+  }
   configureColor(argv);
-  const projectDirOption = projectDirFlag(argv);
+  const projectDirOption = projectDirFlag(argv.slice(0, ourFlagLimit(argv)));
   if (projectDirOption.error) {
     process.exitCode = renderDispatcherFailure(argv, 2, projectDirOption.error);
     return;
@@ -3350,9 +3875,11 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
-        "./aidlc-windows-uninstall.ts"
-      );
+      const {
+        describeWindowsUninstallFailure,
+        recoverWindowsUninstallContinuations,
+        windowsUninstallStillFinishingLine,
+      } = await import("./aidlc-windows-uninstall.ts");
       // A failed continuation does not block other commands: the fence still
       // stops machine mutation, and `aidlc uninstall` retries it explicitly.
       // A reinstall retries it too, since the failed cleanup may have removed
@@ -3370,7 +3897,7 @@ export async function main(rawArgv: string[]): Promise<void> {
                 ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
                 : ""
             }`
-            : "a Windows uninstall cleanup is still running; this command was not run",
+            : windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), reinstalling ? "install" : "other"),
         );
         return;
       }
@@ -3460,10 +3987,29 @@ export async function main(rawArgv: string[]): Promise<void> {
 }
 
 if (import.meta.main) {
+  // Kiro IDE's Command Prompt terminal: the tool runs itself as a child behind
+  // a pointer line (commandPromptReplyTee), or notes at exit a reply Kiro
+  // dropped, and rejoins the quote pair cmd.exe left on the words. Loaded only
+  // in Kiro's terminal, so the dispatcher's front gate and the lean projections
+  // keep their import graph.
+  if (process.env.TERM_PROGRAM === "kiro" && (process.platform === "win32" || process.env.AIDLC_TEST_KIRO_IDE_SETTINGS)) {
+    import("./aidlc-kiro-ide-terminal.ts")
+      .then(async (m) => {
+        if (await m.commandPromptReplyTee()) return;
+        m.noteSlowReplyAtExit();
+        run(m.rejoinCommandPromptQuotes(process.argv.slice(2)));
+      })
+      .catch(() => run(process.argv.slice(2)));
+  } else {
+    run(process.argv.slice(2));
+  }
+}
+
+function run(args: string[]): void {
   // Keep pending stdin and async dispatch alive, while leaving this module
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
-  void main(process.argv.slice(2)).catch((error) => {
+  void main(args).catch((error) => {
     // Recorded before the message is rendered, so a failing stderr write
     // still leaves the reason in the trace. Only hook routes are traced.
     if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {

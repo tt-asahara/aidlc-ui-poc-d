@@ -20,6 +20,8 @@ import {
   isEngineEngagementSegment,
   isEngineToolCall,
   isShellToolName,
+  MESSAGE_FILL,
+  MESSAGE_SLOT,
   parseLiteralShellInvocation,
   shellCommandText,
 } from "../../core/tools/aidlc-lib.ts";
@@ -592,6 +594,30 @@ const corpus: CorpusCase[] = [
     d2: "pass",
     kind: "negative",
     note: "Plain shell command negative.",
+  },
+  {
+    id: "record-file-find-redirect",
+    cmd: "find aidlc/spaces/default/intents -name aidlc-state.md 2>/dev/null",
+    d1: false,
+    d2: "pass",
+    kind: "negative",
+    note: "The record file named under a redirect is a file, not the state tool: a chat turn that read the record this way was blocked by the Stop hook.",
+  },
+  {
+    id: "record-file-cat-redirect",
+    cmd: "cat aidlc/spaces/default/intents/x/aidlc-state.md 2>/dev/null",
+    d1: false,
+    d2: "pass",
+    kind: "negative",
+    note: "Reading the record file with a redirect is not engagement.",
+  },
+  {
+    id: "record-file-ls-glob",
+    cmd: "ls aidlc/spaces/default/intents/*/aidlc-state.md",
+    d1: false,
+    d2: "pass",
+    kind: "negative",
+    note: "A glob over record files is not engagement.",
   },
   {
     id: "plain-cat",
@@ -1225,6 +1251,67 @@ describe("detector corpus", () => {
     }
   });
 
+  test("a setting their line did not carry is the same dispatch with the message flag its step names", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --sensors off";
+    const fill = MESSAGE_FILL;
+    const step = (named: string, said = fill): string => JSON.stringify({
+      kind: "print",
+      message: `Run \`${named}\` to update the configuration${said}, then print its output verbatim and stop.`,
+    });
+    const setter = "bun .claude/tools/aidlc.ts engine config set sensors off";
+    expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'`))).toBe(false);
+    // The fill names the ids of the messages on record, with their times.
+    expect(isEngineToolCall("Bash", { command }, step(
+      `${setter} --message '${MESSAGE_SLOT}'`, `${fill} (0a1b2c3d, sent 2026-10-23T04:00:00Z; 4e5f6a7b, sent 2026-10-23T04:01:00Z)`,
+    ))).toBe(false);
+    for (const other of [
+      step(`${setter} --message 0a1b2c3d`),
+      step(`${setter} --message`),
+      step(`${setter} --message '${MESSAGE_SLOT}'`, ""),
+      step(`${setter} --person-words '<their words>'`, ", with <their words> the person's reply that asked for it, word for word"),
+      step(setter),
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, other), other).toBe(true);
+    }
+  });
+
+  test("a scope change or a check typed with next is the same dispatch, with the message flag its step names", () => {
+    const fill = MESSAGE_FILL;
+    const step = (named: string, said: string, verb: string): string => JSON.stringify({
+      kind: "print",
+      message: `Run \`${named}\` to ${verb}${said}, then print its output verbatim and stop.`,
+    });
+    const engine = "bun .claude/tools/aidlc.ts engine";
+    for (const [typed, named, verb] of [
+      ["--scope mvp --sensors off", "scope change --scope mvp --sensors off", "change scope"],
+      ["--scope mvp --guard.review-freeze Off", "scope change --scope mvp --guard.review-freeze off", "change scope"],
+      ["--guard.review-freeze off", "config set guard.review-freeze off", "update the configuration"],
+      ["--depth minimal --guard.state-transition off", "config set depth minimal --guard.state-transition off", "update the configuration"],
+      // `guard.plan-approval` is another way to say plan approval.
+      ["--guard.plan-approval off", "config set plan-approval off", "update the configuration"],
+    ]) {
+      const command = `${engine} orchestrate next ${typed}`;
+      const setter = `${engine} ${named}`;
+      // A check turned off by config set: the step asks the setter for its lines alone.
+      const verbatim = named.startsWith("config set") ? " --verbatim" : "";
+      expect(isEngineToolCall("Bash", { command }, step(`${setter} --message '${MESSAGE_SLOT}'${verbatim}`, fill, verb)), command).toBe(false);
+      for (const other of [
+        ...(verbatim ? [step(`${setter} --message '${MESSAGE_SLOT}'`, fill, verb)] : []),
+        step(`${setter} --message 0a1b2c3d`, fill, verb),
+        step(`${setter} --message`, fill, verb),
+        step(`${setter} --message '${MESSAGE_SLOT}'`, "", verb),
+        step(setter, fill, verb),
+        step(`${setter.replace(" off", " on")} --message '${MESSAGE_SLOT}'`, fill, verb),
+      ]) {
+        expect(isEngineToolCall("Bash", { command }, other), `${command}: ${other}`).toBe(true);
+      }
+    }
+    // A check word the engine refuses, or no word, is its own terminal refusal, as a depth word is.
+    for (const typed of ["--guard.review-freeze maybe", "--guard.review-freeze", "--guard.state-transition off --depth bogus"]) {
+      expect(isEngineToolCall("Bash", { command: `${engine} orchestrate next ${typed}` }), typed).toBe(false);
+    }
+  });
+
   test("a scope change needs its exact authoritative dispatch output", () => {
     const command = "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp";
     const directive = {
@@ -1363,7 +1450,10 @@ describe("detector corpus", () => {
           [`${entry} --project-dir '${otherProjectDir}' next --depth standard`, true],
           [`${terminal} --project-dir '${projectDir}'`, false],
           [`${terminal} --project-dir='${otherProjectDir}'`, true],
-          [`${terminal} --project-dir='${projectDir}'`, false],
+          // The orchestrator takes its folder only as two tokens: there
+          // `--project-dir=<dir>` is a token `next` does not take, so the line is
+          // not this terminal command. The dispatcher's own grammar reads it.
+          [`${terminal} --project-dir='${projectDir}'`, entry.endsWith("aidlc-orchestrate.ts")],
           [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
           [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
           [`${terminal} --project-dir .`, false],
@@ -1379,7 +1469,7 @@ describe("detector corpus", () => {
       const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth standard";
       for (const [selectors, engaged] of [
         [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
-        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, true],
       ] as const) {
         const command = `${terminal} ${selectors}`;
         expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);

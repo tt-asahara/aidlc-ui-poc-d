@@ -1,10 +1,10 @@
 // covers: render-surface:statusline-colour
 //
-// t-tui-render-colour.serial.tui.test.ts — the statusline context-window COLOUR
+// t-tui-render-colour.serial.test.ts - the statusline context-window COLOUR
 // branch (§5-C render row, §7 Phase 3), proven through the hook bytes and a REAL
 // terminal render.
 //
-// The branch under test (aidlc-statusline.ts:54-58, contextColor): the right side
+// The branch under test (aidlc-statusline.ts, contextColor): the right side
 // paints "ctx:N%" wrapped in an SGR colour escape chosen by the context-window
 // usage — green (\x1b[32m) < 50%, yellow (\x1b[33m) >= 50%, red (\x1b[31m) >= 75%.
 //
@@ -142,7 +142,7 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
       const sandbox = setupTuiProject({ withState: "state-mid-ideation.md" });
       try {
         const destClaude = join(sandbox, ".claude");
-        expect(readFileSync(join(destClaude, "settings.json"), "utf8")).toContain('"statusLine"');
+        expect(readFileSync(join(destClaude, "settings.local.json"), "utf8")).toContain('"statusLine"');
         const ESC = String.fromCharCode(0x1b);
 
         // Prove the product hook's colour branch directly: with a synthetic low
@@ -165,6 +165,10 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
           "40",
           "--",
           "claude",
+          // AI-DLC's status line is the person's choice, in their own
+          // .claude/settings.local.json (#1407): load it beside the project file.
+          "--setting-sources",
+          "project,local",
           "--dangerously-skip-permissions",
         ]);
         expect(started.rc).toBe(0);
@@ -176,8 +180,8 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
           "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
         ]);
         expect(startup.rc).toBe(0);
-        // P9: orientation prefix ("<intent-slug> · ") sits between [AIDLC] and the
-        // phase, so match with .* rather than a contiguous gap.
+        // The orientation prefix (the intent slug and a middle-dot separator) sits
+        // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
         expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000)).toBe(true);
 
         // --- submit a trivial prompt to consume context (populate ctx:%) ------

@@ -1,7 +1,7 @@
 // t255-workspace-sync: aidlc-workspace-sync reconciles a workspace root against
 // an optional repos.json manifest, idempotently and without ever destroying work.
 //
-// covers: file:core/tools/aidlc-workspace-sync.ts
+// covers: file:core/tools/aidlc-workspace-sync.ts, function:renameRetryingOnWindows
 //
 // The orphan-safety coverage is the load-bearing part: a reconcile tool that
 // clones and removes sibling repos must never delete unrecoverable work.
@@ -26,7 +26,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -48,6 +48,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
+import { maskUserinfo, renameRetryingOnWindows } from "../../core/tools/aidlc-workspace-sync.ts";
 
 // Real git repos + bare remotes + a shimmed sleep 1 per case exceed bun's 5s default under load.
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -613,7 +614,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const settings = () => JSON.parse(readFileSync(file, "utf-8")).settings;
     expect(runSync(ws).status).toBe(0);
     expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
-    // A file written before this release, with no settings yet, gets it too.
+    // A file with no settings yet gets it too.
     writeFileSync(file, `${JSON.stringify({ folders: [{ path: "." }] }, null, 2)}\n`);
     expect(runSync(ws).status).toBe(0);
     expect(settings()).toEqual({ "chat.agent.maxRequests": 200 });
@@ -638,9 +639,25 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const gi = readFileSync(join(ws, ".gitignore"), "utf-8");
     expect(gi).toContain("# >>> aidlc workspace-sync managed");
     expect(gi).toContain("\n/.aidlc-workspace-sync-recovery-*/\n");
+    // The staging folder a clone cut off by a host timeout leaves behind.
+    expect(gi).toContain("\n/.aidlc-workspace-sync-txn-*/\n");
     expect(gi).toContain("\n/checkout-api/\n");
     expect(gi).toContain("\n/checkout-web/\n");
     expect(gi).toContain("# <<< aidlc workspace-sync managed <<<");
+  });
+
+  test("a repo folder named with a space gets its own managed line, which git reads as that folder", () => {
+    const ws = freshWorkspace('{ "org": "acme", "repos": [{ "name": "my lib" }] }', ["my lib"]);
+    expect(runSync(ws).status).toBe(0);
+    expect(readFileSync(join(ws, ".gitignore"), "utf-8")).toContain("\n/my lib/\n");
+    git(ws, "init", "-q");
+    writeFileSync(join(ws, "my lib", "a.txt"), "x\n", "utf-8");
+    writeFileSync(join(ws, "my libs.txt"), "x\n", "utf-8");
+    const ignored = (path: string) => spawnSync("git", ["-C", ws, "check-ignore", "-q", path], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).status;
+    expect(ignored("my lib/a.txt")).toBe(0);
+    expect(ignored("my libs.txt")).toBe(1);
   });
 
   test("is idempotent and preserves hand-owned lines outside the gates", () => {
@@ -730,18 +747,14 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
     const r = runSync(ws);
     expect(r.status).not.toBe(0);
-    // Tool prints the orphan's name and the --force hint
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("--force");
     // Orphan dir was NOT removed (atomic: no changes made)
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // aidlc.code-workspace was NOT created (mutation did not happen)
     expect(existsSync(join(ws, "aidlc.code-workspace"))).toBe(false);
   });
 
   test("orphan clean+pushed is removed from the active set and retained for recovery", () => {
-    // Same setup as above; with --force the tool removes the orphan and
-    // succeeds, writing .gitignore + aidlc.code-workspace for manifest repos only.
     const SINGLE_MANIFEST = `{
   "org": "acme",
   "repos": [
@@ -754,7 +767,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
     const r = runSync(ws, ["--force"]);
     expect(r.status).toBe(0);
-    // Orphan was removed from the active sibling path.
     expect(existsSync(join(ws, "checkout-web"))).toBe(false);
     const recovery = readdirSync(ws).find((name) =>
       name.startsWith(".aidlc-workspace-sync-recovery-"),
@@ -763,11 +775,9 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(
       readFileSync(join(ws, recovery!, "checkout-web", "README.md"), "utf-8"),
     ).toContain("# checkout-web");
-    // .gitignore managed block lists only the manifest repo
     const gi = readFileSync(join(ws, ".gitignore"), "utf-8");
     expect(gi).toContain("/checkout-api/");
     expect(gi).not.toContain("/checkout-web/");
-    // aidlc.code-workspace contains only root + manifest repo
     const cw = JSON.parse(readFileSync(join(ws, "aidlc.code-workspace"), "utf-8"));
     expect(cw.folders).toEqual([{ path: "." }, { path: "checkout-api" }]);
   });
@@ -784,14 +794,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
     makeRepo(ws, "checkout-api");
     makeRepo(ws, "checkout-web");
-    // Make checkout-web dirty: add an untracked file
     writeFileSync(join(ws, "checkout-web", "dirty.txt"), "uncommitted change", "utf-8");
 
     const r = runSync(ws, ["--force"]);
     expect(r.status).not.toBe(0);
-    // Dir survives
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // Output names the repo and signals a dirty/uncommitted reason
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("dirty working tree");
   });
@@ -808,7 +815,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
     makeRepo(ws, "checkout-api");
     makeRepo(ws, "checkout-web");
-    // Add a commit that is NOT pushed to origin
     writeFileSync(join(ws, "checkout-web", "extra.md"), "unpushed", "utf-8");
     git(join(ws, "checkout-web"), "add", "-A");
     git(join(ws, "checkout-web"), "commit", "-q", "-m", "unpushed commit");
@@ -830,22 +836,18 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   ]
 }`;
     const ws = freshRealWorkspace(SINGLE_MANIFEST);
-    // Init on feature/x so current branch != the manifest's branch
     makeRepo(ws, "checkout-api", { branch: "feature/x" });
 
     const r = runSync(ws);
     expect(r.status).toBe(2);
-    // Output contains a branch advisory naming both branches
     expect(r.out).toContain("feature/x");
     expect(r.out).toContain("main");
     // The advisory names its source: repos.json (the explicit branch is set).
     expect(r.out).toContain("repos.json");
-    // Output contains the honest final line
     expect(r.out).toContain("NOT fully in sync");
     // The warning/yellow path is also escape-free when captured (non-TTY) - this
     // exercises the color gate on the exit-2 path, not just the green success path.
     expect(r.out).not.toContain("\x1b[");
-    // Branch was NOT switched - repo is still on feature/x
     const head = git(join(ws, "checkout-api"), "rev-parse", "--abbrev-ref", "HEAD");
     expect(head).toBe("feature/x");
   });
@@ -878,7 +880,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(r.status).not.toBe(0);
     // Orphan dir MUST survive - the detached commit would be destroyed otherwise
     expect(existsSync(join(ws, "checkout-web"))).toBe(true);
-    // Output names the repo and the unpushed reason
     expect(r.out).toContain("checkout-web");
     expect(r.out).toContain("unpushed commits");
   });
@@ -1194,11 +1195,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     const cases = [
       {
         repos: [{ name: "../escaped", url: "/does/not/matter" }],
-        message: "single path segment",
+        message: "its name is not one folder's name",
       },
       {
         repos: [{ name: "nested/repo", url: "/does/not/matter" }],
-        message: "single path segment",
+        message: "its name is not one folder's name",
       },
       {
         repos: [{ name: "same" }, { name: "same" }],
@@ -1397,6 +1398,60 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
       "develop",
     );
     expect(existsSync(join(ws, "checkout-api", "develop.txt"))).toBe(true);
+  });
+
+  test("a token in a clone address is masked on screen while git gets the address whole", () => {
+    const sourceWs = freshRealWorkspace('{ "org": "fake-org", "repos": [] }');
+    const remote = git(makeRepo(sourceWs, "source"), "remote", "get-url", "origin");
+    const plainRemote = git(makeRepo(sourceWs, "plain"), "remote", "get-url", "origin");
+    const tokenUrl = "https://t255-user:FAKE-TOKEN-t255@example.invalid/fake-org/checkout-api.git";
+    const ws = freshRealWorkspace(
+      JSON.stringify({
+        org: "fake-org",
+        repos: [
+          { name: "checkout-api", branch: "main", url: tokenUrl },
+          { name: "checkout-web", branch: "main", url: plainRemote },
+        ],
+      }),
+    );
+    // git rewrites only this exact address to the local remote, so the clone
+    // succeeds offline only when git received it with its userinfo.
+    const result = runSync(ws, [], {
+      ...GIT_ENV,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`,
+      GIT_CONFIG_VALUE_0: tokenUrl,
+    });
+    expect(result.out).not.toContain("FAKE-TOKEN");
+    expect(result.out).toContain(
+      "staging clone checkout-api from https://***@example.invalid/fake-org/checkout-api.git (branch main)",
+    );
+    expect(result.out).toContain(`staging clone checkout-web from ${plainRemote} (branch main)`);
+    expect(result.status).toBe(0);
+    expect(git(join(ws, "checkout-api"), "config", "--get", "remote.origin.url")).toBe(tokenUrl);
+  });
+
+  test("clone-failure text from git hides userinfo; addresses without it print unchanged", () => {
+    expect(
+      maskUserinfo(
+        "fatal: unable to access 'https://t255-user:FAKE-TOKEN-t255@example.invalid/fake-org/repo.git/': Could not resolve host",
+      ),
+    ).toBe("fatal: unable to access 'https://***@example.invalid/fake-org/repo.git/': Could not resolve host");
+    expect(maskUserinfo("https://FAKE-TOKEN-t255@example.invalid/fake-org/repo.git")).toBe(
+      "https://***@example.invalid/fake-org/repo.git",
+    );
+    expect(maskUserinfo("http://t255-user:p@ss-FAKE-TOKEN@127.0.0.1:9/repo.git")).toBe(
+      "http://***@127.0.0.1:9/repo.git",
+    );
+    for (const address of [
+      "git@github.com:fake-org/repo.git",
+      "https://example.invalid/fake-org/repo@v1.git",
+      "/srv/git/repo.git",
+      "C:\\git\\repo.git",
+      "file:///srv/git/repo.git",
+    ]) {
+      expect(maskUserinfo(address)).toBe(address);
+    }
   });
 
   test("orphan changes during a slow clone abort the transaction", async () => {
@@ -1619,7 +1674,6 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     // Source label for the omitted case names the origin default, not repos.json.
     expect(r.out).toContain("origin default");
     expect(r.out).toContain("NOT fully in sync");
-    // Branch was NOT switched.
     expect(git(dir, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feature/x");
     expect(r.out).not.toContain("\x1b[");
   });
@@ -1708,7 +1762,7 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("legacy defaultBranch key is ignored gracefully (exit 0)", () => {
-    // The old key is unknown JSON now - parses fine and behaves as "branch
+    // The old key is unknown JSON - parses fine and behaves as "branch
     // omitted": checkout on the detected origin default → no warning.
     const SINGLE_MANIFEST = `{
   "org": "acme",
@@ -1727,8 +1781,8 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
 
   test("per-entry url override is accepted (validated, not derived from org)", () => {
     // A non-empty "url" is valid and does not trip validation; an empty "url"
-    // is rejected before any git call. The clone path itself is network-bound
-    // and covered manually, so we only assert the validation contract here.
+    // is rejected before any git call. The clone path itself is covered with
+    // local bare remotes, so we only assert the validation contract here.
     const GOOD = `{
   "org": "acme",
   "repos": [
@@ -1750,4 +1804,49 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     expect(r.out).toContain("url");
     expect(r.out).toContain("checkout-api");
   });
+});
+
+// Windows refuses to rename a folder while another program has a file in it
+// open; the move waits a few seconds for it to let go, and never over a target
+// that is already there.
+describe("t255 workspace-sync - a folder move on Windows", () => {
+  test.skipIf(process.platform !== "win32")(
+    "on Windows a move waits for a program holding a file inside to let go, and never retries over an existing target",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "aidlc-t255-move-"));
+      tmpRoots.push(root);
+      const held = join(root, "staged");
+      mkdirSync(join(held, "src"), { recursive: true });
+      const file = join(held, "src", "api.ts");
+      writeFileSync(file, "export const api = 1;\n", "utf-8");
+      const opened = join(root, "opened");
+      const holder = (path: string, ms: number) => {
+        const child = spawn("powershell", [
+          "-NoProfile",
+          "-Command",
+          `$f = [IO.File]::Open('${path}', 'Open', 'Read', 'Read'); New-Item -ItemType File '${opened}' | Out-Null; ` +
+            `Start-Sleep -Milliseconds ${ms}; $f.Close()`,
+        ]);
+        return new Promise<void>((done) => child.on("exit", () => done()));
+      };
+
+      const released = holder(file, 1_000);
+      await waitForPath(opened);
+      expect(() => renameSync(held, join(root, "plain"))).toThrow();
+      renameRetryingOnWindows(held, join(root, "installed"));
+      expect(existsSync(join(root, "installed", "src", "api.ts"))).toBe(true);
+      await released;
+
+      rmSync(opened, { force: true });
+      const target = join(root, "taken");
+      mkdirSync(join(target, "kept"), { recursive: true });
+      const releasedAgain = holder(join(root, "installed", "src", "api.ts"), 2_000);
+      await waitForPath(opened);
+      const started = Date.now();
+      expect(() => renameRetryingOnWindows(join(root, "installed"), target)).toThrow();
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(existsSync(join(target, "kept"))).toBe(true);
+      await releasedAgain;
+    },
+  );
 });

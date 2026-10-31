@@ -19,10 +19,12 @@ import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -34,6 +36,7 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   latestMainWorkflowStageRunFloorForProject,
+  markHumanTurn,
   readAllAuditShards,
   splitKiroCommandArgs,
   teamUnitGateStatus,
@@ -47,13 +50,20 @@ import {
   createTestProject,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
+  REPO_ROOT,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -134,7 +144,7 @@ function constructionState(
 - **Construction Iteration**: ${iteration}
 ${reviewOverride ? `- **Review Override**: ${reviewOverride}\n` : ""}
 ${autonomy ? `- **Construction Autonomy Mode**: ${autonomy}\n` : ""}
-${ownership ? `- **Unit Ownership**: ${ownership}\n` : ""}
+- **Unit Ownership**: ${ownership ?? "solo"}
 
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -646,6 +656,7 @@ describe("t278 engine-emitted wave contract", () => {
       { name: "web", kind: "ui" },
       { name: "contract", kind: "spec" },
     ]);
+    seedAnsweredUnitQuestions(proj, "infrastructure-design", ["api", "web", "contract"]);
 
     const result = next(proj);
     const directive = result.directive;
@@ -656,6 +667,7 @@ describe("t278 engine-emitted wave contract", () => {
       "api",
       "web",
     ]);
+    expect(directive.protocol_modules).toContain("wave");
 
     const api = directive.wave?.entries[0] as WaveEntry;
     const web = directive.wave?.entries[1] as WaveEntry;
@@ -710,6 +722,7 @@ describe("t278 engine-emitted wave contract", () => {
   test("downstream consumes omit artifacts pruned by the producer for this unit kind", () => {
     const proj = project("nfr-design");
     seedBoltDag(proj, [{ name: "contract", kind: "spec" }]);
+    seedAnsweredUnitQuestions(proj, "nfr-design", ["contract"]);
 
     const entry = next(proj).directive.wave?.entries[0] as WaveEntry;
     const consumePaths = [
@@ -751,6 +764,7 @@ describe("t278 engine-emitted wave contract", () => {
       ],
       [["alpha", "beta"]],
     );
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     writeDependencyArtifact(proj, [
       { name: "alpha", kind: "service", depends_on: [] },
       { name: "beta", kind: "service", depends_on: ["alpha"] },
@@ -761,7 +775,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(result.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
       "alpha",
     ]);
-    expect(result.stderr).toContain("bolt_dag is missing or stale");
+    expect(result.stderr).not.toContain("bolt_dag");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("dependent batches wait for fresh terminal receipts, including NOT-READY at cap", () => {
@@ -771,6 +785,7 @@ describe("t278 engine-emitted wave contract", () => {
       ["alpha", "beta"],
       [["alpha"], ["beta"]],
     );
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
 
     const alphaReview = next(proj).directive;
@@ -912,7 +927,6 @@ describe("t278 engine-emitted wave contract", () => {
       const after = next(proj).directive;
       expect(after.wave, JSON.stringify(after)).toBeUndefined();
       expect(after.gate).toBe(true);
-      // The gate opens and says the change once.
       const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
@@ -971,6 +985,75 @@ describe("t278 engine-emitted wave contract", () => {
       reason_codes: ["REVIEW_RECOVERY_SPENT"],
       unit: "alpha",
     });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A hook refused the agent's write mid-revision and left its own way on
+  // (finish the revision) for `next` to hand on. The agent stopped instead.
+  // Where nobody attends, the Stop hook's probe sees that same own-work ask and
+  // hands the work back. In an attended run the turn ends, and the person's next
+  // message gets the same own-work ask from `next`: they are never asked to
+  // decide about work the agent never tried.
+  test("an own-work ask a hook refusal left: the Stop hook hands it back where nobody attends, on Claude Code and Codex", () => {
+    const proj = project("functional-design", "stage-major", undefined, undefined, "team");
+    seedBoltDag(proj, ["alpha"]);
+    cover(proj, "alpha", "functional-design", REQUIRED_FD);
+    for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
+      appendAuditEntry(event, {
+        Stage: "functional-design", Unit: "alpha", "Gate Scope": "per-stage", "Gate Stages": "functional-design",
+        ...(event === "GATE_REJECTED" ? { Feedback: "revise alpha" } : {}),
+      }, proj);
+    }
+    // The person's "revise alpha" comes first; the agent's revision then
+    // records its review (stage work the carve-out counts, #2400) and has its
+    // next write refused.
+    markHumanTurn(proj);
+    review(proj, "alpha");
+    const artifact = join(seededRecordDir(proj), "construction", "alpha", "functional-design", "functional-spec.md");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" };
+    delete env.AWS_AIDLC_DEFAULT_SCOPE;
+    delete env.AIDLC_STOP_HOOK_PROBE;
+    expect(freezeWrite(proj, artifact).status).toBe(2);
+    const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
+    expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+    // The hook's probe runs the project's own tree.
+    for (const tree of ["claude", "codex"] as const) {
+      const dir = tree === "claude" ? ".claude" : ".codex";
+      if (!existsSync(join(proj, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(proj, dir), { recursive: true });
+    }
+    let stops = 0;
+    const stop = (tree: "claude" | "codex", unattended: "0" | "1") => spawnSync(BUN, tree === "claude"
+      ? [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "continue-workflow"]
+      : [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "Stop", stop_hook_active: false, session_id: "t278-agent-work", cwd: proj, turn_id: `t${++stops}`,
+      }),
+      encoding: "utf-8",
+      env: {
+        ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined,
+        AIDLC_UNATTENDED: unattended,
+      },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const traces = () => {
+      const traceDir = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+      return existsSync(traceDir)
+        ? readdirSync(traceDir).map((name) => `${name}:\n${readFileSync(join(traceDir, name), "utf-8")}`).join("\n")
+        : "(no hooks-health dir)";
+    };
+    for (const tree of ["claude", "codex"] as const) {
+      // Each tree is one agent's stop: the hook's no-progress block count is
+      // per project, so the second tree starts it afresh.
+      rmSync(join(seededRecordDir(proj), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
+      const attended = stop(tree, "0");
+      expect(attended.stdout.trim(), `${tree}: ${attended.stderr}\n${traces()}`).toBe("");
+      const handedBack = stop(tree, "1");
+      expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
+      expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
+    }
+    const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
+    expect(asked).toContain('"agent_work":true');
+    expect(asked).toContain("--result revised");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team revising Units route freeze and spent-review refusals to redo", () => {
@@ -1279,6 +1362,7 @@ describe("t278 engine-emitted wave contract", () => {
   test("fully settled siblings are omitted from a repeated same-batch wave", () => {
     const proj = project();
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
     review(proj, "alpha");
     completeWave(proj, "alpha");
@@ -1307,6 +1391,7 @@ describe("t278 engine-emitted wave contract", () => {
       kind: "service",
     }));
     seedBoltDag(proj, units);
+    seedAnsweredUnitQuestions(proj, "functional-design", units.map((unit) => unit.name));
     const result = next(proj);
     const entries = result.directive.wave?.entries ?? [];
     expect(entries.length).toBeGreaterThan(0);
@@ -1444,6 +1529,7 @@ describe("t278 engine-emitted wave contract", () => {
       const proj = project("functional-design", "stage-major", "none");
       addRuntimeState(proj);
       seedBoltDag(proj, ["alpha", "beta"], [["alpha"], ["beta"]]);
+      seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
       if (priorCompletion) {
         cover(proj, "alpha", "functional-design", REQUIRED_FD);
         completeWave(proj, "alpha");
@@ -1507,6 +1593,7 @@ describe("t278 engine-emitted wave contract", () => {
         readFileSync(file, "utf-8").replaceAll("- [ ]", "- [S]"),
       );
       seedBoltDag(proj, ["alpha", "beta"]);
+      seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
       appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
       if (rejectedWave) {
         appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
@@ -1574,6 +1661,7 @@ describe("t278 engine-emitted wave contract", () => {
     const proj = project("nfr-requirements", "unit-major", "none");
     addRuntimeState(proj);
     seedBoltDag(proj, ["alpha"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha"]);
     appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
     const file = seededStateFile(proj);
     writeFileSync(
@@ -1638,57 +1726,51 @@ describe("t278 engine-emitted wave contract", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+// The wave contract left the /aidlc skill for the wave module the step names
+// (`wave` in directive.protocol_modules), shipped in every harness tree.
 function expectWaveProse(body: string): void {
-  expect(body).toContain("**Per-unit batch waves (optional).**");
+  expect(body).toContain("**Per-unit batch waves (optional, stage-major only).**");
   expect(body).toContain("directive.wave");
-  expect(body).toContain(
-    "then `directive.wave` when present, otherwise `directive.gate`",
-  );
-  expect(body).toContain("parent Unit fields are only a projection");
-  expect(body).toContain("every `inline_context_paths` file");
+  expect(body).toContain("the parent Unit fields are compatibility projections of the first entry");
+  expect(body).toContain("`inline_context_paths`");
   expect(body).toContain("`context_warnings`");
   expect(body).toContain("entry.required_produces");
   expect(body).toContain("completion_required");
-  expect(body).toContain("entry.unit_memory_path");
+  expect(body).toContain("`unit_memory_path`");
   expect(body).toContain("retry-required");
   expect(body).toContain("repair-required");
   expect(body).toContain("recovery-required");
   expect(body).toContain("escalation-required");
-  expect(body).toContain("`--retry-pending`");
+  expect(body).toContain("--retry-pending");
   expect(body).toContain("emits `UNIT_COMPLETED`");
-  expect(body).toContain("Code Generation and unit-major iteration never carry a wave");
+  expect(body).toContain("Code Generation remains wave-ineligible");
   expect(body).not.toContain(
     "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
   );
 }
 
 describe("t278 wave protocol parity", () => {
-  test("authored and generated conductor skills carry the current engine contract", () => {
+  test("every shipped wave module carries the engine contract, and the skill leaves it there", () => {
     for (const harness of HARNESS_MATRIX) {
-      const authored = readFileSync(
+      const wave = readFileSync(
+        join(harness.engineRoot, "aidlc-common", "protocols", "stage-protocol-wave.md"),
+        "utf-8",
+      );
+      expectWaveProse(wave);
+      expect(wave).toContain(
+        'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
+      );
+      expect(wave).toContain("Reviewer dispatches remain serialized where the single reviewer-scope record is enforced");
+      for (const skill of [
         join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      const generated = readFileSync(
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      expectWaveProse(authored);
-      expectWaveProse(generated);
-      if (harness.name === "kiro" || harness.name === "kiro-ide") {
-        for (const body of [authored, generated]) {
-          expect(body).toContain(
-            'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
-          );
-          expect(body).toContain("native preload where one exists, verbatim paste otherwise");
+      ]) {
+        const body = readFileSync(skill, "utf-8");
+        expect(body, skill).not.toContain("**Per-unit batch waves (optional).**");
+        if (harness.name === "kiro" || harness.name === "kiro-ide") {
+          expect(body, skill).toContain("Every `entry.unit_memory_path` is engine-created and output-only.");
         }
-      } else {
-        expect(authored).toContain("complete steering bundle verbatim");
-        expect(generated).toContain("complete steering bundle verbatim");
       }
-      expect(authored).toContain(
-        "Serialize reviews wherever the single reviewer-scope record is enforced",
-      );
     }
   });
 
@@ -1701,7 +1783,7 @@ describe("t278 wave protocol parity", () => {
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol-construction.md",
+        "stage-protocol-wave.md",
       ),
       "utf-8",
     );
@@ -1723,9 +1805,8 @@ describe("t278 wave protocol parity", () => {
     expect(core).toContain("UNIT_COMPLETED");
     expect(core).toContain("accumulated steering bundle");
     expect(core).toContain(
-      'Deliver the `load-steering` rule bundle per `stage-protocol.md` § "For subagent stages" step 2',
+      'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
     );
-    expect(core).toContain("native preload where one exists, verbatim paste otherwise");
     expect(core).not.toContain(
       "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
     );

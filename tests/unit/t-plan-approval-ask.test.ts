@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
-// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
-// function:keepPlanApprovalAskOverStateWrite
+// function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply, function:runStateContent,
+// function:keepPlanApprovalAskOverStateWrite, function:planNote, function:preparePlanRecordFolders
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -28,8 +28,9 @@
 //     one approval still starts the build, and editing, changes, and review
 //     (even said while the parts arrive) still ask again; nothing is built or
 //     handed to a worker until the build step itself has arrived;
-//   - when the chat compacts, a guard-recovery question comes up, or the work
-//     is paused after the approval, the approved plan is built and not asked
+//   - when the chat compacts, a guard-recovery question comes up, the work is
+//     paused, or the person asks to build the Units one at a time after the
+//     approval, the approved plan is built and not asked
 //     about again, and editing, changes, review, a rejected gate, a new
 //     attempt, and another Unit still ask; "review the plan first" said then
 //     asks again; an answer typed after the chat compacts still counts;
@@ -42,11 +43,23 @@
 //     and source edits go through, parking and coming back reach the build
 //     with no new question, and a rules part left behind by a state that moved
 //     back holds nothing.
+//   - an isolated Code Generation run with the workflow at another stage: its
+//     plan step, plan question and revision name that run's own `next`, which
+//     brings back that run's step; the workflow's own steps keep the bare `next`.
+//   - the step that writes a plan (stage-level, a Unit's, a parallel batch's)
+//     makes each plan's record folder first, so a file tool that makes no
+//     folders writes the plan; a route check makes nothing.
+//   - an isolated Code Generation run in a project with no work: its plan
+//     question is asked and answered as inside work, PLAN_APPROVAL_RECORDED
+//     lands beside the run's start, and Approve Plan builds and the run
+//     finishes; Request Changes, editing the files and "review the plan" go as
+//     inside work.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -54,7 +67,10 @@ import {
   REPO_ROOT,
   cleanupWorktreeFixture,
   createOrchestrationTestProject,
+  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
+  intentsDirOf,
+  removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
   seedBoltDag,
@@ -82,15 +98,25 @@ import {
   planApprovalAskIsOpen,
   mintProtectedQuestion,
   planApprovalRuntimeFile,
+  readActiveDirectiveMarker,
+  findStageBySlug,
+  artifactFilename,
+  auditBlockField,
+  readAuditShardEvents,
+  reviewArtifactFingerprint,
+  unitCompletedReceipts,
   readProtectedResponse,
   stateDigest,
   workspaceSourceFingerprint,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
+  personsWordsText,
   writeBaselineSourceSnapshot,
   writeSessionPidEntry,
+  hooksHealthDir,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { listMessages, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { FILE_TOOLS_RULE } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -103,18 +129,24 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SESSION = "01995000-7a11-7000-8000-000000000001";
 const OTHER_SESSION = "01995000-7a11-7000-8000-000000000002";
 
-/** The directive fields these cases read. */
 interface Emitted {
   kind: string;
   ask_type?: string;
   stage?: string;
+  mode?: string;
+  narration?: string;
   question?: string;
   message?: string;
   response_route?: string;
+  plan_note?: string;
+  question_note?: string;
   plan_approval: {
+    next?: string;
     status?: string;
     feedback?: string;
     note?: string;
+    notice?: string;
+    skipped?: boolean;
     editing?: boolean;
     choices?: string[];
     targets?: Array<{ unit: string | null; plan_path: string; summary: string[] }>;
@@ -188,18 +220,30 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   return result.stdout ?? "";
 }
 
-// What the agent runs after reading the person's reply: the choice they made.
+// The id of the message the hook kept for the latest turn (its HUMAN_TURN
+// row's Message Id): what a setter names for the person's request.
+function turnId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 function answer(
   proj: string,
   details: string,
   extra: string[] = [],
+  chat?: string,
 ): { code: number; recorded?: string; message: string } {
   const result = spawnSync(BUN, [
     join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
     "--details", details, ...extra, "--project-dir", proj,
   ], {
     cwd: proj,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    env: {
+      ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+      ...(chat ? { AIDLC_SESSION_OVERRIDE: chat } : {}),
+    },
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
@@ -210,6 +254,24 @@ function answer(
     ...(parsed.recorded ? { recorded: parsed.recorded } : {}),
     message: parsed.message ?? parsed.error ?? `${result.stdout ?? ""}${result.stderr ?? ""}`,
   };
+}
+
+// The person's reply at the plan question, and the agent's record of the
+// choice it read from it: the hook records nothing from typed words.
+function replyAndRecord(proj: string, typed: string, choice: string, session = SESSION): void {
+  reply(proj, typed, session);
+  const recorded = answer(proj, choice, [], session === SESSION ? undefined : session);
+  expect(recorded.code, recorded.message).toBe(0);
+}
+
+function lower(proj: string, key: string, value: string): { code: number; out: string } {
+  const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", key, value, "--project-dir", proj], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
 function guardWrite(proj: string, path: string): { code: number; stderr: string } {
@@ -249,8 +311,11 @@ function guardBash(proj: string, command: string): { code: number; stderr: strin
 // Runs an engine command the way the conductor would, after the guard let it
 // through: the installed tools in the project, as the engine spelled them.
 function runInstalled(proj: string, command: string): string {
-  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
-  const [, ...args] = command.split(" ");
+  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+( --reason '[^']*')?$/);
+  // The engine's own reason for the person's skip is one quoted argument.
+  const reason = /--reason '([^']*)'$/.exec(command)?.[1];
+  const [, ...args] = command.replace(/ --reason '[^']*'$/, "").split(" ");
+  if (reason !== undefined) args.push("--reason", reason);
   const result = spawnSync(BUN, args, {
     cwd: proj,
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
@@ -261,7 +326,6 @@ function runInstalled(proj: string, command: string): string {
   return result.stdout ?? "";
 }
 
-// The command `next --resume` names to clear the park.
 function resumeNamesUnpark(proj: string): string {
   const resume = next(proj, ["--resume"]);
   expect(resume.kind, JSON.stringify(resume)).toBe("print");
@@ -327,12 +391,209 @@ describe("the engine asks for Plan Approval", () => {
     expect(lockStep).not.toContain("guard.plan-approval off");
   });
 
+  // The question says what already changed in the workspace since Code
+  // Generation started (an agent that ran ahead of the plan, or the person's
+  // own edits), so they approve with that in front of them. No refusal, no
+  // new question: one line under the summary, in the chat and in the record.
+  test("the plan question names source that already changed before approval", () => {
+    const proj = project();
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    // Writing the plan changes no source: the summary is the plan's alone.
+    const asked = askFor(proj);
+    expect(asked.plan_approval.targets?.[0].summary).toEqual([
+      "Builds: slugify for titles", "Touches: src/slugify.ts", "Tests: 3 unit tests",
+    ]);
+    expect(questions(proj)).not.toContain("Already changed before you approved");
+    writeFileSync(join(proj, "src", "extra.ts"), "export const extra = 1;\n", "utf-8");
+    const one = next(proj);
+    expect(one.kind, JSON.stringify(one)).toBe("ask");
+    expect(one.plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/extra.ts.");
+    expect(questions(proj)).toContain("- Already changed before you approved: src/extra.ts.");
+    writeFileSync(join(proj, "src", "more.ts"), "export const more = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1))
+      .toBe("Already changed before you approved (2 files): src/extra.ts, src/more.ts.");
+  });
+
+  // An AI-DLC update while the plan waits rewrites AI-DLC's own files (Codex's
+  // skill under .agents/skills/): nothing ran ahead of the plan, so the
+  // question names only the person's source.
+  test("the plan question never names AI-DLC's own files an update changed", () => {
+    const proj = project();
+    const skill = join(proj, ".agents", "skills", "aidlc", "SKILL.md");
+    mkdirSync(dirname(skill), { recursive: true });
+    writeFileSync(skill, "AI-DLC 1\n", "utf-8");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    askFor(proj);
+    writeFileSync(skill, "AI-DLC 2\n", "utf-8");
+    const updated = next(proj);
+    expect(updated.kind, JSON.stringify(updated)).toBe("ask");
+    expect((updated.plan_approval.targets ?? [])[0].summary.some((line) => line.startsWith("Already changed"))).toBe(false);
+    writeFileSync(join(proj, "src", "extra.ts"), "export const extra = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/extra.ts.");
+  });
+
+  // The line measures from the stage's start or from the previous plan approval,
+  // whichever is later, and leaves out what the plans approved since then name:
+  // an earlier Unit's approved build is not something that ran ahead.
+  test("a later Unit's question names nothing from an earlier Unit's approved build, and still names a stray file", () => {
+    const proj = unitProject("unit-b", "unit-a");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    writePlan(proj, "", "unit-b");
+    writePlan(proj, "", "unit-a");
+    const first = next(proj);
+    expect(first.kind, JSON.stringify(first)).toBe("ask");
+    expect((first.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-b"]);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).kind).toBe("run-stage");
+    // unit-b's approved build writes the file its plan names (Touches: src/slugify.ts).
+    writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+    const route = () => routeCodeGenerationPlanApproval(proj, {
+      kind: "run-stage", stage: "code-generation", unit: "unit-a",
+    } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    const quiet = route();
+    expect(quiet.kind, JSON.stringify(quiet)).toBe("ask");
+    expect((quiet.plan_approval.targets ?? [])[0].summary.some((line) => line.startsWith("Already changed"))).toBe(false);
+    writeFileSync(join(proj, "src", "stray.ts"), "export const stray = 1;\n", "utf-8");
+    expect(route().plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/stray.ts.");
+  });
+
+  test("in a unit-major run the first question does not name what changed in earlier stages", () => {
+    const proj = unitProject("unit-a");
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace("- **Guard Policy**: relaxed (set by you)", "- **Guard Policy**: relaxed (set by you)\n- **Construction Iteration**: unit-major"), "utf-8");
+    const atWorkflowStart = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": atWorkflowStart }, proj);
+    // A change made during Inception, before Code Generation started.
+    writeFileSync(join(proj, "src", "inception.ts"), "export const fromInception = 1;\n", "utf-8");
+    const atStageStart = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": atStageStart }, proj);
+    writePlan(proj, "", "unit-a");
+    const ask = next(proj);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    expect((ask.plan_approval.targets ?? [])[0].summary.some((line) => line.startsWith("Already changed"))).toBe(false);
+    writeFileSync(join(proj, "src", "stray.ts"), "export const stray = 1;\n", "utf-8");
+    expect(next(proj).plan_approval.targets?.[0].summary.at(-1)).toBe("Already changed before you approved: src/stray.ts.");
+  });
+
+  // The status line switch is a display setting (#1407): typed while the plan
+  // question is open, the chat route names the config command and ends the
+  // turn, the guard lets that command through, and the plan question is still
+  // the one waiting afterwards.
+  test("/aidlc --statusline off while the plan waits ends the turn, passes the guard, and leaves the plan question open", () => {
+    const proj = project();
+    // The project's own installed tools, as the copy channel has them.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    const switched = next(proj, ["--statusline", "off"]);
+    expect(switched.kind, JSON.stringify(switched)).toBe("print");
+    const command = /^Run `([^`]+)`, print its output verbatim, then stop\./.exec(switched.message ?? "")?.[1];
+    expect(command, switched.message).toBe("bun .claude/tools/aidlc.ts config --statusline off --harness claude");
+    expect(switched.message).toContain("do NOT run `next`");
+    const guarded = guardBash(proj, command as string);
+    expect(guarded.code, guarded.stderr).toBe(0);
+    expect(runInstalled(proj, command as string)).toContain("--statusline on brings");
+    const still = next(proj);
+    expect(still.kind, JSON.stringify(still)).toBe("ask");
+    expect(still.ask_type).toBe("plan-approval");
+  });
+
+  // `/aidlc --config models` typed while the plan question is open: the chat
+  // route ends the turn, the guard lets its read and the change the person
+  // picked through, both run, and the plan question is still the one waiting.
+  test("/aidlc --config models while the plan waits reads and lands the change, and leaves the plan question open", () => {
+    const proj = project();
+    // The project's own installed tools, as the copy channel has them.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    const configure = next(proj, ["--config", "models"]);
+    expect(configure.kind, JSON.stringify(configure)).toBe("print");
+    expect(configure.message).toContain("do NOT run `next`");
+    const show = /Read current state first with `([^`]+)`/.exec(configure.message ?? "")?.[1];
+    expect(show, configure.message).toBe("bun .claude/tools/aidlc.ts config models --show --json");
+    const land = "bun .claude/tools/aidlc.ts config models --preset thorough --local --yes";
+    for (const command of [show as string, land]) {
+      const guarded = guardBash(proj, command);
+      expect(guarded.code, `${command}\n${guarded.stderr}`).toBe(0);
+      runInstalled(proj, command);
+    }
+    expect(readFileSync(join(proj, "aidlc.settings.local.json"), "utf-8")).toContain('"thorough"');
+    const still = next(proj);
+    expect(still.kind, JSON.stringify(still)).toBe("ask");
+    expect(still.ask_type).toBe("plan-approval");
+  });
+
+  test("--status while the code plan question is open says it waits for the person's approval, naming the Unit", () => {
+    const statusLine = (proj: string): string => {
+      const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "status", "--project-dir", proj], {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_UNATTENDED: "0" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return /^Status:\s+(.*)$/m.exec(result.stdout ?? "")?.[1] ?? "";
+    };
+    const proj = project();
+    next(proj);
+    askFor(proj);
+    expect(statusLine(proj)).toBe("Awaiting your approval on the code plan");
+    // They chose to edit the files themselves: the work waits on their edit.
+    replyAndRecord(proj, "/aidlc 3", "I'll edit the files");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    expect(statusLine(proj)).toBe("Waiting for you to finish editing the code plan");
+    const units = unitProject("unit-b", "unit-a");
+    writePlan(units, "", "unit-b");
+    writePlan(units, "", "unit-a");
+    expect(next(units).ask_type).toBe("plan-approval");
+    expect(statusLine(units)).toBe("Awaiting your approval on the code plan for unit-b");
+  });
+
+  test("--status for a named piece of work reads that work's code plan question", () => {
+    const statusLine = (proj: string, target: string[]): string => {
+      const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "status", ...target, "--project-dir", proj], {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_UNATTENDED: "0" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return /^Status:\s+(.*)$/m.exec(result.stdout ?? "")?.[1] ?? "";
+    };
+    const proj = project();
+    next(proj);
+    askFor(proj);
+    // Other work here, not selected and with no plan question of its own.
+    const other = "fixture-other-0000000000000002";
+    const intents = intentsDirOf(proj);
+    mkdirSync(join(intents, other), { recursive: true });
+    writeFileSync(join(intents, other, "aidlc-state.md"), readFileSync(seededStateFile(proj), "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+    registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "fixture-other", dirName: other, status: "in-flight" });
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`, "utf-8");
+    expect(statusLine(proj, ["--intent", DEFAULT_RECORD_DIR])).toBe("Awaiting your approval on the code plan");
+    expect(statusLine(proj, ["--space", "default"])).toBe("Awaiting your approval on the code plan");
+    expect(statusLine(proj, ["--intent", other])).not.toContain("code plan");
+    replyAndRecord(proj, "/aidlc 3", "I'll edit the files");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    expect(statusLine(proj, ["--intent", DEFAULT_RECORD_DIR])).toBe("Waiting for you to finish editing the code plan");
+    expect(statusLine(proj, ["--intent", other])).not.toContain("code plan");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);
     expect(planning.kind).toBe("run-stage");
     expect(planning.stage).toBe("code-generation");
     expect(planning.plan_approval).toEqual({ status: "plan" });
+    // The conductor writes the plan itself: the step says so (a Kiro run read the
+    // stage's dispatched mode and handed the plan to the developer, which the
+    // guard refused), and the person hears who does what.
+    expect(planning.mode).toBe("inline");
+    // The record's cursor is past User Stories to Infrastructure Design, never
+    // started, so the count leaves them out, as a plan switch's line does.
+    expect(planning.narration).toBe("Writing the code plan for Code Generation (stage 11 of 20) first; the developer builds from it.");
 
     const ask = askFor(proj);
     expect(ask.question).toBe("Approve the code plan?");
@@ -343,24 +604,38 @@ describe("the engine asks for Plan Approval", () => {
     expect(target.unit).toBeNull();
     expect(target.plan_path).toEndWith("construction/code-generation/code-generation-plan.md");
     expect(target.summary).toEqual(["Builds: slugify for titles", "Touches: src/slugify.ts", "Tests: 3 unit tests"]);
-    // The engine wrote the record the old ritual had the agent write.
     expect(questions(proj)).toContain("## Plan Approval");
     expect(questions(proj)).toMatch(/^\[Approval Fingerprint\]: sha256:v3:[0-9a-f]{64}$/m);
     expect(questions(proj)).toMatch(/^\[Answer\]:$/m);
-    // While the question is open, nothing is built and the plan stays as shown.
-    const blocked = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    // While the question is open, nothing is built. The plan file is AI-DLC's
+    // record: a write to it passes, and a plan changed under the question is
+    // asked about again by `next`. The code the plan names waits.
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(0);
+    const blocked = guardWrite(proj, join(proj, "src", "slugify.ts"));
     expect(blocked.code).toBe(2);
     // Only the person's sentence: some hosts show a hook's refusal as written.
     // The agent's steps for it live in the skill's refusal clause.
     expect(blocked.stderr.trim()).toBe("Nothing is built or changed while the plan waits for your approval.");
-    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     // A person's answer text for `log answer --details-file` is written in the
     // record's own answer-text folder, so no shell reads it; that alone passes.
     const answerText = join(seededRecordDir(proj), ".aidlc-engine", "answer-text");
     expect(guardWrite(proj, join(answerText, "answer.txt")).code).toBe(0);
     expect(guardWrite(proj, join(seededRecordDir(proj), ".aidlc-engine", "answer.txt")).code).toBe(2);
+    // So are a stage's learnings picks for `learnings persist` (#1592): the
+    // ritual runs while Code Generation is the current stage, so its file
+    // must be writable while the plan waits.
+    const learnings = join(seededRecordDir(proj), ".aidlc-engine", "learnings");
+    expect(guardWrite(proj, join(learnings, "code-generation-selections.json")).code).toBe(0);
+    // A traversal out of it lands on the plan file: AI-DLC's record, which
+    // passes on its own (a plan changed under the question is asked about again).
     expect(guardWrite(proj, join(answerText, "..", "..", "construction", "code-generation", "code-generation-plan.md")).code)
-      .toBe(2);
+      .toBe(0);
+    // So does a person's request for `next --request-file`, directly inside the
+    // project's request-text folder, the only place the engine reads it.
+    const requestText = join(proj, "aidlc", ".aidlc-request-text");
+    expect(guardWrite(proj, join(requestText, "request.txt")).code).toBe(0);
+    expect(guardWrite(proj, join(requestText, "nested", "request.txt")).code).toBe(2);
+    expect(guardWrite(proj, join(requestText, "..", "aidlc-state.md")).code).toBe(2);
   });
 
   // Only the build waits for the plan (K6c): a write to a file the waiting plan
@@ -381,7 +656,9 @@ describe("the engine asks for Plan Approval", () => {
         expect(blocked.code, path).toBe(2);
         expect(blocked.stderr.trim()).toBe("Nothing is built or changed while the plan waits for your approval.");
       }
-      expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(2);
+      // The questions file is AI-DLC's record: an answer written there has no
+      // receipt, so the write passes and approves nothing.
+      expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(0);
       expect(guardBash(proj, "echo 'export const s = 1;' > src/slugify.ts").code).toBe(2);
       reply(proj, "approve the plan, and write approval needed to scratch/notify.txt next time");
       expect(answer(proj, "Approve Plan").code).toBe(0);
@@ -389,6 +666,58 @@ describe("the engine asks for Plan Approval", () => {
       expect(side.code, side.stderr).toBe(0);
     });
   }
+
+  // In a workspace whose repo folder has a space, the plan's files in that repo
+  // are its build as they are in any other repo: they wait, and a file the
+  // plan does not name goes through.
+  test("while the plan waits, its files in a repo named with a space wait, as in any repo", () => {
+    const proj = project("strict");
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["api", "my lib"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of ["api", "my lib"]) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "greet.py"), "def greet(name):\n    return name\n");
+      for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "init"]]) {
+        expect(spawnSync("git", args, { cwd: join(proj, repo), encoding: "utf-8" }).status).toBe(0);
+      }
+    }
+    writePlan(proj, "- [ ] Step 2: change `my lib/src/greet.py` and api/src/greet.py\n");
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    for (const path of [join(proj, "my lib", "src", "greet.py"), join(proj, "api", "src", "greet.py")]) {
+      expect(guardWrite(proj, path).code, path).toBe(2);
+    }
+    for (const path of [join(proj, "my lib", "notes.md"), join(proj, "api", "notes.md")]) {
+      const result = guardWrite(proj, path);
+      expect(result.code, `${path}\n${result.stderr}`).toBe(0);
+    }
+  });
+
+  // A repo whose name ends another's after a space ("lib" beside "my lib") is
+  // its own: the plan's "my lib/src/greet.py" names nothing in "lib", so a file
+  // there the person asks to change goes through while the plan waits.
+  test("while the plan waits, a file in \"lib\" beside \"my lib\" is not the plan's own", () => {
+    const proj = project("strict");
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8"));
+    rows[0].repos = ["lib", "my lib"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of ["lib", "my lib"]) {
+      mkdirSync(join(proj, repo, "src"), { recursive: true });
+      writeFileSync(join(proj, repo, "src", "greet.py"), "def greet(name):\n    return name\n");
+      for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "init"]]) {
+        expect(spawnSync("git", args, { cwd: join(proj, repo), encoding: "utf-8" }).status).toBe(0);
+      }
+    }
+    writePlan(proj, "- [ ] Step 2: change `my lib/src/greet.py`\n");
+    const directive = next(proj);
+    expect(directive.ask_type, JSON.stringify(directive)).toBe("plan-approval");
+    expect(guardWrite(proj, join(proj, "my lib", "src", "greet.py")).code).toBe(2);
+    const other = guardWrite(proj, join(proj, "lib", "src", "greet.py"));
+    expect(other.code, other.stderr).toBe(0);
+  });
 
   // K6c on Kiro IDE: the plan is written and the agent writes the person's
   // standing notify line in the same batch as the `next` that asks the plan
@@ -447,14 +776,16 @@ describe("the engine asks for Plan Approval", () => {
     writeFileSync(reasonFile, "source is unreadable\n", "utf-8");
     const overrideFile = run("aidlc-log.ts", ["answer", ...checkpoint, "--details", "Approve Plan", "--override-file", reasonFile]);
     expect(overrideFile.stdout + overrideFile.stderr).not.toContain(redirect);
-    // The engine's question is untouched by the refusals.
     expect(next(proj).ask_type).toBe("plan-approval");
   });
 
   test("the agent records the approval it read from their words, and the next `next` builds", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "yes")).toBe("");
+    // The hook names the kept message for the agent and reads nothing into it.
+    const said = reply(proj, "yes");
+    expect(said).toContain("--message");
+    expect(said).not.toMatch(/Approve|yes/);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
@@ -465,6 +796,8 @@ describe("the engine asks for Plan Approval", () => {
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
+    expect(build.mode).toBe("subagent");
+    expect(build.narration).toMatch(/^Generating code for \d+ plan steps?\b/);
   });
 
   // An approval and a request to stop the workflow for now is exactly that:
@@ -482,7 +815,6 @@ describe("the engine asks for Plan Approval", () => {
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(auditText(proj)).toContain("**Event**: WORKFLOW_PARKED");
     expect(next(proj).kind).toBe("parked");
-    // Resuming later builds the approved plan.
     const unpark = spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" });
     expect(unpark.status, unpark.stderr).toBe(0);
     const build = next(proj);
@@ -565,20 +897,19 @@ describe("the engine asks for Plan Approval", () => {
     const proj = project();
     askFor(proj);
     const plan = join(stageDir(proj), "code-generation-plan.md");
-    // Before they reply, the plan stays as shown.
-    expect(guardWrite(proj, plan).code).toBe(2);
+    // The plan file is AI-DLC's record: it can be written before they reply (a
+    // changed plan is asked about again) and after their reply for what they asked.
+    expect(guardWrite(proj, plan).code).toBe(0);
     reply(proj, "approve, but rename slugify to toSlug");
-    // After it, the guard lets the agent change this plan and its test
-    // instructions, and nothing else.
     expect(guardWrite(proj, plan).code).toBe(0);
     expect(guardWrite(proj, join(stageDir(proj), "unit-test-instructions.md")).code).toBe(0);
-    expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(2);
+    // The questions file is AI-DLC's record too: it passes; the code still waits.
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-questions.md")).code).toBe(0);
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
     expect(recorded.message).toContain("changed since it was shown");
-    // The approval covers the plan as edited.
     expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
     expect(auditText(proj)).toContain("**Person Reply**: approve, but rename slugify to toSlug");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
@@ -593,15 +924,15 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("parked");
   });
 
-  test("an exact pick is recorded by the hook; the agent recording it too is fine, and a different choice is refused", () => {
+  test("a typed pick records nothing at the hook; the agent's record approves, and recording it again is fine", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "1");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(answer(proj, "Approve Plan").message).toContain("already recorded");
-    const overruled = answer(proj, "Request Changes");
-    expect(overruled.code).not.toBe(0);
-    expect(overruled.message).toContain('The person picked "Approve Plan"');
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
@@ -622,29 +953,31 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("an exact pick typed after /aidlc is recorded at once, and its words lead straight to the build", () => {
+  test("a pick typed after /aidlc is the agent's to read: next hands it the record step, and its record leads to the build", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "/aidlc 1");
-    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const read = next(proj, ["1"]);
     expect(read.kind, JSON.stringify(read)).toBe("print");
-    expect(read.message).toContain("it is recorded");
+    expect(read.message).toContain("--checkpoint plan-approval");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   // The person's latest pick stands: a Request Changes after an exact approval
   // is never reported as recorded while the approval builds.
-  test("a later Request Changes after an exact approval names the step that brings the plan back", () => {
+  test("a later Request Changes after a recorded approval names the step that brings the plan back", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "/aidlc 1");
+    replyAndRecord(proj, "/aidlc 1", "Approve Plan");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     reply(proj, "/aidlc Request Changes");
     const read = next(proj, ["Request", "Changes"]);
     expect(read.kind, JSON.stringify(read)).toBe("print");
     expect(read.message).not.toContain("it is recorded");
-    expect(read.message).toContain("--details 'Review the plan'");
+    expect(read.message).toContain('"Review the plan" brings the question back');
     const reviewed = answer(proj, "Review the plan");
     expect(reviewed.code, reviewed.message).toBe(0);
     const again = next(proj);
@@ -654,16 +987,15 @@ describe("the engine asks for Plan Approval", () => {
 
   // "I'll edit the files" after an answer is their latest word too: the
   // question waits in edit mode, with nothing built, until they say done.
-  test("I'll edit the files after an exact approval opens edit mode before anything is built", () => {
+  test("I'll edit the files after a recorded approval opens edit mode before anything is built", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "/aidlc 1");
+    replyAndRecord(proj, "/aidlc 1", "Approve Plan");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     reply(proj, "/aidlc 3");
     const read = next(proj, ["3"]);
     expect(read.kind, JSON.stringify(read)).toBe("print");
-    expect(read.message).toContain(`--details "I'll edit the files"`);
-    expect(read.message).not.toContain("Review the plan");
+    expect(read.message).toContain("--checkpoint plan-approval");
     const edit = answer(proj, "I'll edit the files");
     expect(edit.code, edit.message).toBe(0);
     const again = next(proj);
@@ -675,7 +1007,7 @@ describe("the engine asks for Plan Approval", () => {
   test("I'll edit the files with no reply after the recorded answer changes nothing", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "/aidlc 1");
+    replyAndRecord(proj, "/aidlc 1", "Approve Plan");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const early = answer(proj, "I'll edit the files");
     expect(early.code).not.toBe(0);
@@ -686,29 +1018,86 @@ describe("the engine asks for Plan Approval", () => {
   test("I'll edit the files after Request Changes opens edit mode", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "/aidlc 2");
-    reply(proj, "/aidlc 3");
+    replyAndRecord(proj, "/aidlc 2", "Request Changes");
+    replyAndRecord(proj, "/aidlc 3", "I'll edit the files");
     const again = next(proj);
     expect(again.kind, JSON.stringify(again)).toBe("ask");
     expect(again.plan_approval?.editing).toBe(true);
   });
 
-  // Both halves of one message are done: the switch lands on this work, and
-  // the choice typed after it answers the plan question.
-  test("a switch typed before a plan choice applies to this work, and the choice is recorded", () => {
+  // Both halves of one message are done by the agent, which reads the line:
+  // the hook keeps it as a reply, the setter lands the switch on this work,
+  // and the choice typed after the flag answers the plan question.
+  test("a switch typed before a plan choice: the agent lowers this work and records the choice from the one reply", () => {
     const proj = project("strict");
     askFor(proj);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
     reply(proj, "/aidlc --guard-policy relaxed Approve Plan");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    const lowered = lower(proj, "guard-policy", "relaxed");
+    expect(lowered.code, lowered.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: relaxed (set by you)");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("Guard Policy off typed before a plan choice lands on this work, which then builds", () => {
+  // "Approve it, and turn the sensors off": the setting rides the answer, or
+  // goes first, or follows it while that reply is in hand
+  // (t-setting-rides-approval). Once the person has said more, the message that
+  // gave the approval stands for no setting (t-setting-spent-message).
+  test("an approval and a setting in one reply: riding the answer, the setting is theirs; once they say more, refused", () => {
+    const proj = project();
+    askFor(proj);
+    const words = "approve it, and turn the sensors off";
+    reply(proj, words);
+    const id = turnId(proj);
+    // The approval row lands in a later second than their reply.
+    Bun.sleepSync(1100);
+    const approved = answer(proj, "Approve Plan", ["--sensors", "off"]);
+    expect(approved.code, approved.message).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    reply(proj, "thanks");
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "on", "--message", id, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(set.status).not.toBe(0);
+    expect(`${set.stdout}${set.stderr}`).not.toContain(id);
+  });
+
+  // The other order: the setter naming their message runs first, as the plan
+  // question's own step says for a setting beside the answer. The setting takes
+  // nothing of the reply away, so the approval in it still records.
+  test("an approval and a setting in one reply: the setting run first, the approval still records", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "approve it, and turn the sensors off");
+    const id = turnId(proj);
+    const set = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "sensors", "off", "--message", id, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Sensors**: off (set by you)");
+    const approved = answer(proj, "Approve Plan");
+    expect(approved.code, approved.message).toBe(0);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+  });
+
+  test("Guard Policy off typed before a plan choice lands on this work through the setter, which then builds", () => {
     const proj = project("strict");
     askFor(proj);
     reply(proj, "/aidlc --guard-policy off Approve Plan");
+    const lowered = lower(proj, "guard-policy", "off");
+    expect(lowered.code, lowered.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: off (set by you)");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
     const build = next(proj);
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   });
@@ -720,7 +1109,6 @@ describe("the engine asks for Plan Approval", () => {
     const early = answer(proj, "Approve Plan");
     expect(early.code).not.toBe(0);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
-    // The step it names works once they reply.
     reply(proj, "approve it");
     expect(answer(proj, "Approve Plan").code).toBe(0);
   });
@@ -728,25 +1116,113 @@ describe("the engine asks for Plan Approval", () => {
   test("an answer from another chat on the same work counts", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "Approve Plan", OTHER_SESSION);
+    replyAndRecord(proj, "Approve Plan", "Approve Plan", OTHER_SESSION);
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // No host hands the hook dismissal text (measured on Claude Code and Codex,
+  // 2026-10-12): a reply that is only "cancel" is the person's word. Kept, the
+  // agent reads it and records the choice it read; dropped, the engine said they
+  // had not replied and the agent asked the same question again. It names no
+  // change, so the revision asks what should change.
+  test("a reply that is only 'cancel' is kept, and the agent's reading of it is recorded with their word", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "cancel");
+    const recorded = answer(proj, "Request Changes");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(recorded.message).toContain('Recorded "Request Changes"');
+    expect(auditText(proj)).toContain("**Person Reply**: cancel");
+    expect(auditText(proj)).not.toContain("**User Input**: cancel");
+    expect(next(proj).plan_approval).toEqual({ status: "revise" });
   });
 
   test("Request Changes in the person's words reaches the revision, and a revised plan is asked about again", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "rename slugify to toSlug");
-    expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
+    expect(answer(proj, "Request Changes: rename slugify to toSlug").message).toContain('Recorded "Request Changes"');
     const revise = next(proj);
     expect(revise.kind).toBe("run-stage");
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "rename slugify to toSlug" });
-    // Unchanged plan: still revising.
+    expect(revise.mode).toBe("inline");
     expect(next(proj).plan_approval.status).toBe("revise");
     writePlan(proj, "- [ ] Step 2: rename slugify to toSlug\n");
     const again = next(proj);
     expect(again.kind).toBe("ask");
     expect(again.plan_approval.note).toBeUndefined();
+  });
+
+  // Two live runs typed "/aidlc go back to code generation for a second round:
+  // also accept -S ..."; the plan question opened for that message, the change
+  // was refused as no reply, and the person was asked to pick Request Changes.
+  // Their message record in this chat is the proof, on finished work too,
+  // where a prompt leaves no turn row.
+  for (const finished of [false, true]) {
+    test(`a change asked for in the message the question opened for is its Request Changes${finished ? ", on finished work" : ""}; an approval still needs a reply`, () => {
+      const proj = project();
+      writePlan(proj);
+      const turns = () => auditText(proj).split("**Event**: HUMAN_TURN").length;
+      if (finished) {
+        // The first round, then the work finished. Message records keep whole
+        // seconds: the second round comes in a later one.
+        reply(proj, "build the slugify helper");
+        Bun.sleepSync(1050 - (Date.now() % 1000));
+        const path = seededStateFile(proj);
+        writeFileSync(path, readFileSync(path, "utf-8")
+          .replace(/^- \[[-R ]\] ([a-z-]+) \u2014 EXECUTE$/gm, "- [x] $1 \u2014 EXECUTE")
+          .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: build-and-test")
+          .replace(/^- \*\*Status\*\*:.*$/m, "- **Status**: Completed"));
+      }
+      const words = "go back to code generation: also accept -S as a short form of --shout";
+      const before = turns();
+      reply(proj, `/aidlc ${words}`);
+      // A prompt on finished work leaves no turn row there.
+      expect(turns() - before).toBe(finished ? 0 : 1);
+      if (finished) {
+        const back = spawnSync(BUN, [
+          join(AIDLC_SRC, "tools", "aidlc-jump.ts"), "execute", "--target", "code-generation", "--direction", "backward",
+          "--scope", "poc", "--project-dir", proj,
+        ], { cwd: proj, env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj }, encoding: "utf-8" });
+        expect(back.status, `${back.stdout}${back.stderr}`).toBe(0);
+      }
+      expect(next(proj).ask_type).toBe("plan-approval");
+      // Words typed before the question never approve it.
+      expect(answer(proj, "Approve Plan", [], SESSION).message).toContain("has not replied to the plan question");
+      // Another chat's message is not this chat's.
+      expect(answer(proj, "Request Changes: also accept -S", [], OTHER_SESSION).message)
+        .toContain("has not replied to the plan question");
+      expect(answer(proj, "Request Changes: also accept -S", [], SESSION).message).toContain('Recorded "Request Changes"');
+      const recorded = auditText(proj).split("\n---\n").find((block) => block.includes("**Details**: Request Changes"));
+      expect(recorded).toContain("**User Input**: also accept -S");
+      expect(recorded).toContain(`**Person Reply**: ${words}`);
+      expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "also accept -S" });
+      // The revised plan's question is a later one: it needs a reply of its own.
+      writePlan(proj, "- [ ] Step 2: accept -S\n");
+      expect(next(proj).ask_type).toBe("plan-approval");
+      expect(answer(proj, "Request Changes", [], SESSION).message).toContain("has not replied to the plan question");
+      expect(answer(proj, "Approve Plan", [], SESSION).message).toContain("has not replied to the plan question");
+      replyAndRecord(proj, "1", "Approve Plan");
+      expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    });
+  }
+
+  // Two of this chat's messages in the same second cannot be told apart by
+  // their records: neither is taken, and the agent names the one it means.
+  test("two messages in the opening's second: neither is taken unless the agent names one", () => {
+    const proj = project();
+    writePlan(proj);
+    const words = "/aidlc go back to code generation: also accept -S as a short form of --shout";
+    reply(proj, words);
+    const opening = listMessages(proj).find((m) => m.session === SESSION && personsWordsText(m.text) === words);
+    expect(opening).toBeDefined();
+    const { id: _id, ...rest } = opening!;
+    saveMessage(proj, { ...rest, picker: null, text: "also make it blue", words: "also make it blue" });
+    expect(next(proj).ask_type).toBe("plan-approval");
+    expect(answer(proj, "Request Changes", [], SESSION).message).toContain("has not replied to the plan question");
+    expect(answer(proj, "Request Changes", ["--message", opening!.id], SESSION).message).toContain('Recorded "Request Changes"');
+    expect(auditText(proj)).toContain("**Person Reply**: go back to code generation: also accept -S as a short form of --shout");
   });
 
   // The agent may word the picker its own way: the pick counts by the choices
@@ -776,7 +1252,6 @@ describe("the engine asks for Plan Approval", () => {
     // some other question, whichever option the person picked there.
     pick("Rename the module first?", ["Request Changes", "Something else"], "Something else");
     pick("Shall I build this plan?", ["Approve Plan", "Show me the plan first"], "Approve Plan");
-    // Nor is a picker offering only its approve choice, or a label twice.
     pick("Shall I build this plan?", ["Approve Plan"], "Approve Plan");
     pick("Shall I build this plan?", ["Approve Plan", "Approve Plan", "Request Changes"], "Approve Plan");
     expect(answer(proj, "Approve Plan").message).toContain("has not replied to the plan question");
@@ -810,6 +1285,43 @@ describe("the engine asks for Plan Approval", () => {
         },
         tool_response: JSON.stringify({ answers: { plan: { answers: ["Approve Plan (Recommended)"] } } }),
         tool_use_id: "request-codex-turn",
+      }),
+      env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // A note the person adds in Codex's box comes back as a second entry beside
+  // their pick: still one pick, so the plan is approved, not asked again.
+  test("a Codex picker pick with the person's note approves the plan", () => {
+    const proj = project();
+    const ask = askFor(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    const session = "codex-plan-approval-session-note";
+    writeSessionPidEntry(proj, process.pid, session);
+    const result = spawnSync(BUN, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: session,
+        turn_id: "codex-turn-note",
+        cwd: proj,
+        tool_name: "request_user_input",
+        tool_input: {
+          questions: [{
+            id: "plan",
+            question: ask.question,
+            options: ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
+          }],
+        },
+        tool_response: JSON.stringify({
+          answers: { plan: { answers: ["Approve Plan (Recommended)", "user_note: keep the old helper"] } },
+        }),
+        tool_use_id: "request-codex-turn-note",
       }),
       env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
       encoding: "utf-8",
@@ -855,10 +1367,39 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // Codex's other box (request_user_input_async) sends the answer back as a
+  // new prompt in its own reply envelope, the agent's question beside it
+  // (captured live on Codex CLI 0.164.0). The plan question keeps the answer
+  // alone, as the words of a reply typed in the chat.
+  test("an answer in Codex's async question box answers the plan question in the person's own words", () => {
+    const proj = project();
+    askFor(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    writeSessionPidEntry(proj, process.pid, SESSION);
+    const reply = "<send_user_message_question_reply>\n" + JSON.stringify([{
+      answer: "Approve Plan",
+      question: "Approve the code plan? It builds slugify for titles and adds three unit tests.",
+      questionItemId: JSON.stringify(["request_user_input_async", "call_e67db833bc2f5fc8811b5c62c85d35f2", 0]),
+    }]) + "\n</send_user_message_question_reply>";
+    const result = spawnSync(BUN, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, turn_id: "codex-async-turn", cwd: proj, prompt: reply }),
+      env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(auditText(proj)).toContain("**Person Reply**: Approve Plan\n");
+    expect(auditText(proj)).not.toContain("send_user_message_question_reply");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   test("a question records nothing; the agent answers it, and their next reply decides", () => {
     const proj = project();
     askFor(proj);
-    expect(reply(proj, "what does step 1 do?")).toBe("");
+    expect(reply(proj, "what does step 1 do?")).not.toContain("step 1");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).ask_type).toBe("plan-approval");
     reply(proj, "ok, go ahead");
@@ -896,10 +1437,41 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("ask");
   });
 
+  // The person edits the plan files, then hands the plan back in their own words.
+  // Their reply is kept; the agent reads which answer it is. The refusal and the
+  // edit-mode question name the answer to record, with a place for what they
+  // asked of the plan, so nobody goes round: the answer, the write and next,
+  // and the plan is the agent's, with what they asked.
+  test("edit mode: the person hands the plan back; the refusal names the answer to record, with what they asked of the plan", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(next(proj).plan_approval.editing).toBe(true);
+    const planPath = join(stageDir(proj), "code-generation-plan.md");
+    // Before they reply, the files are theirs.
+    const waiting = guardWrite(proj, planPath);
+    expect(waiting.code).toBe(2);
+    expect(waiting.stderr).toContain("When they say they are done");
+    expect(waiting.stderr).not.toContain("--checkpoint plan-approval");
+    reply(proj, "you finish it");
+    const handedBack = guardWrite(proj, planPath);
+    expect(handedBack.code).toBe(2);
+    expect(handedBack.stderr).toContain(
+      "answer --stage code-generation --checkpoint plan-approval --details 'Request Changes: <what they asked of the plan>'");
+    expect(handedBack.stderr).toContain('--details "Approve Plan"');
+    const asked = next(proj);
+    expect(asked.plan_approval.editing).toBe(true);
+    expect(String(asked.plan_approval.note)).toContain("--details 'Request Changes: <what they asked of the plan>'");
+    const recorded = answer(proj, "Request Changes: finish the plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(guardWrite(proj, planPath).code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "finish the plan" });
+  });
+
   test("edit mode: the agent cannot touch the files, and done approves them as the person left them", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "I'll edit the files");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
     const editing = next(proj);
     expect(editing.kind).toBe("ask");
     expect(editing.plan_approval.editing).toBe(true);
@@ -917,7 +1489,7 @@ describe("the engine asks for Plan Approval", () => {
   test("edit mode: what the person wrote in the questions file is read by the agent and recorded", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "3");
+    replyAndRecord(proj, "3", "I'll edit the files");
     const path = join(stageDir(proj), "code-generation-questions.md");
     writeFileSync(
       path,
@@ -932,7 +1504,7 @@ describe("the engine asks for Plan Approval", () => {
   test("edit mode: a Testing Contract the edit broke is repaired, then asked about once", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "I'll edit the files");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
     const planPath = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");
@@ -943,7 +1515,7 @@ describe("the engine asks for Plan Approval", () => {
     writePlan(proj, "- [ ] Step 2: handle unicode\n");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
-    expect(ask.question).toBe("I repaired the Testing Contract block. Build your edited plan?");
+    expect(ask.question).toBe("I repaired the plan's Testing Contract (the test rules your build follows). Build your edited plan?");
   });
 
   // The person's stop holds even when the plan they approved needs repair
@@ -951,7 +1523,7 @@ describe("the engine asks for Plan Approval", () => {
   test("edit mode: approve and stop parks even when the Testing Contract needs repair", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "I'll edit the files");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
     const planPath = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(planPath, readFileSync(planPath, "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done, and let's stop for today");
@@ -969,7 +1541,7 @@ describe("the engine asks for Plan Approval", () => {
   test("after approval, code that moved elsewhere gives no new question even under strict", () => {
     const proj = project("strict");
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     writeFileSync(join(proj, "src", "other.ts"), "export const other = 1;\n", "utf-8");
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
@@ -979,7 +1551,7 @@ describe("the engine asks for Plan Approval", () => {
   test("under strict, a plan edited after approval is asked about again", () => {
     const proj = project("strict");
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     writePlan(proj, "- [ ] Step 2: add a fast path\n");
     expect(next(proj).kind).toBe("ask");
   });
@@ -990,7 +1562,7 @@ describe("the engine asks for Plan Approval", () => {
   test.each(["relaxed", "off"] as const)("under %s, a note or new line endings in the answered questions file keep the approval", (policy) => {
     const proj = project(policy);
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     const path = join(stageDir(proj), "code-generation-questions.md");
     writeFileSync(path, `${readFileSync(path, "utf-8").replace(/\n/g, "\r\n")}\r\nNote: checked with the team.\r\n`, "utf-8");
     const build = next(proj);
@@ -1001,7 +1573,7 @@ describe("the engine asks for Plan Approval", () => {
   test("under strict, a note added to the answered questions file is asked about again", () => {
     const proj = project("strict");
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     const path = join(stageDir(proj), "code-generation-questions.md");
     writeFileSync(path, `${readFileSync(path, "utf-8")}\nNote: checked with the team.\n`, "utf-8");
     expect(next(proj).kind).toBe("ask");
@@ -1010,13 +1582,13 @@ describe("the engine asks for Plan Approval", () => {
   test("'review the plan' after approval asks again before anything is built", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     reply(proj, "review the plan first");
     expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
@@ -1100,7 +1672,6 @@ describe("the engine asks for Plan Approval", () => {
     expect(recorded.message).toContain("The workflow is parked");
     expect(auditText(proj)).toContain(APPROVE_AND_STOP);
     expect(next(proj).kind).toBe("parked");
-    // Back from the stop, the plan is approved: nothing is asked again.
     expect(spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8" }).status).toBe(0);
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
@@ -1129,7 +1700,6 @@ describe("the engine asks for Plan Approval", () => {
     reply(proj, "looks good, maybe rename later");
     answer(proj, "Request Changes");
     expect(next(proj).plan_approval.status).toBe("revise");
-    // Not before they reply again.
     expect(answer(proj, "Approve Plan").message).toContain("has not replied since Request Changes was recorded");
     reply(proj, "no, I approved it");
     const corrected = answer(proj, "Approve Plan");
@@ -1138,16 +1708,15 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  // An exact pick stands until the person replies again; then their newer
-  // reply decides, as the agent reads it.
-  test("an exact Request Changes pick is refused as an approval until the person replies again", () => {
+  // The agent's Request Changes stands until the person replies again; then
+  // their newer reply decides, as the agent reads it.
+  test("a recorded Request Changes is refused as an approval until the person replies again", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "2");
+    replyAndRecord(proj, "2", "Request Changes");
     expect(next(proj).plan_approval.status).toBe("revise");
     const refused = answer(proj, "Approve Plan");
     expect(refused.code).not.toBe(0);
-    expect(refused.message).toContain('The person picked "Request Changes" for this plan and has not replied since');
     reply(proj, "ok, thanks");
     const read = answer(proj, "Approve Plan");
     expect(read.code, read.message).toBe(0);
@@ -1157,38 +1726,42 @@ describe("the engine asks for Plan Approval", () => {
   test("\"2\" then \"actually, approve it\": the agent records Approve Plan with no second question", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "2");
+    replyAndRecord(proj, "2", "Request Changes");
     reply(proj, "actually, approve it");
     const recorded = answer(proj, "Approve Plan");
     expect(recorded.code, recorded.message).toBe(0);
     expect(recorded.message).toContain("correcting the Request Changes recorded before");
-    // The correction carries the words that made it.
     expect(auditText(proj)).toContain("**Person Reply**: actually, approve it");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("\"2\" then \"1\": the second exact pick is recorded straight away, with no step for the agent", () => {
+  test("\"2\" then \"1\": the agent reads each reply, and its Approve Plan on the second is recorded", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "2");
-    reply(proj, "1");
+    replyAndRecord(proj, "2", "Request Changes");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("\"2\" and no newer reply: an approval record is refused, before and after next", () => {
+  // No tool holds the agent to a reading of "2": its Request Changes is
+  // recorded, and an approval with no newer reply of theirs is not.
+  test("\"2\" read as Request Changes, and no newer reply: an approval record is refused, before and after next", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "2");
-    expect(answer(proj, "Approve Plan").message).toContain('The person picked "Request Changes" for this plan');
+    replyAndRecord(proj, "2", "Request Changes");
+    expect(answer(proj, "Approve Plan").code).not.toBe(0);
     expect(next(proj).plan_approval.status).toBe("revise");
-    expect(answer(proj, "Approve Plan").message).toContain('The person picked "Request Changes" for this plan');
+    expect(answer(proj, "Approve Plan").code).not.toBe(0);
     expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
   });
 
+  // Under strict, a revised plan is asked about again: the policy's purpose is
+  // to ask. Under off and relaxed the person's own change request is not put
+  // back to them (t-plan-revised-for-their-request.test.ts).
   test("a rejected gate sends the approved plan back with the person's words, then asks about the revised plan", () => {
-    const proj = project();
+    const proj = project("strict");
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     appendAuditEntry("GATE_REJECTED", {
       Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
@@ -1198,6 +1771,23 @@ describe("the engine asks for Plan Approval", () => {
     expect(revise.plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
     writePlan(proj, "- [ ] Step 2: log every slug\n");
     expect(next(proj).kind).toBe("ask");
+  });
+
+  // The same chain under a lowered fence: they asked for the change, so the
+  // revised plan builds and the gate after it collects their judgement.
+  test("under relaxed, the plan revised for their own change request builds with no second question", () => {
+    const proj = project();
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", "User Input": "Request Changes", Feedback: "log every slug",
+    }, proj);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every slug" });
+    writePlan(proj, "- [ ] Step 2: log every slug\n");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval?.status).toBe("approved");
   });
 });
 
@@ -1344,7 +1934,6 @@ describe("when the stage rules arrive in parts", () => {
       const brief = posture(proj, "brief", unit);
       expect(brief.status, brief.stderr).toBe(0);
       expect(brief.stdout).toContain("## Approved plan");
-      // The worker is told to do file work with its file tools, before the approved content.
       expect(brief.stdout).toContain(`## Files and commands\n\n${FILE_TOOLS_RULE}\n`);
       expect(brief.stdout.indexOf("## Files and commands")).toBeLessThan(brief.stdout.indexOf("## Approved plan"));
       // The rule is about the worker writing a file itself: a command the
@@ -1359,7 +1948,7 @@ describe("when the stage rules arrive in parts", () => {
   test("under strict, a plan edited after approval is asked about again", () => {
     const proj = withRulesInParts(project("strict"));
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
     writePlan(proj, "- [ ] Step 2: add a fast path\n");
     expect(next(proj).kind).toBe("ask");
@@ -1370,7 +1959,7 @@ describe("when the stage rules arrive in parts", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
     reply(proj, "rename slugify to toSlug");
-    expect(answer(proj, "Request Changes").message).toContain('Recorded "Request Changes"');
+    expect(answer(proj, "Request Changes: rename slugify to toSlug").message).toContain('Recorded "Request Changes"');
     const revise = nextThroughParts(proj);
     expect(revise.parts).toBeGreaterThan(1);
     expect(revise.directive.kind, JSON.stringify(revise.directive)).toBe("run-stage");
@@ -1382,22 +1971,21 @@ describe("when the stage rules arrive in parts", () => {
   test("'review the plan' after approval asks again, and one approval builds", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
     reply(proj, "review the plan first");
     expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     const build = nextThroughParts(proj);
     expect(build.parts).toBeGreaterThan(1);
     expect(build.directive.plan_approval).toEqual({ status: "approved" });
   });
 
-  // AIDA F34: the question shown again after "Review the plan" is a fresh one.
   test("after Request Changes and \"Review the plan\", Approve Plan waits for a new reply, then records", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "2");
+    replyAndRecord(proj, "2", "Request Changes");
     reply(proj, "review the plan first");
     expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     const shown = next(proj);
@@ -1411,27 +1999,33 @@ describe("when the stage rules arrive in parts", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  // AIDA F34: a question about the switch is kept as words but is no reply, so
-  // the plan's files stay closed.
-  test("\"skip plan approval?\" leaves the plan files closed to edits", () => {
+  // A question about the switch is kept whole as the person's words, no tool
+  // reads it, so nothing is recorded or applied and the plan question stays open
+  // for the agent to answer.
+  test("\"skip plan approval?\" records nothing and leaves the plan question open", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "skip plan approval?");
-    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(2);
-    expect(guardWrite(proj, join(stageDir(proj), "unit-test-instructions.md")).code).toBe(2);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
+    // The plan files are AI-DLC's records and pass; the code waits, and the
+    // question is still the step.
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 
   test("'review the plan first' said while the rules are arriving asks again before anything is built", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     reply(proj, "review the plan first");
     expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
   });
 
@@ -1439,7 +2033,7 @@ describe("when the stage rules arrive in parts", () => {
     test(`nothing is built or handed to a worker until the stage's own step arrives (Guard Policy ${policy})`, () => {
       const proj = withRulesInParts(project(policy));
       askFor(proj);
-      reply(proj, "1");
+      replyAndRecord(proj, "1", "Approve Plan");
       const first = engineCall(proj, ["next"]);
       expect(first).toMatchObject({ kind: "load-steering", part: 1 });
       // One line, the same everywhere and under every Guard Policy: the rules
@@ -1462,7 +2056,6 @@ describe("when the stage rules arrive in parts", () => {
       expect(write.code).toBe(2);
       expect(write.stderr.trim()).toBe(reason);
       expect(generationStarted(proj)).toBe(false);
-      // Once the build step has arrived, the same brief goes to the worker.
       expect(nextThroughParts(proj).directive.kind).toBe("run-stage");
       const ready = posture(proj, "brief", null);
       expect(ready.status, ready.stderr).toBe(0);
@@ -1475,7 +2068,7 @@ describe("when the stage rules arrive in parts", () => {
   test("a part receipt that is not the engine's own is never put in a command: the line names a fresh `next`", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
     const part = JSON.parse(readFileSync(markerPath, "utf-8")) as Record<string, unknown>;
@@ -1526,7 +2119,7 @@ describe("when the stage rules arrive in parts", () => {
   test("'review the plan first' while a gate's or checkpoint's rules arrive shows the plan now", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     // Not every such step has a person reviewing it (an autonomous checkpoint,
     // the settled swarm), so the plan is shown while the person is asking.
@@ -1548,7 +2141,7 @@ describe("when the stage rules arrive in parts", () => {
     for (const step of BUILT_STEPS) {
       const proj = withRulesInParts(project());
       askFor(proj);
-      reply(proj, "1");
+      replyAndRecord(proj, "1", "Approve Plan");
       expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
       // The route now claims a step after the build, but its receipt was minted
       // for the build's own part.
@@ -1567,7 +2160,7 @@ describe("when the stage rules arrive in parts", () => {
     writePlan(proj, "", "unit-a");
     writePlan(proj, "", "unit-b");
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     // unit-b's build part, its top-level Unit edited to unit-a: the request is
     // still kept for unit-b, whose plan is asked about before it is built.
@@ -1596,7 +2189,7 @@ describe("when the stage rules arrive in parts", () => {
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(["unit-b"]);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     expect(evaluateCodeGenerationApproval(proj, { unit: "unit-b" }).ok).toBe(true);
     // The same part as it would be published for unit-a (say, sent back at its
@@ -1641,7 +2234,7 @@ describe("after approval, whatever the engine said last", () => {
         const proj = unit ? unitProject(unit) : project();
         writePlan(proj, "", unit);
         expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-        reply(proj, "1");
+        replyAndRecord(proj, "1", "Approve Plan");
         interrupt(proj, how);
         const build = next(proj);
         expect(build.kind, JSON.stringify(build)).toBe("run-stage");
@@ -1657,13 +2250,15 @@ describe("after approval, whatever the engine said last", () => {
 
   // The chat can compact while the question waits for the person. The question
   // is still theirs: their answer counts, and nothing the agent writes can
-  // change the plan or answer for them meanwhile.
+  // answer for them meanwhile.
   test("the chat compacts while the question waits: the person's answer counts", () => {
     const proj = project();
     askFor(proj);
     interrupt(proj, "the chat compacts");
-    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(2);
-    reply(proj, "1");
+    // The plan file is a record and passes; the code still waits.
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
     const build = next(proj);
     expect(build.kind, JSON.stringify(build)).toBe("run-stage");
@@ -1673,7 +2268,7 @@ describe("after approval, whatever the engine said last", () => {
   test("under strict, a plan edited after approval is asked about again", () => {
     const proj = project("strict");
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     interrupt(proj, "the chat compacts");
     writePlan(proj, "- [ ] Step 2: add a fast path\n");
     expect(next(proj).kind).toBe("ask");
@@ -1686,7 +2281,7 @@ describe("after approval, whatever the engine said last", () => {
   test("the chat compacts while the rules arrive: the approval holds, and the build still waits for them", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
     interrupt(proj, "the chat compacts");
     const again = engineCall(proj, ["next"]);
@@ -1709,7 +2304,7 @@ describe("after approval, whatever the engine said last", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "rename slugify to toSlug");
-    expect(answer(proj, "Request Changes").code).toBe(0);
+    expect(answer(proj, "Request Changes: rename slugify to toSlug").code).toBe(0);
     interrupt(proj, "the chat compacts");
     const revise = next(proj);
     expect(revise.kind, JSON.stringify(revise)).toBe("run-stage");
@@ -1719,7 +2314,7 @@ describe("after approval, whatever the engine said last", () => {
   test("'review the plan' still asks again", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     reply(proj, "review the plan first");
         expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
@@ -1732,7 +2327,7 @@ describe("after approval, whatever the engine said last", () => {
     writePlan(proj, "", "unit-2");
     writePlan(proj, "", "unit-3");
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     interrupt(proj, "the chat compacts");
     const route = (unit: string) => routeCodeGenerationPlanApproval(proj, {
       kind: "run-stage", stage: "code-generation", unit,
@@ -1743,10 +2338,53 @@ describe("after approval, whatever the engine said last", () => {
 
   test("one approval for several Units still builds all of them", () => {
     const { pd } = groupedProject();
-    reply(pd, "approve all");
+    replyAndRecord(pd, "approve all", "Approve all");
     interrupt(pd, "the chat compacts");
     const routed = routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units: GROUP });
     expect((routed as unknown as Emitted).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // "Build them one at a time" after one approval for several Units: the
+  // switch's state write retires the step the engine issued, not the person's
+  // approval, so each Unit is built from its approved plan.
+  test("one approval for several Units, then 'build them one at a time': each Unit is built, not asked about again", () => {
+    const { pd } = groupedProject();
+    replyAndRecord(pd, "approve all", "Approve all");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    reply(pd, "build them one at a time instead");
+    for (const setter of [["set-construction-execution", "serial"], ["set-construction-iteration", "unit-major"]]) {
+      const set = spawnSync(BUN, [STATE, ...setter, "--project-dir", pd], {
+        cwd: pd,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    }
+    for (const unit of GROUP) {
+      const routed = routeCodeGenerationPlanApproval(pd, {
+        kind: "run-stage", stage: "code-generation", unit,
+      } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+      expect(routed.plan_approval, JSON.stringify(routed)).toEqual({ status: "approved" });
+    }
+  });
+
+  // Only this work's own Code Generation step stands in when it is out of date.
+  test("an out-of-date step of another stage or another piece of work is not read for the approval", () => {
+    const { pd } = groupedProject();
+    replyAndRecord(pd, "approve all", "Approve all");
+    expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+    const file = join(activeDirectiveStorageDir(pd), "active-directive.json");
+    const issued = JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>;
+    const route = (change: Record<string, unknown>) => {
+      writeFileSync(file, JSON.stringify({ ...issued, state_sha256: stateDigest("# an earlier state\n"), ...change }));
+      return routeCodeGenerationPlanApproval(pd, {
+        kind: "run-stage", stage: "code-generation", unit: "alpha",
+      } as Parameters<typeof routeCodeGenerationPlanApproval>[1]) as unknown as Emitted;
+    };
+    expect(route({}).plan_approval).toEqual({ status: "approved" });
+    expect(route({ stage: "functional-design" }).kind).toBe("ask");
+    expect(route({ intent_uuid: "01995000-7a11-7000-8000-00000000ffff" }).kind).toBe("ask");
   });
 
   // "Review the plan first" is the person's own request, whatever the engine
@@ -1757,7 +2395,7 @@ describe("after approval, whatever the engine said last", () => {
         const proj = unit ? unitProject(unit) : project();
         writePlan(proj, "", unit);
         expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-        reply(proj, "1");
+        replyAndRecord(proj, "1", "Approve Plan");
         expect(next(proj).plan_approval).toEqual({ status: "approved" });
         interrupt(proj, how);
         reply(proj, "review the plan first");
@@ -1765,7 +2403,7 @@ describe("after approval, whatever the engine said last", () => {
         const ask = next(proj);
         expect(ask, JSON.stringify(ask)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
         expect(questions(proj, unit)).toMatch(/^\[Answer\]:$/m);
-        reply(proj, "1");
+        replyAndRecord(proj, "1", "Approve Plan");
         expect(next(proj).plan_approval).toEqual({ status: "approved" });
       });
     }
@@ -1784,7 +2422,7 @@ describe("after approval, whatever the engine said last", () => {
   test("a rejected gate after the chat compacts still sends the plan back with the person's words", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     interrupt(proj, "the chat compacts");
     appendAuditEntry("GATE_REJECTED", {
@@ -1798,7 +2436,7 @@ describe("after approval, whatever the engine said last", () => {
   test("a new attempt at the stage after a pause still asks again", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     interrupt(proj, "the work is paused");
     appendAuditEntry("STAGE_STARTED", { Stage: "code-generation" }, proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
@@ -1886,7 +2524,7 @@ function swarmState(pd: string): Emitted {
 }
 
 describe("one question for several ready Units", () => {
-  test("before the question, the batch's plans can be written in the main workspace, and nothing else", () => {
+  test("before the question, the batch's plans can be written in the main workspace, and the code waits", () => {
     const pd = swarmFixture(false);
     writeActiveDirectiveMarker(pd, {
       kind: "invoke-swarm", stage: "code-generation", units: GROUP,
@@ -1897,8 +2535,20 @@ describe("one question for several ready Units", () => {
       const written = guardWrite(pd, join(codeGenerationRecordDir(pd, unit), "code-generation-plan.md"));
       expect(written.code, written.stderr).toBe(0);
     }
-    expect(guardWrite(pd, join(codeGenerationRecordDir(pd, "later"), "code-generation-plan.md")).code).toBe(2);
+    // A later Unit's plan is a record of this work too: it passes.
+    expect(guardWrite(pd, join(codeGenerationRecordDir(pd, "later"), "code-generation-plan.md")).code).toBe(0);
     expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
+  });
+
+  // With plan approval off the batch builds at once, so its one line names
+  // every plan and asks nothing.
+  test("with plan approval off, the batch's line names every plan and says they can be gone over at any time", () => {
+    const pd = swarmFixture(true, GROUP, "off");
+    const routed = swarmState(pd);
+    expect(routed.plan_approval.skipped, JSON.stringify(routed)).toBe(true);
+    expect(routed.plan_approval.notice).toContain("Plans written: ");
+    expect(routed.plan_approval.notice).toContain("Starting code generation now. You can ask me to go over the plans at any time.");
+    expect(routed.plan_approval.notice).not.toContain("?");
   });
 
   test("shows every Unit's summary, and 'approve all' approves each Unit separately", () => {
@@ -1907,30 +2557,50 @@ describe("one question for several ready Units", () => {
     expect(ask.plan_approval.choices).toEqual(["Approve all", "Request Changes", "I'll edit the files"]);
     expect((ask.plan_approval.targets ?? []).map((target) => target.unit)).toEqual(GROUP);
     expect(ask.plan_approval.targets?.[1].summary).toEqual(["Builds: beta"]);
-    reply(pd, "approve all");
+    replyAndRecord(pd, "approve all", "Approve all");
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // A reply while the person edits several Units' plans can be about some of
+  // them ("alpha is finished; you finish beta"), so no answer for all of them is
+  // named: the files stay theirs, and Request Changes or Approve Plan for the
+  // Units they name is the agent's to record.
+  test("edit mode on a grouped question: a reply names no answer for every Unit, and the files stay the person's", () => {
+    const { pd } = groupedProject();
+    reply(pd, "I'll edit the files");
+    const editing = answer(pd, "I'll edit the files");
+    expect(editing.code, editing.message).toBe(0);
+    reply(pd, "alpha is finished; you finish beta");
+    const plan = join(codeGenerationRecordDir(pd, "beta"), "code-generation-plan.md");
+    const refused = guardWrite(pd, plan);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain("When they say they are done");
+    expect(refused.stderr).not.toContain("--checkpoint plan-approval");
+    const asked = swarmState(pd);
+    expect(asked.plan_approval.editing).toBe(true);
+    expect(String(asked.plan_approval.note)).not.toContain("--checkpoint plan-approval");
+    for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
   });
 
   test("a change naming one Unit: the agent sends only that Unit back and approves the rest", () => {
     const { pd } = groupedProject();
     reply(pd, "change beta: use a lookup table");
-    expect(answer(pd, "Request Changes", ["--units", "beta"]).message).toContain("for alpha too");
+    expect(answer(pd, "Request Changes: use a lookup table", ["--units", "beta"]).message).toContain("for alpha too");
     expect(answer(pd, "Approve Plan", ["--units", "alpha"]).message).toContain('Recorded "Approve Plan" for alpha');
     expect(evaluateCodeGenerationApproval(pd, { unit: "alpha" }).ok).toBe(true);
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(false);
     expect(swarmState(pd).plan_approval).toEqual({
       status: "plan",
-      units: [{ unit: "beta", status: "revise", feedback: "change beta: use a lookup table" }],
+      units: [{ unit: "beta", status: "revise", feedback: "use a lookup table" }],
     });
   });
 
-  test("a bare Request Changes for a group binds: the agent's Approve all is refused until a later reply", () => {
+  test("a bare \"2\" for a group is the agent's to read: its Request Changes holds until a later reply", () => {
     const { pd } = groupedProject();
-    reply(pd, "2");
+    replyAndRecord(pd, "2", "Request Changes");
     const refused = answer(pd, "Approve all");
     expect(refused.code).not.toBe(0);
-    expect(refused.message).toContain('The person picked "Request Changes"');
     expect(answer(pd, "I'll edit the files").code).not.toBe(0);
     for (const unit of GROUP) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
     reply(pd, "only beta, use a lookup table; alpha is fine");
@@ -1973,27 +2643,27 @@ describe("one question for several ready Units", () => {
     expect(evaluateCodeGenerationApproval(pd, { unit: "beta" }).ok).toBe(true);
   });
 
-  // After the person replies, the agent can change the plans the question asks
-  // about, for what they said; a plan outside the question, an answered plan,
-  // the questions file and code stay as they are.
-  test("after a reply, only the asked plans' own plan files can change", () => {
+  test("the plans' files are records and can be written at any point of the question; the code waits", () => {
     const { pd } = groupedProject();
     const file = (unit: string, name: string) => join(codeGenerationRecordDir(pd, unit), name);
-    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(2);
-    // A bare pick says no plan: nothing opens until the person says which.
+    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(0);
     reply(pd, "2");
-    for (const unit of GROUP) expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(2);
+    for (const unit of GROUP) expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(0);
     reply(pd, "approve alpha; beta, add a test for an empty list, then approve it");
     for (const unit of GROUP) {
       expect(guardWrite(pd, file(unit, "code-generation-plan.md")).code).toBe(0);
       expect(guardWrite(pd, file(unit, "unit-test-instructions.md")).code).toBe(0);
-      expect(guardWrite(pd, file(unit, "code-generation-questions.md")).code).toBe(2);
+      // An answer the agent writes into the questions file has no receipt.
+      expect(guardWrite(pd, file(unit, "code-generation-questions.md")).code).toBe(0);
     }
-    expect(guardWrite(pd, file("later", "code-generation-plan.md")).code).toBe(2);
+    expect(guardWrite(pd, file("later", "code-generation-plan.md")).code).toBe(0);
     expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
     expect(answer(pd, "Approve Plan", ["--units", "alpha"]).code).toBe(0);
-    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(2);
+    // After alpha's approval its plan file still passes: a plan changed after
+    // the approval fails the fingerprint and is asked about again.
+    expect(guardWrite(pd, file("alpha", "code-generation-plan.md")).code).toBe(0);
     expect(guardWrite(pd, file("beta", "code-generation-plan.md")).code).toBe(0);
+    expect(guardWrite(pd, join(pd, "src", "alpha.ts")).code).toBe(2);
   });
 
   test("a change naming no Unit: the agent asks which, then records it for the one named", () => {
@@ -2035,16 +2705,14 @@ describe("'review the plan' next to other questions and for groups", () => {
     test(`'${words}' during a guard-recovery question: the agent's review request answers nothing else`, () => {
       const proj = project();
       askFor(proj);
-      reply(proj, "1");
+      replyAndRecord(proj, "1", "Approve Plan");
       expect(next(proj).plan_approval).toEqual({ status: "approved" });
       guardRecoveryQuestion(proj);
       reply(proj, words);
       const said = answer(proj, "Review the plan").message;
       expect(said).toContain("wants to review the plan");
-      expect(said).toContain("not taken as the answer to the open recovery question");
-      // No remedy is chosen for them: the question still waits.
-      expect(marker(proj).guard_recovery_response).toBeUndefined();
-      expect(marker(proj).delivery).not.toBe("consumed");
+      // The open recovery question keeps that they replied, and no remedy is picked from their words.
+      expect(marker(proj).guard_recovery_response?.selected_op ?? null).toBeNull();
       expect(routeStage(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     });
   }
@@ -2052,7 +2720,7 @@ describe("'review the plan' next to other questions and for groups", () => {
   test("'review the plan before building' during a protected checkpoint question picks nothing there", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     mintProtectedQuestion(proj, { kind: "verification-command", session: SESSION, target: { commandSha256: "a".repeat(64) } });
     reply(proj, "review the plan before building");
@@ -2066,7 +2734,7 @@ describe("'review the plan' next to other questions and for groups", () => {
   test("'review the plan' at the stage's completion gate shows the plan now; during the build it asks again", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: "code-generation" }, proj);
     reply(proj, "review the plan");
@@ -2081,13 +2749,24 @@ describe("'review the plan' next to other questions and for groups", () => {
     expect(answer(proj, "Review the plan").message).toContain("shown for approval before anything else is built");
   });
 
-  test("a reply that answers the guard-recovery question stays its answer when the agent records no review", () => {
+  test("a reply the agent records as the guard-recovery answer stays that answer when it records no review", () => {
     const proj = project();
     askFor(proj);
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     guardRecoveryQuestion(proj);
-    reply(proj, "Request Changes: review the plan's error handling");
+    const words = "Request Changes: review the plan's error handling";
+    reply(proj, words);
+    const recorded = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "guard-recovery",
+      "--details", words, "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     expect(marker(proj).guard_recovery_response).toMatchObject({ status: "ready", selected_op: "request-changes" });
     expect(routeStage(proj).plan_approval).toEqual({ status: "approved" });
   });
@@ -2107,15 +2786,14 @@ describe("'review the plan' next to other questions and for groups", () => {
       });
       publishPlanApprovalAsk(pd, routed as Parameters<typeof publishPlanApprovalAsk>[1]);
       reply(pd, "change beta: use a lookup table");
-      // The agent sends beta back with their words and approves the rest.
-      expect(answer(pd, "Request Changes", ["--units", "beta"]).code).toBe(0);
+      expect(answer(pd, "Request Changes: use a lookup table", ["--units", "beta"]).code).toBe(0);
       expect(answer(pd, "Approve Plan", ["--units", group.filter((unit) => unit !== "beta").join(",")]).code).toBe(0);
       const swarm = (units: string[]) => {
         writeActiveDirectiveMarker(pd, { kind: "invoke-swarm", stage: "code-generation", units, state_sha256: state() });
         return routeCodeGenerationPlanApproval(pd, { kind: "invoke-swarm", stage: "code-generation", units }) as unknown as Emitted;
       };
       expect(swarm(group).plan_approval.units).toEqual([
-        { unit: "beta", status: "revise", feedback: "change beta: use a lookup table" },
+        { unit: "beta", status: "revise", feedback: "use a lookup table" },
       ]);
       // The revised plan is shown before it is built, though plan approval is off.
       const dir = codeGenerationRecordDir(pd, "beta");
@@ -2129,7 +2807,7 @@ describe("'review the plan' next to other questions and for groups", () => {
 
   test("a review for a group is recorded for every plan or for none", () => {
     const { pd } = groupedProject();
-    reply(pd, "approve all");
+    replyAndRecord(pd, "approve all", "Approve all");
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
     // The second plan's request cannot be written.
     const key = createHash("sha256").update(`${markerIntent(pd)}\nunit:beta`, "utf-8").digest("hex").slice(0, 24);
@@ -2145,7 +2823,7 @@ describe("'review the plan' next to other questions and for groups", () => {
 
   test("a review is kept per piece of work, and one kept by an earlier release still counts until answered", () => {
     const { pd } = groupedProject();
-    reply(pd, "approve all");
+    replyAndRecord(pd, "approve all", "Approve all");
     const intent = markerIntent(pd);
     // Another piece of work in this checkout asks to review the same plan.
     const other = "01995000-7a11-7000-8000-0000000000aa";
@@ -2168,10 +2846,221 @@ describe("'review the plan' next to other questions and for groups", () => {
       state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
     });
     publishPlanApprovalAsk(pd, asked as unknown as Parameters<typeof publishPlanApprovalAsk>[1]);
-    reply(pd, "1");
+    replyAndRecord(pd, "1", "Approve Plan");
     expect(existsSync(legacy)).toBe(false);
     expect(planApprovalReviewRequested(pd, "unit:beta", other)).toBe(true);
     expect(swarmState(pd).plan_approval).toEqual({ status: "approved" });
+  });
+});
+
+// An isolated Code Generation run (`next --stage code-generation --single`)
+// while the workflow sits at another stage: every step of its plan names that
+// run's own `next`, since a bare `next` routes the main workflow (a live agent
+// that followed the plan step was handed Requirements Analysis).
+describe("an isolated Code Generation run's plan steps name that run's own next", () => {
+  const SINGLE = ["--stage", "code-generation", "--single"];
+  const WORKFLOW_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const OWN = `${WORKFLOW_NEXT} --stage code-generation --single --scope poc`;
+  const planStep = (command: string) =>
+    `Write this plan and its test instructions (Code Generation Steps 1 and 2), then run \`${command}\`: ` +
+    "AI-DLC asks the person to approve the plan itself, never you.";
+  // The project's own copy of the harness, as an installed project has it.
+  function isolated(): string {
+    const proj = project();
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+      .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: requirements-analysis"), "utf-8");
+    reply(proj, "/aidlc --stage code-generation --single");
+    return proj;
+  }
+  // The command the step names, run as printed.
+  const own = (proj: string): Emitted => next(proj, OWN.split(" ").slice(3));
+
+  test("the plan step, the question and the build: each names it, and it brings back that run's step", () => {
+    const proj = isolated();
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const planning = next(proj, SINGLE);
+    expect(planning, JSON.stringify(planning)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "plan", next: OWN } });
+    expect(planning.plan_note).toBe(planStep(OWN));
+    writePlan(proj);
+    const asked = own(proj);
+    expect(asked, JSON.stringify(asked)).toMatchObject({ kind: "ask", ask_type: "plan-approval", stage: "code-generation", plan_approval: { next: OWN } });
+    expect(String(asked.question_note)).toEndWith(`, then run \`${OWN}\`.`);
+    expect(String(asked.question_note)).not.toContain(`\`${WORKFLOW_NEXT}\``);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    expect(own(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(state);
+  });
+
+  test("Request Changes: the revision names it", () => {
+    const proj = isolated();
+    next(proj, SINGLE);
+    writePlan(proj);
+    const asked = own(proj);
+    expect(asked.ask_type, JSON.stringify(asked)).toBe("plan-approval");
+    replyAndRecord(proj, "rename slugify to toSlug", "Request Changes");
+    const revising = own(proj);
+    expect(revising, JSON.stringify(revising)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "revise", next: OWN } });
+    expect(revising.plan_note).toBe(
+      `The person asked for changes to this plan: revise the plan and its test instructions from their words, then run \`${OWN}\`.`,
+    );
+  });
+
+  test("the person edits the files: the reply's step names it", () => {
+    const proj = isolated();
+    next(proj, SINGLE);
+    writePlan(proj);
+    expect(own(proj).ask_type).toBe("plan-approval");
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(own(proj).plan_approval.editing).toBe(true);
+    reply(proj, "you finish it");
+    const editing = own(proj);
+    expect(editing, JSON.stringify(editing)).toMatchObject({ kind: "ask", plan_approval: { editing: true, next: OWN } });
+    expect(String(editing.plan_approval.note)).toEndWith(`Then run \`${OWN}\`.`);
+    expect(String(editing.question_note)).not.toContain(`\`${WORKFLOW_NEXT}\``);
+  });
+
+  test("the workflow's own plan steps keep the bare next and carry no command of their own", () => {
+    const proj = project();
+    const planning = next(proj);
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    expect(planning.plan_note).toBe(planStep(WORKFLOW_NEXT));
+    writePlan(proj);
+    const asked = next(proj);
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(asked.plan_approval).not.toHaveProperty("next");
+    expect(String(asked.question_note)).toContain(`or run \`${WORKFLOW_NEXT}\` when it returns none.`);
+    expect(String(asked.question_note)).toEndWith(`, then run \`${WORKFLOW_NEXT}\`.`);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    next(proj);
+    reply(proj, "you finish it");
+    expect(String(next(proj).plan_approval.note)).toEndWith(". Then run next.");
+  });
+});
+
+// An isolated Code Generation run in a project with no work: its start is in
+// the space's own record, and its plan question is the open step there, bound
+// to the empty state its step was issued on, so the person's answer records
+// (PLAN_APPROVAL_RECORDED beside the start) and the run builds and finishes as
+// it does inside work.
+describe("an isolated Code Generation run in a project with no work", () => {
+  const SINGLE = ["--stage", "code-generation", "--single", "--scope", "enterprise"];
+  const OWN_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
+  const SPACE_RECORD = ["aidlc", "spaces", "default", "intents"];
+  const planDir = (proj: string) => join(proj, ...SPACE_RECORD, "construction", "code-generation");
+  // A project with code and no work, the harness installed, and the run started.
+  function noWork(start = true): string {
+    const proj = createOrchestrationTestProject();
+    created.push(proj);
+    removeWorkspaceRecord(proj);
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+    if (start) {
+      reply(proj, "/aidlc --stage code-generation --single");
+      expect(next(proj, SINGLE).plan_approval?.status).toBe("plan");
+    }
+    return proj;
+  }
+  function writeOwnPlan(proj: string, builds = "slugify for titles"): void {
+    mkdirSync(planDir(proj), { recursive: true });
+    writeFileSync(
+      join(planDir(proj), "code-generation-plan.md"),
+      `# Code Generation Plan\n\n## Summary\n\n- Builds: ${builds}\n- Touches: src/slugify.ts\n` +
+        "- Tests: 3 unit tests\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" +
+        renderTestingContract(resolveTestingPosture(proj)),
+      "utf-8",
+    );
+    writeFileSync(join(planDir(proj), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src/slugify.test.ts`.\n", "utf-8");
+  }
+  function asked(proj: string): Emitted {
+    const directive = next(proj, SINGLE);
+    expect(directive, JSON.stringify(directive)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    return directive;
+  }
+  function events(proj: string): string[] {
+    const dir = join(proj, ...SPACE_RECORD, "audit");
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).flatMap((name) => readFileSync(join(dir, name), "utf-8").split("\n---\n"))
+      .flatMap((block) => /\*\*Event\*\*: (\S+)/.exec(block)?.[1] ?? []);
+  }
+  function builds(proj: string): void {
+    expect(next(proj, SINGLE)).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+  }
+  function finishes(proj: string): void {
+    writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+    const result = spawnSync(BUN, [
+      DISPATCHER, "engine", "orchestrate", "report", "--single", "--stage", "code-generation", "--result", "completed",
+      "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect((JSON.parse(result.stdout || "{}") as { kind?: string }).kind, result.stdout).toBe("done");
+    expect(events(proj).filter((event) => event === "STAGE_COMPLETED")).toHaveLength(1);
+    expect(existsSync(join(proj, ...SPACE_RECORD, "aidlc-state.md"))).toBe(false);
+    expect(existsSync(join(proj, ...SPACE_RECORD, "intents.json"))).toBe(false);
+  }
+
+  test("Approve Plan is recorded beside the run's start, and the run builds and finishes", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    expect(existsSync(join(planDir(proj), "code-generation-questions.md"))).toBe(true);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    expect(events(proj).filter((event) => event === "PLAN_APPROVAL_RECORDED")).toHaveLength(1);
+    builds(proj);
+    finishes(proj);
+  });
+
+  test("Request Changes: the revision names the run's own next, and the revised plan is asked about once", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "rename slugify to toSlug", "Request Changes: rename slugify to toSlug");
+    expect(next(proj, SINGLE)).toMatchObject({
+      kind: "run-stage",
+      plan_approval: { status: "revise", feedback: "rename slugify to toSlug", next: `${OWN_NEXT} ${SINGLE.join(" ")}` },
+    });
+    writeOwnPlan(proj, "toSlug for titles");
+    expect(asked(proj).plan_approval.targets?.[0].summary[0]).toBe("Builds: toSlug for titles");
+    replyAndRecord(proj, "ok, approve", "Approve Plan");
+    builds(proj);
+  });
+
+  test("the person edits the files: after done, their approval builds", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "I'll edit the files", "I'll edit the files");
+    expect(asked(proj).plan_approval.editing).toBe(true);
+    writeFileSync(join(planDir(proj), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src`.\n", "utf-8");
+    replyAndRecord(proj, "done", "Approve Plan");
+    builds(proj);
+  });
+
+  test("review the plan first, said after approving: the plan is asked about again", () => {
+    const proj = noWork();
+    writeOwnPlan(proj);
+    asked(proj);
+    replyAndRecord(proj, "approve", "Approve Plan");
+    reply(proj, "wait, review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.code, review.message).toBe(0);
+    asked(proj);
+  });
+
+  test("with no run open the plan answer is refused as before and records nothing", () => {
+    const proj = noWork(false);
+    reply(proj, "approve");
+    const refused = answer(proj, "Approve Plan");
+    expect(refused.code).not.toBe(0);
+    expect(events(proj)).not.toContain("PLAN_APPROVAL_RECORDED");
   });
 });
 
@@ -2191,7 +3080,6 @@ describe("the question's summary", () => {
 // command the engine itself names for their request gets through the guard,
 // and code still waits for the approved plan.
 describe("what the engine names while a plan waits", () => {
-  // Commands a directive names: its command fields and backticked commands.
   function namedCommands(directive: unknown): string[] {
     const out = new Set<string>();
     const visit = (value: unknown, key = ""): void => {
@@ -2234,7 +3122,7 @@ describe("what the engine names while a plan waits", () => {
     return proj;
   }
   function resumeReport(proj: string, choice: string): unknown {
-    const result = spawnSync(BUN, [ORCHESTRATE, "report", "--result", "resumed", "--user-input", choice, "--project-dir", proj], {
+    const result = spawnSync(BUN, [ORCHESTRATE, "report", "--result", "resumed", "--choice", choice, "--project-dir", proj], {
       cwd: proj,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
       encoding: "utf-8",
@@ -2257,18 +3145,17 @@ describe("what the engine names while a plan waits", () => {
     ["a scope change", "/aidlc --scope feature", ["--scope", "feature"]],
     ["a setting change", "/aidlc --depth minimal --review advisory", ["--depth", "minimal", "--review", "advisory"]],
     ["new work beside it", "/aidlc --new-intent add a csv export", ["--new-intent", "--scope", "poc", "add a csv export"]],
-    ["the resume menu's redo", "redo this stage from the start", null],
+    ["a redo asked for on re-entry", "redo this stage from the start", null],
   ] as const)("%s: every command the engine names gets through", (_label, typed, args) => {
     const proj = waitingPlan();
     reply(proj, typed);
-    const directive = args === null ? resumeReport(proj, "2") : next(proj, [...args]);
+    const directive = args === null ? resumeReport(proj, "redo") : next(proj, [...args]);
     const commands = namedCommands(directive).map(filled);
     expect(commands.length, `no command named: ${JSON.stringify(directive)}`).toBeGreaterThan(0);
     for (const command of commands) {
       const verdict = guardBash(proj, command);
       expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
     }
-    // Code is still held for the plan.
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
@@ -2277,19 +3164,18 @@ describe("what the engine names while a plan waits", () => {
     for (const command of protocolCommands()) {
       const verdict = guardBash(proj, command);
       expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
-      expect(guardBash(proj, `${command}; printf x > src/a.ts`).code, `${command} with a write`).toBe(2);
+      expect(guardBash(proj, `${command}; printf x > src/slugify.ts`).code, `${command} with a write`).toBe(2);
     }
   });
 
-  test("a review the person asks for runs while the plan waits: its request, its own review file and dispatch record, nothing else", () => {
+  test("a review the person asks for runs while the plan waits: its request is the engine's command, its files are records, the code waits", () => {
     const proj = waitingPlan();
     const request = "bun .claude/tools/aidlc.ts engine log review --stage code-generation --reviewer aidlc-architecture-reviewer-agent --iteration 2";
-    // A move the person asks for: it waits for them to have spoken.
-    expect(guardBash(proj, request).code).toBe(2);
+    // AI-DLC's own command: the log tool judges it, this guard does not.
+    expect(guardBash(proj, request).code).toBe(0);
     reply(proj, "before I approve the plan, have the reviewer look at it again");
     expect(guardBash(proj, request).code, guardBash(proj, request).stderr).toBe(0);
     expect(guardBash(proj, `${request} --verdict READY`).code).toBe(0);
-    // The request it records names the reviewer's file.
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
     const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
     const reviewFile = ".aidlc-engine/reviews/code-generation/stage/a1/2.0123456789abcdef0123456789abcdef.review.md";
@@ -2297,8 +3183,9 @@ describe("what the engine names while a plan waits", () => {
     // The path as an agent types it in bash: from the project, with forward
     // slashes (bash reads a Windows backslash as an escape).
     const dispatchInShell = dispatch.slice(proj.length + 1).replace(/\\/g, "/");
-    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
-    expect(guardWrite(proj, dispatch).code).toBe(2);
+    // The reviewer's own records pass, request or no request.
+    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(0);
+    expect(guardWrite(proj, dispatch).code).toBe(0);
     appendAuditEntry("REVIEW_REQUESTED", {
       Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "2",
       "Request Id": "review:0123456789abcdef0123456789abcdef", "Review File": reviewFile,
@@ -2306,18 +3193,18 @@ describe("what the engine names while a plan waits", () => {
     expect(guardWrite(proj, join(record, reviewFile)).code).toBe(0);
     expect(guardWrite(proj, dispatch).code).toBe(0);
     expect(guardBash(proj, `rm ${dispatchInShell}`).code).toBe(0);
-    // Everything else still waits for the plan answer.
-    expect(guardWrite(proj, join(record, ".aidlc-engine", "reviews", "code-generation", "stage", "a1", "3.other.review.md")).code).toBe(2);
-    expect(guardWrite(proj, join(record, "construction", "code-generation", "code-summary.md")).code).toBe(2);
+    // Other records pass too; the code the plan names still waits.
+    expect(guardWrite(proj, join(record, ".aidlc-engine", "reviews", "code-generation", "stage", "a1", "3.other.review.md")).code).toBe(0);
+    expect(guardWrite(proj, join(record, "construction", "code-generation", "code-summary.md")).code).toBe(0);
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
-    expect(guardBash(proj, `printf x > ${dispatchInShell}; printf x > src/a.ts`).code).toBe(2);
-    // Once the review completes, its files wait again.
+    expect(guardBash(proj, `printf x > ${dispatchInShell}; printf x > src/slugify.ts`).code).toBe(2);
+    // Once the review completes, its files are still the reviewer's records.
     appendAuditEntry("REVIEW_COMPLETED", {
       Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "2", Verdict: "READY",
       "Request Id": "review:0123456789abcdef0123456789abcdef",
     }, proj);
-    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
-    expect(guardWrite(proj, dispatch).code).toBe(2);
+    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(0);
+    expect(guardWrite(proj, dispatch).code).toBe(0);
     // Audit rows are project text: a Review File outside the reviews folder
     // never opens a write while the plan waits.
     appendAuditEntry("REVIEW_REQUESTED", {
@@ -2327,18 +3214,17 @@ describe("what the engine names while a plan waits", () => {
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
-  test("a move the person asked for waits for them to have spoken", () => {
+  test("a jump waits for the person to ask (the jump tool checks no one); a skip is the engine's own command; the code waits", () => {
     const proj = waitingPlan();
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc";
     expect(guardBash(proj, jump).code).toBe(2);
-    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(2);
+    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(0);
     reply(proj, "/aidlc --stage nfr-requirements");
-    // The jump the engine printed for that request.
     expect(namedCommands(next(proj, ["--stage", "nfr-requirements"]))).toContain(jump);
     const verdict = guardBash(proj, jump);
     expect(verdict.code, verdict.stderr).toBe(0);
-    // A skip passes with its own flags only.
-    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --scope feature").code).toBe(2);
+    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --scope feature").code).toBe(0);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
   // From a live run: a skip typed while the plan waited left the plan
@@ -2355,12 +3241,48 @@ describe("what the engine names while a plan waits", () => {
     const verdict = guardBash(proj, recompose as string);
     expect(verdict.code, `${recompose}\n${verdict.stderr}`).toBe(0);
     runInstalled(proj, recompose as string);
-    // The plan question is still the open step.
     expect(planApprovalAskIsOpen(proj)).toBe(true);
     reply(proj, "approve the plan, but let's stop there for today");
     const said = answer(proj, "Approve Plan", ["--park"]);
     expect(said.code, said.message).toBe(0);
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
+  });
+
+  // Skipping Code Generation itself while its plan waits: the skip the engine
+  // names gets through and runs, the plan question goes with the stage, and the
+  // work goes on to Build and Test without asking about the plan again.
+  test("a skip of Code Generation while its plan waits is carried out, and the plan is not asked about again", () => {
+    const proj = project("strict");
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace("- [ ] code-generation", "- [-] code-generation"), "utf-8");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    askFor(proj);
+    reply(proj, "/aidlc --skip code-generation");
+    const named = next(proj, ["--skip", "code-generation"]);
+    const commands = namedCommands(named);
+    expect(commands.some((command) => command.includes("engine recompose")), JSON.stringify(named)).toBe(false);
+    const skip = commands.find((command) => command.includes("report --stage code-generation --result skipped"));
+    expect(skip, JSON.stringify(named)).toBeDefined();
+    const verdict = guardBash(proj, skip as string);
+    expect(verdict.code, `${skip}\n${verdict.stderr}`).toBe(0);
+    const reason = /--reason '([^']*)'/.exec(skip as string)?.[1];
+    const skipped = spawnSync(BUN, [
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"), "report", "--stage", "code-generation",
+      "--result", "skipped", "--reason", String(reason), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(skipped.status, `${skipped.stdout}${skipped.stderr}`).toBe(0);
+    expect(readFileSync(file, "utf-8")).toContain("- [S] code-generation");
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
+    for (let turn = 0; turn < 2; turn++) {
+      const after = next(proj);
+      expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+      expect(after.stage).toBe("build-and-test");
+    }
   });
 
   // A scope or setting change asked for while the plan waits, alone or with a
@@ -2432,8 +3354,50 @@ describe("what the engine names while a plan waits", () => {
     expect(said.recorded).toBe("approve");
   });
 
-  // Only the skip's own write keeps the plan question open: any other change
-  // to the work's state still leaves it out of date, and the engine asks again.
+  // "Use bun test to check each Unit" while the plans wait: the person approves
+  // the command in the agent's question box, the agent records and applies it,
+  // and the plan question is still the open step, so their next "approve both
+  // plans" is kept as their answer to it.
+  test("a verification command approved while the plans wait keeps the plan question open", () => {
+    const { pd } = groupedProject();
+    const tool = (name: string, args: string[]): void => {
+      const run = spawnSync(BUN, [join(AIDLC_SRC, "tools", name), ...args, "--project-dir", pd], {
+        cwd: pd,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(run.status, `${name} ${args.join(" ")}\n${run.stdout}${run.stderr}`).toBe(0);
+    };
+    reply(pd, "before you build anything, use bun test as the verification command");
+    const question = "Use this command to verify each completed Unit?";
+    const route = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "bun test", "--session", SESSION];
+    tool("aidlc-log.ts", ["decision", ...route, "--decision", question, "--options", "Approve,Request Changes"]);
+    const asked = [{
+      question, header: "Command", multiSelect: false,
+      options: [{ label: "Approve", description: "" }, { label: "Request Changes", description: "" }],
+    }];
+    const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: pd,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked },
+        tool_response: { questions: asked, answers: { [question]: "Approve" } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: pd, AIDLC_PROJECT_DIR: pd, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(picked.status, picked.stderr).toBe(0);
+    tool("aidlc-log.ts", ["answer", ...route, "--details", "Approve"]);
+    tool("aidlc-state.ts", ["set-construction-verification-command", "bun test"]);
+    expect(planApprovalAskIsOpen(pd)).toBe(true);
+    reply(pd, "approve both plans");
+    const said = answer(pd, "Approve all");
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+  });
+
   test("a state change from anything but the skip still leaves the plan question out of date", () => {
     const proj = waitingPlan();
     expect(planApprovalAskIsOpen(proj)).toBe(true);
@@ -2493,7 +3457,7 @@ describe("a project whose files cannot all be read", () => {
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");
-      reply(proj, "1");
+      replyAndRecord(proj, "1", "Approve Plan");
       expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
       const build = next(proj);
       expect(build.kind, JSON.stringify(build)).toBe("run-stage");
@@ -2523,6 +3487,202 @@ describe("a project whose files cannot all be read", () => {
       const stopped = next(proj);
       expect(stopped.kind, JSON.stringify(stopped)).toBe("error");
       expect(stopped.message).toContain("cannot be presented");
+    });
+  });
+
+  // Under strict the person can still have the plan built, on their own word:
+  // they say so however they like, after they were told why it cannot be
+  // checked, and the agent records it with their words on the record. There is
+  // no sentence to type.
+  function writeBuildAnyway(proj: string, reason: string): void {
+    const tags = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts"), "fingerprint", "--stage-level", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(tags.status, tags.stderr).toBe(0);
+    writeFileSync(
+      join(stageDir(proj), "code-generation-questions.md"),
+      `## Plan Approval\n${tags.stdout.trim()}\nA. Approve Plan\nB. Request Changes\n[Answer]: Approve Plan\n`,
+      "utf-8",
+    );
+    writeFileSync(join(stageDir(proj), "override-reason.txt"), `${reason}\n`, "utf-8");
+  }
+
+  function buildAnyway(proj: string, env: Record<string, string> = {}): { status: number | null; out: string } {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--stage-level", "--session", SESSION, "--questions-file", join(stageDir(proj), "code-generation-questions.md"),
+      "--details", "Approve Plan", "--override-file", join(stageDir(proj), "override-reason.txt"), "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", ...env },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+
+  function auditBlock(proj: string, event: string): string | undefined {
+    return auditText(proj).split("\n---\n").find((block) => block.includes(`**Event**: ${event}`));
+  }
+
+  test("strict: the refusal says they can have it built anyway, and their own words do it", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      const stopped = next(proj);
+      expect(stopped.kind, JSON.stringify(stopped)).toBe("error");
+      expect(stopped.message).toContain("built anyway");
+      expect(stopped.message).not.toContain("type exactly");
+      expect(stopped.message).not.toContain("Override Plan Approval:");
+      reply(proj, "build it anyway, that folder is a dev mount");
+      writeBuildAnyway(proj, "that folder is a dev mount");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      // The receipt prints no line for the person; the record keeps the override.
+      expect(built.out).not.toContain("Recorded that you approved building this plan with no check of the project's files.");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: build it anyway, that folder is a dev mount");
+      const recorded = auditBlock(proj, "PLAN_APPROVAL_RECORDED");
+      expect(recorded).toContain("**Override**: yes");
+      expect(recorded).toContain("**Person Reply**: build it anyway, that folder is a dev mount");
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval).toEqual({ status: "approved" });
+    });
+  });
+
+  test("strict: without a reply of theirs since the refusal nothing is recorded, and the line says to ask them", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      // Words from before they were told are no answer to it.
+      reply(proj, "build it anyway");
+      expect(next(proj).kind).toBe("error");
+      writeBuildAnyway(proj, "the folder is a dev mount");
+      const refused = buildAnyway(proj);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("end the turn");
+      expect(refused.out).not.toContain("type exactly");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toBeUndefined();
+      expect(auditBlock(proj, "PLAN_APPROVAL_RECORDED")).toBeUndefined();
+      // The refusal shown again does not move past their next reply.
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "fine, build it anyway");
+      expect(next(proj).kind).toBe("error");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: fine, build it anyway");
+    });
+  });
+
+  test("strict: one reply has the plan built once", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "go ahead and build it anyway");
+      writeBuildAnyway(proj, "go ahead");
+      expect(buildAnyway(proj).status).toBe(0);
+      const again = buildAnyway(proj);
+      expect(again.status).not.toBe(0);
+      expect(auditText(proj).split("**Event**: PLAN_APPROVAL_OVERRIDDEN").length).toBe(2);
+    });
+  });
+
+  test("strict: a pick in a question box after the refusal has it built, with the pick on the record", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      const asked = [{
+        question: "How do you want to go on?", header: "Plan", multiSelect: false,
+        options: [{ label: "Build it anyway", description: "" }, { label: "Fix the files first", description: "" }],
+      }];
+      const picked = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+          tool_input: { questions: asked },
+          tool_response: { questions: asked, answers: { "How do you want to go on?": "Build it anyway" } },
+        }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(picked.status, picked.stderr).toBe(0);
+      writeBuildAnyway(proj, "Build it anyway");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: Build it anyway");
+    });
+  });
+
+  test("strict: a message that starts with the old override sentence is a reply like any other", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      reply(proj, "Override Plan Approval: the walk is broken here");
+      const turn = auditBlock(proj, "HUMAN_TURN");
+      expect(turn).not.toContain("**Reply**: command");
+      writeBuildAnyway(proj, "the walk is broken here");
+      const built = buildAnyway(proj);
+      expect(built.status, built.out).toBe(0);
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toContain("**Person Reply**: Override Plan Approval: the walk is broken here");
+    });
+  });
+
+  test("an unattended run has no person to ask, and the line says so", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      // The plan step comes first, as in a run: the plan is written to it.
+      expect(next(proj).plan_approval.status).toBe("plan");
+      writePlan(proj);
+      expect(next(proj).kind).toBe("error");
+      const prompt = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "build it anyway" }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "1" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(prompt.status, prompt.stderr).toBe(0);
+      writeBuildAnyway(proj, "unattended");
+      const refused = buildAnyway(proj, { AIDLC_UNATTENDED: "1" });
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("AIDLC_UNATTENDED=1 is set");
+      expect(auditBlock(proj, "PLAN_APPROVAL_OVERRIDDEN")).toBeUndefined();
+    });
+  });
+
+  // Starting the build of a plan approved before its files stopped being
+  // readable names the repair and the next step. It offers no override:
+  // `next` says how to go on, and is where the person hears it.
+  test("strict: generation start on files that cannot be read says to repair them and run next", () => {
+    const proj = project("strict");
+    askFor(proj);
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    unreadable(() => {
+      const begun = posture(proj, "begin", null);
+      expect(begun.status).not.toBe(0);
+      expect(begun.stderr).toContain("then run next");
+      expect(begun.stderr).not.toContain("retry generation");
+      expect(begun.stderr).not.toContain("Override Plan Approval");
     });
   });
 });
@@ -2558,11 +3718,11 @@ describe("stopping for now at Code Generation", () => {
     cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
     askFor(proj);
     const source = workspaceSourceFingerprint(proj);
-    let park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+    let park = "bun .claude/tools/aidlc.ts engine orchestrate park --person-asked";
     if (how === "typed") {
       const named = next(proj, ["park"]);
       expect(named.kind, JSON.stringify(named)).toBe("print");
-      park = /Run `([^`]+ park)`/.exec(named.message ?? "")?.[1] ?? "";
+      park = /Run `([^`]+ park --person-asked)`/.exec(named.message ?? "")?.[1] ?? "";
     }
     const parkAdmitted = guardBash(proj, park);
     expect(parkAdmitted.code, `${park}\n${parkAdmitted.stderr}`).toBe(0);
@@ -2582,25 +3742,22 @@ describe("stopping for now at Code Generation", () => {
 });
 
 // From a live run under production guards: at the plan question the person
-// asked "skip plan approval?", a question about the switch the hook marks as a
-// command turn, and nothing else. The agent recorded "Approve Plan" from it and
-// built the code. A question or a command is no answer: the choice is refused,
-// the question stays open, and the refusal names the real switch.
+// asked "skip plan approval?" and the agent recorded "Approve Plan" from it and
+// built the code. No tool reads the question: the hook keeps it whole, marks
+// nothing, applies nothing and answers nothing, so the plan question stays open
+// for the agent to answer it and offer; the choice, when they make it, is
+// recorded from their words.
 describe("a question about the switch is no answer to the plan question", () => {
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"Approve Plan\" after only \"skip plan approval?\" is refused", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" records nothing, and the plan question stays open", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const result = answer(proj, "Approve Plan");
-    expect(result.code, result.message).not.toBe(0);
-    expect(result.recorded).toBeUndefined();
-    expect(result.message).toContain("not an answer");
-    expect(result.message).toContain("engine config set guard.plan-approval off");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    // Their answer, when it comes, is recorded.
     reply(proj, "ok, approve it");
     const approved = answer(proj, "Approve Plan");
     expect(approved.code, approved.message).toBe(0);
@@ -2610,14 +3767,15 @@ describe("a question about the switch is no answer to the plan question", () => 
 
 // The conductor's call on #1677's asked form, from the same live run: a
 // question about the check turns nothing off, the agent answers it and offers,
-// and a yes is the ask. A request, plain or phrased as a question, turns it off
-// at once. No tool reads more than that one asked form.
+// and a yes is the ask. A request, plain or phrased as a question, is done at
+// once by the setter the agent runs, naming their message. No tool reads the words.
 describe("a question about plan approval turns nothing off; a request does", () => {
-  // The setter as the agent runs it under production guards: no presence bypass.
-  function setter(proj: string): { code: number; out: string } {
+  // The setter as the agent runs it under production guards: no presence bypass,
+  // naming the message that asked for it (the agent read it).
+  function setter(proj: string, message: string): { code: number; out: string } {
     const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off"], {
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off", "--message", message], {
       cwd: proj,
       env,
       encoding: "utf-8",
@@ -2627,19 +3785,14 @@ describe("a question about plan approval turns nothing off; a request does", () 
   }
   const offRows = (proj: string) => (auditText(proj).match(/\*\*Event\*\*: (GUARD_DISABLED|CEREMONY_SET)/g) ?? []).length;
 
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" lowers nothing; a yes to the offer does, with their words", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" lowers nothing by itself; a yes to the offer does, with their words", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const refused = setter(proj);
-    expect(refused.code, refused.out).not.toBe(0);
-    expect(refused.out).toContain("asked a question about this check");
-    expect(refused.out).toContain("offer to turn it off");
-    expect(refused.out).not.toContain("They can also type");
     expect(offRows(proj)).toBe(0);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "yes");
-    const lowered = setter(proj);
+    const lowered = setter(proj, turnId(proj));
     expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
     expect(auditText(proj)).toContain("**Person Reply**: yes");
@@ -2650,17 +3803,21 @@ describe("a question about plan approval turns nothing off; a request does", () 
       const proj = project(policy);
       askFor(proj);
       reply(proj, words);
-      const lowered = setter(proj);
+      const lowered = setter(proj, turnId(proj));
       expect(lowered.code, `${words}: ${lowered.out}`).toBe(0);
       expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
     }
   });
 
-  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval for this work\" lowers it at once", (policy) => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval for this work\" is done at once by the setter, with their words", (policy) => {
     const proj = project(policy);
     askFor(proj);
     reply(proj, "skip plan approval for this work");
+    expect(offRows(proj)).toBe(0);
+    const lowered = setter(proj, turnId(proj));
+    expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
+    expect(auditText(proj)).toContain("**Person Reply**: skip plan approval for this work");
     const after = next(proj);
     expect(after.kind === "ask" && after.ask_type === "plan-approval", JSON.stringify(after)).toBe(false);
   });
@@ -2668,23 +3825,25 @@ describe("a question about plan approval turns nothing off; a request does", () 
   // From a live run: the chat opened with `/aidlc`, the plan question came,
   // and "skip plan approval?" turned the check off, because the opening
   // command still read as a request. The person's latest word was a question.
-  test("after the chat's opening /aidlc, \"skip plan approval?\" still lowers nothing", () => {
+  test("after the chat's opening /aidlc, \"skip plan approval?\" is the person's words and nothing is applied or recorded", () => {
     const proj = project("off");
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval?");
-    const refused = setter(proj);
-    expect(refused.code, refused.out).not.toBe(0);
-    expect(refused.out).toContain("asked a question about this check");
+    // A question is the agent's to answer and offer on: the hook marks nothing,
+    // nothing is recorded, and the plan question is still open.
     expect(offRows(proj)).toBe(0);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 
-  test("after the chat's opening /aidlc, a request to skip plan approval is still done at once", () => {
+  test("after the chat's opening /aidlc, a request to skip plan approval is still done at once by the setter", () => {
     const proj = project("off");
     reply(proj, "/aidlc");
     askFor(proj);
     reply(proj, "skip plan approval for this work");
+    const lowered = setter(proj, turnId(proj));
+    expect(lowered.code, lowered.out).toBe(0);
     expect(offRows(proj)).toBeGreaterThan(0);
   });
 });
@@ -2712,7 +3871,7 @@ function zeroUnitProject(scope: "refactor" | "bugfix"): string {
   if (scope === "refactor") {
     state = state
       .replace("- **Scope**: bugfix", "- **Scope**: refactor")
-      .replace("- [S] functional-design \u2014 SKIP (bugfix scope)", "- [x] functional-design \u2014 EXECUTE")
+      .replace("- [ ] functional-design \u2014 SKIP (bugfix scope)", "- [x] functional-design \u2014 EXECUTE")
       .replaceAll("SKIP (bugfix scope)", "SKIP (refactor scope)");
   }
   writeFileSync(seededStateFile(proj), state, "utf-8");
@@ -2739,7 +3898,6 @@ function continueEachPart(proj: string, first: Emitted & { part?: number; receip
   return directive;
 }
 
-/** The person approves, the rules arrive in parts, and the build step arrives. */
 function approveThroughParts(proj: string, scope: string): Emitted {
   writePlan(proj);
   const ask = next(proj);
@@ -2747,7 +3905,7 @@ function approveThroughParts(proj: string, scope: string): Emitted {
   expect(ask.ask_type).toBe("plan-approval");
   expect(ask.plan_approval.targets?.map((target) => target.unit)).toEqual([null]);
   // The person picks Approve Plan, the first choice.
-  reply(proj, "1");
+  replyAndRecord(proj, "1", "Approve Plan");
   expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
   // The conductor re-enters naming the work's own scope, as reported. (New words
   // here would be new work, which the engine asks the person about.)
@@ -2784,7 +3942,6 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       expect(generationStarted(proj)).toBe(true);
       const edit = guardWrite(proj, join(proj, "src", "slugify.ts"));
       expect(edit.code, edit.stderr).toBe(0);
-      // The approval was asked for once and still stands.
       expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
       expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
       expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
@@ -2798,7 +3955,10 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const proj = zeroUnitProject("refactor");
     const first = engineCall(proj, ["next"]);
     expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
-    const early = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    // The plan file is a record and passes while the rules arrive; a source
+    // write waits, and the refusal names the part's `continue`.
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(0);
+    const early = guardWrite(proj, join(proj, "src", "slugify.ts"));
     expect(early.code).toBe(2);
     expect(early.stderr).toContain(`continue ${first.receipt}\``);
     const planning = continueEachPart(proj, first);
@@ -2821,16 +3981,16 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
       } else {
         writePlan(proj);
         expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-        reply(proj, "1");
+        replyAndRecord(proj, "1", "Approve Plan");
         expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
       }
       const park = "bun .claude/tools/aidlc.ts engine orchestrate park";
       const parkAdmitted = guardBash(proj, park);
       expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
       expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
-      // Parked, a workspace command is refused; the refusal names `next`, and
+      // Parked, a write to the code is refused; the refusal names `next`, and
       // `next --resume` names the unpark, which the guard lets through.
-      const parked = guardBash(proj, "git add -A");
+      const parked = guardBash(proj, "printf changed > src/inline.ts");
       expect(parked.code).toBe(2);
       expect(parked.stderr).toContain(" next`");
       const unpark = resumeNamesUnpark(proj);
@@ -2855,7 +4015,7 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const proj = zeroUnitProject("refactor");
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    reply(proj, "1");
+    replyAndRecord(proj, "1", "Approve Plan");
     expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
     const file = seededStateFile(proj);
     writeFileSync(file, readFileSync(file, "utf-8")
@@ -2868,5 +4028,401 @@ describe("the zero-Unit Code Generation lockout reported in #1172", () => {
     const current = nextThroughParts(proj).directive;
     expect(current.kind, JSON.stringify(current)).toBe("run-stage");
     expect(current.stage).toBe("functional-design");
+  });
+});
+
+// The Copilot CLI's file tool makes no folders ("Parent directory does not
+// exist"), and while the plan waits the guard refuses every PowerShell way of
+// making one (New-Item, a variable, python), so on Windows the agent looped and
+// then turned plan approval off before the plan question was ever asked. The
+// engine makes the plan's folder when it issues the step that writes the plan.
+describe("the plan's record folder is there before the plan is written", () => {
+  const emptyFolder = (dir: string): void => {
+    expect(existsSync(dir), dir).toBe(true);
+    expect(readdirSync(dir)).toEqual([]);
+  };
+
+  test("a bugfix's stage-level plan step, with its rules in parts: the folder is there from the first part", () => {
+    const proj = zeroUnitProject("bugfix");
+    expect(existsSync(stageDir(proj))).toBe(false);
+    const first = engineCall(proj, ["next"]);
+    expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    emptyFolder(stageDir(proj));
+    const planning = continueEachPart(proj, first);
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    // The plan is one plain file write into it.
+    const write = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    expect(write.code, write.stderr).toBe(0);
+  });
+
+  test("a Unit's plan step makes that Unit's folder only", () => {
+    const proj = unitProject("unit-a");
+    const step = next(proj) as Emitted & { unit?: string };
+    expect(step).toMatchObject({ kind: "run-stage", unit: "unit-a", plan_approval: { status: "plan" } });
+    emptyFolder(stageDir(proj, "unit-a"));
+    expect(existsSync(stageDir(proj))).toBe(false);
+  });
+
+  test("a parallel batch's plan step makes each listed Unit's folder", () => {
+    const pd = swarmFixture(false);
+    // Installed as config installs it, and the person's message reached the
+    // hooks, so `next` hands out the batch.
+    mkdirSync(join(pd, ".claude"), { recursive: true });
+    cpSync(join(AIDLC_SRC, "settings.json"), join(pd, ".claude", "settings.json"));
+    reply(pd, "continue");
+    const batch = next(pd);
+    expect(batch.kind, JSON.stringify(batch)).toBe("invoke-swarm");
+    expect(batch.plan_approval.status).toBe("plan");
+    for (const unit of GROUP) emptyFolder(codeGenerationRecordDir(pd, unit));
+    expect(existsSync(codeGenerationRecordDir(pd, "later"))).toBe(false);
+  });
+
+  test("a file where the folder goes, or a link out of the project, leaves the step as it was", () => {
+    const blocked = project();
+    mkdirSync(dirname(stageDir(blocked)), { recursive: true });
+    writeFileSync(stageDir(blocked), "", "utf-8");
+    expect(next(blocked).plan_approval).toEqual({ status: "plan" });
+    expect(readFileSync(join(hooksHealthDir(blocked), "plan-approval-ask.drops"), "utf-8")).toContain("EEXIST");
+    if (process.platform === "win32") return; // A link needs a privilege Windows does not give by default.
+    const linked = project();
+    const outside = mkdtempSync(join(tmpdir(), "t-plan-folder-outside-"));
+    try {
+      symlinkSync(outside, join(seededRecordDir(linked), "construction"));
+      expect(next(linked).plan_approval).toEqual({ status: "plan" });
+      expect(readdirSync(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("a route check makes nothing, and a written plan's folder keeps what it holds", () => {
+    const proj = project();
+    const probe = runOrchestrateNext(ORCHESTRATE, proj, [], { env: { ...process.env, AIDLC_ROUTE_CHECK: "1" } });
+    expect(probe.directive).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+    expect(existsSync(stageDir(proj))).toBe(false);
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    emptyFolder(stageDir(proj));
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(readdirSync(stageDir(proj))).toEqual(expect.arrayContaining(["code-generation-plan.md", "unit-test-instructions.md"]));
+  });
+});
+
+// A setting typed over the step in hand. A live run (Claude Code, 2026-10-11)
+// typed "turn the specialist reviewers off for the rest of this work" while
+// Code Generation was planning; the setting's state write retired the issued
+// step (its state digest no longer matched), so the guard refused the plan
+// write twice with "no matching v2 code-generation active directive" until a
+// fresh `next`. The step stays current over the write, as it does over
+// set-autonomy: a setting changes how the step runs, not which step it is.
+describe("a setting typed over the step in hand keeps that step current", () => {
+  // The setter `config set <key> <value>` runs (the dispatcher routes it here).
+  const configSet = (proj: string, key: string, value: string): string => {
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "config-change", `--${key}`, value, "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return result.stdout ?? "";
+  };
+  const stateOf = (proj: string): string => readFileSync(seededStateFile(proj), "utf-8");
+  const planFile = (proj: string): string => {
+    mkdirSync(stageDir(proj), { recursive: true });
+    return join(stageDir(proj), "code-generation-plan.md");
+  };
+
+  test("while the plan is written: the plan write still goes through after the setting", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    expect(readActiveDirectiveMarker(proj, stateOf(proj))?.kind).toBe("run-stage");
+    expect(guardWrite(proj, planFile(proj)).code).toBe(0);
+    configSet(proj, "review", "none");
+    expect(stateOf(proj)).toContain("- **Review Override**: none");
+    const kept = readActiveDirectiveMarker(proj, stateOf(proj));
+    expect(kept?.kind).toBe("run-stage");
+    expect(kept?.stage).toBe("code-generation");
+    const write = guardWrite(proj, planFile(proj));
+    expect(write.code, write.stderr).toBe(0);
+    expect(write.stderr).not.toContain("no matching v2 code-generation active directive");
+  });
+
+  test("after approval, with the build issued: a source write goes through, and the review the setting turned off is refused", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "yes");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    const source = join(proj, "src", "slugify.ts");
+    expect(guardWrite(proj, source).code).toBe(0);
+    configSet(proj, "review", "none");
+    const write = guardWrite(proj, source);
+    expect(write.code, write.stderr).toBe(0);
+    // The step in hand was issued with a reviewer; the tool, not the directive,
+    // decides a review: under none its budget is 0.
+    const review = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "review", "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(review.status).not.toBe(0);
+    expect(`${review.stdout}${review.stderr}`).toContain("REVIEW_BUDGET_EXHAUSTED");
+  });
+
+  test("the Guard Policy the person typed keeps the step too, with no plan question open", () => {
+    const proj = project("strict");
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
+    // Their line changes nothing by itself; the setter the agent runs for it
+    // does, and the step in hand is still the step after it.
+    reply(proj, "/aidlc --guard-policy relaxed");
+    expect(stateOf(proj)).toContain("- **Guard Policy**: strict");
+    configSet(proj, "guard-policy", "relaxed");
+    expect(stateOf(proj)).toContain("- **Guard Policy**: relaxed (set by you)");
+    const kept = readActiveDirectiveMarker(proj, stateOf(proj));
+    expect(kept?.kind).toBe("run-stage");
+    expect(guardWrite(proj, planFile(proj)).code).toBe(0);
+  });
+});
+
+// The governance protocol writes a phase-boundary verification report
+// (<record>/verification/<boundary>-verification.md) as the next phase begins.
+// A Codex run wrote the Inception->Construction one while Code Generation was
+// planning and the guard refused it as a workspace path ("Blocked by hook" on
+// the person's screen). It is AI-DLC's own record of a check, not source and
+// not a plan-bound file: admitted while the Code Generation step is current,
+// under the stage diary's fences. Source still waits for the approval.
+describe("the phase-boundary verification report is written while the plan is", () => {
+  const report = (proj: string, drive: "same" | "flipped" = "same"): string => {
+    const target = join(seededRecordDir(proj), "verification", "inception-construction-verification.md");
+    if (drive === "same") return target;
+    return target.replace(/^([A-Za-z]):/, (_m, letter: string) =>
+      `${letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase()}:`);
+  };
+
+  test("a Write under <record>/verification/ goes through at the planning step; a source write still waits", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    const write = guardWrite(proj, report(proj));
+    expect(write.code, write.stderr).toBe(0);
+    const source = guardWrite(proj, join(proj, "src", "other.ts"));
+    expect(source.code).toBe(2);
+    expect(source.stderr).toContain("Code generation cannot modify workspace paths for the zero-Unit stage-level implementation");
+    expect(source.stderr).toContain("Writes inside the selected code-generation record directory remain available for planning.");
+    // The state and the engine's control files are not a report.
+    expect(guardWrite(proj, join(seededRecordDir(proj), "verification", "..", "aidlc-state.md")).code).toBe(2);
+  });
+
+  // VS Code hosts report c:\ where the project dir carries C:; the drive letter
+  // is folded, as the stage diary's is, so the same folder is the same folder.
+  test.skipIf(process.platform !== "win32")("on Windows the report spelled with the other drive-letter case is the same folder", () => {
+    const proj = project();
+    expect(next(proj).plan_approval).toEqual({ status: "plan" });
+    const write = guardWrite(proj, report(proj, "flipped"));
+    expect(write.code, write.stderr).toBe(0);
+  });
+});
+
+// #2551: the router's receipt recovery must survive the actual PreToolUse
+// boundary, including a state write that legitimately retires its old marker.
+describe("Code Generation receipt recovery through the Plan Approval hook", () => {
+  function readyUnit(unitMajor = false): string {
+    const proj = unitProject("unit-a", "unit-b");
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    const state = seededStateFile(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(
+      "- **Guard Policy**: relaxed (set by you)", "- **Guard Policy**: strict (set by you)",
+    ).replace(
+      "## Scope Configuration", "## Runtime State\n- **Revision Count**: 0\n\n## Scope Configuration",
+    ).replace(
+      "### CONSTRUCTION PHASE", "### INCEPTION PHASE\n- [x] units-generation — EXECUTE\n\n### CONSTRUCTION PHASE",
+    ));
+    if (unitMajor) {
+      writeFileSync(state, readFileSync(state, "utf-8")
+        .replace("## Runtime State", "## Runtime State\n- **Construction Iteration**: unit-major")
+        .replace(/^- \[x\] (functional-design|nfr-requirements|nfr-design|infrastructure-design)/gm, "- [S] $1"));
+    }
+    writePlan(proj, "", "unit-a");
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    replyAndRecord(proj, "1", "Approve Plan");
+    expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    const start = `bun .claude/tools/aidlc-state.ts unit start --stage code-generation --unit unit-a`;
+    expect(guardBash(proj, start).code).toBe(0);
+    runInstalled(proj, start);
+    expect(next(proj)).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+    const source = join(proj, "src", "slugify.ts");
+    const write = guardWrite(proj, source);
+    expect(write.code, write.stderr).toBe(0);
+    writeFileSync(source, "export const slugify = (title: string) => title.toLowerCase();\n");
+
+    for (const name of ["code-summary", "traceability"]) {
+      writeFileSync(join(stageDir(proj, "unit-a"), artifactFilename(name)), `# ${name}\nBuilt unit-a.\n`);
+    }
+    const stage = findStageBySlug("code-generation")!;
+    const fields = {
+      Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "1",
+      "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")!,
+    };
+    appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+    appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+    return proj;
+  }
+
+  function codexGuard(proj: string, command: string, toolUseId: string): ReturnType<typeof spawnSync> {
+    return spawnSync(BUN, [join(REPO_ROOT, "dist", "codex", ".codex", "hooks", "aidlc-codex-adapter.ts"), "plan-approval-guard"], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_use_id: toolUseId,
+        tool_name: "Bash", tool_input: { command } }),
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" },
+    });
+  }
+
+  for (const unitMajor of [false, true]) {
+    test(`${unitMajor ? "unit-major" : "stage-major"}: next refreshes retired authority before its exact receipt command is guarded`, () => {
+      const proj = readyUnit(unitMajor);
+      reply(proj, "Use scope-dependent skeleton stance");
+      runInstalled(proj, "bun .claude/tools/aidlc-state.ts set-skeleton-stance scope-dependent");
+      expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
+      const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+      // A Unit's completion is the engine's own command, before `next` as
+      // after: `unit complete` judges the Unit's approved plan itself.
+      const early = guardBash(proj, complete);
+      expect(early.code, early.stderr).toBe(0);
+      expect(early.stderr).toBe("");
+      // To the Codex tree's guard the `.claude` spelling is no installed command
+      // of its own, so the build's check holds it until `next` refreshes the step.
+      const staleCodex = codexGuard(proj, complete, "before-next");
+      expect(staleCodex.status, String(staleCodex.stderr)).toBe(2);
+      const probe = runOrchestrateNext(ORCHESTRATE, proj, [], {
+        env: { ...process.env, AIDLC_ROUTE_CHECK: "1" },
+      });
+      expect(probe.directive).toMatchObject({ kind: "run-stage", unit: "unit-a" });
+      expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
+      const recovered = next(proj) as Emitted & { unit_record_step?: string; gate_note?: string };
+      const admitted = guardBash(proj, complete);
+      expect(admitted.code, admitted.stderr).toBe(0);
+      expect(recovered).toMatchObject({ kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" } });
+      expect(recovered.unit_record_step).toContain(complete);
+      expect(recovered.gate_note).toBe(recovered.unit_record_step);
+      expect(recovered).toMatchObject({ mode: "inline" });
+      expect(recovered).not.toHaveProperty("plan_note");
+      expect(recovered.narration ?? "").not.toContain("Building");
+      const codex = codexGuard(proj, complete, "after-next");
+      expect(codex.status, String(codex.stderr)).toBe(0);
+      // The state command still owns Unit/artifact admission; another Unit has
+      // neither the outputs nor its review and cannot borrow this recovery.
+      const other = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-b", "--project-dir", proj], {
+        cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "0" },
+      });
+      expect(other.status, other.stderr).not.toBe(0);
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-b")).toBe(false);
+      next(proj);
+      runInstalled(proj, complete);
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(true);
+      expect(JSON.stringify(next(proj))).not.toContain("completion is not recorded");
+    });
+
+  }
+
+  for (const missing of [true, false]) {
+    test(`${missing ? "a missing artifact" : "a stale review"} keeps the normal work step`, () => {
+      const proj = readyUnit();
+      const summary = join(stageDir(proj, "unit-a"), "code-summary.md");
+      if (missing) rmSync(summary);
+      else writeFileSync(summary, "# Code summary\nChanged after review.\n");
+      const routed = next(proj);
+      expect(routed).toMatchObject({ kind: "run-stage", plan_approval: { status: "approved" } });
+      expect(routed).not.toHaveProperty("unit_record_step");
+      if (missing) {
+        const result = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-a", "--project-dir", proj], {
+          cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          env: { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "0", AIDLC_SKIP_REVIEWER_GATE_GUARD: "0" },
+        });
+        expect(result.status, result.stderr).not.toBe(0);
+      }
+      expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(false);
+    });
+  }
+
+  test("a changed approved plan routes to approval instead of another refused receipt", () => {
+    const proj = readyUnit();
+    writeFileSync(join(stageDir(proj, "unit-a"), "code-generation-plan.md"),
+      `${readFileSync(join(stageDir(proj, "unit-a"), "code-generation-plan.md"), "utf-8")}\nNew work to approve.\n`);
+    // Review the changed files so the receipt-only candidate still exists.
+    const stage = findStageBySlug("code-generation")!;
+    const fields = { Stage: stage.slug, Unit: "unit-a", Reviewer: stage.reviewer!, Iteration: "2",
+      "Artifact Fingerprint": reviewArtifactFingerprint(proj, stage, "unit-a")! };
+    appendAuditEntry("REVIEW_REQUESTED", fields, proj);
+    appendAuditEntry("REVIEW_COMPLETED", { ...fields, Verdict: "READY" }, proj);
+    const recovered = next(proj);
+    expect(recovered).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    expect(JSON.stringify(recovered)).not.toContain("unit_record_step");
+    // The guard admits the Unit's completion; `unit complete` holds it itself
+    // while the changed plan waits for the person.
+    const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+    const admitted = guardBash(proj, complete);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    expect(admitted.stderr).toBe("");
+    const held = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-a", "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(held.status, held.stderr).not.toBe(0);
+    expect(held.stderr).toContain("The code plan is not approved yet");
+    expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(false);
+  });
+});
+
+// A typed "2" picks Request Changes and says nothing about what to change (on
+// Codex the plan was once revised from "2"): the record keeps their "2" as
+// their words, names no change, and the revision step has none to hand, so the
+// agent asks what should change, once. A change they did say is the agent's
+// reading, passed after the choice, and reaches the revision with no question.
+describe("what to change is what the person said, as the agent read it", () => {
+  const requestChangesRow = (proj: string): string =>
+    auditText(proj).split("\n---\n").find((block) =>
+      block.includes("**Details**: Request Changes") && block.includes("**Checkpoint**: plan-approval")) ?? "";
+
+  test('a typed "2" records Request Changes with no change named, and the revision asks what should change', () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    const recorded = answer(proj, "Request Changes");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(requestChangesRow(proj)).toContain("**Person Reply**: 2");
+    expect(requestChangesRow(proj)).not.toContain("**User Input**");
+    expect(next(proj).plan_approval).toEqual({ status: "revise" });
+  });
+
+  test("a change they asked for, passed after the choice, reaches the revision with their words beside it", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "please add a test for the empty cart");
+    const recorded = answer(proj, "Request Changes: add a test for the empty cart");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(requestChangesRow(proj)).toContain("**User Input**: add a test for the empty cart");
+    expect(requestChangesRow(proj)).toContain("**Person Reply**: please add a test for the empty cart");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "add a test for the empty cart" });
+  });
+
+  test("the stage tells the agent to pass what to change, and to ask when the reply only picked the choice", () => {
+    const text = readFileSync(join(AIDLC_SRC, "aidlc-common", "stages", "construction", "code-generation.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    expect(text).toContain("pass what to change after the choice (`--details 'Request Changes: <what they asked>'`");
+    expect(text).toContain("when their reply only picked Request Changes, ask what should change before you record it");
+    expect(text).not.toContain("a change request uses them as what to change");
+    // Several plans asked about at once: the change that names a Unit goes with it.
+    const grouped = readFileSync(join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol-construction.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    expect(grouped).toContain("record `Request Changes: use Stripe` for that Unit");
   });
 });

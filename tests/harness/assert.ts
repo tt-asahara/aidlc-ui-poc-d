@@ -60,10 +60,6 @@ export function assertToolResultContains(
   }
 }
 
-/**
- * Assert a tool was called at least once (regardless of result content).
- * Useful when you only care that a stage reached a particular tool.
- */
 export function assertToolCalled(result: DriveResult, toolName: string): void {
   const called = result.toolResults.some((t) => t.toolName === toolName);
   if (!called) {
@@ -74,6 +70,26 @@ export function assertToolCalled(result: DriveResult, toolName: string): void {
   }
 }
 
+/**
+ * The person's `--stage` or `--phase` jump took one engine call: the `next`
+ * that reached it returned the target's step, and no shell call ran the jump
+ * tool itself. Stop the drive with `stopAtStep(targetStage)` so the state and
+ * the record are read as that call left them.
+ */
+export function stopAtStep(targetStage: string): { toolName: "Bash"; resultIncludes: string } {
+  return { toolName: "Bash", resultIncludes: `"stage":"${targetStage}"` };
+}
+export function assertJumpInOneCall(result: DriveResult, targetStage: string): void {
+  const shell = result.toolResults.filter((t) => t.toolName === "Bash");
+  const ranJump = shell.find((t) => /aidlc-jump|engine jump/.test(String(t.input.command ?? "")));
+  if (ranJump) fail(`the agent ran the jump itself: ${truncate(String(ranJump.input.command), 240)}`);
+  const step = shell.find((t) => t.resultText.includes(stopAtStep(targetStage).resultIncludes));
+  if (!step) fail(`no engine call returned the ${targetStage} step (saw: ${summarizeToolNames(result)}).`);
+  if (!/\borchestrate(?:\.ts)? next\b/.test(String(step.input.command ?? ""))) {
+    fail(`the ${targetStage} step came from ${truncate(String(step.input.command), 240)}, not the person's next`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Audit-event assertions
 // ---------------------------------------------------------------------------
@@ -81,8 +97,8 @@ export function assertToolCalled(result: DriveResult, toolName: string): void {
 /**
  * Assert the audit log recorded an event of type `event` (e.g. "STATE_FORKED").
  * Reads result.auditEvents, which sdk-drive parsed from the `**Event**:` lines of
- * the audit trail — P4: the per-intent shards under
- * aidlc/spaces/<space>/intents/<slug>-<id8>/audit/, or the flat aidlc-docs/audit.md
+ * the audit trail - the per-intent shards under
+ * aidlc/spaces/<space>/intents/<record>/audit/, or the flat aidlc-docs/audit.md
  * for a pre-migration fixture (sdk-drive's readAuditEvents resolves both). Fails
  * clearly when no audit was written.
  */
@@ -108,8 +124,7 @@ export function assertAuditEvent(result: DriveResult, event: string): void {
 /**
  * Assert the run terminated cleanly: a `result` event arrived, its subtype is
  * 'success', and is_error is false. Reads the SDK's structured terminal event
- * (SDKResultSuccess, sdk.d.ts:3479), NOT a guessed exit code — the old
- * run_claude fixture's exit-124 heuristic is exactly what this replaces.
+ * (its subtype and is_error fields), NOT a guessed exit code.
  */
 export function assertResultOk(result: DriveResult): void {
   // A drive that ran out of time may still hold an earlier result from a turn
@@ -153,8 +168,8 @@ export function assertResultSubtype(result: DriveResult, subtype: string): void 
 
 /**
  * Assert a `- **<field>**: <value>` line in the post-run state file equals
- * `expected` (after trimming). Reads result.stateFile (verbatim contents of
- * aidlc-docs/aidlc-state.md). Fails clearly when the state file is absent or
+ * `expected` (after trimming). Reads result.stateFile (the state file resolved
+ * by sdk-drive's stateFilePathFor). Fails clearly when the state file is absent or
  * the field is missing.
  */
 export function assertStateField(

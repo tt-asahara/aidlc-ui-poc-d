@@ -70,8 +70,8 @@ it this way, never as Request Changes.
 `## Loop-Back Log` whose latest entry has a planned fix but the audit shows
 no matching `STAGE_JUMPED` (Target: code-generation) after it, and no
 unit-tagged `GATE_REJECTED` (Stage: code-generation) for a unit the fix names, the session
-died between logging and jumping — re-execute the jump per the construction
-protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
+died between logging and jumping — re-execute the jump per the loop-back
+protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`),
 "Build-and-Test failure loop-back", rather than re-diagnosing. When the fix
 names several units and only some have that row after it, reopen the others
 the same way before going on. On any resume,
@@ -123,9 +123,10 @@ When resuming, load context appropriate to the current phase and stage type:
 
 **INCEPTION — Requirements stages:**
 - Load RE artifacts (if RE was performed)
-- Load `<record>/inception/requirements-analysis/` (functional requirements, NFRs, user stories)
+- Load `<record>/inception/requirements-analysis/` (functional and non-functional requirements)
+- Load `<record>/inception/user-stories/` (stories and personas) if User Stories ran
 
-**INCEPTION — Design stages (App Design, Refined Mockups, Units Generation):**
+**INCEPTION — Design stages (Refined Mockups, Domain Design, Units Generation, Contract Design):**
 - Load requirements artifacts
 - Load user stories
 - Load `<record>/inception/domain-design/` (component catalogue) and `<record>/inception/contract-design/` (inter-unit contracts)
@@ -174,7 +175,7 @@ never mark the checkbox by hand.
 The PreCompact hook validates state file structure in `aidlc-state.md` before compaction.
 After compaction, the orchestrator can re-read state and continue.
 
-**Note:** PreCompact hooks are informational-only and cannot block compaction. The hook writes a `.aidlc-engine/recovery.md` breadcrumb file recording the last validated state (current stage, timestamp). On session resume, the orchestrator compares this breadcrumb with `aidlc-state.md` to detect possible compaction-related state corruption.
+**Note:** PreCompact hooks are informational-only and cannot block compaction.
 
 ### Corrupted state file recovery
 If `aidlc-state.md` exists but cannot be parsed (missing required sections, invalid checkbox syntax, contradictory state):
@@ -260,6 +261,9 @@ Generation.
 - Apply changes to current stage artifacts
 - Re-present completion message
 
+### Leaving planned work out (within current stage):
+- Do what the person asked and carry on with the rest; in Code Generation, record what was left out as its traceability step says
+
 ### Major changes (affects prior stages):
 1. Identify which prior stages are affected
 2. Present impact analysis to the user via a structured question
@@ -289,6 +293,6 @@ If the user wants to add, remove, or split implementation units mid-workflow:
 If the user requests a change that affects the application architecture (e.g., switching databases, changing deployment model, adding a major integration):
 1. Identify the scope: which design artifacts, story designs, and generated code are affected
 2. Present full impact analysis showing all affected artifacts
-3. If approved, return to App Design stage and re-run from there
+3. If approved, return to the Domain Design stage and re-run from there
 4. All downstream artifacts (story designs, code) for affected units must be regenerated
 5. Preserve unaffected units — do NOT re-run stages for units that are not impacted

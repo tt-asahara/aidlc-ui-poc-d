@@ -8,13 +8,15 @@ import type { OnboardingFills } from "../../scripts/onboarding.ts";
 const fills: OnboardingFills = {
   invoke: "/aidlc",
   slots: {
-    title_block: `# Project Name <!-- Replace with your project name -->
+    title_block: `# AI-DLC
+
+Your project's name, notes and rules go in \`aidlc/spaces/default/memory/project.md\`. Every AI tool in this project reads it.
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **GitHub Copilot harness** (one install serves Copilot CLI and VS Code agent mode). The workspace shell ships in \`.aidlc/\` (no setup command); describe what you want to build and it sets up the workflow for you. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume. Run \`/aidlc compose "<task>"\` to get a plan tailored to that task (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
     prereq_bullets: `- **Copilot CLI ≥ 1.0.74 and/or VS Code ≥ 1.130**: the hook surface this install relies on (PascalCase-registered lifecycle hooks in \`.github/hooks/aidlc.json\`, blocking PreToolUse deny, blocking Stop) and \`.github/{skills,agents}\` discovery are current-line features. Check with \`copilot --version\` / \`code --version\`.
 - **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the shells Copilot spawns.
-- **Folder trust (each Copilot surface checks its own)**: the Copilot CLI runs repo hooks only in a folder its \`trustedFolders\` list covers (this folder or one above it), in \`config.json\` under \`COPILOT_HOME\`, else \`~/.copilot\` (\`%USERPROFILE%\\.copilot\` on Windows); an interactive run asks you to confirm folder trust first. VS Code agent mode never reads that list: its hooks run only in a trusted workspace with the **Chat: Use Hooks** setting on (your organization can switch it off), and a skipped hook leaves no message in the chat. Headless \`copilot -p\` runs ADDITIONALLY need \`GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1\` in the environment; without it every hook silently no-ops. \`/aidlc --doctor\` checks the CLI list and reminds you of the headless variable; it cannot see the VS Code switches.
+- **Folder trust (each Copilot surface checks its own)**: the Copilot CLI runs repo hooks only in a folder its \`trustedFolders\` list covers (this folder or one above it), in \`config.json\` under \`COPILOT_HOME\`, else \`~/.copilot\` (\`%USERPROFILE%\\.copilot\` on Windows); an interactive run asks you to confirm folder trust first. VS Code agent mode never reads that list: its hooks run only in a trusted workspace with the **Chat: Use Hooks** setting on (your organization can switch it off), and a skipped hook leaves no message in the chat. \`/aidlc --doctor\` checks the CLI list; it cannot see the VS Code switches.
 - **Model/provider**: no model is pinned anywhere in this install — agents inherit the session model on both surfaces. On the CLI, BYOK env vars select the provider (e.g. Amazon Bedrock's Anthropic-compatible endpoint via \`COPILOT_PROVIDER_BASE_URL\`/\`COPILOT_PROVIDER_TYPE=anthropic\`; \`copilot help providers\` documents the set); in VS Code, use the model picker or a Custom Endpoint provider.`,
 
     prereq_bullets_tail: "",
@@ -45,16 +47,17 @@ The Copilot-specific guide (install, what differs, verification) is \`docs/guide
     sections_after_resumption: `## Method include (do not remove)
 
 Copilot expands \`@\`-imports in this file (live-verified on the CLI); these lines pull the
-active space's method layers into ambient context (the native include —
-\`/aidlc space <name>\` re-points them in place):
+active space's method layers into ambient context (the native include: they read
+AI-DLC's git-ignored copy of the active space's \`aidlc/spaces/<space>/memory/\`,
+which the engine refreshes at session start and on \`/aidlc space <name>\`):
 
-@aidlc/spaces/default/memory/org.md
-@aidlc/spaces/default/memory/team.md
-@aidlc/spaces/default/memory/project.md
-@aidlc/spaces/default/memory/phases/ideation.md
-@aidlc/spaces/default/memory/phases/inception.md
-@aidlc/spaces/default/memory/phases/construction.md
-@aidlc/spaces/default/memory/phases/operation.md
+@aidlc/active-memory/org.md
+@aidlc/active-memory/team.md
+@aidlc/active-memory/project.md
+@aidlc/active-memory/phases/ideation.md
+@aidlc/active-memory/phases/inception.md
+@aidlc/active-memory/phases/construction.md
+@aidlc/active-memory/phases/operation.md
 `,
   },
 };

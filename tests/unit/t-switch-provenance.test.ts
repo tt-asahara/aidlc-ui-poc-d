@@ -1,4 +1,4 @@
-// covers: function:fencesOffCreationGranted, function:applyTypedGuardSwitchPrompt, function:applyIntentSettings, function:switchOffLine
+// covers: function:fencesOffCreationGranted, function:keepSettingsForNextWork, function:applyIntentSettings, function:switchOffLine
 //
 // Where a switch the person set came from, and where it lands:
 //   - a check typed off with a request reaches the work that request became,
@@ -21,6 +21,7 @@ import {
   createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seededStateFile,
@@ -50,7 +51,6 @@ const CLEAR = {
   AIDLC_UNATTENDED: "0",
 };
 const TYPED = "/aidlc --guard.review-freeze off fix the parser";
-const FOR_THE_REQUEST = "The review freeze check (it stops edits to work you already approved) is off for the work you are asking for (set by you).";
 const FOR_NEW_WORK = "The review freeze check (it stops edits to work you already approved) is off for the new work (set by you).";
 const FOR_WORK_STARTING_NOW = "The review freeze check (it stops edits to work you already approved) is off for the piece of work you start now (set by you).";
 const STARTS_ON = "not off as you typed with the request";
@@ -60,7 +60,6 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop());
 });
 
-/** Open work under a strict Guard Policy, set by the person. */
 function openWork(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -109,7 +108,6 @@ function guardsOff(state: string): string {
   return getField(state, "Guards Off") ?? "";
 }
 
-/** The person's message as their host delivers it to the prompt hook. */
 function reply(proj: string, prompt: string, session = SESSION): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -128,6 +126,14 @@ function reply(proj: string, prompt: string, session = SESSION): string {
     // Plain text output.
   }
   return out;
+}
+
+/** The id of the message the human-turn hook kept for the person's last turn. */
+function lastMessageId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function utility(proj: string, args: string[]): { status: number; stdout: string; stderr: string } {
@@ -157,11 +163,11 @@ function configSet(proj: string, args: string[], session: string | null): { stat
 }
 
 function next(proj: string, args: string[]): { directive: Record<string, unknown> | null; out: string } {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, args, { env: { ...process.env, ...CLEAR } });
+  const options = { env: { ...process.env, ...CLEAR } };
+  const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   return { directive: result.directive as Record<string, unknown> | null, out: result.out };
 }
 
-/** The `next` arguments of an answer command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
@@ -173,7 +179,6 @@ function requestIn(message: unknown, out: string): string {
   return id;
 }
 
-/** Creation as the agent runs it: the plan and request the engine's print names. */
 function createFromPrint(proj: string, step: { directive: Record<string, unknown> | null; out: string }): {
   status: number;
   stdout: string;
@@ -181,11 +186,15 @@ function createFromPrint(proj: string, step: { directive: Record<string, unknown
 } {
   const message = String(step.directive?.message);
   const scope = /--scope ([a-z][a-z-]*)/.exec(message)?.[1];
+  // Every lowering flag the print names rides to creation, as the agent passes it.
+  const flags = [...message.matchAll(/--(guard-policy|guard\.[a-z-]+) (strict|relaxed|on|off)/g)]
+    .flatMap((match) => [`--${match[1]}`, match[2]]);
   return utility(proj, [
     "intent-create",
     "--request",
     requestIn(message, step.out),
     ...(scope === undefined ? [] : ["--scope", scope]),
+    ...flags,
   ]);
 }
 
@@ -220,12 +229,11 @@ function atATerminal(proj: string, args: string[]): { status: number; out: strin
 
 const hasPty = spawnSync("script", ["-qec", "true", "/dev/null"], { encoding: "utf-8" }).status === 0;
 
-/** Everything the person hears from this step: its own line and the kept ones. */
 function heard(proj: string, step: { directive: Record<string, unknown> | null }): string {
-  return `${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
+  const told = Array.isArray(step.directive?.change_notices) ? step.directive.change_notices.map(String) : [];
+  return `${told.join(" ")} ${String(step.directive?.narration ?? "")} ${pendingPersonLines(proj, SESSION).lines.join(" ")}`;
 }
 
-/** Hold the open work at its approval gate, as a person reading its output is. */
 function holdAtGate(proj: string): void {
   const stage = getField(activeState(proj), "Current Stage")!.trim();
   const result = spawnSync(BUN, [STATE, "checkbox", `${stage}=awaiting-approval`, "--project-dir", proj], {
@@ -243,14 +251,20 @@ describe("a check typed off with a request, routed through a second question", (
     const openBefore = readFileSync(join(intents(proj), open, "aidlc-state.md"), "utf-8");
     // The person types the switch with the request while the open work waits at
     // its gate, so the engine keeps their words as that gate's possible answer.
-    expect(reply(proj, TYPED)).toContain(FOR_THE_REQUEST);
+    reply(proj, TYPED);
     const first = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const q1 = requestIn(first.directive?.message, first.out);
-    // The engine asks where the request belongs: a second question.
     const routing = next(proj, ["--request", q1]);
     const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
     expect(ask?.ask_type, routing.out).toBe("new-work-routing");
-    const routed = next(proj, answerArgs(ask?.new_intent_command));
+    // No plan was named with the words, so the separate-work answer reaches the
+    // plan question (the agent's proposal) before the creation; the check rides
+    // that hop to the work it becomes.
+    const offer = next(proj, answerArgs(ask?.new_intent_command));
+    expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    // The person goes ahead with the plan.
+    reply(proj, "1");
+    const routed = next(proj, answerArgs((offer.directive as { confirm_command?: string }).confirm_command));
     expect(heard(proj, routed), routed.out).toContain(FOR_NEW_WORK);
     expect(heard(proj, routed), routed.out).not.toContain(STARTS_ON);
     const made = createFromPrint(proj, routed);
@@ -260,7 +274,6 @@ describe("a check typed off with a request, routed through a second question", (
     // first step says it, as the live run showed it must.
     const onNewWork = next(proj, []);
     expect(heard(proj, onNewWork), onNewWork.out).toContain(FOR_NEW_WORK);
-    // The work the person did not ask about keeps its checks.
     expect(readFileSync(join(intents(proj), open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
   });
 
@@ -270,10 +283,16 @@ describe("a check typed off with a request, routed through a second question", (
     reply(proj, TYPED);
     const first = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const routing = next(proj, ["--request", requestIn(first.directive?.message, first.out)]);
-    const ask = routing.directive as { scope_commands?: Array<{ scope: string; command: string }> } | null;
-    // The person names a plan of their own instead of the proposed one: its
-    // Guard Policy is strict, so only their typed off can lower the check.
-    const strict = ask?.scope_commands?.find((row) => row.scope === "enterprise");
+    const ask = routing.directive as { new_intent_command?: string } | null;
+    // The which-work question named no plan, so its separate-work answer
+    // reaches the plan question first.
+    const offer = next(proj, answerArgs(ask?.new_intent_command));
+    expect(offer.directive?.ask_type, offer.out).toBe("scope-confirm");
+    // The person names a plan of their own there instead of the proposed one:
+    // its Guard Policy is strict, so only their typed off can lower the check.
+    reply(proj, "enterprise");
+    const rows = (offer.directive as { scope_commands?: Array<{ scope: string; command: string }> }).scope_commands;
+    const strict = rows?.find((row) => row.scope === "enterprise");
     const routed = next(proj, answerArgs(strict?.command));
     expect(heard(proj, routed), routed.out).toContain(FOR_NEW_WORK);
     const made = createFromPrint(proj, routed);
@@ -291,7 +310,7 @@ describe("a check typed off with a request, routed through a second question", (
   test("the line survives a question the agent asked in between, and the engine's own question says it", () => {
     const { proj } = oneOpenRecord();
     holdAtGate(proj);
-    expect(reply(proj, TYPED)).toContain(FOR_THE_REQUEST);
+    reply(proj, TYPED);
     // The engine hands the words on, with no line of its own to speak yet.
     const handedOn = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
     const request = requestIn(handedOn.directive?.message, handedOn.out);
@@ -299,35 +318,35 @@ describe("a check typed off with a request, routed through a second question", (
     // what used to drop the line before any step could say it.
     reply(proj, "it's a separate new piece of work");
     const routing = next(proj, ["--request", request]);
-    expect((routing.directive as { ask_type?: string } | null)?.ask_type, routing.out).toBe("new-work-routing");
-    expect(heard(proj, routing), routing.out).toContain(FOR_THE_REQUEST);
+    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    expect(String(ask?.new_intent_command)).toContain("--guard.review-freeze off");
   });
 
-  test("the note tells the agent to say the line, never that it need not", () => {
+  test("the hook says nothing about the check: the flag rides the routing question's answers", () => {
     const { proj } = oneOpenRecord();
-    const note = reply(proj, TYPED);
-    expect(note).toContain(FOR_THE_REQUEST);
-    expect(note).toContain("Say that line to the person in your reply");
-    expect(note).toContain("never run a setter for it");
-    expect(note).not.toContain("need not repeat");
-  });
-
-  test("the person hears the line with the question the engine asks about it", () => {
-    const { proj } = oneOpenRecord();
-    reply(proj, TYPED);
+    expect(reply(proj, TYPED)).not.toContain("AIDLC Guard Policy");
     const routing = next(proj, ["--guard.review-freeze", "off", "--", "fix the parser"]);
-    expect(heard(proj, routing), routing.out).toContain(FOR_THE_REQUEST);
+    const ask = routing.directive as { new_intent_command?: string; continue_command?: string } | null;
+    expect(String(ask?.new_intent_command), routing.out).toContain("--guard.review-freeze off");
+    expect(String(ask?.continue_command), routing.out).toContain("--guard.review-freeze off");
   });
 });
 
 describe("a check typed off before any work exists", () => {
-  test("the person hears it on the step that follows, in every tool", () => {
+  test("next names the setter, the setter keeps it and says so, and the step after says it is kept", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
-    // The agent runs `next`, as its skill says; the line must reach the person
-    // from the engine, not only from a host that shows hook output.
+    expect(reply(proj, "/aidlc --guard.review-freeze off")).not.toContain("AIDLC Guard Policy");
+    // The agent runs `next`, as its skill says; it names the setter, whose line
+    // the agent says, so the person hears it from the engine on every host.
     const step = next(proj, ["--guard.review-freeze", "off"]);
-    expect(heard(proj, step), step.out).toContain(FOR_WORK_STARTING_NOW);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(String(step.directive?.message)).toContain("config set guard.review-freeze off");
+    const kept = configSet(proj, ["guard.review-freeze", "off"], SESSION);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain(FOR_WORK_STARTING_NOW);
+    const after = next(proj, []);
+    expect(String(after.directive?.message), after.out).toContain("is kept for it");
   });
 
   // The live symptom was a switch "spent at creation without applying": the work
@@ -336,7 +355,8 @@ describe("a check typed off before any work exists", () => {
   // quietly turned it back on.
   test("the work it creates records it as theirs even when that plan already lowers the check", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);
@@ -352,7 +372,6 @@ describe("a setter the person runs in their own terminal", () => {
   test.skipIf(!hasPty)("is their own act, and quotes no chat message", () => {
     const proj = openWork();
     reply(proj, ASKED);
-    // The person typed this command at their own terminal.
     const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).not.toContain(ASKED);
@@ -364,15 +383,16 @@ describe("a setter the person runs in their own terminal", () => {
     expect(auditBlockField(disabled[0].block, "Person Reply")).toBeNull();
   });
 
-  test("run by the agent for what they asked in the chat, their words stand behind it", () => {
+  test("run by the agent for what they asked in the chat, the message it names stands behind it", () => {
     const proj = openWork();
-    reply(proj, ASKED);
+    const asked = "turn the state transition check off";
+    reply(proj, asked);
     // The agent's own tool call: pipes, no terminal of theirs behind it.
-    const off = configSet(proj, ["guard.state-transition", "off"], null);
+    const off = configSet(proj, ["guard.state-transition", "off", "--message", lastMessageId(proj)], null);
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`because you said: "${ASKED}"`);
+    expect(off.out).toContain(`because you said: "${asked}"`);
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
-    expect(auditBlockField(disabled[0].block, "Person Reply")).toBe(ASKED);
+    expect(auditBlockField(disabled[0].block, "Person Reply")).toBe(asked);
   });
 });
 
@@ -382,7 +402,9 @@ describe("a setter the person runs in their own terminal", () => {
 describe("a terminal that the person's own tool runs", () => {
   const ASKED = "turn the state transition check off";
   /** `engine config set` as the agent runs it in a host's own terminal. */
-  const inHostTerminal = (proj: string, mark: Record<string, string | undefined>): { status: number; out: string } => {
+  const inHostTerminal = (
+    proj: string, mark: Record<string, string | undefined>, words: string[] = [],
+  ): { status: number; out: string } => {
     const env: Record<string, string | undefined> = {
       ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj,
       // Both ends a terminal, as an integrated terminal is.
@@ -392,7 +414,7 @@ describe("a terminal that the person's own tool runs", () => {
     delete env.AIDLC_SESSION_OVERRIDE;
     delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
     delete env.CODEX_THREAD_ID;
-    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.state-transition", "off", "--project-dir", proj], {
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.state-transition", "off", ...words, "--project-dir", proj], {
       cwd: proj,
       env: env as NodeJS.ProcessEnv,
       encoding: "utf-8",
@@ -407,10 +429,10 @@ describe("a terminal that the person's own tool runs", () => {
     { host: "Cursor", mark: { TERM_PROGRAM: "cursor" } },
     { host: "Copilot", mark: { COPILOT_AGENT_ID: "a1" } },
     { host: "Claude Code", mark: { CLAUDECODE: "1" } },
-  ])("$host: the switch is the agent's, so their own words stand behind it, never 'set by you'", ({ mark }) => {
+  ])("$host: the switch is the agent's, so the message it names stands behind it, never 'set by you'", ({ mark }) => {
     const proj = openWork();
     reply(proj, ASKED);
-    const off = inHostTerminal(proj, mark);
+    const off = inHostTerminal(proj, mark, ["--message", lastMessageId(proj)]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain(`because you said: "${ASKED}"`);
     expect(off.out).not.toContain("set by you.");
@@ -426,15 +448,14 @@ describe("a terminal that the person's own tool runs", () => {
     const refused = inHostTerminal(proj, mark);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain(`To turn the state-transition check off, ask for it in your ${host} chat.`);
-    // No environment variable and no third person in what the person reads.
     expect(refused.out).not.toContain("AIDLC_");
     expect(refused.out).not.toContain("the person");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 });
 
-// Finding 1 from the live runs: the authority rule that stops an agent lowering
-// one of the person's checks was also applied to the person themselves.
+// The authority rule that stops an agent lowering one of the person's checks
+// was also applied to the person themselves.
 describe("a command the person typed, with no turn of theirs on record", () => {
   test.skipIf(!hasPty)("is carried out, not refused, and reads as theirs", () => {
     const proj = openWork();
@@ -442,7 +463,7 @@ describe("a command the person typed, with no turn of theirs on record", () => {
     const off = atATerminal(proj, ["guard.state-transition", "off"]);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("The state transition check (it keeps the engine, not an agent, moving the work along) is off for this piece of work, set by you.");
-    expect(off.out).not.toContain("No reply from the person has arrived");
+    expect(off.out).not.toContain("the message they asked in");
     expect(guardsOff(readFileSync(seededStateFile(proj), "utf-8"))).toContain("state-transition");
     const disabled = readAuditShardEvents(proj).filter((row) => row.event === "GUARD_DISABLED");
     expect(disabled).toHaveLength(1);
@@ -465,54 +486,10 @@ describe("a command the person typed, with no turn of theirs on record", () => {
     const before = readFileSync(seededStateFile(proj), "utf-8");
     const refused = configSet(proj, ["guard.state-transition", "off"], null);
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("No reply from the person has arrived");
+    expect(refused.out).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
+    // No message of theirs is on record, so no retry is named.
+    expect(refused.out).not.toContain("If their message");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-  });
-});
-
-// Finding 2 from the live runs: a flag-shaped word in the request threw the
-// whole prompt away, so the switch was lost and nothing was said.
-describe("a flag-shaped word inside the request", () => {
-  test("is part of what they described, and the switch they typed still applies", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off add a --help flag to the reverser");
-    expect(note).toContain(FOR_THE_REQUEST);
-    const printed = next(proj, ["--scope", "poc", "--", "add a --help flag to the reverser"]);
-    const made = createFromPrint(proj, printed);
-    expect(made.status, made.stderr).toBe(0);
-    expect(guardsOff(activeState(proj))).toContain("review-freeze");
-  });
-
-  // Their switch is readable, so it is carried out: only the part that was not
-  // read is named back, and they are never told to retype what worked.
-  test("before any words, what was read is still carried out and only the rest is named", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
-    expect(note).toContain(FOR_WORK_STARTING_NOW);
-    expect(note).toContain('I could not read "--nonsense". Was that a setting you wanted?');
-    expect(note).not.toContain("Nothing changed");
-    // Two sentences, not one run together: the line before it ends in a stop.
-    expect(note).not.toMatch(/[a-z)] I could not read/);
-    // And it really did apply: the work they start next has the check off.
-    const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
-    const made = createFromPrint(proj, printed);
-    expect(made.status, made.stderr).toBe(0);
-    expect(guardsOff(activeState(proj))).toContain("review-freeze");
-  });
-
-  test("the same setting typed twice with two values is put back to them once", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard-policy relaxed --change-control off");
-    expect(note).toContain("Nothing changed: you typed Guard Policy twice in that command, as relaxed and off.");
-    expect(note).toContain("Which did you mean?");
-  });
-
-  test("a setting with no value after it asks which value they meant", () => {
-    const proj = emptyProject();
-    const note = reply(proj, "/aidlc --guard.review-freeze off --depth");
-    expect(note).toContain('Nothing changed: "--depth" came with no value. Which value did you mean for it?');
-    // AI-DLC could not read it, so it asks: it never tells them what to type.
-    expect(note).not.toContain("Type it again");
   });
 });
 
@@ -523,26 +500,23 @@ describe("a flag-shaped word inside the request", () => {
 describe("a switch typed while the engine's question is open, before any work exists", () => {
   test("brings that question back instead of asking for the work again", () => {
     const proj = emptyProject();
-    // The person described the work, so the engine asked about the plan for it.
     const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
     expect(asked.directive?.kind, asked.out).toBe("ask");
     const question = String(asked.directive?.question ?? "");
     expect(question).toContain("reverses a string");
 
-    // They turn a check off while that question waits.
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
 
-    // The step puts their own question back, rather than asking them to say
-    // what to build when they already have.
     const again = next(proj, []);
     expect(String(again.directive?.narration ?? ""), again.out).not.toContain("Tell me what to build");
     expect(again.directive?.kind, again.out).toBe("ask");
     expect(String(again.directive?.question ?? "")).toContain("reverses a string");
 
-    // Answering it starts the work with the check they turned off.
     const route = (again.directive as { confirm_command?: string; scope_commands?: Array<{ scope: string; command: string }> });
     const command = route.confirm_command ??
       route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    reply(proj, "1");
     const printed = next(proj, answerArgs(command));
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);
@@ -551,9 +525,85 @@ describe("a switch typed while the engine's question is open, before any work ex
 
   test("with nothing of theirs waiting, the step still asks what to build", () => {
     const proj = emptyProject();
-    expect(reply(proj, "/aidlc --guard.review-freeze off")).toContain(FOR_WORK_STARTING_NOW);
+    reply(proj, "/aidlc --guard.review-freeze off");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
     const step = next(proj, []);
     expect(String(step.directive?.narration ?? ""), step.out).toContain("Tell me what to build");
+  });
+});
+
+// A setting the person typed that no parser can read, and nothing else with it:
+// the hook reads no switch at all, so it says nothing. `next` cannot take the
+// token either, and says so to the agent alone: the person is never asked about
+// a name they misspelt, and no stage runs on top of it while they believe a
+// check went off. The agent has their line in the chat and reads what they
+// meant (t-flags-next-does-not-take holds the rule).
+describe("a setting the engine cannot read, typed on its own", () => {
+  test.each([
+    { typed: "--review-freeze", reason: "the guard. prefix is missing" },
+    { typed: "--plan-aprroval", reason: "the name is misspelt" },
+  ])("with work open, the agent is told and nothing of theirs changes ($reason)", ({ typed }) => {
+    const proj = openWork();
+    expect(reply(proj, `/aidlc ${typed} off`)).not.toContain("could not read");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const step = next(proj, [typed, "off"]);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(step.out).not.toContain("could not read");
+    expect(String(step.directive?.message ?? ""), step.out).toContain(`${typed} off`);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("before any work exists, the same print and nothing said to them", () => {
+    const proj = emptyProject();
+    const step = next(proj, ["--plan-aprroval", "off"]);
+    expect(step.directive?.kind, step.out).toBe("print");
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(String(step.directive?.message ?? ""), step.out).toContain("--plan-aprroval off");
+    expect(step.out).not.toContain("could not read");
+  });
+
+  test("a token beside a readable switch: nothing is said to the person, and the agent gets the token", () => {
+    const proj = emptyProject();
+    const note = reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
+    expect(note).not.toContain("could not read");
+    expect(note).not.toContain("AIDLC Guard Policy");
+    const step = next(proj, ["--guard.review-freeze", "off", "--nonsense", "1"]);
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(step.out).not.toContain("could not read");
+    expect(String(step.directive?.message), step.out).toContain("--nonsense");
+  });
+});
+
+// Live on Claude Code: the agent passed a token the engine had just said it could
+// not read to `next` as the work description, the engine offered a plan for
+// "--nonsense 1", and when the person abandoned that offer and described real
+// work, their switch had been spent on the question they walked away from.
+describe("a request made only of a flag-shaped token the engine could not read", () => {
+  test.each(["poc", "enterprise"])("starts no work, and the switch waits for the work they describe (%s)", (scope) => {
+    const proj = emptyProject();
+    reply(proj, "/aidlc --guard.review-freeze off --nonsense 1");
+    expect(configSet(proj, ["guard.review-freeze", "off"], SESSION).out).toContain(FOR_WORK_STARTING_NOW);
+    const step = next(proj, ["--nonsense", "1"]);
+    expect(step.directive?.kind, step.out).not.toBe("ask");
+    // The token is not work, so no plan is offered for it and nothing is said
+    // to the person; the agent reads their line and comes back with their words.
+    expect(step.directive?.narration, step.out).toBeUndefined();
+    expect(String(step.directive?.message ?? ""), step.out).toContain("--nonsense 1");
+    // So their switch is still waiting for the work they describe next.
+    const printed = next(proj, ["--scope", scope, "--", "build the export"]);
+    const made = createFromPrint(proj, printed);
+    expect(made.status, made.stderr).toBe(0);
+    expect(guardsOff(activeState(proj))).toContain("review-freeze");
+  });
+
+  test("a flag-shaped word among real words is still their description", () => {
+    const proj = emptyProject();
+    // One quoted argument, as Kiro IDE's PowerShell hands it over.
+    const step = next(proj, ["--help flag for the reverser"]);
+    expect(step.directive?.kind, step.out).toBe("ask");
+    expect(String(step.directive?.question ?? "")).toContain("--help flag for the reverser");
   });
 });
 
@@ -567,7 +617,7 @@ describe("a ceremony the person typed before any work exists", () => {
   ])("$flag off reaches the work they start next, as theirs ($scope)", ({ flag, field, scope }) => {
     const proj = emptyProject();
     reply(proj, `/aidlc ${flag} off`);
-    // The engine's step says what they set is kept for the work they start next.
+    expect(configSet(proj, [flag.slice(2), "off"], SESSION).status).toBe(0);
     expect(String(next(proj, []).directive?.message)).toContain("is kept for it");
     const printed = next(proj, ["--scope", scope, "--", "build the export"]);
     const made = createFromPrint(proj, printed);
@@ -575,11 +625,12 @@ describe("a ceremony the person typed before any work exists", () => {
     expect(getField(activeState(proj), field)).toBe("off (set by you)");
   });
 
-  // The plain path a person takes on main (issue 1962 F1): they type it, then
-  // describe the work in their own words and answer the plan question.
+  // The plain path a person takes (issue 1962 F1): they type it, then describe
+  // the work in their own words and answer the plan question.
   test("typed, then the work described in their own words: it is still off, and theirs", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --learnings off");
+    expect(configSet(proj, ["learnings", "off"], SESSION).status).toBe(0);
     const asked = next(proj, ["--", "a tiny tool that reverses a string"]);
     expect(asked.directive?.kind, asked.out).toBe("ask");
     const route = asked.directive as {
@@ -587,6 +638,7 @@ describe("a ceremony the person typed before any work exists", () => {
       scope_commands?: Array<{ scope: string; command: string }>;
     };
     const command = route.confirm_command ?? route.scope_commands?.find((row) => row.scope === "poc")?.command;
+    reply(proj, "1");
     const printed = next(proj, answerArgs(command));
     const made = createFromPrint(proj, printed);
     expect(made.status, made.stderr).toBe(0);
@@ -596,6 +648,7 @@ describe("a ceremony the person typed before any work exists", () => {
   test("a flag the agent passes at creation still wins, and is recorded as the command's", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --sensors off");
+    expect(configSet(proj, ["sensors", "off"], SESSION).status).toBe(0);
     const printed = next(proj, ["--scope", "poc", "--", "build the export"]);
     const message = String(printed.directive?.message);
     const made = utility(proj, [
@@ -614,6 +667,7 @@ describe("a ceremony the person typed before any work exists", () => {
   test("the work after it starts at its scope default: the words are spent, not standing", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --sensors off");
+    expect(configSet(proj, ["sensors", "off"], SESSION).status).toBe(0);
     const first = next(proj, ["--scope", "poc", "--", "build the export"]);
     expect(createFromPrint(proj, first).status).toBe(0);
     expect(getField(activeState(proj), "Sensors")).toBe("off (set by you)");

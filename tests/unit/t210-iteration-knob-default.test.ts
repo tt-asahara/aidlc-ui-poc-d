@@ -50,12 +50,18 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -87,11 +93,6 @@ interface Directive {
   [k: string]: unknown;
 }
 
-/**
- * A CLEAN Construction-phase state file pivoted to `current`, in-flight.
- * `iteration`, when set, writes the `Construction Iteration` field under a
- * `## Runtime State` section. `autonomy`, when set, adds the autonomy grant.
- */
 function constructionState(opts: {
   current: string;
   iteration?: string;
@@ -110,6 +111,7 @@ function constructionState(opts: {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 ${autonomyLine}## Scope Configuration
 - **Stages to Execute**: all
@@ -137,7 +139,6 @@ ${autonomyLine}## Scope Configuration
 ${runtimeSection}`;
 }
 
-/** Mark `unit` COVERED for `slug` by writing each artifact in `producesNames`. */
 function coverUnit(
   proj: string,
   unit: string,
@@ -199,7 +200,6 @@ function reviewUnit(proj: string, unit: string): void {
   }
 }
 
-/** Seed a fresh Construction project. Returns the proj dir. */
 function seedProject(opts: {
   current?: string;
   iteration?: string;
@@ -215,7 +215,6 @@ function seedProject(opts: {
   return proj;
 }
 
-/** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string): Directive {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
@@ -230,13 +229,12 @@ function runNext(proj: string): Directive {
 }
 
 // Cover alpha's functional-design produces before `next`, to reach the
-// stage-major "advance to beta" shape.
+// stage-major completion-work shape.
 function coverAlphaFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
   reviewUnit(proj, "alpha");
 }
 
-// Cover both units' functional-design produces, to reach the all-covered gate.
 function coverBothFd(proj: string): void {
   coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
   coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
@@ -244,14 +242,13 @@ function coverBothFd(proj: string): void {
   reviewUnit(proj, "beta");
 }
 
-// Drive `next` for a given knob value at a given coverage state and return the
-// directive. `cover` seeds artifacts before the run.
 function directiveFor(
   iteration: string | undefined,
   cover: (p: string) => void,
 ): Directive {
   const proj = seedProject({ iteration });
   seedBoltDag(proj, ["alpha", "beta"]);
+  seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
   cover(proj);
   return runNext(proj);
 }
@@ -283,9 +280,6 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
   ];
 
   for (const st of STATES) {
-    // 1: field ABSENT and explicit stage-major produce the SAME directive, AND it
-    // matches the known stage-major shape. Deep-equal proves byte-identical
-    // behaviour off the knob.
     test(`1[${st.name}]: absent field == stage-major == known stage-major shape`, () => {
       const absent = directiveFor(undefined, st.cover);
       const stageMajor = directiveFor("stage-major", st.cover);
@@ -295,8 +289,6 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
       expect(absent.gate).toBe(st.expected.gate);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // 2: a JUNK value also reads as stage-major (strict read: only exactly
-    // "unit-major" activates). Deep-equal to the absent-field directive.
     test(`2[${st.name}]: junk value "unit-majorish" reads as stage-major`, () => {
       const absent = directiveFor(undefined, st.cover);
       const junk = directiveFor("unit-majorish", st.cover);

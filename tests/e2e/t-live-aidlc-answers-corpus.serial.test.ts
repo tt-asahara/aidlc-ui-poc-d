@@ -1,0 +1,412 @@
+// covers: file:skills/aidlc/SKILL.md, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, hook:aidlc-record-human-turn
+//
+// t-live-aidlc-answers-corpus: a sample of the answers corpus (tests/fixtures/aidlc-answers/corpus.json) driven through
+// REAL agents on the shipped trees: Claude Code through the SDK, Codex through `codex exec`, Kiro CLI over ACP. The
+// question is asked first by the real agent (a bare `/aidlc` at the fixture's state shows it, the record pick included;
+// the routing question and the plan offer come from the typed line that produces them, so their fixture stops before
+// that line: seedWait in tests/harness/live-gate-fuzz.ts), then the person replies: in chat (the box
+// dismissed with "Chat about this", the reply as their next message), after `/aidlc`, or in the box. At re-entry and a
+// jump the person's own line is the whole exchange.
+// On demand, never in PR CI: AIDLC_ANSWERS_LIVE=1 opens it, and each harness keeps its own live gate
+// (AIDLC_CODEX_EXEC_LIVE, AIDLC_KIRO_ACP_LIVE; Claude needs the `claude` binary). The nightly runs it too, in the
+// Claude SDK family's Linux live job (GitHub Actions with AIDLC_CLAUDE_SDK_LIVE=1, where no switch of its own reaches
+// it): Claude Code only, one item per question by the date rotation (rotateByGroup), and every miss reported, not
+// failed, until NIGHTLY_MISSES_FAIL is true. A drive that throws, a run with no item, or a changed home still fails
+// the file. Scratch projects and scratch homes
+// (the SDK's ephemeral CLAUDE_CONFIG_DIR, the Codex driver's CODEX_HOME, checked before the first prompt); the real
+// homes are hashed before and after, and a change in ~/.claude or ~/.codex fails the file.
+//
+// Pass, per item: the right choice is on the record (`expected.end.recorded`, read from the rows the choice wrote and
+// never from the person's words) with the person's words beside it, the
+// message record keeps their words, nothing is recorded from a non-answer, the person was asked only what the item
+// allows (a question asked twice is a miss), and what the agent told them after their reply matches the meaning and
+// the `says` rubric (a model judge, plain words, no engine terms). A report with a score per question and every miss
+// with its transcript excerpt, and a summary for the nightly report, is written under AIDLC_ANSWERS_REPORT_DIR (default
+// aidlc-answers-live in the run's log folder, AIDLC_TEST_LOG_DIR, else tests/logs).
+//
+// Sample: AIDLC_ANSWERS_SAMPLE = a comma list of item ids, or a number per question (default 2), seeded by
+// AIDLC_ANSWERS_SEED (default 1), from the items with a fixture that wait for nothing and that a fresh chat can meet
+// (liveReply).
+// Harnesses: AIDLC_ANSWERS_HARNESSES (default claude,codex,kiro).
+// The mechanics shared with the input corpus's live check live in tests/harness/live-corpus.ts.
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { LIVE_COMMAND_TIMEOUT_MS, LIVE_SETUP_TIMEOUT_MS, liveCaseTimeoutMs, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+import { execCodex, execCodexResume } from "../harness/exec-drive.ts";
+import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
+import { type AnswerSpec, driveAidlc, type DriveTurnEnd } from "../harness/sdk-drive.ts";
+import {
+  HOMES, PERSON_READS_RULE, ROTATION_START, drivesHome, homeDigest, inNightly, judgeShownQuestion, judgeText, liveGate, liveHarnesses, liveItem,
+  liveProject, nightOf, rotateByGroup, sampleByGroup, writeLiveReport,
+  type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
+} from "../harness/live-corpus.ts";
+import { codexWords } from "../harness/aidlc-input-corpus.ts";
+import {
+  ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
+} from "../harness/aidlc-answers-corpus.ts";
+import { openingLine, seedWait } from "../harness/live-gate-fuzz.ts";
+import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { planApprovalAskState } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
+
+setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
+
+const NIGHTLY = inNightly();
+// The nightly reports its misses until a month of them reads clean; true makes a miss fail it, as on demand.
+const NIGHTLY_MISSES_FAIL = false;
+const REPORT_ONLY = NIGHTLY && !NIGHTLY_MISSES_FAIL;
+const NIGHT = nightOf(new Date());
+const LIVE = process.env.AIDLC_ANSWERS_LIVE === "1" || NIGHTLY;
+const HARNESSES: LiveHarness[] = NIGHTLY ? ["claude"] : liveHarnesses(process.env.AIDLC_ANSWERS_HARNESSES, "AIDLC_ANSWERS_HARNESSES");
+const CASE_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS);
+// The run's log folder outlives the runner's checkout of this file; the nightly uploads it.
+const REPORT_DIR = process.env.AIDLC_ANSWERS_REPORT_DIR ?? join(process.env.AIDLC_TEST_LOG_DIR ?? join(REPO_ROOT, "tests", "logs"), "aidlc-answers-live");
+const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "set AIDLC_ANSWERS_LIVE=1 to drive the answers corpus through real agents (spends tokens)");
+
+// Items a real agent can be driven through: a fixture exists, nothing is waited for, and the reply is one a person can
+// give in a live chat (a dismissed box is the unit check's). Codex and Kiro CLI have no question box, so picker items
+// stay with Claude Code; a `$aidlc` line is Codex's. A question asked in chat is met only by its `/aidlc` replies
+// (ASKED_IN_CHAT says which, and why), and guard recovery not at all (liveReply).
+function eligible(harness: LiveHarness): AnswersItem[] {
+  return ANSWERS.filter((item) =>
+    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null && liveReply(item) &&
+    !(item.via === "picker" && (item.picker?.answer === null || item.picker?.answer === "" || harness !== "claude")) &&
+    !(item.via === "codex" && harness !== "codex"));
+}
+const sample = (harness: LiveHarness): AnswersItem[] => NIGHTLY
+  ? rotateByGroup(eligible(harness), NIGHT, (item) => item.question)
+  : sampleByGroup(eligible(harness), process.env.AIDLC_ANSWERS_SAMPLE ?? "2", process.env.AIDLC_ANSWERS_SEED, (item) => item.question);
+const SAMPLE_LINE = NIGHTLY
+  ? `Sample: the nightly's one item per question, night ${NIGHT} of the rotation from ${ROTATION_START} (${new Date().toISOString().slice(0, 10)}).`
+  : `Sample: ${process.env.AIDLC_ANSWERS_SAMPLE ?? "2"} per question, seed ${process.env.AIDLC_ANSWERS_SEED ?? "1"}.`;
+
+const before = new Map<string, HomeDigest>();
+const outcomes: LiveOutcome<AnswersItem>[] = [];
+
+// What the project held before the person replied: the records, how long the audit was, and how many rows of each
+// event the fixture itself carries (a gate fixture holds its own summary confirmation, say): only rows after that are
+// the reply's.
+interface Start { records: number; active: string | null; stage: string | null; events: number; rowsBefore: Record<string, number> }
+const RECORD_EVENTS = ["PLAN_APPROVAL_RECORDED", "GATE_APPROVED", "GATE_REJECTED", "REQUEST_ROUTED", "ARTIFACT_REUSED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
+const ANSWER_EVENTS = ["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED"];
+const startOf = (proj: string): Start => ({
+  records: listIntents(proj).length,
+  active: listIntents(proj).find((i) => i.active)?.slug ?? null,
+  stage: existsSync(stateFilePath(proj)) ? getField(readFileSync(stateFilePath(proj), "utf-8"), "Current Stage") : null,
+  events: readAuditShardEvents(proj).length,
+  rowsBefore: Object.fromEntries(RECORD_EVENTS.map((event) => [event, rows(proj, event).length])),
+});
+const rowsAfter = (proj: string, start: Start, event: string) => rows(proj, event).slice(start.rowsBefore[event] ?? 0);
+
+// The choice on record now, as the item's `end.recorded` names it: the audit rows the answer commands write and the
+// engine's own Plan Approval question, never a reading of the person's words (a decision reaches the engine when its
+// row does). A routing reply leaves no row of its own: separate new work is a new record, and "part of this work" is
+// the open work carrying on (rows after the reply, no new record).
+function recordedNow(item: AnswersItem, proj: string, start: Start): string {
+  const since = (event: string) => rowsAfter(proj, start, event).length > 0;
+  const intents = listIntents(proj);
+  const fresh = intents.length > start.records ? intents.at(-1) : undefined;
+  switch (item.question) {
+    case "routing":
+      // Folding the words into the open work leaves no row of its own (see workCarriedOn); dropping them leaves none either.
+      if (fresh) return "Separate new piece of work";
+      if (since("REQUEST_ROUTED")) return "Reshape the active work";
+      return "none";
+    case "plan-offer":
+    case "scope-confirm":
+      if (fresh) return fresh.scope === "bugfix" ? 'Go ahead with the "bugfix" plan' : `A different plan (${fresh.scope ?? "?"})`;
+      return "none";
+    case "intent-pick": {
+      const active = intents.find((i) => i.active)?.slug ?? null;
+      return active !== null && active !== start.active ? active : "none";
+    }
+    case "unit-paused":
+      if (readAuditShardEvents(proj).slice(start.events).some((e) => e.event === "UNIT_RESUMED")) return "Resume";
+      break;
+    case "resume-reentry":
+    case "jump-target": {
+      if (fresh) return "fresh";
+      const stage = existsSync(stateFilePath(proj)) ? getField(readFileSync(stateFilePath(proj), "utf-8"), "Current Stage") : null;
+      if (stage !== null && stage !== start.stage) return `jump ${stage}`;
+      break;
+    }
+    default:
+      break;
+  }
+  // The project-type answer reclassifies the workspace: the row names the new type, with the person as its source.
+  if (item.question === "project-type") {
+    const row = readAuditShardEvents(proj).slice(start.events).findLast((e) => e.event === "WORKSPACE_RECLASSIFIED");
+    if (row) return /New Project Type\*\*: Brownfield/.test(row.block) ? "Yes, it is existing code" : "No, it stays a new project";
+  }
+  if (since("PLAN_APPROVAL_RECORDED")) return "approved plan";
+  // Request Changes and the edit choice land on the Plan Approval question's own record, with no row.
+  if (item.question === "code-plan" || item.question === "code-plan-grouped") {
+    const plan = planApprovalAskState(proj);
+    if (plan === "editing") return "I'll edit the files";
+    if (plan === "answered") return "Request Changes";
+  }
+  const approved = rowsAfter(proj, start, "GATE_APPROVED").at(-1);
+  if (approved) return /^accept as-is/i.test(approved["User Input"] ?? "") ? "Accept as-is" : "Approve";
+  if (since("GATE_REJECTED")) return "Request Changes";
+  if (since("REQUEST_ROUTED")) return "routed";
+  if (since("ARTIFACT_REUSED")) return rowsAfter(proj, start, "ARTIFACT_REUSED").at(-1)?.Decision ?? "reused";
+  // The agent's answer command lands on a row named for the question (a summary confirmation, a verification command, a
+  // Construction policy) or on QUESTION_ANSWERED; the row carries the choice.
+  const answered = ANSWER_EVENTS.flatMap((event) => rowsAfter(proj, start, event)).at(-1);
+  if (answered) return answered.Choice ?? answered.Details ?? answered.Decision ?? "answered";
+  return "none";
+}
+// True once the choice the item expects is on record: the drive stops at that point. Nothing is reached before the
+// person's reply (`replyFrom`, the audit's length when it was sent): the work carrying on is counted from there, so the
+// chat's own opening rows are not read as the reply's. A non-answer the agent read past carries on too, which the judge
+// of the words catches.
+function endReached(item: AnswersItem, proj: string, start: Start, replyFrom: number | null): boolean {
+  const end = item.expected.end;
+  if (end.recorded === "none" || replyFrom === null) return false;
+  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start.records, replyFrom);
+  const now = recordedNow(item, proj, start);
+  if (now === "none") return false;
+  if (end.recorded === "first stage" || end.recorded === "jump") return now.startsWith("jump");
+  return now.toLowerCase().includes(end.recorded.toLowerCase().split(" ")[0]) || end.recorded.toLowerCase().includes(now.toLowerCase());
+}
+// How many questions the item allows after the reply. A non-answer (an empty line or a dismissed box: the corpus
+// keeps no words for it) leaves the question standing, so showing it again is not asking twice.
+const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
+const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
+
+function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start, replyFrom: number | null): { failures: string[]; endSummary: string } {
+  const failures: string[] = [];
+  const end = item.expected.end;
+  const now = recordedNow(item, proj, start);
+  const asked = transcript.asks ?? 0;
+  // A question the item allows pauses the work there: the end state is owed only when the agent did not stop to ask.
+  const paused = asked > 0 && asked <= asksAllowed(item);
+  const record = messageRecord(proj, typed);
+  if (record === null) failures.push("no message record for the typed line");
+  else if (record.text.trim() !== typed.trim()) failures.push(`record text ${JSON.stringify(record.text)} is not the typed line`);
+  if (end.recorded === "none") {
+    if (now !== "none") failures.push(`a choice was recorded (${now}) where the item records none`);
+  } else if (!paused) {
+    if (!endReached(item, proj, start, replyFrom)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
+    if (end.words && item.via !== "picker") {
+      const words = typed.replace(/^[/$]aidlc\s*/, "");
+      const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
+      const kept = recorded(proj, item).words ?? "";
+      const onRow = [row?.["Person Reply"], row?.["User Input"], row?.Feedback, row?.Reply].some((v) => (v ?? "").includes(words));
+      if (!onRow && !kept.includes(words)) failures.push(`the person's words ${JSON.stringify(words)} are not on the record beside the choice`);
+    }
+  }
+  const state = existsSync(stateFilePath(proj)) ? readFileSync(stateFilePath(proj), "utf-8") : "";
+  for (const [field, value] of paused ? [] : end.set ?? []) {
+    const name = SETTING_FIELDS[field] ?? field;
+    const got = getField(state, name) ?? "";
+    if (!got.toLowerCase().includes(value.toLowerCase())) failures.push(`${name}: ${JSON.stringify(got)}, expected to contain ${JSON.stringify(value)}`);
+  }
+  if (end.parked && !paused && (getField(state, "Status") ?? "").toLowerCase() !== "parked") failures.push(`the work was not parked (Status ${JSON.stringify(getField(state, "Status") ?? "")})`);
+  if (transcript.asks !== null && transcript.asks > asksAllowed(item)) failures.push(`${transcript.asks} question(s) to the person, ${asksAllowed(item)} allowed (asked twice)`);
+  return { failures, endSummary: `recorded ${now}; asks ${transcript.asks ?? "?"}` };
+}
+
+// A picker reply as the person gives it: the option when the answer is one of the options shown (its "(Recommended)"
+// tag aside), else their own words typed into the box's free-text field.
+const DECORATED = /\s*\((Recommended|Default)\)\s*$/i;
+function pickerSpec(item: AnswersItem): { spec: AnswerSpec; label: string | null } {
+  const answer = item.picker?.answer ?? item.input;
+  const label = answer.replace(DECORATED, "");
+  const offered = (item.picker?.options ?? []).some((o) => o.replace(DECORATED, "") === label);
+  return offered ? { spec: { labelContains: label }, label } : { spec: { text: answer }, label: null };
+}
+
+// The agent's first turn must show the item's question: when it showed another question, or none, the reply answers
+// nothing this item judges, and the line says what was shown instead. A model reads what was shown (the box and its
+// options where there was one), as a person would; a judge that gives no verdict leaves the item to be judged.
+// The choice the corpus names most often for a question: the most stable wording the agent shows.
+const USUAL_CHOICE = new Map<string, string>();
+for (const question of [...new Set(ANSWERS.map((i) => i.question))]) {
+  const counts = new Map<string, number>();
+  for (const item of ANSWERS) if (item.question === question && item.expected.end.recorded !== "none") counts.set(item.expected.end.recorded, (counts.get(item.expected.end.recorded) ?? 0) + 1);
+  const usual = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (usual !== undefined) USUAL_CHOICE.set(question, usual);
+}
+function showsQuestion(item: AnswersItem, firstText: string): string | null {
+  const want = item.expected.end.recorded;
+  if (want === "none") return null;
+  const usual = USUAL_CHOICE.get(item.question) ?? want;
+  const what = `the ${item.question.replace(/-/g, " ")} question, whose choices include ${JSON.stringify(want)}${usual === want ? "" : ` or ${JSON.stringify(usual)}`}`;
+  const verdict = judgeShownQuestion(what, firstText, judgeDir);
+  if ("failure" in verdict || verdict.shown) return null;
+  return `setup: the agent did not show the ${item.question} question (${verdict.reason}); it said: ${JSON.stringify(firstText.trim().slice(-300))}`;
+}
+
+/** What the person says first so the agent shows the question: a bare /aidlc re-enters the open work and shows the
+ * question open there; the routing question and the plan offer are the engine's reply to a typed line, which opens
+ * them (openingLine); null where the item's own line is the whole exchange. */
+const FIRST_PROMPT: Partial<Record<AnswersItem["question"], string | null>> = {
+  "resume-reentry": null,
+  "jump-target": null,
+  ...Object.fromEntries([...ASKED_IN_CHAT].map((question) => [question, null])),
+};
+function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
+  const line = openingLine(item.question) ?? (item.question in FIRST_PROMPT ? FIRST_PROMPT[item.question] ?? null : "/aidlc");
+  return line === null ? null : harness === "codex" ? line.replace(/^\/aidlc/, "$aidlc") : line;
+}
+
+// Each driver's person-turn ledger refuses a drive whose decisions no turn of the person backs (a reply or a box
+// submission backs one decision per question it answered: one reply that approves every plan of a group writes one row
+// per plan). That is the drive's accounting, reported as such; the item is not judged.
+const ledgerRefusal = (e: unknown): e is Error => e instanceof Error && /recorded \d+ decision\(s\) as the person's/.test(e.message);
+
+const REAL_CODEX_HOME = join(homedir(), ".codex");
+// Answering one question takes the agent a handful of tool calls; a drive still running past this many after the reply
+// has left the question behind (a runaway into later stages), and what it did there is not what the item judges.
+const REPLY_TOOL_BUDGET = 30;
+let judgeDir = "";
+async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutcome<AnswersItem>> {
+  // Codex has no /aidlc skill: the same line is typed as `$aidlc` there, as the input corpus's live check does.
+  const typed = harness === "codex" ? typedPrompt(item).replace(/^\/aidlc/, "$aidlc") : typedPrompt(item);
+  const first = firstPrompt(item, harness);
+  const { proj, home, cleanup } = liveProject(harness);
+  const driveFailures: string[] = [];
+  // What the person said as the record keeps it: the typed line, or for a picker reply the label the box offered.
+  let said = typed;
+  let firstText = "";
+  try {
+    await seedWait(proj, item.question);
+    const start = startOf(proj);
+    // Where the person's reply starts in the audit; with no first line, their line is the reply.
+    let replyFrom: number | null = first === null ? start.events : null;
+    const replying = () => {
+      replyFrom ??= readAuditShardEvents(proj).length;
+    };
+    let transcript: Transcript;
+    if (harness === "claude") {
+      // Turn 1: the agent shows the open question. The person does not use the box when they reply in chat or after
+      // /aidlc ("Chat about this"), and their line is turn 2; a picker reply answers the box in turn 1. Every box after
+      // the person's own answer is a question put to them after it: it stays open (the drive never answers for them,
+      // which would approve or pick on their behalf), and the turn ends there. The drive also ends one tool call after
+      // the choice is on record (the agent says its line to the person between that step and its next tool call, and
+      // would then carry on into work this item does not judge), or after REPLY_TOOL_BUDGET tool calls past the reply.
+      let firstTurn: DriveTurnEnd | undefined;
+      let reachedAt: number | null = null;
+      let boxes = 0;
+      const picker = pickerSpec(item);
+      const r = await driveAidlc(first ?? typed, {
+        projectDir: proj,
+        permissionMode: "bypassPermissions",
+        chatAboutQuestionWhen: () => {
+          boxes += 1;
+          if (item.via === "picker" && boxes === 1) replying();
+          return item.via !== "picker" || boxes > 1;
+        },
+        answerScript: { kind: "sequence", specs: [picker.spec] },
+        nextMessage: (turn) => {
+          if (first === null || firstTurn !== undefined || item.via === "picker") return undefined;
+          firstTurn = turn;
+          replying();
+          return typed;
+        },
+        stopWhen: (results) => {
+          if (reachedAt === null && endReached(item, proj, start, replyFrom)) reachedAt = results.length;
+          const replied = item.via === "picker" ? boxes > 0 : firstTurn !== undefined;
+          const since = results.length - (item.via === "picker" ? 0 : (firstTurn?.toolResults ?? 0));
+          return (reachedAt !== null && results.length > reachedAt + 1) || (replied && since > REPLY_TOOL_BUDGET);
+        },
+        timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS),
+      });
+      // What the person read after their reply: the prose after turn 1 (chat), or after the box they answered (picker);
+      // every box after the question itself is a question put to the person after their reply.
+      const boxesBefore = item.via === "picker" ? Math.min(1, r.askedQuestions.length) : (firstTurn?.askedQuestions ?? 0);
+      const shown = item.via === "picker" ? (r.askedQuestions.length > 0 ? (r.assistantTextBeforeFirstAsk ?? "").length : 0) : (firstTurn?.assistantText.length ?? 0);
+      firstText = [r.assistantText.slice(0, shown), ...r.askedQuestions.slice(0, boxesBefore).flatMap((q) => q.questions.flatMap((x) => [x.question, ...x.options.map((o) => o.label)]))].join("\n");
+      transcript = {
+        tools: r.toolResults.map((t) => `${t.toolName} ${JSON.stringify(t.input).slice(0, 200)} -> ${t.resultText.slice(0, 200)}`),
+        text: [r.assistantText.slice(shown), ...r.askedQuestions.slice(boxesBefore).flatMap((q) => q.questions.map((x) => `Question to the person: ${x.question} [${x.options.map((o) => o.label).join(" / ")}]`))].join("\n"),
+        asks: r.askedQuestions.length - boxesBefore,
+      };
+      // The driver falls back to the first option when the box offers no such label: that is the drive's doing, named as such.
+      const box = r.askedQuestions[0];
+      if (item.via === "picker" && box !== undefined) {
+        const picked = Object.values(box.answers).flat().join(" / ");
+        if (picked !== "") said = picked;
+        if (picker.label !== null && !picked.includes(picker.label)) driveFailures.push(`drive: the box offered [${box.questions.flatMap((q) => q.options.map((o) => o.label)).join(" / ")}] and the driver picked ${JSON.stringify(picked)}, not ${JSON.stringify(picker.label)}`);
+      }
+    } else if (harness === "codex") {
+      // Scratch home only: the drive's CODEX_HOME must not be the person's.
+      if (home === undefined || home === REAL_CODEX_HOME) throw new Error(`the Codex drive has no scratch home (${home ?? "none"})`);
+      if (first !== null) firstText = codexWords(execCodex(proj, home, first).out);
+      replying();
+      const r = first === null ? execCodex(proj, home, typed) : execCodexResume(proj, home, typed);
+      transcript = { tools: [], text: codexWords(r.out), asks: null, raw: r.out };
+    } else {
+      // One live ACP session for both turns: the agent shows the question, then reads the person's reply in the same chat.
+      const session = new AcpSession(proj, "aidlc", true);
+      try {
+        if (first !== null) firstText = (await driveKiroAcp({ projectDir: proj, prompt: first, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) })).assistantText;
+        replying();
+        const r = await driveKiroAcp({ projectDir: proj, prompt: typed, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) });
+        transcript = { tools: r.toolCalls.map((t) => `${t.title ?? ""} ${JSON.stringify(t).slice(0, 300)}`), text: r.assistantText, asks: null };
+      } finally {
+        session.close();
+      }
+    }
+    // The questions put to the person: the boxes the driver saw, and the questions the judge reads in the prose (the
+    // only kind on Codex and Kiro CLI, and what Claude's agent asks when it does not open a box).
+    const words = await judgeText({ typed: said, meaning: item.meaning, asksAllowed: asksAllowed(item), says: item.expected.end.says, engineWords: PERSON_READS_RULE }, transcript.text, judgeDir);
+    if (words.asked !== null) transcript.asks = Math.max(transcript.asks ?? 0, words.asked);
+    const { failures, endSummary } = judge(item, proj, said, transcript, start, replyFrom);
+    if (words.failure !== null) failures.push(words.failure);
+    const setup = first === null ? null : showsQuestion(item, firstText);
+    // A reply to a question the agent never showed judges nothing about the reply: the setup line stands alone.
+    return { item, harness, prompt: said, failures: setup !== null ? [setup, ...driveFailures] : [...driveFailures, ...failures], endSummary, transcript: { ...transcript, text: `[shown first]\n${firstText}\n[after the reply]\n${transcript.text}` } };
+  } catch (e) {
+    if (ledgerRefusal(e)) {
+      return { item, harness, prompt: said, failures: [`drive: ${e.message.replace(/\s+/g, " ").trim()}`], endSummary: "drive aborted by its ledger", transcript: { tools: [], text: firstText, asks: null } };
+    }
+    throw e;
+  } finally {
+    cleanup();
+  }
+}
+
+beforeAll(() => {
+  for (const home of HOMES) before.set(home, homeDigest(home));
+  judgeDir = mkdtempSync(join(tmpdir(), "aidlc-answers-judge-"));
+  mkdirSync(join(judgeDir, "config"), { recursive: true });
+});
+afterAll(() => {
+  const summaries = writeLiveReport({
+    dir: REPORT_DIR, title: "Live answers corpus", outcomes, groupName: "question", group: (o) => o.item.question,
+    recordMeans: "wrong or missing record: the choice recorded, the person's words beside it, a setting, the typed line", label: (o) => `${o.item.question} ${o.item.via}`,
+    sampleLine: SAMPLE_LINE, reportOnly: REPORT_ONLY,
+    homes: before, drives: (home) => drivesHome(home, HARNESSES),
+  });
+  for (const s of summaries) {
+    console.log(`Answers corpus, ${s.harness}: ${s.passed} of ${s.items} passed; misses: setup ${s.misses.setup}, record ${s.misses.record}, question ${s.misses.question}, words ${s.misses.words}. ${s.sample} Report: ${REPORT_DIR}`);
+  }
+  if (judgeDir) rmSync(judgeDir, { recursive: true, force: true });
+  if (!LIVE) return;
+  // The judge's own claude -p runs under its own config dir, so ~/.claude is owed unchanged on every run; a driven
+  // Codex home too. Kiro CLI writes its own session data under ~/.kiro while it runs, so that home is reported, not asserted.
+  for (const home of HOMES.filter((h) => !h.endsWith(".kiro") && drivesHome(h, HARNESSES))) {
+    const was = before.get(home);
+    if (was) expect(homeDigest(home).digest, `${home} changed during the live run`).toBe(was.digest);
+  }
+});
+
+for (const harness of HARNESSES) {
+  const reason = gate(harness);
+  describe(`${harness}: the answers corpus through a real agent`, () => {
+    if (reason !== null) {
+      test.skip(`skipped: ${reason}`, () => {});
+      return;
+    }
+    for (const item of sample(harness)) {
+      test(`${item.id} ${item.question} ${item.via} ${JSON.stringify(item.input)}`, async () => {
+        const { outcome, owed } = await liveItem(() => drive(harness, item), outcomes, REPORT_ONLY);
+        expect(owed, `${item.meaning}\n${outcome.transcript.text.slice(-800)}`).toEqual([]);
+      }, CASE_TIMEOUT_MS);
+    }
+  });
+}

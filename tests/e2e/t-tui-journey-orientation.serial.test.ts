@@ -8,8 +8,8 @@
 // `<space> · <intent> · <phase>` orientation prefix as a persistent cwd-style
 // breadcrumb, so work never lands in the wrong space.
 //
-// WHY THIS IS THE NET-NEW RENDER ASSERTION (verified 2026-06-19):
-//   - The deterministic twin t168 already SPAWNS the shipped hook directly and
+// WHY THIS IS A RENDER ASSERTION:
+//   - The deterministic twin t168 SPAWNS the shipped hook directly and
 //     asserts the `teamB · export-bug · CONSTRUCTION` two-space string — so the
 //     prefix LOGIC is unit-proven token-free. What t168 CANNOT prove is that the
 //     prefix survives the real TUI render path (the host pipes the workspace
@@ -19,24 +19,24 @@
 //     fixture (setupTuiProject with no secondSpace), so its statusline never
 //     paints the `<space> ·` segment — it matches `[AIDLC].*IDEATION` loosely and
 //     asserts the bar/counter/stage, never the orientation prefix. So the
-//     >1-space orientation paint is genuinely net-new here, riding the new
-//     `secondSpace` fixture variant (tui-fixtures.ts).
+//     >1-space orientation paint rides the `secondSpace` fixture variant
+//     (tui-fixtures.ts).
 //
 // HARNESS MATRIX — Claude TUI ONLY, by surface limitation (stated, not faked):
 //   The orientation prefix is the aidlc-statusline.ts hook, wired ONLY through
-//   Claude Code's settings.json `statusLine` key (dist/claude/.claude/
-//   settings.json). Kiro has NO statusline surface at all — dist/kiro/AGENTS.md
+//   Claude Code's `statusLine` key, in the person's own .claude/settings.local.json
+//   once they choose AI-DLC's status line (#1407; the fixture's person has). Kiro has NO statusline surface at all: dist/kiro/AGENTS.md
 //   and harness/kiro/skills/aidlc/SKILL.md both state "there is no statusline;
 //   use /aidlc --status and the progress lines at gates", and dist/kiro ships
-//   aidlc-statusline.ts but nothing invokes it as a status row. Codex likewise
-//   has no statusline host (and no TUI surface — tui-drive.ts has zero codex
-//   awareness). So the render-half statusline-orientation matrix is Claude-only:
-//   there is no Kiro/Codex statusline pane to scrape. A Kiro-TUI sibling was NOT
-//   written because the surface it would assert against does not exist — mirror
-//   the plan's "stated, not faked" honesty rather than a hollow skip. The Kiro
-//   render path IS exercised (read-only status through the print-directive arm)
-//   by t-tui-kiro-status.serial; that surfaces the same scope/stage strings, but
-//   in the chat transcript, not a statusline.
+//   aidlc-statusline.ts but nothing invokes it as a status row. Codex has no
+//   host for the aidlc-statusline.ts hook (its native status row is fed by
+//   `update_plan`, per the Codex SKILL.md) and no TUI surface (tui-drive.ts has
+//   zero codex awareness). So the render-half statusline-orientation matrix is
+//   Claude-only: there is no Kiro/Codex statusline pane to scrape, and no
+//   Kiro-TUI sibling was written because the surface it would assert against
+//   does not exist. The Kiro render path IS exercised (read-only status) by
+//   t-tui-kiro-status.serial; that surfaces the same scope/stage strings, but in
+//   the chat transcript, not a statusline.
 //
 // COST: launches the claude TUI but submits NO prompt — it reaches the workflow
 // statusline purely from the seeded per-intent state file (state-mid-ideation),
@@ -63,7 +63,7 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
   : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 const DRIVER = join(import.meta.dir, "../harness/tui-drive.ts");
-const ABSENT_REASON = absentReason({ command: ["claude", "--dangerously-skip-permissions"] });
+const ABSENT_REASON = absentReason({ command: ["claude", "--setting-sources", "project,local", "--dangerously-skip-permissions"] });
 
 describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you are here')", () => {
   const sampleCount = process.platform === "win32" ? 3 : 1;
@@ -76,7 +76,7 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
         { length: sampleCount },
         (_, index) => captureOrientationStatusline(index + 1, {
           driver: DRIVER,
-          command: ["claude", "--dangerously-skip-permissions"],
+          command: ["claude", "--setting-sources", "project,local", "--dangerously-skip-permissions"],
           deadlineMs,
           reserveMs,
         }),
@@ -87,8 +87,8 @@ describe("t-tui-journey-orientation (live Claude TUI — the render-half 'you ar
 
   // The full orientation prefix: space token (because >1 space) + intent slug +
   // phase, in the `<space> · <intent> · <phase>` order the builder emits. This is
-  // the genuinely-new render assertion — no existing TUI test scrapes the space
-  // segment (t-tui-render-statusline seeds a single space).
+  // the render assertion the sibling t-tui-render-statusline cannot make: it seeds
+  // a single space, so its statusline never paints the space segment.
   test.skipIf(ABSENT_REASON !== null)(
     `paints the "default · fixture · IDEATION" orientation prefix (>1 space)${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {

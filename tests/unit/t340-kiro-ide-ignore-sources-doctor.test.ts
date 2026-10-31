@@ -63,7 +63,7 @@ const READS = [
   "knowledge/aidlc-architect-agent/patterns.md",
 ];
 const NON_READS = [
-  "agents/aidlc.md",
+  "agents/aidlc-aidlc.md",
   "skills/aidlc/SKILL.md",
   "aidlc-common/conductor.md",
   "aidlc-common/protocols/stage-definition.md",
@@ -193,10 +193,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     };
 
     const cli = run();
-    expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+    expect(cli).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
     expect(cli).not.toContain("Kiro IDE ignore sources:");
 
-    writeFileSync(join(project, ".kiro", "agents", "aidlc.md"), "# AI-DLC conductor\n");
+    writeFileSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"), "# AI-DLC conductor\n");
     const ide = run();
     expect(ide).toContain(`fail  Kiro IDE ignore sources: ${XDG_IGNORE}:1 hides .kiro/`);
   });
@@ -522,7 +522,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     for (const rule of [
       ".kiro/tools/", ".kiro/sensors/", ".kiro/hooks/", ".kiro/scopes/", ".kiro/steering/", ".kiro/settings/",
       // Loaded by the IDE or baked into directives by the engine.
-      ".kiro/agents/aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
+      ".kiro/agents/aidlc-aidlc.md", "SKILL.md", ".kiro/aidlc-common/conductor.md",
       // Contributor documentation the skills never load (#1402 F5).
       ".kiro/aidlc-common/protocols/stage-definition.md",
     ]) {
@@ -537,7 +537,7 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const { project, globalFile, env } = setupProject();
     installFramework(project);
     writeFileSync(globalFile, [
-      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-aidlc.md",
       ".kiro/skills/aidlc/SKILL.md",
       ".kiro/aidlc-common/protocols/stage-protocol.md",
       ".kiro/aidlc-common/stages/ideation/intent-capture.md",
@@ -641,21 +641,29 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
     const { project, globalFile, env } = setupProject();
     const repo = fileURLToPath(new URL("../../", import.meta.url));
     cpSync(join(repo, "dist", "kiro-ide"), project, { recursive: true });
-    cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+    // The drop is one copy of the projection's .kiro folder; the registration
+    // runs the launcher in the plugin's own folder.
+    cpSync(join(repo, "dist", "plugins", "test-pro", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
     const composeEnv: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
     for (const name of ["AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "PLUGIN_ROOT"]) {
       delete composeEnv[name];
     }
-    const compose = spawnSync(process.execPath, ["./hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {
+    const compose = spawnSync(process.execPath, ["./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"], {
       cwd: project,
       encoding: "utf-8",
       env: composeEnv,
     });
     expect(compose.status, compose.stderr).toBe(0);
-    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(false);
+    // With no aidlc on PATH the launcher ran the project's own `plugin sync`
+    // with Bun: it records the files it installed and writes the composition
+    // stamp, as a native install does.
+    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(true);
+    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(true);
 
+    // The lead reads the plugin's persona from its copy without Kiro's
+    // dispatch lines, as it reads the core personas.
     const cases: [rule: string, folder: string][] = [
-      [".kiro/agents/test-pro-*", ".kiro/agents/"],
+      [".kiro/aidlc-common/personas/test-pro-*", ".kiro/aidlc-common/"],
       [".kiro/knowledge/test-pro-metrics-agent/", ".kiro/knowledge/"],
     ];
     for (const [rule, folder] of cases) {

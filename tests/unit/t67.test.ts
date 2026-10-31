@@ -1,101 +1,39 @@
 // covers: subcommand:aidlc-utility:scope-table, subcommand:aidlc-utility:detect-scope
 //
-// CLI-contract port of tests/unit/t67-scope-table.sh (TAP plan 28),
-// mechanism = cli. Equal-or-stronger migration: every .sh assertion that
-// shelled out to `bun aidlc-utility.ts scope-table ...` / `detect-scope ...`
-// (and the `assert_infer` helper's `bun -e` import of inferScopeFromText) is
-// preserved by SPAWNING the real CLI via node:child_process spawnSync
+// Mechanism = cli. Every assertion about `bun aidlc-utility.ts scope-table
+// ...` / `detect-scope ...` (exit code, stdout, stderr, audit rows)
+// is preserved by SPAWNING the real CLI via node:child_process spawnSync
 // (BUN + the tool .ts path), asserting on res.status / res.stdout / res.stderr
-// and on the audit.md the tool writes — the PROCESS boundary, not in-process
-// renderScopeTable()/inferScopeFromText() calls.
+// and on the audit shards the tool writes - the PROCESS boundary, not
+// in-process renderScopeTable() calls.
 //
-// INFER-VIA-CLI (STRONGER): the .sh tested inferScopeFromText() in isolation
-// through `bun -e`. Here every keyword / word-boundary / fallback / empty-input
-// case is exercised through the REAL `detect-scope --from-text --input <t>`
-// subcommand, which routes through inferScopeFromText internally (utility.ts:2734)
-// and surfaces the resolved scope BOTH as the JSON ack `"scope":"<s>"` on stdout
-// AND as the `**Detected scope**: <s>` audit row. We assert both — the same
-// observable the .sh asserted (resolved scope), expressed at the full process
-// boundary plus the audit side effect, never less. Empty `--input ""` is a
-// first-class CLI path under --from-text (utility.ts:2718-2727), so the
-// empty-input fallback migrates faithfully.
+// NO KEYWORD INFERENCE: the engine does not read the person's words for a
+// plan: the agent proposes it (`next --propose <plan> --request <id>`, pinned
+// in t-plan-proposed-by-the-agent), and `--from-text` is refused.
 //
-// SUBCOMMAND UNITS: this .cli file credits BOTH subcommand units the .sh
+// SUBCOMMAND UNITS: this test file credits BOTH subcommand units it
 // exercises — `scope-table` (emission shape, determinism, ordering, row count,
-// --check clean/drift/missing-markers) and `detect-scope` (--from-text keyword
-// inference + audit, --scope backward-compat, flag-collision rejection). Both
-// are fired here.
+// --check clean/drift/missing-markers) and `detect-scope` (the explicit --scope
+// path and its audit row). Both are fired here.
 //
 // DIE / ERROR STREAM: the tool's die() path emits JSON `{"error":"..."}` to
-// STDERR and exits 1 (verified live). The .sh redirected `2>/tmp/...` and
-// grepped that capture, so the error text lives on stderr. handleScopeTable's
-// --check failures (missing markers / out of date) also write to stderr via
-// console.error + process.exit(1). The `out` helper field concatenates
-// stdout+stderr (mirroring the .sh's 2>&1 where it used it) so message asserts
-// hold regardless of stream; JSON-ack asserts stay scoped to stdout.
+// STDERR and exits 1. handleScopeTable's --check failures (missing markers /
+// out of date) also write to stderr via console.error + process.exit(1). The
+// `out` helper field concatenates stdout+stderr so message asserts hold
+// regardless of stream; JSON-ack asserts stay scoped to stdout.
 //
-// PARITY NOTES (every .sh `ok` line maps to an expect() below; STRONGER adds noted):
-//   §1 scope-table emission shape (5 asserts) -> Tests 1-5:
-//     - BEGIN marker / END marker / "| Scope" header / "| bugfix" row /
-//       "| classic" row — all preserved as stdout .toContain() + STRONGER
-//       res.status===0 pin (the .sh discarded $? on the bare emission call).
-//   §2 deterministic + alphabetical (2 asserts) -> Tests 6-7:
-//     - two emissions byte-equal (Test 6); row names == alphabetical EXPECTED
-//       "bugfix enterprise feature infra mvp poc refactor security-patch
-//       workshop" (Test 7), parsed by the same `^| <name>` regex the .sh awk'd.
-//   §3 row count == scopes/*.md count (1 assert) -> Test 8: the .sh pinned
-//       rows matching `^| <name>` === `ls scopes/aidlc-*.md | wc -l`. v0.6.0
-//       deleted scope-mapping.json; loadScopeMapping() now derives the scope
-//       SET from the .claude/scopes/aidlc-*.md files present (aidlc-lib.ts:836)
-//       + scope-grid.json `.stages`, so that filesystem count is STILL the live
-//       source — the .sh assertion is restored faithfully against it (NOT
-//       obsolete). STRONGER: also pins gridCount === mdCount === rendered rows
-//       === 9 (triangulate the rendered table against BOTH shipped surfaces).
-//   §4 --check clean exit 0 on real SKILL.md (1 assert) -> Test 9: res.status===0
-//       (no AIDLC_SKILL_MD_PATH override -> the shipped SKILL.md).
-//   §5 --check exit 1 on drifted SKILL.md (2 asserts) -> Tests 10-11: copy the
-//       real SKILL.md to a temp file, sed the bugfix row to bogus, point
-//       AIDLC_SKILL_MD_PATH at it; res.status===1 (Test 10) + stderr contains
-//       "out of date" (Test 11). Never mutates the real SKILL.md (env seam).
-//   §6 --check exit 1 on missing markers (1 assert) -> Test 12: marker-less temp
-//       file -> res.status===1 AND stderr "missing scope-table markers"
-//       (the .sh AND'd rc==1 with the grep; both asserted here).
-//   §7 keyword matching (7 asserts) -> Tests 13-19: fix->bugfix, refactor,
-//       CVE->security-patch, classic, express, spike->poc, mvp, infra — each asserts
-//       JSON-ack "scope" AND audit **Detected scope** (STRONGER: the .sh only
-//       compared inferScopeFromText().scope; we also pin the audit side effect).
-//   §8 word-boundary guards (2 asserts) -> Tests 20-21: "debug this issue" and
-//       "fixture scope testing" both resolve to feature (substring "bug"/"fix"
-//       must NOT trigger via \b regex) — asserted via the CLI resolved scope.
-//   §8b multi-word whitespace variance (1 assert) -> Test 22: "minimum  viable"
-//       (double-space) -> mvp.
-//   section 9 >5-word fallback (1 assert) -> Test 23: "add a fix-up step to the
-//       importer" -> classic (the old sentence asks for a fix, so it is now a
-//       bugfix case below).
-//   §10 empty input (1 assert) -> Test 24: --input "" -> feature.
-//   §11 detect-scope --from-text emits SCOPE_DETECTED keyword + Matched keywords
-//       (2 asserts) -> Tests 25-26: scope=bugfix + Source=keyword (Test 25,
-//       STRONGER: exact block-scoped field values + event count===1) and
-//       "Matched keywords" row present (Test 26).
-//   §12 backward-compat --scope path (1 assert) -> Test 27: detect-scope --scope
-//       feature --source freeform still emits SCOPE_DETECTED with
-//       Detected scope=feature + Source=freeform (STRONGER: exact fields).
-//   §13 flag-collision (1 assert) -> Test 28: --scope + --from-text -> res.status
-//       ===1 AND error "Cannot combine --from-text and --scope" (the .sh AND'd
-//       rc==1 with the grep; both asserted).
+// ROW COUNT (Test 8): loadScopeMapping() derives the scope
+//       SET from the .claude/scopes/aidlc-*.md files present (aidlc-lib.ts)
+//       + scope-grid.json `.stages`, so that filesystem count is the live
+//       source; Test 8 pins gridCount === mdCount === rendered rows.
 //
-// 28 .sh asserts -> 28 expect()-bearing test() cases (one observable cluster
-// per case; the 2-assert sections split into two cases each to keep parity 1:1
-// where the .sh emitted two `ok` lines).
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + cleanup_test_project
-// per audit case, and mktemp for the drift/nomark SKILL.md sandboxes): each
-// audit-emitting case uses a FRESH temp project dir (createTestProject, which
-// toPortablePath-converts on Windows so audit.md — written by the tool via the
-// forward-slash audit helper — round-trips when read back). The drift/nomark
-// SKILL.md fixtures are mkdtemp'd temp FILES driven through AIDLC_SKILL_MD_PATH
-// so the shipped SKILL.md is never touched. All temp dirs/files cleaned in
-// afterAll. NOTHING is written under tests/fixtures/**.
+// FIXTURE DISCIPLINE: each audit-emitting case uses a FRESH temp project dir
+// (createTestProject, which toPortablePath-converts on Windows so audit shards
+// - written by the tool via the forward-slash audit helper - round-trip when
+// read back). The drift/nomark SKILL.md fixtures are mkdtemp'd temp FILES
+// driven through AIDLC_SKILL_MD_PATH so the shipped SKILL.md is never touched.
+// All temp dirs/files cleaned in afterAll. NOTHING is written under
+// tests/fixtures/**.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -112,13 +50,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(
   REPO_ROOT,
@@ -128,6 +66,7 @@ const TOOL = join(
   "tools",
   "aidlc-utility.ts",
 );
+// The generated tables live in tables.md beside the orchestrator skill.
 const SKILL = join(
   REPO_ROOT,
   "dist",
@@ -135,7 +74,7 @@ const SKILL = join(
   ".claude",
   "skills",
   "aidlc",
-  "SKILL.md",
+  "tables.md",
 );
 const SCOPE_GRID = join(
   REPO_ROOT,
@@ -146,12 +85,11 @@ const SCOPE_GRID = join(
   "data",
   "scope-grid.json",
 );
-// CURRENT canonical scope-set surface (v0.6.0): scope-mapping.json was DELETED;
-// loadScopeMapping() now derives the scope SET from the .claude/scopes/*.md
-// files present (aidlc-lib.ts:836 — `for (const name of Object.keys(metadata))`,
-// metadata sourced from loadScopeMetadata over scopes/aidlc-*.md) and merges in
-// scope-grid.json's per-scope `.stages`. So scopes/aidlc-*.md is the live source
-// the .sh's §3 `ls scopes/aidlc-*.md | wc -l` count targeted — NOT obsolete.
+// Canonical scope-set surface: loadScopeMapping() derives the scope SET from
+// the .claude/scopes/*.md files present (aidlc-lib.ts loadScopeMapping,
+// `for (const name of Object.keys(metadata))`, metadata sourced from
+// loadScopeMetadata over scopes/aidlc-*.md) and merges in scope-grid.json's
+// per-scope `.stages`. So scopes/aidlc-*.md is the live source.
 const SCOPES_DIR = join(
   REPO_ROOT,
   "dist",
@@ -160,7 +98,6 @@ const SCOPES_DIR = join(
   "scopes",
 );
 
-/** Count of shipped scope definition files: .claude/scopes/aidlc-*.md. */
 function scopesMdCount(): number {
   return readdirSync(SCOPES_DIR).filter(
     (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
@@ -175,14 +112,13 @@ afterAll(() => {
   for (const f of tempFiles) rmSync(f, { force: true });
 });
 
-/** Fresh empty project dir (mirrors create_test_project). */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
   return p;
 }
 
-// P9: detect-scope's appendAuditEvent CREATES the bare SPACE record root's
+// detect-scope's appendAuditEvent CREATES the bare SPACE record root's
 // per-clone shard on first emit (no state seeded → no intent resolves → bare
 // root); the SPAWNED tool mints its own clone-id, so reads glob every shard.
 const readAudit = (p: string): string => readAllAuditShards(p);
@@ -191,7 +127,7 @@ interface CliResult {
   status: number;
   stdout: string;
   stderr: string;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
 }
 
 /** Spawn `bun aidlc-utility.ts <args...>`. Optional AIDLC_SKILL_MD_PATH env seam. */
@@ -209,30 +145,15 @@ function util(args: string[], skillMdPath?: string): CliResult {
   };
 }
 
-/** Run `scope-table` (no --check); returns combined stdout+stderr like the .sh's 2>&1. */
 function scopeTable(...args: string[]): CliResult {
   return util(["scope-table", ...args]);
 }
 
-/** Run `detect-scope --from-text --input <text> --project-dir <p>`. */
-function detectFromText(input: string, p: string): CliResult {
-  return util(["detect-scope", "--from-text", "--input", input, "--project-dir", p]);
-}
 
 /**
- * Resolved scope from the JSON ack the tool prints on stdout
- * (`{"emitted":"SCOPE_DETECTED","scope":"<s>",...}`). Mirrors the .sh's
- * `inferScopeFromText(...).scope` observable, read at the process boundary.
- */
-function ackScope(r: CliResult): string {
-  const m = r.stdout.match(/"scope":"([a-z-]+)"/);
-  return m ? m[1] : "";
-}
-
-/**
- * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
- * Resets at `## ` headings / `---`; splits `**label**: value` on `**: `.
- * Mirrors audit_field in the proven t31/t90 ports. Returns "" when absent.
+ * Value of <key> from the FIRST audit block containing it whose `**Event**:`
+ * matches <ev>. Resets at `## ` headings / `---`; splits `**label**: value` on
+ * `**: `. Mirrors auditField in t31.test.ts. Returns "" when absent.
  */
 function auditField(body: string, ev: string, key: string): string {
   let matched = false;
@@ -262,7 +183,6 @@ function auditField(body: string, ev: string, key: string): string {
   return "";
 }
 
-/** Count audit blocks with `**Event**: <ev>` in a buffer. */
 function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
   return body
@@ -270,15 +190,9 @@ function auditEventCount(body: string, ev: string): number {
     .filter((l) => re.test(l)).length;
 }
 
-/** Whole-buffer presence (mirrors a bare grep). */
-function fileContains(body: string, needle: string): boolean {
-  return body.includes(needle);
-}
-
 /**
  * Row names from the scope-table output: every line `^| <name>` where <name>
- * matches [a-z-]+. Mirrors the .sh's
- * `grep -oE '^\| [a-z-]+' | awk '{print $2}'`.
+ * matches [a-z-]+.
  */
 function rowNames(tableOut: string): string[] {
   const names: string[] = [];
@@ -293,14 +207,14 @@ const EXPECTED_ROW_ORDER =
   "bugfix classic enterprise express feature infra mvp poc refactor security-patch workshop";
 
 // ============================================================
-// scope-table — emission shape (.sh §1)
+// scope-table - emission shape
 // (covers: subcommand:aidlc-utility:scope-table)
 // ============================================================
 
 describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", () => {
   test("1: scope-table output has BEGIN marker", () => {
     const r = scopeTable();
-    expect(r.status).toBe(0); // STRONGER: .sh discarded $?; pin clean exit
+    expect(r.status).toBe(0);
     expect(r.out).toContain("BEGIN: compiled");
   });
 
@@ -334,33 +248,26 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(names.join(" ")).toBe(EXPECTED_ROW_ORDER);
   });
 
-  // --- §3: row count matches the CURRENT shipped scope-set surface ---
-  // The .sh pinned `rowCount === ls scopes/aidlc-*.md | wc -l`. v0.6.0 deleted
-  // scope-mapping.json; loadScopeMapping() now derives the scope SET from the
-  // .claude/scopes/aidlc-*.md files present (aidlc-lib.ts:836) and the per-scope
-  // grid from scope-grid.json. The .sh's filesystem count is therefore STILL the
-  // live source — not obsolete — so we restore it AND triangulate against the
-  // grid (every scopes/*.md scope must carry a grid `.stages` entry) and the
-  // rendered table rows. All three must agree; that is strictly stronger than
-  // the .sh (rows == scopes/*.md only) and than the prior twin (rows == grid).
+  // --- Test 8: row count matches the CURRENT shipped scope-set surface ---
+  // loadScopeMapping() derives the scope SET from the .claude/scopes/aidlc-*.md
+  // files present (aidlc-lib.ts loadScopeMapping) and the per-scope grid from
+  // scope-grid.json. Triangulate the scopes/*.md count against the grid's scope
+  // count and the rendered table rows: all three must agree.
   test("8: scope-table row count matches scopes/*.md AND scope-grid.json", () => {
     const rowCount = rowNames(scopeTable().out).length;
     const mdCount = scopesMdCount();
     const gridCount = Object.keys(
       JSON.parse(readFileSync(SCOPE_GRID, "utf-8")),
     ).length;
-    // .sh §3 assertion (restored against the current shipped source surface):
     expect(rowCount).toBe(mdCount);
-    // STRONGER: the compiled grid covers exactly the scopes/*.md set …
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
-    // … and the concrete count is pinned.
     expect(rowCount).toBe(11);
   });
 });
 
 // ============================================================
-// scope-table --check (.sh §4-6)
+// scope-table --check
 // (covers: subcommand:aidlc-utility:scope-table)
 // ============================================================
 
@@ -403,243 +310,35 @@ describe("t67 scope-table --check drift guard (migrated from t67 §4-6)", () => 
     tempFiles.push(nomark);
     writeFileSync(nomark, "no markers in this file\n", "utf-8");
     const r = util(["scope-table", "--check"], nomark);
-    // The .sh AND'd rc==1 with the grep; both asserted here.
     expect(r.status).toBe(1);
     expect(r.out).toContain("missing scope-table markers");
   });
-});
 
-// ============================================================
-// detect-scope --from-text keyword inference (.sh §7-10)
-// (covers: subcommand:aidlc-utility:detect-scope)
-// Exercises inferScopeFromText through the real CLI process boundary.
-// ============================================================
-
-describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)", () => {
-  // Each case asserts BOTH the JSON-ack resolved scope AND the audit
-  // **Detected scope** row (STRONGER than the .sh's bare scope compare).
-  const keywordCase = (input: string, expected: string) => () => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe(expected);
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      expected,
-    );
-  };
-
-  test('13: "fix the login bug" -> bugfix', keywordCase("fix the login bug", "bugfix"));
-  test('14: "refactor this code" -> refactor', keywordCase("refactor this code", "refactor"));
-  test('15: "CVE patch" -> security-patch', keywordCase("CVE patch", "security-patch"));
-  test('16: "run workshop today" -> workshop', keywordCase("run workshop today", "workshop"));
-  test('16b: "express" -> express', keywordCase("express", "express"));
-  test('17: "spike prototype" -> poc', keywordCase("spike prototype", "poc"));
-  test('18: "mvp" -> mvp', keywordCase("mvp", "mvp"));
-  test('19: "infra deploy" -> infra', keywordCase("infra deploy", "infra"));
-  test('19b: "bugfix: filter drops rows" -> bugfix', keywordCase("bugfix: filter drops rows", "bugfix"));
-});
-
-describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §8-10)", () => {
-  // §8 word-boundary false-positive guards: "debug" contains "bug",
-  // "fixture" contains "fix" — \b regex must NOT match -> feature default.
-  const fallbackCase = (input: string, expected: string) => () => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe(expected);
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      expected,
-    );
-  };
-
-  test('20: "debug this issue" -> classic (word-boundary, no bugfix)', fallbackCase("debug this issue", "classic"));
-  test('21: "fixture scope testing" -> classic (word-boundary, no bugfix)', fallbackCase("fixture scope testing", "classic"));
-
-  // §8b multi-word keyword matches despite extra whitespace.
-  test('22: "minimum  viable" (double-space) -> mvp', () => {
-    const p = proj();
-    const r = detectFromText("minimum  viable", p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("mvp");
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      "mvp",
-    );
-  });
-
-  // .sh section 9: >5-word input whose keywords only name things -> classic default.
-  test('23: ">5-word input with keywords -> classic default"', fallbackCase("add a fix-up step to the importer", "classic"));
-
-  // §9b (issue #1072): affirmative high-specificity keywords in long prose
-  // resolve to their scope; generic or explicitly negated mentions defer.
-  test('23b: ">5-word input with a high-specificity keyword -> keyword scope, not freeform default"', () => {
-    const p = proj();
-    const input =
-      "refactor the legacy authentication module to improve long-term maintainability";
-    expect(input.trim().split(/\s+/).length).toBeGreaterThan(5); // guard: this IS a >5-word input
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("refactor");
-    const f = readAudit(p);
-    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("refactor");
-    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
-  });
-
-  test.each([
-    ["Resolve the security vulnerability CVE-2026-12345 in our authentication service", "security-patch"],
-    ["Build a POC prototype for the customer onboarding workflow", "poc"],
-    ["Build a minimum  viable product for customer onboarding", "mvp"],
-    ["Build a proof  of  concept for the authentication service", "poc"],
-    ["Fix and refactor the authentication flow today", "refactor"],
-    ["Build a poc and mvp for customer onboarding", "mvp"],
-    ["Refactor the authentication module without changing its behavior", "refactor"],
-    ["Do not deploy today; refactor the authentication module", "refactor"],
-    ["Do not build a prototype, but build an MVP for onboarding", "mvp"],
-    ["Do not refactor the UI; refactor the authentication module", "refactor"],
-    ["Not only refactor authentication but also improve its tests", "refactor"],
-  ])("long affirmative description: %s -> %s", (input, expected) => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe(expected);
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("keyword");
-  });
-
-  test.each([
-    "Do not refactor anything; add a new login screen",
-    "Build a production service, not a proof of concept",
-    "Build a new login screen without a refactor",
-    "Please don't refactor anything; add a new login screen",
-    "Please don’t refactor anything; add a new login screen",
-    "Avoid building a POC for the customer onboarding workflow",
-    "Do not build an MVP for the customer onboarding workflow",
-    "Create refactorings and mvps and apocryphal documentation today",
-  ])("long negated or substring-only description stays freeform: %s", (input) => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("classic");
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
-  });
-
-  // A long description that asks for a fix is offered bugfix, so the person
-  // with a known bug sees the bugfix plan at the scope offer.
-  test.each([
-    "Fix the login page timeout bug",
-    "Fix a filter bug found while optimising a Power BI report",
-    "I want to fix the broken auth flow quickly today",
-    "Fix crash on logout when the session expired",
-    "The export drops the last row. Please fix it before Friday",
-    "The export drops the last row, can you fix that today",
-    "Bugfix: pagination skips page 2 on the orders list",
-    "Bug fix needed: CSV import treats the first data row as a header",
-    "We need to fix the login timeout on the account page",
-    "- Fix the date filter that drops rows in the Power BI report",
-    "The sales dashboard drops rows for the last 30 days. Please find out why and fix it.",
-    "The notification emails go out twice for every comment, could you take a look and fix that?",
-    "1) Fix the login timeout on the account page",
-  ])("long fix request -> bugfix: %s", (input) => {
-    const p = proj();
-    expect(input.trim().split(/\s+/).length).toBeGreaterThan(5);
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("bugfix");
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("keyword");
-  });
-
-  // A high-specificity keyword still outranks the fix request.
-  test.each([
-    ["Fix the CVE-2026-12345 vulnerability in the auth library", "security-patch"],
-    ["Fix the rounding bug while you refactor the payment module", "refactor"],
-  ])("high-specificity keyword outranks a fix request: %s -> %s", (input, expected) => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe(expected);
-  });
-
-  // Feature work whose words only name a fix or a bug is not offered bugfix.
-  test.each([
-    "Add a quick fix suggestion panel to the editor",
-    "Build a bug tracker for our support team",
-    "Add a bugfix release lane to the release calendar",
-    "Help mechanics fix their bikes faster with a parts lookup app",
-    "Add a 'Report a broken link' button to every docs page",
-    "Do not fix the bug yet; add a new export screen",
-    // Fixing as something the product or a side task does, not the request.
-    "Build a linter that can fix the formatting automatically on save",
-    "Build a customer portal where users can view invoices and fix their billing details",
-    "Make a CLI that scans repos for outdated deps and opens PRs to fix them",
-    "Add a button so support agents can fix any order in one click",
-    "Add dark mode to the settings page. Also fix the typo in the footer while you are there",
-    "Add an auto-fix the user can trigger from the toolbar",
-    "Call utils.fix() from the save handler before the form posts",
-    "The app should let users fix it themselves from the settings page",
-    "Build a CLI that can lint, fix, and format Terraform files",
-    "If the import fails, fix the mapping and retry automatically in the new sync service",
-    "Show a banner when the config is invalid, with a link to fix it",
-    "Build a wiki where anyone who spots a typo can fix it.",
-  ])("long description naming a fix or bug stays freeform: %s", (input) => {
-    const p = proj();
-    const r = detectFromText(input, p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("classic");
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
-  });
-
-  test("short multi-scope input keeps alphabetical precedence and diagnostic shape", () => {
-    const p = proj();
-    const r = detectFromText("fix refactor this", p);
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({
-      scope: "bugfix",
-      source: "keyword",
-      matches: ["fix", "refactor"],
-    });
-  });
-
-  // §10 empty input -> feature default (valid CLI path under --from-text).
-  test("24: empty input -> classic default", () => {
-    const p = proj();
-    const r = detectFromText("", p);
-    expect(r.status).toBe(0);
-    expect(ackScope(r)).toBe("classic");
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
-      "classic",
-    );
-    // STRONGER: a keyword-less match also marks Source=freeform.
-    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
+  // skill-text prints the installed orchestrator skill whole, for a host whose
+  // command template carries it (opencode cuts the skill tool's output at
+  // 50 KiB). The same AIDLC_SKILL_MD_PATH seam the table checks read.
+  test("13: skill-text prints the SKILL.md whole, byte for byte", () => {
+    const r = util(["skill-text"]);
+    expect(r.status, r.stderr).toBe(0);
+    const skill = readFileSync(join(dirname(SKILL), "SKILL.md"), "utf-8");
+    expect(r.stdout).toBe(skill.endsWith("\n") ? skill : `${skill}\n`);
+    const seam = join(mkdtempSync(join(tmpdir(), "t67-skill-text-")), "skill.md");
+    tempFiles.push(seam);
+    writeFileSync(seam, "# a skill\n\nwith `!NAME!` kept as written\n", "utf-8");
+    expect(util(["skill-text"], seam).stdout).toBe("# a skill\n\nwith `!NAME!` kept as written\n");
+    // The harness the caller names must be a harness folder name.
+    const bad = util(["skill-text", "--harness-dir", "not a folder"]);
+    expect(bad.status).toBe(1);
+    expect(bad.out).toContain("--harness-dir");
   });
 });
 
 // ============================================================
-// detect-scope audit-row shape + backward-compat + collision (.sh §11-13)
+// detect-scope audit-row shape + backward-compat
 // (covers: subcommand:aidlc-utility:detect-scope)
 // ============================================================
 
 describe("t67 detect-scope audit + backward-compat + collision (migrated from t67 §11-13)", () => {
-  // §11: --from-text keyword match emits SCOPE_DETECTED with scope=bugfix,
-  // Source=keyword, and a Matched keywords row.
-  test("25: --from-text emits SCOPE_DETECTED scope=bugfix + Source=keyword", () => {
-    const p = proj();
-    const r = detectFromText("fix the login bug", p);
-    expect(r.status).toBe(0);
-    const f = readAudit(p);
-    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1); // STRONGER: exact count
-    expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("bugfix");
-    expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
-  });
-
-  test("26: keyword-match SCOPE_DETECTED includes Matched keywords field", () => {
-    const p = proj();
-    detectFromText("fix the login bug", p);
-    const f = readAudit(p);
-    // Whole-file presence (.sh used unanchored grep "Matched keywords").
-    expect(fileContains(f, "Matched keywords")).toBe(true);
-    // STRONGER: exact matched-keyword value.
-    expect(auditField(f, "SCOPE_DETECTED", "Matched keywords")).toBe("fix");
-  });
-
-  // §12: backward-compat — pre-milestone-10 --scope path still emits SCOPE_DETECTED.
   test("27: --scope (pre-milestone-10 path) still emits SCOPE_DETECTED", () => {
     const p = proj();
     const r = util([
@@ -655,28 +354,10 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     ]);
     expect(r.status).toBe(0);
     const f = readAudit(p);
-    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1); // STRONGER
+    expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1);
     expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
     expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("freeform");
   });
 
-  // §13: flag collision — --scope + --from-text rejected.
-  test("28: --scope + --from-text rejected with flag-collision error", () => {
-    const p = proj();
-    const r = util([
-      "detect-scope",
-      "--scope",
-      "feature",
-      "--from-text",
-      "--input",
-      "fix bug",
-      "--project-dir",
-      p,
-    ]);
-    // The .sh AND'd rc==1 with the grep; both asserted here.
-    expect(r.status).toBe(1);
-    expect(r.out).toContain("Cannot combine --from-text and --scope");
-    // STRONGER: the rejected call emits NO SCOPE_DETECTED row.
-    expect(auditEventCount(readAudit(p), "SCOPE_DETECTED")).toBe(0);
-  });
+
 });

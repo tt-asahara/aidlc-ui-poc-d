@@ -19,9 +19,9 @@ the canonical spec — this chapter adds narrative and "when to use" guidance.
 
 Every stage `.md` file serves two readers:
 
-- **The parser** (`parseStageFrontmatter` in `lib.ts`, ships in milestone 7). Reads
-  the YAML frontmatter, produces a structured `StageEntry`. Doesn't touch the
-  body.
+- **The parser** (`parseStageFrontmatter` in `core/tools/aidlc-lib.ts`). Reads
+  the YAML frontmatter into a plain record that `validateStageFrontmatter`
+  (`core/tools/aidlc-stage-schema.ts`) then checks. Doesn't touch the body.
 - **The LLM agent** executing the stage. Reads the body, follows the prose
   instructions, produces artifacts. Doesn't touch the frontmatter.
 
@@ -34,8 +34,8 @@ that makes stages reviewable.
 
 ## Why Variant A3
 
-The format is called "Variant A3" — the third of three authorship variants
-weighed during v0.3.0 planning:
+The format is called "Variant A3", the third of three authorship variants
+that were weighed for it:
 
 - **One file beats split files.** Frontmatter plus prose in one `.md` keeps
   graph structure and execution steps together. A reviewer reading a stage
@@ -59,9 +59,9 @@ Edit stage YAML
       v
 bun scripts/package.ts
       |
-      +--> ignored dist/<harness>/tools/data/stage-graph.json
+      +--> ignored dist/<harness>/<harness-dir>/tools/data/stage-graph.json
       |
-      +--> ignored dist-release/<harness>/tools/data/stage-graph.json
+      +--> ignored dist-release/<harness>/<harness-dir>/tools/data/stage-graph.json
                     |
                     v
              loadStageGraph()
@@ -92,8 +92,8 @@ Encodes dependency edges. Two roles:
    produces" → add `Y` to `requires_stage`.
 2. **Presentation-order edge.** Two stages in the same phase with no
    semantic dependency but a fixed ordering (e.g., `market-research` before
-   `feasibility` in Ideation). Add the weak edge so the computed
-   `display_order` lands stably.
+   `feasibility` in Ideation). Add the weak edge so the computed stage
+   `number` lands stably.
 
 The compile step's slug-alphabetical tiebreak is a safety net. For stages
 that must land in a specific order, author the edge explicitly rather than
@@ -135,8 +135,17 @@ stage's question flow:
 
 The receipt is not inferred from markdown alone. `aidlc-log.ts` records the
 reserved `SUMMARY_CONFIRMATION_RECORDED` event after a matching prompt record
-and a reply of the person's since their last answer (before or after that
-record), with their words as `Person Reply`, binding it to the questions-file digest and its recorded
+and a reply of the person's after that record. When the agent showed the
+summary before recording the prompt, their latest reply in that chat before the
+record counts the same way, with no `--message`, when the questions file was
+written after the stage's last question or answer and before that reply, and no
+other question was recorded between the reply and the prompt (the agent writing
+their pick into `[Answer]:` after their reply is not a write of the summary).
+The agent can also name the message with `--message <id>` (a message sent
+before the last write of the questions file this clone's audit records ahead of
+that prompt, or ahead of that reply, cannot be named: the summary was not there
+to see; a stage gate's approval reads the same rule against the stage's
+outputs). The receipt keeps their words as `Person Reply`, binding it to the questions-file digest and its recorded
 `Hash Scope`. New receipts use `confirmed-content-v2`: the unchanged raw-content
 SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible
@@ -214,6 +223,45 @@ How "source work" is detected depends on the workspace:
 - **Non-git workspace** (or any git error) - the guard falls back to a shell-free
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
+- **Code kept outside the workspace's own git** - the code may live in one of
+  the intent's recorded repos (the `repos` of its registry row), in a child
+  repo, clone or worktree made after the work started, in a linked worktree of
+  any of those (as `git worktree list` names them), or in a checkout the
+  workspace's git does not track, such as a worktree of a repo kept outside the
+  project and placed in a gitignored folder inside it (found up to three levels
+  below each untracked or ignored folder, without following links). The guard
+  asks each of them the same question it asks the workspace, so a brownfield
+  checkout with no new code does not pass either. A checkout found when the
+  check runs counts only where the review can see its code change, that is
+  where the source walk lists files below it outside AI-DLC's own: code kept in
+  a harness folder such as Claude Code's `.claude/worktrees/`, outside the
+  project or on another drive is not counted, so it goes to the person with the
+  line below, unless the work records that checkout (`intent add-checkout
+  <path>`, which the agent runs before the review, or a Unit's claim inside a
+  worktree of the harness folder, recorded at the review request). A recorded
+  checkout is walked by the review as a root of its own, its files listed as
+  `<label>@checkout/<path>`, so it is asked and found, and a change there after
+  the review is a stale review. Git is asked only in a folder with a real `.git` entry (a clone,
+  submodule, init or worktree the person made); a committed folder merely
+  shaped like a repo gets the filesystem check, so its committed git config
+  never runs. AI-DLC's own Bolt worktrees under `.aidlc/` are left to the
+  swarm's own evidence.
+- **Code committed, then the records** - a records-only last commit hides code
+  committed earlier in the stage, so the guard also compares the source with
+  the stage attempt's `Source Baseline`: a change outside AI-DLC's own files
+  since the stage began is source work.
+
+When the guard finds no source work anywhere it looked, Guard Policy off lets
+the work carry on, and the person hears once "AI-DLC found no source changes
+under <where it looked>". Under strict or relaxed the agent's own first report is
+refused, naming the way on that always works: report again, and the approval
+question goes to the person with that line ("If your code is somewhere else,
+approve as usual; if it is missing, ask for changes."). Their approval records
+it as `Source Work` beside their words. Under strict or relaxed, where no
+approval would be the person's reply after the gate (an autonomous Construction
+gate, the human-presence check switched off, an unattended run) and for the
+agent's own `advance`, `finalize` and `complete-workflow`, the refusal stays. Each outcome is
+recorded once per stage attempt as a `SOURCE_WORK_NOT_FOUND` row.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:
@@ -223,6 +271,17 @@ receipt, compares every fresh unit against a content-addressed stage-entry
 baseline, and refuses changed paths outside the fresh claims union. Directory
 claims cover later additions; in a main multi-repo workspace every entry names
 its recorded repo, while a Bolt's manifest is relative to its one selected repo.
+In a workspace that records no repos, an entry inside a checkout nested in the
+project (a worktree or clone its git does not track) is judged by that
+checkout's own git, so the workspace's `.gitignore` for that folder does not
+refuse it. So is an entry through a link or junction to a checkout outside the
+project (`wt-link/src/`, or `wt-link/` for all of it), and it covers what the
+source walk lists through that link. An entry inside one of the work's
+recorded checkouts is judged by that checkout's git too and keyed by its
+listing name; a checkout outside the project is named that way
+(`<label>@checkout/src/`), with no `repo` even in work that records repos,
+and a listing name the work has not recorded is refused with the step to
+record it.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that
@@ -312,12 +371,12 @@ artifact Y is moot because Y's producer is SKIP in this scope." That's
 advisory, not blocking — the user has already opted into the
 truncation by picking the scope.
 
-**What v0.10.0 adds.** The reserved `when:` primitive (see "Reserved"
-section below) will let authors express richer predicates —
-`when: producer-in-plan`, `when: mode == brownfield`,
-`when: scope != poc`. Today's `required: true` + `conditional_on:
-brownfield|greenfield` pair covers the two dimensions v0.3.0 needs;
-`when:` generalises it.
+**`when:` (accepted, not yet evaluated).** A stage may declare a `when:`
+predicate; today the schema accepts only `producer-in-plan`, checks its shape,
+and nothing acts on it yet, so the stage runs under its `scopes:` as if it were
+absent. The `required: true` + `conditional_on: brownfield|greenfield` pair
+covers the two dimensions the engine evaluates today; `when:` is meant to
+generalise it.
 
 ### `consumes[].conditional_on`
 
@@ -330,6 +389,32 @@ only required when we're in brownfield".
 For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
+
+### `consumes[].cited`
+
+An optional boolean on a consume: `cited: true` says the stage's deliverables
+cite that input whenever it exists. The `upstream-coverage` check asks the
+deliverables to cite every required consume that exists; it leaves an optional
+one (`required: false`) unchecked, because an optional input may not have
+informed the output, unless the consume is marked `cited: true`. Requirements
+Analysis marks `intent-statement` and `scope-document`: both are optional
+there, because scopes without Ideation produce neither, and when they exist the
+requirements build on them.
+
+The compile lists the marked consumes as the stage's `cites` in
+`stage-graph.json` and keeps the compiled `consumes` entries as they were, so
+marking or unmarking one does not change the record of a stage that already
+finished. The flag sits on the consume, not in a top-level list, because a
+project on 2.8.0 to 2.11.0 refreshes to a newer release with its own tool,
+which accepts a key inside a consume and refuses a top-level key it does not
+know.
+
+```yaml
+consumes:
+  - artifact: intent-statement
+    required: false
+    cited: true
+```
 
 ### `optional_produces`
 
@@ -384,9 +469,9 @@ runs. Five values, four active:
   context (long stages, e.g. Construction code generation, that would blow
   out the conductor's context). When the stage also declares
   `support_agents`, each one is dispatched as a real spoke against the
-  lead's returned draft (mutually blind briefs carrying artifacts by path
-  and the accumulated steering bundle) and the lead is dispatched once
-  more to integrate.
+  lead's returned draft (mutually blind briefs carrying artifacts by path,
+  with the stage's rules delivered per `stage-protocol.md` § "For subagent stages" step 2) and the lead is dispatched
+  once more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier
   contributions. Order is the point. Requires non-empty `support_agents`, and
@@ -408,7 +493,7 @@ On every topology the conductor is the bus: agents never invoke each other —
 only the conductor delegates. The writing model mirrors a real working
 session: everyone writes their own work, the owner collates and edits. Each
 dispatched support agent writes a contribution file
-(`contributions/<agent-slug>.md`, `stage-protocol-ensemble.md` §11 shape with the
+(`contributions/<agent-slug>.md`, `stage-protocol-collaborators.md` shape with the
 identity-marker first line); the lead alone edits the stage's `produces[]`
 artifacts; pipeline links advance the artifacts directly instead. On mob and
 subagent-with-supports stages the contribution files are the completion
@@ -435,7 +520,7 @@ stage might lead with `aidlc-product-agent` for requirements work but load
 `aidlc-delivery-agent` as support for capacity reality-checking.
 
 Both fields validate dynamically against `.claude/agents/*.md` via
-`loadAgents()` (introduced in milestone 3) — `aidlc-graph.ts compile` passes the
+`loadAgents()`, which reads the active harness's agents directory; `aidlc-graph.ts compile` passes the
 discovered agent slugs into `validateStageFrontmatter`, so a `lead_agent` or
 `support_agents` value naming an agent with no matching file fails the
 compile loudly (`lead_agent "<name>" has no matching .claude/agents/*.md`)
@@ -462,15 +547,15 @@ compile validates the value against the discovered agent roster the same way
 Every reviewer-bearing stage must also declare `review_artifact`, naming one
 required Markdown entry from `produces[]`: the artifact the review is about.
 The review record is keyed to it, the gate names it, and
-`--reject-finding` / `--reopen-finding <artifact>#R-NN` address its findings; the reviewer never
+`--reject-finding` / `--reopen-finding` / `--fix-finding <artifact>#R-NN` address its findings; the reviewer never
 writes to it. List ordering and plugin-added outputs cannot change it. On a per-Unit stage the target must remain applicable for every Unit
 kind on which any required output is applicable, otherwise graph compilation
 fails. Structured outputs such as `traceability.json` cannot be review targets.
 
 `reviewer_max_iterations` caps the review/revise loop before the workflow proceeds
 to the gate with unresolved findings. It **defaults to 2** when `reviewer` is
-declared but no cap is given; the compiler coerces a missing or non-positive value
-to 2. Omit the field on a stage that declares no `reviewer`: the compiler rejects
+declared but no cap is given; a value you give must be a positive integer, and
+any other value fails schema validation before the compile. Omit the field on a stage that declares no `reviewer`: the compiler rejects
 a `reviewer_max_iterations` declared without a `reviewer` (the schema error
 `reviewer_max_iterations requires a reviewer` fails the graph compile), so it is
 never silently ignored.
@@ -481,7 +566,7 @@ loop above — the default when a `reviewer` is declared without a class) or
 from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
 at the next ordinal, and a review the person asks for is never refused. The shipped split:
-the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
+the 8 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
 `none` exists on the scope `review_cap` and the per-run `--review` override,
@@ -513,6 +598,52 @@ approval and disables summary confirmation; bugfix disables learnings and
 summary confirmation; express and poc disable plan approval. Apart from plan
 approval off, which builds each code plan without asking, stage approvals,
 human-turn authority, audit, and team write protection remain in force.
+
+### `ars`
+
+Optional. The stage's **composer screening prior** — the same four facts as
+one entry of `tools/data/ars-priors.json`, written in the stage's own
+frontmatter:
+
+```yaml
+ars:
+  targets: [ve, r]            # ARS components the stage reduces: iae | csu | ve | r | ua
+  cost: 4                     # 1 (trivial) .. 5 (heavy); null = never numerically screened
+  role: structural            # optional: initialization | core | phase-gate | structural
+  project_types: [brownfield] # optional: mirror a condition: that restricts the project kind
+```
+
+Lists are inline (`[a, b]`). The block runs until the next top-level key, so
+blank lines and `#` comments inside it, including trailing ones, are allowed.
+
+Why it exists: `aidlc-graph ars` (see [CLI commands](../guide/12-cli-commands.md))
+screens each stage EXECUTE/SKIP from a cost prior and the components it
+targets. The shipped priors name core stages only and a plugin cannot edit
+that file, so a plugin stage used to land as a `no-prior` row the composer
+could only decide by judgment. The schema validates the block like a
+priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
+subcommand screens it exactly like a file entry: `role: core` always executes,
+`structural` and a `null` cost are left to judgment at the gate,
+`project_types` screens the stage out on the other project kind, and a
+`--completed` stage outranks everything. The priors file has one role a stage
+block cannot declare, `project-type` (Reverse Engineering): it runs the stage
+on its own project kind whatever it scores, so on that kind a plugin stage's
+`project_types` still goes by its components.
+
+Three rules keep the screen predictable:
+
+- **The priors file wins.** When a slug has both a file entry and an `ars:`
+  block, the file entry is used, so core screening never changes under a
+  stage-side edit. Core stages declare no `ars:`.
+- **An empty `targets` never executes mechanically.** `targets: []` with a
+  numeric cost is legal, but without a `role` nothing can clear the threshold:
+  the row is SKIP, with a reason that says so.
+- **A cost must have a threshold.** `cost` stays on the composer persona's
+  `1..5` scale, and `aidlc-graph ars` exits 1 naming the stage when the value
+  has no `evThresholds` entry in the priors file it loaded.
+
+Each screen row's `priorSource` (`shipped`, `stage` or `null`) says where its
+prior came from.
 
 ---
 
@@ -561,48 +692,46 @@ The example encodes, in structured form, what today's prose describes:
 
 ## Three-compartment body model
 
-The body of a stage file has three compartments, declared in this order.
-Only `## Steps` is populated in v0.3.0.
+The body of a stage file has three compartments, declared in this order, and
+every shipped stage populates all three:
 
-| Compartment | v0.3.0 | v0.5.0 | What goes here |
-|-------------|--------|--------|----------------|
-| `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
-| `## Sensors` | Reserved, absent | Populated | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
-| `## Learn` | Reserved, absent | Populated | Compact pointer to the shared §13 learning-loop contract and bootstrap exception |
+| Compartment | What goes here |
+|-------------|----------------|
+| `## Steps` | Imperative prose the agent follows |
+| `## Sensors` | Compact output-location, imported-sensor, and upstream-target summary; stage-specific exceptions remain local |
+| `## Learn` | Compact pointer to the shared section 13 learning-loop contract and its bootstrap exception |
 
-Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
-were slot-in changes, not body restructures. See [Sensor
+The fixed order means a stage's sensor bindings and learning-loop pointer
+always have a place of their own. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model. Shared sensor behavior is defined once in
-`stage-protocol.md` §14, while `stage-protocol-learnings.md` §13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
-
-**milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
-else. Most stage files already use `## Steps` as their first body heading.
-
----
-
-## YAML migration — shipped
-
-milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
-`lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
-stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
-`aidlc-graph.ts` to compile the YAML into `stage-graph.json`. The repository now
-generates that file only inside ignored projections; package determinism, not a
-committed compiled-file drift check, is the source-tree gate.
+`stage-protocol-sensors.md`, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
+The `## Sensors` and `## Learn` headings are checked by
+`t87-stage-compartment-headers` across all 33 stages; `## Steps` is in every
+stage but has no test of its own.
 
 ---
 
-## Known limits in v0.3.0
+## Parser and emitter
 
-- **`for_each` is new.** The 5 Construction stages with `**Per-Unit**: Yes`
-  migrate to `for_each: unit-of-work`; the other 26 stages omit the field
-  entirely.
-- **Sensors / Learn compartments declared but empty.** The parser
-  tolerates their absence; v0.5.0 populated them (see [Sensor
-  System](07-sensor-system.md)).
-- **No runtime validation beyond drift check.** The parser accepts any
-  YAML that produces a valid `StageEntry`; doctor's later extensions add
-  advisory rule/sensor checks on top.
+`parseStageFrontmatter` and `emitStageFrontmatter` live in
+`core/tools/aidlc-lib.ts`, YAML-only. `aidlc-graph.ts compile`, which
+`bun scripts/package.ts` runs for every generated tree, compiles the YAML into
+`stage-graph.json`. The repository generates that file only inside ignored
+projections; package determinism, not a committed compiled-file drift check, is
+the source-tree gate.
+
+---
+
+## Known limits
+
+- **`for_each` is used by Construction only.** The five per-Unit Construction
+  stages declare `for_each: unit-of-work`; the other 28 stages omit the field.
+- **`when:` is accepted but not evaluated.** See the field note above.
+- **Only the frontmatter is validated at compile.** The body prose is not
+  parsed; its `## Sensors` and `## Learn` headings are checked by the test suite, and the
+  engine's runtime guards (for example the completion checks on a stage's
+  required work) act on what the stage produces, not on its prose.
 
 ---
 
@@ -612,13 +741,16 @@ The spec reserves names for primitives AI-DLC will likely add in later
 releases. The schema rejects unknown keys — reserving the names here
 prevents future contributions from colliding with ad-hoc additions.
 
-| Key | Likely release | What it will do |
-|-----|----------------|-----------------|
-| `when` | v0.10.0 fitness compiler | Structured condition. Compiles `condition` prose into machine-enforceable logic. Supersedes `consumes[].conditional_on` and generalises today's scope-aware `consumes[].required` with richer predicates (`producer-in-plan`, `mode == brownfield`, `scope != poc`) |
-| `on_failure` | v0.8.0 Ralph loop | Declarative error recovery — "if this stage fails, jump back to X" or "retry with adjusted inputs". Moves revision semantics out of `stage-protocol-recovery.md` prose |
-| `blocks_on` | v0.4.0 Construction (if surfaced) | Completion dependency without data read — splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
-| `timeout` | v0.5.0 sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
-| `retry` | v0.8.0 Ralph loop | Retry policy on failure. Homed in loop config, not stage frontmatter |
+| Key | Reserved for | What it would do |
+|-----|--------------|------------------|
+| `on_failure` | the loop driver | Declarative error recovery: "if this stage fails, jump back to X" or "retry with adjusted inputs". Would move revision semantics out of `stage-protocol-recovery.md` prose |
+| `blocks_on` | Construction worktrees | Completion dependency without data read: would split today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
+| `timeout` | sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
+| `retry` | the loop driver | Retry policy on failure. Homed in loop config, not stage frontmatter |
+
+`when` is no longer reserved: the schema accepts it with the `producer-in-plan`
+predicate and checks its shape, and its evaluation is still to come (see
+`consumes[].required` above).
 
 Design rationale: Claude Code's own task primitives (TaskCreate family plus
 `/loop` and cron) omit dependency, blocks, retry, and timeout — all
@@ -629,10 +761,9 @@ above would be modest structural extensions if consumers emerge, not new
 paradigms.
 
 The reserved-namespace pattern has precedent in the audit taxonomy
-([State Machine](12-state-machine.md)), which pre-registers event names with an
-Emitter cell of `Reserved (v0.x PR N)` — the name exists in the registry but no
-code emits it until the consumer PR ships, at which point the same commit
-replaces the `Reserved` marker with the real emitter path.
+([State Machine](12-state-machine.md)), which can pre-register an event name
+with a `Reserved` Emitter cell until the code that emits it ships, and keeps a
+retired name as `Reserved (retired name)` (`CHANGE_CONTROL_SET` today).
 
 ---
 

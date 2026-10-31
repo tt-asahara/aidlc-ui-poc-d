@@ -1,11 +1,11 @@
 // covers: subcommand:aidlc-utility:recompose, function:setStageSuffix
 // covers: audit:RECOMPOSED
 //
-// t194 - the P4 in-flight recompose matrix (adaptive workflows).
+// t194 - the in-flight recompose matrix (adaptive workflows).
 //
 // The recompose verb flips a PENDING stage's plan suffix on the live state
 // file under withAuditLock, strict-validated, derived-fields rebuilt,
-// RECOMPOSED audited. This pins the FULL P4 contract:
+// RECOMPOSED audited. This pins the FULL contract:
 //
 //   flips:      pending SKIP honored (the router walks around it); pending
 //               forward ADD honored (the router walks TO it); both directions
@@ -19,9 +19,8 @@
 //               against it too.
 //   readers:    finalize (both calls), lookup next-stage, jump target
 //               validation + loops honour the recomposed plan (ADD-then-jump
-//               consistency) - the override-blind sites P4 threaded.
-//   audit:      RECOMPOSED lands with the flip lists (and is a canonical
-//               event - the 69-count pins hold in t28/t111).
+//               consistency).
+//   audit:      RECOMPOSED lands with the flip lists (a canonical event).
 //   inert:      a run that never calls recompose leaves the state file
 //               byte-identical (the OFF-path gate).
 //
@@ -38,6 +37,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forwardJumpNotice } from "../../core/tools/aidlc-jump.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -92,8 +92,8 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** A created feature-scope project (all 31 post-scaffold stages EXECUTE; cursor
- *  at intent-capture after init). */
+/** A created feature-scope project (cursor at intent-capture after
+ *  initialization; greenfield reverse-engineering is SKIP). */
 function createdProject(scope = "feature"): string {
   const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
   tempDirs.push(proj);
@@ -149,10 +149,7 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     expect(r.status).toBe(0);
     const after = readState(proj);
-    // Suffix flipped, checkbox marker still pending.
     expect(after).toMatch(/- \[ \] market-research — SKIP/);
-    // The router (via lookup next-stage, now state-aware) walks around it:
-    // after intent-capture the next stage is NOT market-research.
     const next = run(proj, "aidlc-state.ts", ["lookup", "next-stage", "intent-capture", "feature"]);
     expect(next.status).toBe(0);
     expect(next.out.trim()).toBe("feasibility");
@@ -207,25 +204,26 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
   // five-second default on Windows; keep all plan/count assertions bounded.
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
     const proj = createdProject();
+    // --status counts against the recomposed plan (the static-grid divergence
+    // this P4 closed), so its total drops by 1 too. It counts the stages after
+    // Initialization, as the plan offer does, so it is read before and after
+    // rather than against Total Stages, which counts setup as well.
+    const shownTotal = (): number => {
+      const status = run(proj, "aidlc-utility.ts", ["status"]);
+      expect(status.status).toBe(0);
+      const m = /^Completion: +\d+\/(\d+) stages/m.exec(status.out);
+      if (!m) throw new Error(`no Completion line in:\n${status.out}`);
+      return Number(m[1]);
+    };
     const before = readState(proj);
     const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
+    const shownBefore = shownTotal();
     run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
     const after = readState(proj);
     const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
     expect(totalAfter).toBe(totalBefore - 1);
     expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
-    // --status counts against the recomposed plan (the static-grid divergence
-    // this P4 closed): total in the progress line drops by 1 too.
-    const status = run(proj, "aidlc-utility.ts", ["status"]);
-    expect(status.status).toBe(0);
-    const m = /Progress: (\d+)\/(\d+)/.exec(status.out) ?? /(\d+)\/(\d+) stages/.exec(status.out);
-    if (m) {
-      expect(Number(m[2])).toBe(totalAfter);
-    } else {
-      // Fall back: the status body must not still claim the pre-flip total
-      // wherever it renders counts.
-      expect(status.out).toContain(String(totalAfter));
-    }
+    expect(shownTotal()).toBe(shownBefore - 1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
@@ -312,14 +310,12 @@ describe("t194 recompose - rejections", () => {
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("walking-skeleton gate anchor");
-    // And the state file is untouched by the rejection.
     expect(readState(proj)).toMatch(/- \[ \] functional-design — SKIP/);
   });
 
   test("each refused stage names what the person can do instead", () => {
     const proj = createdProject();
     const before = readState(proj);
-    // Done: jump back to run it again.
     const done = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "state-init"]);
     expect(done.status).not.toBe(0);
     expect(done.out).toContain("not pending");
@@ -332,17 +328,14 @@ describe("t194 recompose - rejections", () => {
     const addCurrent = run(proj, "aidlc-utility.ts", ["recompose", "--add", "intent-capture"]);
     expect(addCurrent.status).not.toBe(0);
     expect(addCurrent.out).toContain("`/aidlc --stage intent-capture --single`");
-    // A starved input names both ways to make the change.
     const starved = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);
     expect(starved.status).not.toBe(0);
     expect(starved.out).toContain("also add a stage that produces what is missing, or also skip the stage that needs it");
-    // Moving the skeleton anchor names jumping past it and the scopes that skip it.
     const anchorSkip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
     expect(anchorSkip.status).not.toBe(0);
     expect(anchorSkip.out).toContain("jump past it when the workflow reaches it");
     expect(anchorSkip.out).toContain("change to a scope that skips it (bugfix, ");
     expect(readState(proj)).toBe(before);
-    // Adding ahead of the anchor names the isolated run and the scopes that run it.
     const bugfix = createdProject("bugfix");
     const anchorAdd = run(bugfix, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
     expect(anchorAdd.status).not.toBe(0);
@@ -358,21 +351,55 @@ describe("t194 recompose - rejections", () => {
     expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
   });
 
-  test("autonomous Construction rejected: recompose refuses and names a setter that runs", () => {
-    // The engine-side anchor for the "never recompose under autonomous
-    // Construction" rule (mirrors the park guard). A created feature project has no
-    // Construction Autonomy Mode field, so inject it as autonomous the way
-    // set-autonomy would, then confirm the verb refuses and the state is
-    // untouched by the rejection.
+  // A stage this work skipped goes back as the plan had it before the skip,
+  // even where the plan leaves out what it reads (bugfix's Deployment
+  // Pipeline), whatever reason the command carries: the undo, a fresh add, a
+  // jump to it. A stage the work never skipped is checked.
+  test("a stage this work skipped goes back over the strict check; one it never skipped is checked", () => {
+    for (const reason of [[], ["--reason", "jump to deployment-pipeline"]]) {
+      const proj = createdProject("bugfix");
+      const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "deployment-pipeline", "--reason", "the person asked to skip it"]);
+      expect(skip.status, skip.out).toBe(0);
+      const back = run(proj, "aidlc-utility.ts", ["recompose", "--add", "deployment-pipeline", ...reason]);
+      expect(back.status, back.out).toBe(0);
+      expect(readState(proj)).toMatch(/- \[ \] deployment-pipeline \u2014 EXECUTE/);
+    }
+    const proj = createdProject("bugfix");
+    const fresh = run(proj, "aidlc-utility.ts", ["recompose", "--add", "observability-setup"]);
+    expect(fresh.status).not.toBe(0);
+    expect(fresh.out).toContain("Recompose rejected by the strict validator");
+  });
+
+  // Under "Continue automatically" the person's own plan change goes through,
+  // as their scope change does; a change nobody asked for is refused, naming
+  // the setter that lets it through. A created feature project has no
+  // Construction Autonomy Mode field, so it is injected as set-autonomy writes
+  // it.
+  const SESSION = "01995000-7a11-7000-8000-00000000c194";
+  const attended: NodeJS.ProcessEnv = { ...process.env, AIDLC_SESSION_OVERRIDE: SESSION, AIDLC_UNATTENDED: "0" };
+  function autonomousProject(): { proj: string; before: string } {
     const proj = createdProject();
     const sp = statePathOf(proj);
-    const withAutonomy = readFileSync(sp, "utf-8").replace(
+    const before = readFileSync(sp, "utf-8").replace(
       /- \*\*Status\*\*: Running/,
       "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
     );
-    expect(withAutonomy).toContain("- **Construction Autonomy Mode**: autonomous");
-    writeFileSync(sp, withAutonomy, "utf-8");
-    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(before).toContain("- **Construction Autonomy Mode**: autonomous");
+    writeFileSync(sp, before, "utf-8");
+    return { proj, before };
+  }
+  // What the person types, through the human-turn hook every harness uses.
+  function says(proj: string, prompt: string): void {
+    const res = spawnSync(BUN, [toolIn(proj, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+      env: { ...attended, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj } as Record<string, string>,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(res.status, res.stderr).toBe(0);
+  }
+  const refusedNamingTheSetter = (r: { status: number; out: string }): void => {
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Construction Autonomy Mode is autonomous");
     // The step it names is one that runs: the setter's real command, and no
@@ -380,8 +407,41 @@ describe("t194 recompose - rejections", () => {
     expect(r.out).toMatch(/`[^`]*aidlc[^`]*bolt[^`]* set-autonomy --mode gated`/);
     expect(r.out).not.toContain("(aidlc-bolt set-autonomy");
     expect(r.out).not.toContain("wait for the current build");
-    // The state file is untouched by the refusal (still autonomous, still EXECUTE).
-    expect(readState(proj)).toBe(withAutonomy);
+  };
+
+  test("autonomous Construction: the person's own request goes through, and the work keeps running automatically", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "/aidlc --skip market-research");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research", "--reason", "the person asked to skip it"], attended);
+    expect(r.status, r.out).toBe(0);
+    const after = readState(proj);
+    expect(after).toContain("- **Construction Autonomy Mode**: autonomous");
+    expect(after).toMatch(/- \[ \] market-research \u2014 SKIP/);
+    // Only the plan changed: the stage rows other than the flip, and the autonomy choice, are as they were.
+    const rows = (content: string) => content.split("\n").filter((line) => /^- \[.\] /.test(line) && !line.includes(" market-research "));
+    expect(rows(after)).toEqual(rows(before));
+    expect(auditText(proj)).toContain("RECOMPOSED");
+  });
+
+  test("autonomous Construction: with no request of the person's on record, recompose refuses and names a setter that runs", () => {
+    const { proj, before } = autonomousProject();
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], attended));
+    expect(readState(proj)).toBe(before);
+  });
+
+  test("autonomous Construction: the turn that chose Continue automatically is not a request for this change", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "Continue automatically");
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], attended));
+    expect(readState(proj)).toBe(before);
+  });
+
+  test("autonomous Construction: an unattended driver is nobody's request, even with a turn on record", () => {
+    const { proj, before } = autonomousProject();
+    says(proj, "/aidlc --skip market-research");
+    refusedNamingTheSetter(run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"], { ...attended, AIDLC_UNATTENDED: "1" }));
+    expect(readState(proj)).toBe(before);
   });
 
   test("gated Construction proceeds: recompose flips as today when autonomy is not autonomous", () => {
@@ -453,7 +513,7 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
     // Jump forward over the promoted stage to code-generation: the forward
-    // loop must mark IN-FLIGHT intermediates [S] against the EFFECTIVE plan.
+    // loop must mark pending intermediates [S] against the EFFECTIVE plan.
     // First put the cursor at requirements-analysis (jump execute redo-shape).
     const jr = run(proj, "aidlc-jump.ts", [
       "execute", "--target", "code-generation", "--direction", "forward",
@@ -479,7 +539,6 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(body.stages_skipped).toContain("user-stories");
     expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. You can go back to [A-Z][^.]* any time\.$/);
     expect(body.notice).not.toContain("--stage");
-    // One plain line: no stage slugs, no internals.
     expect(body.notice).not.toContain("[S]");
     const back = run(proj, "aidlc-jump.ts", [
       "execute", "--target", String(before), "--direction", "backward",
@@ -519,22 +578,28 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect((JSON.parse(jr.out) as { notice?: string }).notice).toContain("You can go back to User Stories any time.");
   });
 
-  test("only a forward jump's instruction asks for its notice; a backward one is unchanged", () => {
+  test("a forward jump says its line with the step it lands on; the backward print at Code Generation is unchanged", () => {
     const proj = createdProject("bugfix");
-    const message = (args: string[]): string => {
+    const directive = (args: string[]): { kind?: string; stage?: string; message?: string; change_notices?: string[] } => {
       const out = run(proj, "aidlc-orchestrate.ts", ["next", ...args]).out;
-      return (JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { message?: string }).message ?? "";
+      return JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}");
     };
     const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
-    const forward = message(["--stage", "code-generation"]);
-    expect(forward).toContain("--direction forward");
-    expect(forward).toContain("When its output carries `notice`, tell the person that line once, as written.");
-    run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
-    // The guard recovery recognizes this exact backward line, so it stays as it was.
-    const backward = message(["--stage", String(before)]);
+    // The person's `next` makes the forward jump and says what it skipped with
+    // the step it lands on, once.
+    const forward = directive(["--stage", "code-generation"]);
+    expect(forward.kind).not.toBe("print");
+    expect(forward.stage).toBe("code-generation");
+    expect((forward.change_notices ?? []).filter((line) => line.startsWith("Moved to Code Generation"))).toHaveLength(1);
+    expect(readState(proj)).toContain("- **Current Stage**: code-generation");
+    // With Code Generation the step on record, the plan-approval guard judges a
+    // jump at the command the print names, and the guard recovery recognizes
+    // this exact backward line, so it stays as it was.
+    const backward = directive(["--stage", String(before)]).message ?? "";
     expect(backward).toContain("--direction backward");
     expect(backward).toMatch(/` to perform the jump, then re-run `next` to continue from the jump target\.$/);
     expect(backward).not.toContain("notice");
+    expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
 
   // After "go back to Requirements Analysis", the person hears how to return,
@@ -560,14 +625,15 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const nextEnv: Record<string, string | undefined> = { ...chat };
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const nextIn = () => (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
-      {}) as { kind?: string; narration?: string };
+      {}) as { kind?: string; narration?: string; change_notices?: string[] };
     const said = nextIn();
     expect(said.kind).toBe("run-stage");
-    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
-    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. You can return to Code Generation/);
-    // Said once.
-    expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
-    // And the way back works: the jump it names goes through.
+    expect(said.change_notices ?? []).toContainEqual(expect.stringMatching(
+      /^Moved back to [A-Z][^.;`]*\. You can return to Code Generation any time\.$/,
+    ));
+    expect(String(said.narration)).not.toContain("Moved back to");
+    const again = nextIn();
+    expect(`${(again.change_notices ?? []).join(" ")} ${again.narration ?? ""}`).not.toContain("return to Code Generation");
     expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
     expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
@@ -609,8 +675,8 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const nextEnv: Record<string, string | undefined> = { ...chat };
     delete nextEnv.AIDLC_SCOPE_MAPPING;
     const said = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
-      {}) as { narration?: string };
-    expect(String(said.narration)).toContain("You can return to Code Generation any time.");
+      {}) as { change_notices?: string[] };
+    expect((said.change_notices ?? []).join(" ")).toContain("You can return to Code Generation any time.");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
@@ -646,7 +712,6 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(message).toContain("next --stage requirements-analysis`.");
     expect(message).not.toContain("change scope");
 
-    // The commands it names, in order, land the workflow on the stage.
     const added = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories", "--reason", "jump to user-stories"]);
     expect(added.status, added.out).toBe(0);
     const jumped = run(proj, "aidlc-jump.ts", [
@@ -665,7 +730,14 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(behind.message).toContain("comes before the current stage, User Stories");
     expect(behind.message).toContain("next --stage intent-capture --single`");
     const before = readState(proj);
-    const alone = directive(["--stage", "intent-capture", "--single"]) as { kind?: string; stage?: string; change_notices?: string[] };
+    // The isolated step arrives in parts with the team's rules, as any
+    // stage's does; the run-stage is what the last part's `continue` returns.
+    const aloneEnv: Record<string, string | undefined> = { ...process.env };
+    delete aloneEnv.AIDLC_SCOPE_MAPPING;
+    const alone = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, ["--stage", "intent-capture", "--single"], {
+      cwd: proj,
+      env: aloneEnv,
+    }).directive ?? {}) as { kind?: string; stage?: string; change_notices?: string[] };
     expect(alone.kind).toBe("run-stage");
     expect(alone.stage).toBe("intent-capture");
     expect(alone.change_notices).toContain(

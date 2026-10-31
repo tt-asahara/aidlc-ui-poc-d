@@ -61,7 +61,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const UTILITY = join(TOOLS, "aidlc-utility.ts");
@@ -138,7 +138,6 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
     expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
   });
 
-  // codekbRepoName: exactly 1 recorded repo -> that repo name.
   test("codekbRepoName: 1 recorded repo → that name", () => {
     const proj = seedRecordedIntent();
     rewriteIntentRepos(proj, ["only-repo"]);
@@ -310,7 +309,7 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
     expect(dir.produces.length).toBeGreaterThan(0);
     for (const p of dir.produces) {
       expect(p.startsWith(codekbPrefix), `produces ${p} not under codekb`).toBe(true);
-      // It must NOT carry the per-intent record tail the OLD placement used.
+      // It must NOT carry the per-intent record tail.
       expect(p.includes("/intents/")).toBe(false);
       expect(p.includes("/inception/reverse-engineering/")).toBe(false);
     }
@@ -324,16 +323,18 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
     }
   });
 
-  test("multi-repo reverse-engineering enumerates the full produces set under every registered repo", () => {
+  // Once per artifact, with {repo} for each registered repo, and the note naming
+  // them: one path per repo grew the step past one result (#2874).
+  test("multi-repo reverse-engineering names the full produces set once, for every registered repo", () => {
     const repos = ["repo-a", "repo-b"];
     const { dir, proj } = emitReverseEngineering(repos);
-    expect(dir.produces).toHaveLength(18);
-    for (const repo of repos) {
-      const prefix = `${relativeCodekbDir(proj, repo, DEFAULT_SPACE)}/`;
-      expect(dir.produces.filter((path) => path.startsWith(prefix))).toHaveLength(9);
-      expect(dir.produces).toContain(`${prefix}architecture.md`);
-      expect(dir.produces).toContain(`${prefix}reverse-engineering-timestamp.md`);
-    }
+    const prefix = `${relativeCodekbDir(proj, "{repo}", DEFAULT_SPACE)}/`;
+    expect(dir.produces).toHaveLength(9);
+    expect(dir.produces.every((path) => path.startsWith(prefix))).toBe(true);
+    expect(dir.produces).toContain(`${prefix}architecture.md`);
+    expect(dir.produces).toContain(`${prefix}reverse-engineering-timestamp.md`);
+    expect((dir as RunStageDirective & { repos_note?: string }).repos_note)
+      .toBe("Each path with {repo} is one file per repository this work covers: repo-a and repo-b.");
     expect(
       dir.produces.some((path) =>
         path.includes(`/codekb/${basename(proj)}/`)
@@ -379,7 +380,6 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
 }
 
-// A second, inactive intent row that recorded its own repos.
 function appendIntentRow(proj: string, repos: string[]): void {
   const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
   const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
@@ -387,7 +387,6 @@ function appendIntentRow(proj: string, repos: string[]): void {
   writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
 }
 
-// A code knowledge base store with one artifact in it.
 function seedStore(proj: string, repo: string): void {
   const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
   mkdirSync(dir, { recursive: true });
@@ -447,15 +446,15 @@ describe("t182 codekb repo name — project root inside a linked git worktree", 
 });
 
 // ============================================================================
-// 5. Topologies that must keep basename(projectDir) EXACTLY as before. The repo
-// name is read from `--git-common-dir`, which git answers RELATIVE TO THE
-// DIRECTORY IT WAS MEASURED IN. Resolving it against `--show-toplevel` instead
-// climbs above the repository whenever the project root sits below the toplevel,
-// and if a git dir happens to sit at that level the resolver would return a
-// DIFFERENT repository's name — silently, since the path exists so no fallback
-// fires. Both cases below are that shape; `--git-dir` === `--git-common-dir`
-// identifies them (only a linked worktree has those differ), so both keep today's
-// answer.
+// 5. Topologies that must keep basename(projectDir). The repo name is read from
+// `--git-common-dir`, which git answers RELATIVE TO THE DIRECTORY IT WAS
+// MEASURED IN. Resolving it against `--show-toplevel` instead climbs above the
+// repository whenever the project root sits below the toplevel, and if a git
+// dir happens to sit at that level the resolver would return a DIFFERENT
+// repository's name - silently, since the path exists so no fallback fires.
+// Both cases below are that shape; `--git-dir` === `--git-common-dir`
+// identifies them (only a linked worktree has those differ), so both keep
+// basename(projectDir).
 // ============================================================================
 describe("t182 codekb repo name — project root below the git toplevel keeps basename", () => {
   const roots: string[] = [];
@@ -481,7 +480,7 @@ describe("t182 codekb repo name — project root below the git toplevel keeps ba
     gitInitAt(root);
     const sub = join(root, "packages", "service");
     mkdirSync(sub, { recursive: true });
-    // Unchanged behaviour: the project root names itself, not the repository.
+    // The project root names itself, not the repository.
     expect(codekbRepoName(sub)).toBe("service");
   });
 

@@ -14,14 +14,34 @@ AI-DLC provides three ways to interact with agents during stages, plus approval 
 
 ## Tri-Mode Question Flow
 
-When a stage gathers your input, the agent presents three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)).
+When a stage gathers your input, the agent writes its questions to a file and offers three interaction modes. You choose the one that suits you; later stages reuse that choice (see [Asked Once, Then Reused](#asked-once-then-reused)). From the run in [Getting Started](01-getting-started.md):
 
+```text
+ Answer mode
+ I've created 8 questions at
+ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/intent-capture-questions.md.
+ How would you like to answer them?
+ > 1. Guide me
+      Walk through each question interactively here
+   2. I'll edit the file
+      Fill in the answers in the file directly
+   3. Chat
+      Discuss freely; I'll extract the decisions from the conversation
+   4. Type something.
+   5. Chat about this
 ```
-▸ Choose interaction mode:
-  (1) Guide Me — agent asks structured questions
-  (2) Edit File — write directly to the artifact
-  (3) Chat — freeform discussion
-```
+
+In a questions file the agent creates, each ordinary question names who would
+usually answer it, such as `[Product owner]` or `[Developer]`, and questions for
+the same person are kept together, unless one of them has to wait for another
+person's answer. A team can split the questions that way, and on your own you
+can see which are about what the product does and which about how it is built.
+Anyone can still answer any question. When the agent asks you one of these
+questions, in the chat or its question picker, the label comes in front of its
+text too. A question added later goes at the end with its own label. The
+confirmation, change-request and approval sections carry no label. A file that
+already existed keeps its questions as they were, unless you ask to redo the
+stage from scratch, which replaces it with a new one.
 
 ### Guide Me
 
@@ -69,19 +89,24 @@ records the mode you meant, so you are not asked again because of the wording.
 
 ## Approval Gates
 
-Every stage (except the 3 Initialization stages) ends with an approval gate. This is your checkpoint to review the agent's work before the workflow advances.
+Every stage (except the 3 Initialization stages) ends with an approval gate. This is your checkpoint to review the agent's work before the workflow advances. In Construction, the gates can come per Unit instead, and the ones you chose to let run automatically are recorded without a question (see [Phases and Stages](04-phases-and-stages.md#what-runs-in-order-and-what-runs-in-parallel)).
 
 ### Standard Gate
 
-The default approval gate presents two options:
+The default approval gate presents two options. From the same run:
 
-```
-▸ How would you like to proceed?
-  (1) Approve — Continue to [next stage]
-  (2) Request Changes — Provide revision feedback
+```text
+ Approval
+ Intent Capture & Framing complete. How would you like to proceed?
+ > 1. Approve
+      Continue to Feasibility & Constraints
+   2. Request Changes
+      Provide revision feedback
+   3. Type something.
+   4. Chat about this
 ```
 
-`[next stage]` shows the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
+The Approve line names the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
 
 - **Approve** reports the outcome; the engine marks the stage completed, updates
   `aidlc-state.md`, shows a progress line, and advances to the next stage
@@ -109,29 +134,33 @@ same thing twice:
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
 Construction setting changes with your words beside them (`Person Reply` in
 the audit trail), as your harness passed them and trimmed. At a stage gate that
-is every message since the gate was shown, up to 8: if a ninth arrives, or one
-message is over 8000 characters, none of them is attached, and a change request
-records the agent's `--reason` instead; at Plan Approval, your latest 8
+is every message since the last decision and since the stage started, except one
+already recorded as your answer to another question, unless it is your latest: if one of
+them is over 8000 characters or no longer on record, none of them is attached
+and the row names the latest message instead, and a change request records the
+agent's `--reason`; at Plan Approval, your latest 8
 replies, each cut to 8000 characters; at a checkpoint or verification-command
 question, your replies joined in order, keeping the last 8000 characters; for a
 Construction setting you asked to change, the message that asked. The summary confirmation records the
 choice the agent read and, for a change request, what you asked to change. A
-decision needs a reply from you after the question was shown: the agent cannot
-answer for you.
+decision needs a reply from you after the question was shown (at a stage gate,
+one since the stage started that the agent names as your answer counts too,
+such as an approval you gave at the learnings question, when you sent it after
+the stage's output was last written). The agent cannot answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
-your chat, exactly as they arrived, and the agent is told to revise from those
-words. If you picked Request Changes and then answered "What should change?",
-your answer is the feedback. Replies to other questions in between, and a
-question on its own, are not. When the agent's own summary of your request
+your chat since the last decision, exactly as they arrived (except a message
+already recorded as your answer to another question, unless it is your latest),
+and the agent revises from what you asked for. If you picked Request Changes and then
+answered "What should change?", both are the feedback. When the agent's own summary of your request
 differs, it is kept beside your words as the `Conductor Summary`. This needs a
 harness that passes your typed prompt and chat session to the human-turn hook;
 where it does not, the feedback is what the agent reports, as before. Like the
 human turn itself, this records what the prompt seam received, not who typed
 it.
 
-The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
+The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, and a stage gate's approval or change request needs one sent since the stage started and after the gate was shown, or the message the agent names as your answer (for an approval, one you sent after the stage's output was last written: an earlier one did not see what you approve). This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record.
 
 The human-turn hook is activated only through the dispatcher's hook route;
 it does not authenticate who launched the dispatcher. Hooks and tool calls run
@@ -167,7 +196,7 @@ flowchart TD
     REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
-    PROGRESS["Display progress line:\nN/total overall"]
+    PROGRESS["Display progress line:\nN of M stages done"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]
@@ -210,14 +239,9 @@ flowchart TD
 
 If you have requested changes 3 or more times on the same stage, a third option appears:
 
-```
-▸ This is revision cycle 4. How would you like to proceed?
-  (1) Approve — Continue to [next stage]
-  (2) Request Changes — Provide revision feedback
-  (3) Accept as-is — Archive current version and move on
-```
+After three rounds of **Request Changes** on the same stage, the question says which revision cycle it is and adds a third option, **Accept as-is** (described as "Archive current version and move on").
 
-**Accept as-is** archives the current version of the stage artifacts and advances the workflow. This prevents infinite revision loops when perfect is the enemy of good.
+**Accept as-is** approves the stage with its documents as they are and advances the workflow. This prevents infinite revision loops when perfect is the enemy of good.
 
 ### How It Activates
 
@@ -227,7 +251,7 @@ If you have requested changes 3 or more times on the same stage, a third option 
 | 2nd | Standard 2-option gate, plus a note: "After one more revision, an 'Accept as-is' option will become available." |
 | 3rd and beyond | 3-option gate with Accept as-is |
 
-The revision count resets when you move to the next stage.
+The revision count resets when you move to the next stage. AI-DLC keeps it in its record of the work, not in the chat, so stopping and resuming, or continuing in a new chat, keeps it too.
 
 ---
 
@@ -270,8 +294,8 @@ You can edit any artifact by hand. What happens next depends on where you are:
 
 | When you edit | What you do | What you see |
 |---|---|---|
-| Answers to a stage's questions | Choose **I'll edit the file**, fill in the `[Answer]:` lines, then send **done** (or "ready") | The agent reads your answers and carries on from them; when summary confirmation is on, you confirm the summary first |
-| A code plan waiting for approval | Choose **I'll edit the files**, change the plan or test instructions (or write your answer in `code-generation-questions.md`), then send **done** | Your edited plan is approved as you left it and the build starts. The agent cannot write those files while you edit. If your edit broke the plan's Testing Contract block, the agent repairs it and asks you once to build |
+| Answers to a stage's questions | Choose **I'll edit the file**, fill in the `[Answer]:` lines, then tell the agent you are done | The agent reads your answers and carries on from them; when summary confirmation is on, you confirm the summary first |
+| A code plan waiting for approval | Choose **I'll edit the files**, change the plan or test instructions (or write your answer in `code-generation-questions.md`), then tell the agent you are done | Your edited plan is approved as you left it and the build starts. The agent cannot write those files while you edit. If your edit broke the plan's Testing Contract block, the agent repairs it and asks you once to build |
 | An artifact already reviewed in the stage you are on, before its gate | Edit the file, then carry on | Under Guard Policy `relaxed` or `off` (most scopes), you hear one line saying the file changed, the edit is recorded once in the audit trail as `CHANGE_ACCEPTED`, and the run continues. Under `strict`, the old review no longer covers the edited file, so it is reviewed once more, as it is now, before the gate. That extra review happens once: if you edit the file again after it, the agent stops and tells you, and you choose **Request Changes** to start the review over |
 | An artifact from a stage that is already finished | Edit the file, then carry on | Nothing re-runs by itself, and later stages read the file as you left it. See [After a stage is finished](#after-a-stage-is-finished) |
 | Between sessions | Edit the files, then resume with `/aidlc` | The same rules apply the next time the file is checked |
@@ -282,7 +306,7 @@ When you are told a file changed and the run is continuing, that is the whole re
 
 An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
 
-- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
+- **What warns you.** Under Guard Policy `strict`, when you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; under `relaxed` and `off` (the default in most plans) an edit is taken as yours: the next step raises no stage as behind, and you are told once only when the file you edited was a reviewed document or a confirmed questions file. A tracked document that has gone missing is raised under every policy. `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
 - **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
 - **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Code Generation's review covers only the application files listed in a Unit's source manifest, so a file you added or moved by hand is not reviewed until it is listed there. When you choose Modify, name the files you added or moved and the Unit they belong to. Work without Units (for example a bugfix or refactor scope) has no source manifest, so check hand edits to application code yourself before you approve. Construction checkpoints you set to run automatically stay automatic.
 
@@ -290,24 +314,18 @@ An edit to a finished stage's files is not reviewed or approved again unless you
 
 ## Progress Tracking
 
-After every approval, a progress line appears:
+After an approval that moves on to another stage, a progress line appears. From the same run:
 
-```
-Progress: 6/30 in-scope stages complete (9/33 overall) | 6/7 IDEATION. Next: Approval & Handoff
+```text
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 ```
 
 This shows:
 - Progress across the stages your plan runs after Initialization (the count you
-  were shown when the work started), with every stage finished so far in
-  parentheses
-- Progress within the current phase
+  were shown when the work started)
 - The name of the next stage
 
-On a shorter plan the numbers are smaller, for example:
-
-```
-Progress: 2/6 in-scope stages complete (5/33 overall) | 2/2 INCEPTION. Next: Code Generation
-```
+On a shorter plan the numbers are that plan's own.
 
 ---
 

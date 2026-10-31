@@ -9,12 +9,17 @@
 //   - Kiro CLI (agent `resources` glob) and opencode (`instructions` glob) put
 //     the memory files in context on every request: an edit is seen at once and
 //     survives a compaction. The proof is that the host's own include, as it
-//     stood when the chat started, covers every file of the stage's bundle.
+//     stood when the chat started, covers every file of the stage's bundle. The
+//     include reads the engine's copy of the active space's memory
+//     (aidlc-includes.ts ACTIVE_MEMORY_DIR), so the proof also needs that copy
+//     to be the memory files now; a step that finds it behind sends the text
+//     and brings the copy up to date for the next request.
 //   - Claude Code (the `.claude/rules/aidlc.md` @-import) loads them at startup,
 //     resume, clear, compact and fork, but not after a mid-chat edit, and it can
-//     clear old tool results with no hook. The proof is that the files still
-//     have the hashes the session start recorded for this chat. A resume or a
-//     fork may also carry older copies, so after an edit it proves nothing.
+//     clear old tool results with no hook. The proof is that each file of the
+//     step's rules still has the hash the session start recorded for this chat.
+//     A resume may also carry older copies of a file edited since the chat's
+//     last load, so that file proves nothing; after a fork none does.
 //   - Codex has no include and a compaction drops every tool result. The proof
 //     is that this thread was handed the bundle, that no session start or
 //     compaction hook ran since, and that its rollout shows no compaction after.
@@ -23,13 +28,14 @@
 //     before its SessionStart hook runs, and keeps that copy through summaries
 //     and reloads; a mid-chat edit is never read (live on 1.2.4). AI-DLC writes
 //     the memory text into that file (aidlc-includes.ts). The proof is that the
-//     chat's session start found the file as the memory files make it now and
-//     did not rewrite it, and that the file is still exactly that. Kiro IDE
-//     gives the agent's shell no chat id, so which chat ran a command is known
-//     only from the process tree, where the latest chat to start wins. So the
-//     pointer also needs every chat with an open turn (a prompt with no Stop
-//     since) to hold the same file; Kiro CLI v3 names the chat in
-//     KIRO_SESSION_ID instead.
+//     chat's session start found the file as the memory files made it then and
+//     did not rewrite it, that each file of the step's rules is as it was then,
+//     and that the file on disk is the memory text now (a helper Kiro starts now
+//     reads it). Kiro IDE gives the agent's shell no chat id, so which chat ran
+//     a command is known only from the process tree, where the latest chat to
+//     start wins. So the pointer also needs every chat with an open turn (a
+//     prompt with no Stop since) to hold the same files; Kiro CLI v3 names the
+//     chat in KIRO_SESSION_ID instead.
 //   - Cursor and Copilot have no proven copy, so they always get the text.
 //
 // The host is identified twice: by the installed tree that wrote the record and
@@ -37,11 +43,12 @@
 // missing or unreadable means the full text.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { isoTimestamp, isStopHookProbe, sessionsDir, toPosix, validSessionId, writeFileAtomic } from "./aidlc-lib.ts";
+import { rootIntegrationTarget } from "./aidlc-distribution.ts";
 import { runtimeHarnessDir, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
-import { KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
+import { ACTIVE_MEMORY_DIR, activeMemoryCopyDrift, KIRO_IDE_STEERING, kiroIdeSteering } from "./aidlc-includes.ts";
 
 type LoadRecord = {
   v: 1;
@@ -50,9 +57,11 @@ type LoadRecord = {
   at: string;
   space: string;
   // per-request: the host re-reads every file under `dir` on each request.
-  // at-load: the host read `files` (sha256 by path) when this chat last loaded.
+  // at-load: the host read `files` (sha256 by path; "" for a file it did not
+  // read, or one a resume may hold in two versions) when this chat last loaded.
   // at-start: the chat holds the steering file it captured when it started
-  // (`steering`, its sha256), whatever happens later.
+  // (`steering`, its sha256), whatever happens later, and with it the text of
+  // `files` (the memory files it carried, sha256 by path).
   refresh: "per-request" | "at-load" | "at-start" | "none";
   dir?: string;
   files?: Record<string, string>;
@@ -74,7 +83,16 @@ export const RULES_HELD_NOTE =
 // agent (live on Kiro CLI, an agent that held the edited file still repeated
 // what it did under the old rule). `full` is the last full-text delivery, the
 // only proof Codex has; a session start or a compaction forgets it.
-type DeliveryRecord = { v: 2; last: string; full?: { bundle: string; at: string } };
+// `persona` is the conductor persona this chat was handed (its sha256): the
+// engine sends it again to any chat that does not hold it, so a person who
+// carries on in a new chat, or whose chat compacted, still has an agent that
+// works by it. Forgotten with `full`, by the same session start and compaction.
+type DeliveryRecord = {
+  v: 2;
+  last: string;
+  full?: { bundle: string; at: string };
+  persona?: { sha256: string; at: string };
+};
 
 function readDelivery(projectDir: string, sid: string): DeliveryRecord | null {
   const record = readJson<DeliveryRecord>(deliveryRecordPath(projectDir, sid));
@@ -83,6 +101,11 @@ function readDelivery(projectDir: string, sid: string): DeliveryRecord | null {
 
 function writeDelivery(projectDir: string, sid: string, record: DeliveryRecord): void {
   try {
+    // A project whose session records were never written yet (hooks off for a
+    // launch, a fresh clone) has no folder for them. Without it the write fails
+    // and nothing is remembered, which would hand this chat the conductor
+    // persona again on every step.
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileAtomic(deliveryRecordPath(projectDir, sid), `${JSON.stringify(record)}\n`);
   } catch {
     removeQuietly(deliveryRecordPath(projectDir, sid));
@@ -95,7 +118,7 @@ function forgetFullDelivery(projectDir: string, sid: string): void {
   const record = readDelivery(projectDir, sid);
   if (record === null) {
     removeQuietly(deliveryRecordPath(projectDir, sid));
-  } else if (record.full !== undefined) {
+  } else if (record.full !== undefined || record.persona !== undefined) {
     writeDelivery(projectDir, sid, { v: 2, last: record.last });
   }
 }
@@ -132,9 +155,23 @@ function sha256File(path: string): string {
   }
 }
 
+function fileHashes(projectDir: string, rels: string[]): Record<string, string> {
+  return Object.fromEntries(rels.map((rel) => [rel, sha256File(join(projectDir, rel))]));
+}
+
+// Each file of a step's rules is as the chat loaded it. The other files the
+// host loaded (another phase's file, a template that carries no rule) do not
+// decide what this step needs.
+function filesUnchanged(projectDir: string, files: Record<string, string> | undefined, paths: string[]): boolean {
+  return files !== undefined &&
+    paths.every((path) => Object.hasOwn(files, path) && files[path] === sha256File(join(projectDir, path)));
+}
+
+// AI-DLC's own records are plain JSON; the team's opencode.jsonc may hold
+// comments, trailing commas and a byte order mark, so every read allows them.
 function readJson<T>(path: string): T | null {
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return Bun.JSONC.parse(readFileSync(path, "utf-8").replace(/^\uFEFF/, "")) as T;
   } catch {
     return null;
   }
@@ -144,10 +181,20 @@ function memoryDirRel(space: string): string {
   return `aidlc/spaces/${space}/memory/`;
 }
 
-// The files the Claude @-import stub names, as project-relative paths. The stub
-// lives at .claude/rules/aidlc.md and imports each memory file by a path
-// relative to itself.
-function claudeImportedFiles(projectDir: string, harnessDir: string): string[] {
+// The copy of the active space's memory that every include reads.
+const COPY_DIR_REL = `${ACTIVE_MEMORY_DIR}/`;
+
+// The memory file of `space` a path the host reads stands for: the same file
+// under the copy, or the file itself (an include from before the copy).
+function memoryFileFor(rel: string, space: string): string {
+  return rel.startsWith(COPY_DIR_REL) ? `${memoryDirRel(space)}${rel.slice(COPY_DIR_REL.length)}` : rel;
+}
+
+// The memory files the Claude @-import stub names, as project-relative paths.
+// The stub lives at .claude/rules/aidlc.md and imports each file of the copy
+// by a path relative to itself; the copy was made the memory files of `space`
+// before this is read.
+function claudeImportedFiles(projectDir: string, harnessDir: string, space: string): string[] {
   const stub = join(projectDir, harnessDir, "rules", "aidlc.md");
   let text: string;
   try {
@@ -160,27 +207,35 @@ function claudeImportedFiles(projectDir: string, harnessDir: string): string[] {
     const match = /^@(\S+\.md)\s*$/.exec(line.trim());
     if (!match) continue;
     const rel = toPosix(relative(projectDir, resolve(dirname(stub), match[1])));
-    if (!rel.startsWith("..")) files.push(rel);
+    if (!rel.startsWith("..")) files.push(memoryFileFor(rel, space));
   }
   return files;
+}
+
+// The directory a memory include reads, when `globs` holds the include for
+// the copy or for the files of `space` themselves; null for neither.
+function includedMemoryDir(globs: unknown, space: string, prefix: string): string | null {
+  if (!Array.isArray(globs)) return null;
+  for (const dir of [COPY_DIR_REL, memoryDirRel(space)]) {
+    if (globs.includes(`${prefix}${dir}**/*.md`)) return dir;
+  }
+  return null;
 }
 
 // Kiro CLI on its 2.0 agent engine: the conductor agent file is the one AI-DLC
 // ships (hooks keyed by event; the 3.0 upgrade rewrites them as a list) and its
 // resources glob carries the active space's whole memory tree.
-function kiroIncludesMemory(projectDir: string, space: string): boolean {
+function kiroIncludedMemoryDir(projectDir: string, space: string): string | null {
   const agent = readJson<{ hooks?: unknown; resources?: unknown }>(join(projectDir, ".kiro", "agents", "aidlc.json"));
   if (agent === null || agent.hooks === null || typeof agent.hooks !== "object" || Array.isArray(agent.hooks)) {
-    return false;
+    return null;
   }
-  return Array.isArray(agent.resources) &&
-    agent.resources.includes(`file://${memoryDirRel(space)}**/*.md`);
+  return includedMemoryDir(agent.resources, space, "file://");
 }
 
-function opencodeIncludesMemory(projectDir: string, space: string): boolean {
-  const config = readJson<{ instructions?: unknown }>(join(projectDir, "opencode.json"));
-  return Array.isArray(config?.instructions) &&
-    config.instructions.includes(`${memoryDirRel(space)}**/*.md`);
+function opencodeIncludedMemoryDir(projectDir: string, space: string): string | null {
+  const config = readJson<{ instructions?: unknown }>(join(projectDir, rootIntegrationTarget(projectDir, "opencode.json")));
+  return includedMemoryDir(config?.instructions, space, "");
 }
 
 function removeQuietly(path: string): void {
@@ -223,24 +278,29 @@ export function recordRulesLoad(
     // This start rewrote the file, or it does not carry the memory text: the
     // chat holds an older copy, or none.
     const current = !includeChanged && inlined.length > 0 && steering === sha256Text(text);
-    record = { ...base, refresh: "at-start", steering, ...(current ? {} : { stale: true as const }) };
+    record = current
+      ? { ...base, refresh: "at-start", steering, files: fileHashes(projectDir, inlined) }
+      : { ...base, refresh: "at-start", steering, stale: true };
   } else if (harness === "claude") {
-    const files: Record<string, string> = {};
-    for (const rel of claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir))) {
-      files[rel] = sha256File(join(projectDir, rel));
-    }
+    const files = fileHashes(projectDir, claudeImportedFiles(projectDir, runtimeHarnessDir(projectDir), space));
     const previous = readJson<LoadRecord>(path);
-    const sameAsBefore = previous !== null && previous.stale !== true && previous.files !== undefined &&
-      JSON.stringify(previous.files) === JSON.stringify(files);
+    const known = previous !== null && previous.stale !== true && previous.files !== undefined;
+    // A resume replays the chat as it was: a file whose text changed since the
+    // chat's last load may be in it twice, old and new, so it proves nothing.
+    if (source === "resume" && known) {
+      for (const rel of Object.keys(files)) {
+        if (previous?.files?.[rel] !== files[rel]) files[rel] = "";
+      }
+    }
     const stale = includeChanged || source === "fork" ||
-      (source === "resume" && !sameAsBefore) ||
+      (source === "resume" && !known) ||
       !["startup", "clear", "compact", "resume"].includes(source);
     record = { ...base, refresh: "at-load", files, ...(stale ? { stale: true as const } : {}) };
   } else if (harness === "kiro" || harness === "opencode") {
-    const covered = !includeChanged && (harness === "kiro"
-      ? kiroIncludesMemory(projectDir, space)
-      : opencodeIncludesMemory(projectDir, space));
-    record = covered ? { ...base, refresh: "per-request", dir: memoryDirRel(space) } : null;
+    const dir = includeChanged ? null : (harness === "kiro"
+      ? kiroIncludedMemoryDir(projectDir, space)
+      : opencodeIncludedMemoryDir(projectDir, space));
+    record = dir !== null ? { ...base, refresh: "per-request", dir } : null;
   } else if (harness === "codex") {
     record = { ...base, refresh: "none", ...(transcriptPath ? { transcript: transcriptPath } : {}) };
   }
@@ -294,6 +354,26 @@ function hostRunsThisChat(harness: string, sessionId: string): boolean {
 /**
  * Kiro IDE: a prompt opens its chat's turn, and the turn's Stop closes it.
  */
+// Whether a turn-open marker still counts: it holds a readable time, not later
+// than now and no older than OPEN_TURN_MAX_MS. One that cannot be read, holds
+// no time, lies ahead of the clock (the clock went back) or is older is a
+// closed turn.
+function openTurnMarkerCounts(path: string, now: number): boolean {
+  let at = NaN;
+  try {
+    at = Date.parse(readFileSync(path, "utf-8").trim());
+  } catch {
+    // A marker that cannot be read counts as an old one.
+  }
+  return Number.isFinite(at) && at <= now && now - at <= OPEN_TURN_MAX_MS;
+}
+
+/** Whether a Kiro IDE chat has a turn open: the person's message opened it, no Stop has closed it, and it is not stale. */
+export function kiroIdeTurnOpen(projectDir: string, sessionId: string | undefined): boolean {
+  const sid = validSessionId(sessionId);
+  return sid !== null && openTurnMarkerCounts(turnOpenPath(projectDir, sid), Date.now());
+}
+
 export function noteKiroIdeTurn(projectDir: string, sessionId: string | undefined, open: boolean): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;
@@ -309,21 +389,15 @@ export function noteKiroIdeTurn(projectDir: string, sessionId: string | undefine
 }
 
 // Kiro IDE: whether this chat has an open turn and every other chat with an
-// open turn holds `steering` too, so whichever of them ran the command holds
-// it.
-function openTurnsHold(projectDir: string, sid: string, space: string, steering: string): boolean {
+// open turn holds the files of `paths` as they are now too, so whichever of
+// them ran the command holds them.
+function openTurnsHold(projectDir: string, sid: string, space: string, paths: string[]): boolean {
   const now = Date.now();
   let own = false;
   for (const name of readdirSync(sessionsDir(projectDir))) {
     if (!name.endsWith(".turn-open")) continue;
     const other = name.slice(0, -".turn-open".length);
-    let at = NaN;
-    try {
-      at = Date.parse(readFileSync(join(sessionsDir(projectDir), name), "utf-8").trim());
-    } catch {
-      // A marker that cannot be read is skipped like an old one.
-    }
-    if (!Number.isFinite(at) || now - at > OPEN_TURN_MAX_MS) continue;
+    if (!openTurnMarkerCounts(join(sessionsDir(projectDir), name), now)) continue;
     if (other === sid) {
       own = true;
       continue;
@@ -331,7 +405,7 @@ function openTurnsHold(projectDir: string, sid: string, space: string, steering:
     const record = readJson<LoadRecord>(loadRecordPath(projectDir, other));
     if (
       record?.v !== 1 || record.harness !== "kiro-ide" || record.refresh !== "at-start" ||
-      record.stale === true || record.space !== space || record.steering !== steering
+      record.stale === true || record.space !== space || !filesUnchanged(projectDir, record.files, paths)
     ) {
       return false;
     }
@@ -348,6 +422,7 @@ export function noteRulesDelivered(
   sessionId: string | undefined,
   bundle: string,
   held: boolean,
+  personaSha256?: string | null,
 ): void {
   const sid = validSessionId(sessionId);
   if (sid === null) return;
@@ -356,7 +431,59 @@ export function noteRulesDelivered(
   const previous = readDelivery(projectDir, sid);
   // Milliseconds, so a compaction in the same second as the delivery is never read as before it.
   const full = held ? previous?.full : { bundle, at: new Date().toISOString() };
-  writeDelivery(projectDir, sid, { v: 2, last: bundle, ...(full ? { full } : {}) });
+  const persona = personaSha256
+    ? { sha256: personaSha256, at: new Date().toISOString() }
+    : previous?.persona;
+  writeDelivery(projectDir, sid, {
+    v: 2,
+    last: bundle,
+    ...(full ? { full } : {}),
+    ...(persona ? { persona } : {}),
+  });
+}
+
+/**
+ * A step reply this chat's shell piped or captured away from the tool result
+ * (the Kiro IDE adapter reads the command's shape, #2167) did not put its rules
+ * in front of the agent: what the chat's last step named is forgotten (an empty
+ * name matches no bundle), so its next step carries the text again, once. The
+ * conductor persona the chat was handed is kept. A chat with no record has
+ * nothing to forget.
+ */
+export function forgetRulesDelivered(projectDir: string, sessionId: string | undefined): void {
+  const sid = validSessionId(sessionId);
+  if (sid === null) return;
+  const previous = readDelivery(projectDir, sid);
+  if (previous === null || previous.last === "") return;
+  writeDelivery(projectDir, sid, { v: 2, last: "", ...(previous.persona ? { persona: previous.persona } : {}) });
+}
+
+/**
+ * True when this chat should be handed the conductor persona whose text hashes
+ * to `personaSha256`: the host's command names its chat, and that chat has not
+ * been handed this persona (a new chat on work under way, or one that
+ * compacted). False where the host's commands do not name their chat (Copilot,
+ * Cursor): there the engine keeps its one delivery per workflow, because the
+ * persona travels on its own directive part and every extra delivery is one
+ * more tool call the person sees. A missing or unreadable delivery record
+ * counts as no persona delivery; an exception from the surrounding checks
+ * returns false.
+ */
+export function chatNeedsPersona(
+  projectDir: string | undefined,
+  sessionId: string | undefined,
+  personaSha256: string,
+): boolean {
+  try {
+    const sid = validSessionId(sessionId);
+    // With no project dir resolved there is nowhere to keep the record, so a
+    // delivery could not be remembered and would repeat on every step.
+    if (sid === null || projectDir === undefined) return false;
+    if (!hostRunsThisChat(runtimeHarnessName(projectDir), sid)) return false;
+    return readDelivery(projectDir, sid)?.persona?.sha256 !== personaSha256;
+  } catch {
+    return false;
+  }
 }
 
 type RuleEntry = { path: string; text: string };
@@ -397,7 +524,7 @@ function rolloutHolds(transcript: string, bundle: string): { holds: boolean; com
     let parts: { bundle: string; next: number; of: number; entries: RuleEntry[] } | null = null;
     for (const line of readFileSync(transcript, "utf-8").split("\n")) {
       const compaction = line.includes('"compacted"');
-      const output = line.includes('"function_call_output"') && line.includes('{\\"kind\\":\\"');
+      const output = line.includes('"function_call_output"') && line.includes('\\"kind\\":\\"');
       if (!compaction && !output) continue;
       let entry: { type?: unknown; timestamp?: unknown; payload?: { type?: unknown; output?: unknown } };
       try {
@@ -417,7 +544,9 @@ function rolloutHolds(transcript: string, bundle: string): { holds: boolean; com
       }
       if (entry.type !== "response_item" || entry.payload?.type !== "function_call_output") continue;
       const text = typeof entry.payload.output === "string" ? entry.payload.output : "";
-      const at = text.search(/\{"kind":"(run-stage|load-steering)"/);
+      // The step is the one JSON object after the host's lines about the command;
+      // it opens with its words for the person, so `kind` sits anywhere in it.
+      const at = text.indexOf('{"');
       if (at < 0) continue;
       let step: { kind?: unknown; bundle?: unknown; part?: unknown; parts?: unknown; rules_content?: unknown };
       try {
@@ -426,6 +555,7 @@ function rolloutHolds(transcript: string, bundle: string): { holds: boolean; com
         // Cut short at an end: it proves nothing.
         continue;
       }
+      if (step.kind !== "run-stage" && step.kind !== "load-steering") continue;
       const rules = step.rules_content;
       if (rules !== undefined && !isRuleEntries(rules)) continue;
       if (step.kind === "load-steering") {
@@ -477,21 +607,31 @@ export function chatHoldsRules(
     // agent in a new chat once ignored a team rule its steering held).
     if (delivered === null || delivered.last !== bundle) return false;
     if (record.refresh === "at-start") {
-      if (record.stale === true || !record.steering) return false;
+      if (record.stale === true || !record.steering || !filesUnchanged(projectDir, record.files, paths)) return false;
+      // A helper Kiro starts now reads the file on disk: it carries these files
+      // as they are now.
       const { text, inlined } = kiroIdeSteering(projectDir, space);
-      const steering = sha256Text(text);
-      if (record.steering !== steering || !paths.every((path) => inlined.includes(path))) return false;
-      if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== steering) return false;
-      return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, steering);
+      if (!paths.every((path) => inlined.includes(path))) return false;
+      if (sha256File(join(projectDir, KIRO_IDE_STEERING)) !== sha256Text(text)) return false;
+      return process.env.KIRO_SESSION_ID ? true : openTurnsHold(projectDir, sid, space, paths);
     }
     if (record.refresh === "per-request") {
       const dir = record.dir ?? "";
-      return dir !== "" && paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
+      if (dir === "") return false;
+      const memory = memoryDirRel(space);
+      // The host reads the copy with each request: it holds the exact text only
+      // while each file of the bundle is in the copy as the memory file is now.
+      if (dir === COPY_DIR_REL) {
+        const behind = new Set(activeMemoryCopyDrift(projectDir, space));
+        return paths.every((path) =>
+          path.startsWith(memory) && path.endsWith(".md") &&
+          sha256File(join(projectDir, path)) !== "" && !behind.has(path.slice(memory.length))
+        );
+      }
+      return paths.every((path) => path.startsWith(dir) && path.endsWith(".md"));
     }
     if (record.refresh === "at-load") {
-      const files = record.files ?? {};
-      if (record.stale === true || !paths.every((path) => path in files)) return false;
-      return Object.entries(files).every(([rel, hash]) => sha256File(join(projectDir, rel)) === hash);
+      return record.stale !== true && filesUnchanged(projectDir, record.files, paths);
     }
     if (harness === "codex") {
       const full = delivered?.full;

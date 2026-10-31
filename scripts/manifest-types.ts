@@ -16,8 +16,11 @@ export type DirMap = { src: string; dst: string };
  * By default <dst> is relative to <harnessDir>/ (e.g. .kiro/skills/aidlc/SKILL.md).
  * Set projectRoot:true to land it at the dist tree ROOT instead, beside the
  * harness dir (e.g. dist/kiro/AGENTS.md) — Kiro/Codex put AGENTS.md there.
+ * Set copyOnly:true for a file only the copy runtime (dist/<name>/) ships,
+ * such as Cursor's copy installer: the native projection, and so
+ * `aidlc config`, leaves it out.
  */
-export type FileMap = { src: string; dst: string; projectRoot?: boolean };
+export type FileMap = { src: string; dst: string; projectRoot?: boolean; copyOnly?: boolean };
 
 /**
  * Context handed to a harness emit() plugin. Everything it needs to write
@@ -35,7 +38,7 @@ export type EmitContext = {
   harnessName: string;
   /** Absolute path to the dist tree root for this harness (e.g. <repo>/dist/codex). */
   distRoot: string;
-  /** The harness directory name (".claude" | ".kiro" | ".codex"). */
+  /** The harness directory name (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /** Route-table-derived namespace trusted by native host permission surfaces. */
   trustedRouteNamespace: string;
@@ -125,6 +128,13 @@ export type HarnessManifest = {
   name: string;
   /** User-facing product name used by lifecycle output. */
   productName: string;
+  /**
+   * The name the harness lists show instead of productName, for a harness
+   * told apart from another of the same product (Kiro CLI's v2 engine).
+   */
+  choiceName?: string;
+  /** What the harness lists show beside the name: which tools and engine it runs on. */
+  choiceNote?: string;
   /** Exact host action printed after `aidlc config` completes. */
   configNextStep: string;
   /**
@@ -159,8 +169,10 @@ export type HarnessManifest = {
     missedReply?: string;
     /**
      * `missedReply` for one host this tree runs in, told apart by environment
-     * variables that host sets for the agent's shell commands (any one
-     * non-empty). Without them, `missedReply` stands.
+     * variables that host sets for the agent's shell commands (any one: a
+     * `NAME` entry matches when it is set, a `NAME=value` entry when it holds
+     * that value, in any case; a `NAME=value` variable holding another value
+     * rules the host out). Without them, `missedReply` stands.
      */
     missedReplyInHost?: { env: string[]; text: string };
     /**
@@ -198,12 +210,39 @@ export type HarnessManifest = {
      */
     agentStep?: string;
     /**
+     * `agentStep` for one host this tree runs in, told apart the same way as
+     * `missedReplyInHost` (environment variables of the agent's shell). An
+     * agent given one line per tool can show the wrong one, so each host gets
+     * its own line alone. Without them, `agentStep` stands.
+     */
+    agentStepInHost?: { env: string[]; text: string };
+    /**
      * The project file `agentStep` has the agent change, relative to the
      * project. When it, or a folder on the way to it, is a link, or it is
      * not one plain file, the agent changes nothing and shows the person
      * `recovery` instead.
      */
     agentStepEdits?: string;
+    /**
+     * The project JSON file this host reads AI-DLC's hook registrations from,
+     * relative to the project, and the line the person is shown instead of
+     * `agentStep` while it is missing (`missing`) or is not valid JSON
+     * (`invalid`): no setting brings those hooks back. `<repair>` is doctor's
+     * command that puts the file back; `<entry>` and `<folder>` as in
+     * `agentStep`.
+     */
+    registration?: { file: string; missing: string; invalid: string };
+    /**
+     * The line the person is shown instead of `agentStep`, and doctor's fix
+     * instead of `recovery` and `notRunYet`, when the host started this chat
+     * in a folder inside the project, where no setting brings its hooks back.
+     * The engine knows that folder only from the host's own record of the
+     * running chat, read only and only that field (aidlc-lib.ts
+     * hostChatStartFolder: Claude Code's sessions/<pid>.json, Codex's rollout
+     * session record); with no such record the usual lines stand.
+     * `<entry>` and `<folder>` as in `agentStep`.
+     */
+    startedInsideProject?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
@@ -233,6 +272,13 @@ export type HarnessManifest = {
    * layout reads it from the installed tree instead of from the row name.
    */
   kiroLayout?: "agent-v1" | "kas";
+  /**
+   * Kiro `agent-v1` rows only: text the packager appends to every hook command
+   * in the row's `agents/*.json`, so the shell the host starts each hook in
+   * hands the hook's own exit code back. The authored JSON carries the command
+   * without it.
+   */
+  hookCommandSuffix?: string;
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -251,6 +297,15 @@ export type HarnessManifest = {
    * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
+   * The frontmatter lines a plugin's agent gets in place of frontmatterAdditions,
+   * which reach core's agents only: the dispatch surface of a persona with no
+   * role of its own. The packager writes them as the frontmatter of
+   * <harnessDir>/tools/data/plugin-agent.md, so the native release's rewrites
+   * reach them as they reach the personas, and the plugin compose hook adds
+   * them to every agent a plugin ships (each key the agent does not declare).
+   */
+  pluginAgentFrontmatter?: string[];
   /**
    * Exact text the native release swaps in before its generic invocation
    * rewrite, for projected content whose copy-channel spelling has no
@@ -304,6 +359,38 @@ export type HarnessManifest = {
    */
   directiveMaxBytes?: number;
   /**
+   * How many options this host's structured-question box shows besides its own
+   * Other row, for a box that shows fewer than five. The questions file letters
+   * each question's options from A to that letter before `X. Other`, so the
+   * agent puts every question in the box whole: the packager writes the letters
+   * into core prose for `{{OPTION_LETTERS}}`. Absent: A-E, the method's own
+   * five. The number is the one the harness's question-rendering annex names.
+   */
+  questionOptions?: number;
+  /**
+   * The host's status line setting that shows AI-DLC's progress, in the host's
+   * own settings shape. Emitted into <harnessDir>/tools/data/harness.json, never
+   * into a settings file the host reads: the engine writes it into the person's
+   * own settings only when they choose it (Claude Code: the project's
+   * .claude/settings.local.json), so the status line they set up stays theirs.
+   * Codex has no per-person project file: its `items` go into the project's
+   * shared .codex/config.toml `[tui] status_line` only when someone chooses it.
+   */
+  statusLine?: { type: "command"; command: string } | { items: string[] };
+  /**
+   * For a host whose own stop event records every dispatched agent's finish
+   * (the log-subagent hook's SUBAGENT_COMPLETED row) before the agent that
+   * dispatched it sees the result, so a review recorded with no agent finished
+   * since its request was recorded before any reviewer finished. `env` names
+   * the variables that host sets in its agent's shell (as `NAME`, or
+   * `NAME=value`), so a command another host runs in the same project is not
+   * taken for it. Emitted into <harnessDir>/tools/data/harness.json. Declare it
+   * only after a live check shows the row lands before the result: a host that
+   * writes it later, or not for every dispatch, would make the engine tell the
+   * person no reviewer finished a review one did.
+   */
+  agentFinishRecorded?: { env: string[] };
+  /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside
    * <harnessDir>/skills/ — the whole skill set (orchestrator, stage/scope
@@ -313,7 +400,7 @@ export type HarnessManifest = {
    */
   skipRunnerGen?: boolean;
   /**
-   * Optional per-shell emission plugin (codex only today). It always writes
+   * Optional per-shell emission plugin (codex, copilot and opencode today). It always writes
    * into ctx.distRoot; under --check the packager invokes it in two independent
    * temporary roots and compares the complete generated trees.
    */
@@ -332,6 +419,17 @@ export type HarnessManifest = {
   plugin?: {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
+    /**
+     * Where the host reads a plugin catalogue (`marketplace.json`) when the
+     * person adds the projection as a marketplace. Defaults to `manifestDir`.
+     */
+    marketplaceDir?: string;
+    /**
+     * Whether the host adds a folder of plugins as one marketplace from that
+     * catalogue, so AI-DLC's own plugins share one there. Defaults to true for
+     * "store" and "cursor" kinds; a folder drop has no catalogue.
+     */
+    hostCatalogue?: boolean;
     /** Host-specific plugin hook projection shape. */
     kind: "store" | "kiro" | "kiro-ide" | "cursor";
     /**

@@ -34,7 +34,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -43,6 +43,7 @@ import {
   cleanupTestProject,
   createOrchestrationTestProject,
   runOrchestrateNext,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seededAuditDir,
   seededAuditShard,
@@ -52,7 +53,9 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  auditBlockField,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -66,6 +69,11 @@ import {
   unitLifecycleReceiptsInUse,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -86,6 +94,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 - **Construction Iteration**: unit-major
 
@@ -237,7 +246,6 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
 
   test("artifacts without a receipt do not settle a unit once the ledger is in use", () => {
     constructionProject();
-    // unit-a earns a real receipt; unit-b gets artifacts only.
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
@@ -475,14 +483,16 @@ describe("t260 single active unit", () => {
     expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
     // Picked for another Unit whose artifacts are missing: still checked.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    recordGuardRecoveryChoice(proj, "record-unit-completion", false);
     const missing = unitVerb(proj, "complete", "unit-b");
     expect(missing.rc).not.toBe(0);
     expect(missing.out).toContain("required artifacts are missing");
     publish("unit-a", [record("unit-a")]);
     // Offered but not yet picked: still refused.
     expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
-    // The person picks it, as the human-turn hook records a reply.
+    // The person picks it: the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    recordGuardRecoveryChoice(proj, "record-unit-completion", false);
     const done = unitVerb(proj, "complete", "unit-a");
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("UNIT_COMPLETED");
@@ -492,11 +502,40 @@ describe("t260 single active unit", () => {
   test("pause/complete/resume validate against the active checkpoint", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
-    // pause/complete of a NON-active unit refuses
     expect(unitVerb(proj, "pause", "unit-b", ["--reason", "r", "--next-action", "n"]).rc).not.toBe(0);
     expect(unitVerb(proj, "complete", "unit-b").rc).not.toBe(0);
-    // resume of a non-paused unit refuses
     expect(unitVerb(proj, "resume", "unit-a").rc).not.toBe(0);
+  });
+
+  // A refusal names the step that is true for the unit: a unit that is
+  // already completed has nothing left to do, so the line must not send the
+  // agent back to "start it first"; a unit never started names the start step.
+  test("completing or pausing a finished unit says it is already completed, never start it first", () => {
+    constructionProject();
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
+
+    const again = unitVerb(proj, "complete", "unit-a");
+    expect(again.rc).not.toBe(0);
+    const againLine = JSON.parse(again.out).error as string;
+    expect(againLine).toContain('Refusing to complete unit "unit-a" for "functional-design": it is already completed');
+    expect(againLine).toContain("orchestrate");
+    expect(againLine).not.toContain("start it first");
+
+    const pause = unitVerb(proj, "pause", "unit-a", ["--reason", "r", "--next-action", "n"]);
+    expect(pause.rc).not.toBe(0);
+    const pauseLine = JSON.parse(pause.out).error as string;
+    expect(pauseLine).toContain('Refusing to pause unit "unit-a" for "functional-design": it is already completed');
+    expect(pauseLine).not.toContain("start it first");
+
+    // Never started: the start step, in full, and no claim that it is done.
+    const fresh = unitVerb(proj, "complete", "unit-b");
+    expect(fresh.rc).not.toBe(0);
+    const freshLine = JSON.parse(fresh.out).error as string;
+    expect(freshLine).toContain("no unit is active");
+    expect(freshLine).toContain("unit start --stage functional-design --unit unit-b");
+    expect(freshLine).not.toContain("already completed");
   });
 
   test("a completed unit reopens only when the engine routes it again", () => {
@@ -690,7 +729,6 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
 
     expect(unitVerb(proj, "resume", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
-    // the checkpoint mirror is cleared on complete
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
@@ -1027,6 +1065,7 @@ describe("t260 finished Units keep their receipts across a Construction policy c
 
   test("a Unit reopened before the switch back still owes its redo", () => {
     policyProject("unit-major");
+    seedAnsweredUnitQuestions(proj, SLUG, ["unit-b"]);
     writeUnitArtifacts(proj, "unit-a");
     appendFileSync(
       seededAuditShard(proj),
@@ -1336,5 +1375,195 @@ describe("t260 finished Units keep their receipts across a Construction policy c
       block("SWARM_UNIT_CONVERGED", "2099-01-01T00:00:01Z", `**Stage**: ${stage}\n**Unit name**: unit-a\n**Run floor**: ${stageFloor}\n`),
     );
     expect(swarmConvergedUnits(proj, stage).has("unit-a")).toBe(true);
+  });
+});
+
+// The receipt waits for the Unit's review: a request open with no verdict is a
+// finding still owed, so a completion over it would hand the walk on with the
+// finding lost. Only that case refuses; the person's message the agent names
+// (--message), their pick on a recovery ask, and every freshness question stay
+// outside this check.
+describe("t260 the receipt waits for the Unit's review", () => {
+  const REVIEWER = "aidlc-architecture-reviewer-agent";
+  const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+  const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+
+  // The person types `prompt`; the shipped human-turn hook keeps it. Returns
+  // the id of the message it kept.
+  function said(prompt: string): string {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t260-person", prompt }),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+    expect(id).not.toBeNull();
+    return id as string;
+  }
+
+  function review(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
+    const r = spawnSync(
+      BUN,
+      [LOG, "review", "--stage", SLUG, "--reviewer", REVIEWER, "--unit", "unit-a", ...args, "--project-dir", proj],
+      {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+          AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+          ...env,
+        },
+      },
+    );
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  // A started Unit with its artifacts written and its review requested: the
+  // review file the request opened is returned.
+  function startedAndRequested(): string {
+    expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
+    writeUnitArtifacts(proj, "unit-a");
+    const requested = review(["--iteration", "1"]);
+    expect(requested.rc, requested.out).toBe(0);
+    return (JSON.parse(requested.out.trim().split("\n").at(-1) ?? "{}") as { reviewFile: string }).reviewFile;
+  }
+
+  function recordVerdict(reviewFile: string, verdict: "READY" | "NOT-READY"): void {
+    const absolute = join(proj, reviewFile);
+    mkdirSync(join(absolute, ".."), { recursive: true });
+    writeFileSync(
+      absolute,
+      `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+    const recorded = review(["--iteration", "1", "--verdict", verdict]);
+    expect(recorded.rc, recorded.out).toBe(0);
+  }
+
+  test("complete refuses while the Unit's review request has no verdict, and names the verdict command", () => {
+    constructionProject();
+    startedAndRequested();
+    const early = unitVerb(proj, "complete", "unit-a");
+    expect(early.rc).not.toBe(0);
+    // The refusal is the tool's JSON error line, so its quotes are escaped.
+    expect(early.out).toContain("Refusing to complete unit");
+    expect(early.out).toContain("its review (iteration 1) is still waiting for a verdict. Record it with");
+    expect(early.out).toContain(`review --stage ${SLUG} --reviewer ${REVIEWER} --unit unit-a --iteration 1 --verdict <READY|NOT-READY>`);
+    expect(early.out).toContain("--retry-pending");
+    expect(early.out).toContain(
+      "If the person says to go on without this review, run this completion again with --message <id>, the message they said it in.",
+    );
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+  });
+
+  test("complete records once the verdict is recorded", () => {
+    constructionProject();
+    const reviewFile = startedAndRequested();
+    recordVerdict(reviewFile, "READY");
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("the person's message, named, lets the receipt record over the open review", () => {
+    constructionProject();
+    startedAndRequested();
+    // Their "approve it as it is": the Unit's checkpoint takes it with
+    // --over-unfinished-review, and that checkpoint needs this receipt first.
+    const id = said("approve it as it is, skip the rest of the review");
+    // Naming no message, the refusal leads with the retry that names theirs.
+    const unnamed = unitVerb(proj, "complete", "unit-a");
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(`If their message ${id} (sent `);
+    expect(unnamed.out).toContain("run the same command with --message <id>");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+    const done = unitVerb(proj, "complete", "unit-a", ["--message", id]);
+    expect(done.rc, done.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  // The checkpoint lets the person's approval go over an unfinished review only
+  // where personMayApproveOverUnfinishedReview says so: a strict the team
+  // locked in a memory layer keeps the review required for everyone on the
+  // repo, so the receipt the checkpoint needs first stays refused there too.
+  test("a strict the team locked in memory keeps the receipt refused over the person's named message, and the refusal says so", () => {
+    constructionProject();
+    const reviewFile = startedAndRequested();
+    const space = seededStateFile(proj).match(/^(.*[\\/]spaces[\\/][^\\/]+)[\\/]/)?.[1];
+    expect(space).toBeDefined();
+    const memory = join(space as string, "memory");
+    mkdirSync(memory, { recursive: true });
+    const layer = join(memory, "project.md");
+    const existing = existsSync(layer) ? readFileSync(layer, "utf-8") : "# Project\n";
+    writeFileSync(layer, existing.includes("## Guard Policy\n")
+      ? existing.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+      : `${existing.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`, "utf-8");
+    const id = said("approve it as it is, skip the rest of the review");
+    const refused = unitVerb(proj, "complete", "unit-a", ["--message", id]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("still waiting for a verdict");
+    expect(refused.out).toContain(
+      "Finish it first, without asking the person: your team set Guard Policy to strict for everyone on this repo",
+    );
+    expect(refused.out).not.toContain("run this completion again");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+    recordVerdict(reviewFile, "READY");
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("under Guard Policy off a recorded verdict never refuses the receipt, whatever changed since; an open request still does", () => {
+    constructionProject();
+    const path = seededStateFile(proj);
+    writeFileSync(
+      path,
+      readFileSync(path, "utf-8").replace(
+        "- **State Version**: 8",
+        "- **State Version**: 8\n- **Guard Policy**: off (set by you)",
+      ),
+      "utf-8",
+    );
+    const reviewFile = startedAndRequested();
+    const open = unitVerb(proj, "complete", "unit-a");
+    expect(open.rc).not.toBe(0);
+    expect(open.out).toContain("still waiting for a verdict");
+
+    recordVerdict(reviewFile, "READY");
+    // The reviewed output changes after the verdict: a freshness question for
+    // the gate under strict, nothing at all under off, and never the receipt's.
+    writeFileSync(
+      join(seededRecordDir(proj), "construction", "unit-a", SLUG, artifactFilename("functional-spec")),
+      "# functional-spec\nchanged after the review\n",
+      "utf-8",
+    );
+    const done = unitVerb(proj, "complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("a request made before the outputs changed is requested again at its own pass, not retried", () => {
+    constructionProject();
+    startedAndRequested();
+    writeFileSync(
+      join(seededRecordDir(proj), "construction", "unit-a", SLUG, artifactFilename("functional-spec")),
+      "# functional-spec\nchanged after the request\n",
+      "utf-8",
+    );
+    const changed = unitVerb(proj, "complete", "unit-a");
+    expect(changed.rc).not.toBe(0);
+    expect(changed.out).toContain("was requested before its outputs changed, so request it again with");
+    expect(changed.out).toContain(`--unit unit-a --iteration 1\``);
+    expect(changed.out).not.toContain("--retry-pending");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
   });
 });

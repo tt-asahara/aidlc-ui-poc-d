@@ -20,9 +20,9 @@
 //     auto-discovered plugin seam mapping opencode hook moments onto the core
 //     hook bodies in .aidlc/hooks/).
 //   - the method tree reaches ambient context via the `instructions` glob in
-//     the shipped opencode.json ("aidlc/spaces/default/memory/**/*.md",
-//     live-verified) — opencode's native include surface, re-pointed on a
-//     space switch by aidlc-includes.ts.
+//     the shipped opencode.json ("aidlc/active-memory/**/*.md",
+//     live-verified): opencode's native include surface, reading the engine's
+//     git-ignored copy of the active space's memory (aidlc-includes.ts).
 //   - opencode auto-reads the project-root AGENTS.md (its primary rules file).
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
@@ -69,6 +69,12 @@ const manifest: HarnessManifest = {
           "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
           // The variant shipped with notes above each group of lines.
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
         ],
       },
     },
@@ -94,10 +100,10 @@ const manifest: HarnessManifest = {
     {
       // The team's own opencode.json (model, provider, instructions,
       // permission rules) keeps everything it has: AI-DLC adds only its own
-      // entries and leaves a permission map's "*" rule to the team. Its part
-      // ships in root-blocks; a copy leaves the file out and its setup adds
-      // the part. A file AI-DLC wrote whole before is adopted by the
-      // signatures below.
+      // entries, its asks for the team's own commands first so the team's
+      // rules after them decide. Its part ships in root-blocks; a copy leaves
+      // the file out and its setup adds the part. A file AI-DLC wrote whole
+      // before is adopted by the signatures below.
       path: "opencode.json",
       policy: "json-entries",
       legacySignatures: {
@@ -136,6 +142,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // Project config at the dist ROOT (opencode reads ./opencode.json):
     // skills.paths (skill discovery), instructions glob (the method include),
     // and the native aidlc command permissions.
@@ -159,6 +166,8 @@ const manifest: HarnessManifest = {
     manifestDir: ".opencode-plugin",
     kind: "store",
     installRoots: [".opencode"],
+    // opencode installs a plugin from an npm module and reads no catalogue file.
+    hostCatalogue: false,
   },
 };
 

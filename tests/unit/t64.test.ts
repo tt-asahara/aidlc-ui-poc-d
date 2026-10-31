@@ -4,40 +4,25 @@
 // Mechanism: none (pure functions, zero I/O, zero LLM, zero tokens).
 // Technique: example-based.
 //
-// In-process migration of tests/unit/t64-stage-parser.sh (TAP plan 45).
-// The .sh spawned `bun -e` 7 times (parse_field, parse_catching,
-// roundtrip, parse_and_validate, parse_json, plus two inline `bun -e`
-// blocks) against inline YAML heredocs. Every assertion exercised one of
-// three exported functions and asserted an OBSERVABLE result — a field
-// value, a thrown error message, JSON-equality of a round-trip, or a
-// VALID/INVALID validator verdict. None of the 45 touched the CLI shell,
-// argv parsing, or process.exit, so all 45 port to direct calls with no
-// env-seam Bun.spawnSync case retained.
-//
-// Sources read for this port:
+// Sources:
 //   dist/claude/.claude/tools/aidlc-lib.ts
-//     :882 parseStageFrontmatter(raw: string): Record<string, unknown>
+//     parseStageFrontmatter(raw: string): Record<string, unknown>
 //          throws "parseStageFrontmatter expected string, got <type>" on
-//          non-string (:886); throws "Stage file missing YAML frontmatter
-//          (---...---)" when the ^---\n...\n--- block is absent (:892).
-//     :1154 emitStageFrontmatter(obj): string  — FIELD_ORDER-pinned YAML;
-//          quotes scalars matching /[:#]|^\s|\s$/ (:1155).
-//     objectListField (:1242) throws "Malformed consumes[] entry ..."
-//          (:1286) and "Blank line not allowed inside consumes[] block ..."
-//          (:1264).
+//          non-string; throws "Stage file missing YAML frontmatter
+//          (---...---)" when the ^---\n...\n--- block is absent.
+//     emitStageFrontmatter(obj): string - FIELD_ORDER-pinned YAML;
+//          quotes scalars matching /[:#]|^\s|\s$/.
+//     objectListField throws "Malformed consumes[] entry ..."
+//          and "Blank line not allowed inside consumes[] block ...".
 //   dist/claude/.claude/tools/aidlc-stage-schema.ts
-//     :108 validateStageFrontmatter(obj) => { valid, data } | { valid,
-//          errors }. "slug must be kebab-case" (:333 via checkSlugPattern),
-//          "consumes[i].artifact must be kebab-case" (:196), reserved-key
-//          "<key> is reserved (<reason>); not active yet" (:128).
+//     validateStageFrontmatter(obj) => { valid, data } | { valid,
+//          errors }. "slug must be kebab-case" (via checkSlugPattern),
+//          "consumes[i].artifact must be kebab-case", reserved-key
+//          "<key> is reserved (<reason>); not active yet".
 //
-// Behavioural-contract note (house style): the .sh asserted observable
-// outputs, not implementation. This file does the same — it never
-// re-implements the YAML grammar; it pins return values, thrown-error
-// substrings, and round-trip JSON-equality exactly as the .sh did.
-//
-// Parity mapping (.sh assertion text -> test below) is documented inline
-// per describe block. 45 old TAP assertions -> 45 expect() calls.
+// Behavioural-contract note (house style): this file asserts observable
+// outputs, not implementation - it never re-implements the YAML grammar; it
+// pins return values, thrown-error substrings, and round-trip JSON-equality.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -46,11 +31,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
 
-// --- Helpers mirroring the .sh's bun -e wrappers, but in-process. ---
+// --- Helpers. ---
 
-// roundtrip(): the .sh's `roundtrip()` — parse -> emit -> parse, compare
-// JSON. Returns "EQ"/"NE" exactly like the shell helper so the parity is
-// obvious.
 function roundtrip(yaml: string): "EQ" | "NE" {
   const obj1 = parseStageFrontmatter(yaml);
   const yaml2 = emitStageFrontmatter(obj1 as Record<string, unknown>);
@@ -58,18 +40,12 @@ function roundtrip(yaml: string): "EQ" | "NE" {
   return JSON.stringify(obj1) === JSON.stringify(obj2) ? "EQ" : "NE";
 }
 
-// parseAndValidate(): the .sh's `parse_and_validate()` — parse, then run
-// the schema validator, returning "VALID" or "INVALID:<errs joined by |>"
-// so the assert_contains substrings (e.g. "slug must be kebab-case",
-// "must be kebab-case", "<key> is reserved ...") match the same bytes.
 function parseAndValidate(yaml: string): string {
   const obj = parseStageFrontmatter(yaml);
   const r = validateStageFrontmatter(obj);
   return r.valid ? "VALID" : `INVALID:${r.errors.join("|")}`;
 }
 
-// parseCatching(): the .sh's `parse_catching()` — returns "OK" or
-// "ERR:<message>" so thrown-error substring assertions port 1:1.
 function parseCatching(yaml: unknown): string {
   try {
     parseStageFrontmatter(yaml as string);
@@ -79,9 +55,8 @@ function parseCatching(yaml: unknown): string {
   }
 }
 
-// --- Fixtures (verbatim from t64-stage-parser.sh heredocs). The .sh
-// interpolated each heredoc into a `bun -e` backtick template, so the
-// leading `---\n` and exact whitespace are part of the contract. ---
+// --- Fixtures. The leading `---\n` and exact whitespace are part of the
+// contract. ---
 
 const WORKED = `---
 slug: scope-definition
@@ -421,8 +396,6 @@ outputs: b
 ---
 `;
 
-// reserved_passthrough(): the .sh built this fixture per-key with the
-// reserved key appended just before the closing ---.
 function reservedPassthrough(key: string): string {
   const fix = `---
 slug: test
@@ -482,7 +455,7 @@ outputs: b
 
 // Reviewer-bearing stage — `reviewer` is a string, `reviewer_max_iterations`
 // is authored as an unquoted integer (the canonical on-disk form). Exercises
-// V1: the parser coerces the cap to a NUMBER, and the emitter round-trips it
+// the parser coercing the cap to a NUMBER, and the emitter round-tripping it
 // as an unquoted number.
 const REVIEWER = `---
 slug: test
@@ -543,52 +516,42 @@ outputs: b
 `;
 
 // ============================================================
-// Positive baseline (.sh assertions 1-6)
+// Positive baseline
 // ============================================================
 describe("worked example parses each field", () => {
   const obj = parseStageFrontmatter(WORKED) as Record<string, unknown>;
 
   test("slug -> scope-definition", () => {
-    // .sh: "worked example → slug"
     expect(obj.slug).toBe("scope-definition");
   });
 
   test("phase -> ideation", () => {
-    // .sh: "worked example → phase"
     expect(obj.phase).toBe("ideation");
   });
 
   test("execution -> ALWAYS", () => {
-    // .sh: "worked example → execution"
     expect(obj.execution).toBe("ALWAYS");
   });
 
   test("produces length -> 2", () => {
-    // .sh: "worked example → produces length"
     expect((obj.produces as unknown[]).length).toBe(2);
   });
 
   test("consumes length -> 2", () => {
-    // .sh: "worked example → consumes length"
     expect((obj.consumes as unknown[]).length).toBe(2);
   });
 
   test("consumes[0].required is boolean true", () => {
-    // .sh: "worked example → consumes[0].required is boolean true"
-    // The .sh stringified `obj.consumes[0].required` and compared to the
-    // string "true"; here we pin the stronger contract — actual boolean.
     const entry = (obj.consumes as Array<Record<string, unknown>>)[0];
     expect(entry.required).toBe(true);
   });
 });
 
 // ============================================================
-// Missing frontmatter (.sh assertion 7)
+// Missing frontmatter
 // ============================================================
 describe("missing frontmatter", () => {
   test("no --- throws clear 'missing YAML frontmatter' error", () => {
-    // .sh: assert_contains parse_catching "no frontmatter here"
-    //      "missing YAML frontmatter"
     expect(parseCatching("no frontmatter here")).toContain(
       "missing YAML frontmatter"
     );
@@ -596,74 +559,63 @@ describe("missing frontmatter", () => {
 });
 
 // ============================================================
-// Malformed frontmatter (.sh assertions 8-9)
+// Malformed frontmatter
 // ============================================================
 describe("malformed frontmatter", () => {
   test("unclosed frontmatter throws 'missing YAML frontmatter'", () => {
-    // .sh: "unclosed frontmatter throws"
     expect(parseCatching(UNCLOSED)).toContain("missing YAML frontmatter");
   });
 
   test("malformed consumes line throws 'Malformed consumes'", () => {
-    // .sh: "malformed consumes line throws"
     expect(parseCatching(MALFORMED_CONSUMES)).toContain("Malformed consumes");
   });
 });
 
 // ============================================================
-// Scalar parsing (.sh assertions 10-14)
+// Scalar parsing
 // ============================================================
 describe("scalar parsing", () => {
   test("unquoted scalar with spaces", () => {
-    // .sh: "unquoted scalar with spaces"
     const obj = parseStageFrontmatter(SCALAR_FIX) as Record<string, unknown>;
     expect(obj.condition).toBe("unquoted value with spaces");
   });
 
   test("double-quoted scalar strips quotes", () => {
-    // .sh: "double-quoted scalar strips quotes"
     const obj = parseStageFrontmatter(SCALAR_FIX) as Record<string, unknown>;
     expect(obj.lead_agent).toBe("aidlc-product-agent");
   });
 
   test("scalar containing colon parses when quoted", () => {
-    // .sh: "scalar containing colon parses when quoted"
     const obj = parseStageFrontmatter(SCALAR_FIX) as Record<string, unknown>;
     expect(obj.outputs).toBe("aidlc-docs/path/CONDITIONAL: file.md");
   });
 
   test('quoted "true" in scalar stays string type', () => {
-    // .sh: 'quoted "true" in scalar stays string type'
     const obj = parseStageFrontmatter(QUOTED_TRUE) as Record<string, unknown>;
     expect(typeof obj.condition).toBe("string");
   });
 
   test('quoted "true" scalar value', () => {
-    // .sh: 'quoted "true" scalar value'
     const obj = parseStageFrontmatter(QUOTED_TRUE) as Record<string, unknown>;
     expect(obj.condition).toBe("true");
   });
 });
 
 // ============================================================
-// List parsing (.sh assertions 15-17)
+// List parsing
 // ============================================================
 describe("list parsing", () => {
   test("flow-form empty list -> length 0", () => {
-    // .sh: "flow-form empty list → length 0"
     const obj = parseStageFrontmatter(FLOW_EMPTY) as Record<string, unknown>;
     expect((obj.produces as unknown[]).length).toBe(0);
   });
 
   test("populated list -> length 3", () => {
-    // .sh: "populated list → length 3"
     const obj = parseStageFrontmatter(POP_LIST) as Record<string, unknown>;
     expect((obj.support_agents as unknown[]).length).toBe(3);
   });
 
   test("absent required list -> [] (empty array, present)", () => {
-    // .sh: "absent required list → [] (empty array, present)"
-    // Stringified "true:0" in the .sh; here split into the two facts.
     const obj = parseStageFrontmatter(ZERO_ITEMS) as Record<string, unknown>;
     expect(Array.isArray(obj.produces)).toBe(true);
     expect((obj.produces as unknown[]).length).toBe(0);
@@ -671,31 +623,27 @@ describe("list parsing", () => {
 });
 
 // ============================================================
-// Nested-object list consumes[] (.sh assertions 18-21)
+// Nested-object list consumes[]
 // ============================================================
 describe("nested-object list consumes[]", () => {
   test("single consumes[] entry -> artifact", () => {
-    // .sh: "single consumes[] entry → artifact"
     const obj = parseStageFrontmatter(SINGLE_CONSUME) as Record<string, unknown>;
     const entry = (obj.consumes as Array<Record<string, unknown>>)[0];
     expect(entry.artifact).toBe("one-artifact");
   });
 
   test("multi-entry consumes[]", () => {
-    // .sh: "multi-entry consumes[]"
     const obj = parseStageFrontmatter(MULTI_CONSUME) as Record<string, unknown>;
     expect((obj.consumes as unknown[]).length).toBe(2);
   });
 
   test("conditional_on present", () => {
-    // .sh: "conditional_on present"
     const obj = parseStageFrontmatter(MULTI_CONSUME) as Record<string, unknown>;
     const entry = (obj.consumes as Array<Record<string, unknown>>)[1];
     expect(entry.conditional_on).toBe("brownfield");
   });
 
   test("trailing-no-newline: last required: line captured", () => {
-    // .sh: "trailing-no-newline: last required: line captured"
     // consumes is the LAST key, so the extractor strips the newline before
     // the closing ---; the parser's `(?:\r?\n|$)` must still capture the
     // final `required: false`.
@@ -706,45 +654,39 @@ describe("nested-object list consumes[]", () => {
 });
 
 // ============================================================
-// Required-field presence guarantees (.sh assertions 22-25)
+// Required-field presence guarantees
 // ============================================================
 describe("required-field presence guarantees", () => {
   const obj = parseStageFrontmatter(ALL_ABSENT) as Record<string, unknown>;
 
   test("support_agents absent -> array []", () => {
-    // .sh: "support_agents absent → array []"
     expect(Array.isArray(obj.support_agents)).toBe(true);
   });
 
   test("produces absent -> array []", () => {
-    // .sh: "produces absent → array []"
     expect(Array.isArray(obj.produces)).toBe(true);
   });
 
   test("requires_stage absent -> array []", () => {
-    // .sh: "requires_stage absent → array []"
     expect(Array.isArray(obj.requires_stage)).toBe(true);
   });
 
   test("consumes absent -> array []", () => {
-    // .sh: "consumes absent → array []"
     expect(Array.isArray(obj.consumes)).toBe(true);
   });
 });
 
 // ============================================================
-// Boolean coercion in consumes[].required (.sh assertions 26-27)
+// Boolean coercion in consumes[].required
 // ============================================================
 describe("boolean coercion in consumes[].required", () => {
   test("required: true -> boolean type", () => {
-    // .sh: "required: true → boolean type"
     const obj = parseStageFrontmatter(BOOL_TRUE) as Record<string, unknown>;
     const entry = (obj.consumes as Array<Record<string, unknown>>)[0];
     expect(typeof entry.required).toBe("boolean");
   });
 
   test("required: false -> boolean false", () => {
-    // .sh: "required: false → boolean false"
     const obj = parseStageFrontmatter(BOOL_FALSE) as Record<string, unknown>;
     const entry = (obj.consumes as Array<Record<string, unknown>>)[0];
     expect(entry.required).toBe(false);
@@ -752,17 +694,15 @@ describe("boolean coercion in consumes[].required", () => {
 });
 
 // ============================================================
-// Optional for_each (.sh assertions 28-29)
+// Optional for_each
 // ============================================================
 describe("optional for_each", () => {
   test("for_each present -> value", () => {
-    // .sh: "for_each present → value"
     const obj = parseStageFrontmatter(FOR_EACH) as Record<string, unknown>;
     expect(obj.for_each).toBe("unit-of-work");
   });
 
   test("for_each absent -> key not in object", () => {
-    // .sh: "for_each absent → key not in object"
     const obj = parseStageFrontmatter(ALL_ABSENT) as Record<string, unknown>;
     expect("for_each" in obj).toBe(false);
   });
@@ -776,30 +716,25 @@ describe("optional for_each", () => {
 });
 
 // ============================================================
-// Round-trip (.sh assertions 30-33)
+// Round-trip
 // ============================================================
 describe("round-trip parse -> emit -> parse", () => {
   test("minimal (no optional) -> EQ", () => {
-    // .sh: "round-trip: minimal (no optional)"
     expect(roundtrip(ALL_ABSENT)).toBe("EQ");
   });
 
   test("full (for_each + conditional_on) -> EQ", () => {
-    // .sh: "round-trip: full (for_each + conditional_on)"
     expect(roundtrip(FULL)).toBe("EQ");
   });
 
   test("colon in scalar -> EQ", () => {
-    // .sh: "round-trip: colon in scalar"
     expect(roundtrip(COLON_SCALAR)).toBe("EQ");
   });
 
   test("empty lists -> EQ", () => {
-    // .sh: "round-trip: empty lists"
     expect(roundtrip(FLOW_EMPTY)).toBe("EQ");
   });
 
-  // V1: reviewer-bearing stage round-trips with the cap as a NUMBER.
   test("reviewer + numeric cap -> EQ", () => {
     expect(roundtrip(REVIEWER)).toBe("EQ");
   });
@@ -810,7 +745,7 @@ describe("round-trip parse -> emit -> parse", () => {
 });
 
 // ============================================================
-// Reviewer field parse/emit (V1) — reviewer_max_iterations is the one
+// Reviewer field parse/emit - reviewer_max_iterations is the one
 // numeric scalar field: the parser returns it as a NUMBER (not the string
 // "2"), and the emitter writes it back as an unquoted number that re-parses
 // to the same number.
@@ -867,66 +802,58 @@ describe("plugin metadata parse/emit", () => {
 });
 
 // ============================================================
-// Schema integration (.sh assertions 34-35)
+// Schema integration
 // ============================================================
 describe("schema integration (parse -> validate)", () => {
   test("worked example -> VALID", () => {
-    // .sh: "worked example: parse → validate = VALID"
     expect(parseAndValidate(WORKED)).toBe("VALID");
   });
 
   test("full fixture -> VALID", () => {
-    // .sh: "full fixture: parse → validate = VALID"
     expect(parseAndValidate(FULL)).toBe("VALID");
   });
 });
 
 // ============================================================
-// Shape regressions (.sh assertions 36-37)
+// Shape regressions
 // ============================================================
 describe("shape regressions via parse -> validate chain", () => {
   test("bad slug rejected ('slug must be kebab-case')", () => {
-    // .sh: "bad slug rejected via parse→validate chain"
     expect(parseAndValidate(BAD_SLUG)).toContain("slug must be kebab-case");
   });
 
   test("bad artifact name rejected ('must be kebab-case')", () => {
-    // .sh: "bad artifact name rejected via chain"
     expect(parseAndValidate(BAD_ARTIFACT)).toContain("must be kebab-case");
   });
 });
 
 // ============================================================
-// Reserved-key passthrough (.sh assertions 38-42)
+// Reserved-key passthrough
 // ============================================================
 describe("reserved-key passthrough (parser keeps key, validator rejects)", () => {
-  // `when` is NO LONGER reserved — it became an active structured activation
-  // predicate (plugin mechanism, Layer 4). Its shape validation lives in t62;
-  // it is deliberately absent from the reserved-passthrough set here.
+  // `when` is an active structured activation predicate (plugin mechanism,
+  // Layer 4). Its shape validation lives in t62; it is deliberately absent
+  // from the reserved-passthrough set here.
 
   test("on_failure", () => {
-    // .sh: "reserved: on_failure"
     expect(reservedPassthrough("on_failure")).toContain(
       "on_failure is reserved (loop driver); not active yet"
     );
   });
 
   test("blocks_on", () => {
-    // .sh: "reserved: blocks_on"
     expect(reservedPassthrough("blocks_on")).toContain(
       "blocks_on is reserved (construction worktrees); not active yet"
     );
   });
 
   test("timeout", () => {
-    // .sh: "reserved: timeout"
     expect(reservedPassthrough("timeout")).toContain(
       "timeout is reserved (sensor binding); not active yet"
     );
   });
 
   test("retry", () => {
-    // .sh: "reserved: retry"
     expect(reservedPassthrough("retry")).toContain(
       "retry is reserved (loop driver); not active yet"
     );
@@ -934,26 +861,203 @@ describe("reserved-key passthrough (parser keeps key, validator rejects)", () =>
 });
 
 // ============================================================
-// Adversarial edge cases (.sh assertions 43-45)
+// Adversarial edge cases
 // ============================================================
 describe("adversarial edge cases", () => {
   test("non-string input -> clean 'expected string' error", () => {
-    // .sh: inline `bun -e` calling parseStageFrontmatter(undefined),
-    //      assert_contains OUT "expected string". Ported in-process: the
-    //      type-guard throw is pure logic, not the CLI shell, so it stays
-    //      an in-process call (NOT a Bun.spawnSync env-seam case).
+    // The type-guard throw is pure logic, not the CLI shell, so it stays an
+    // in-process call (NOT a Bun.spawnSync env-seam case).
     expect(parseCatching(undefined)).toContain("expected string");
   });
 
   test("blank line inside consumes[] throws 'Blank line not allowed'", () => {
-    // .sh: "blank line inside consumes[] throws"
     expect(parseCatching(BLANK_IN_CONSUMES)).toContain("Blank line not allowed");
   });
 
   test("empty-string scalar value reaches object", () => {
-    // .sh: "empty-string scalar value reaches object" — the .sh checked
-    //      `'condition' in obj ? 'PRESENT' : 'MISSING'` === "PRESENT".
     const obj = parseStageFrontmatter(EMPTY_SCALAR) as Record<string, unknown>;
     expect("condition" in obj).toBe(true);
+  });
+});
+
+// ============================================================
+// Optional `ars:` block — the stage-authored composer screening prior
+// ============================================================
+describe("optional ars block (composer screening prior)", () => {
+  // A stage the shipped tools/data/ars-priors.json does not name (a plugin
+  // stage) declares the same four facts in its own frontmatter. The parser
+  // assembles the nested map in canonical child order; the schema validates
+  // it like one priors-file entry.
+  const ARS_FULL = `---
+slug: test
+phase: ideation
+execution: ALWAYS
+condition: x
+lead_agent: aidlc-product-agent
+mode: inline
+ars:
+  targets: [ve, csu]
+  cost: 4
+  role: structural
+  project_types: [brownfield]
+inputs: a
+outputs: b
+---
+`;
+  const withArs = (block: string): string =>
+    ALL_ABSENT.replace("inputs: a\n", `${block}inputs: a\n`);
+
+  test("full block parses into a nested object", () => {
+    const obj = parseStageFrontmatter(ARS_FULL) as Record<string, unknown>;
+    expect(obj.ars).toEqual({
+      targets: ["ve", "csu"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(ARS_FULL)).toBe("VALID");
+  });
+
+  test("absent -> key not in object", () => {
+    const obj = parseStageFrontmatter(ALL_ABSENT) as Record<string, unknown>;
+    expect("ars" in obj).toBe(false);
+  });
+
+  test("minimal block: empty targets + null cost (the priors file's own initialization shape)", () => {
+    const yaml = withArs("ars:\n  targets: []\n  cost: null\n  role: initialization\n");
+    const obj = parseStageFrontmatter(yaml) as Record<string, unknown>;
+    expect(obj.ars).toEqual({ targets: [], cost: null, role: "initialization" });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+  });
+
+  test("round-trip parse -> emit -> parse -> EQ, whatever the authored child order", () => {
+    expect(roundtrip(ARS_FULL)).toBe("EQ");
+    const reordered = withArs("ars:\n  project_types: [greenfield]\n  cost: 2\n  targets: [iae]\n");
+    expect(roundtrip(reordered)).toBe("EQ");
+    const emitted = emitStageFrontmatter(parseStageFrontmatter(reordered) as Record<string, unknown>);
+    // Canonical child order on emit: targets, cost, role, project_types.
+    expect(emitted).toContain("ars:\n  targets: [iae]\n  cost: 2\n  project_types: [greenfield]\n");
+  });
+
+  test("a bare scalar is rejected as a non-object", () => {
+    expect(parseAndValidate(withArs("ars: yes\n"))).toContain("ars must be object, got string");
+  });
+
+  test("unknown child key, duplicate + unknown target, bad cost, bad role each name their field", () => {
+    const yaml = withArs(
+      "ars:\n  targets: [ve, ve, mars]\n  cost: high\n  role: boss\n  weight: 3\n"
+    );
+    const out = parseAndValidate(yaml);
+    expect(out).toContain('ars has unknown key "weight"; allowed: targets | cost | role | project_types');
+    expect(out).toContain('ars.targets[1] repeats "ve"');
+    expect(out).toContain("ars.targets[2] must be one of iae | csu | ve | r | ua, got string");
+    expect(out).toContain("ars.cost must be null or an integer 1..5, got string");
+    expect(out).toContain("ars.role must be one of initialization | core | phase-gate | structural, got string");
+  });
+
+  test("the shipped priors' project-type role is not one a stage block can declare (#2575)", () => {
+    const yaml = withArs("ars:\n  targets: [csu]\n  cost: 4\n  role: project-type\n  project_types: [brownfield]\n");
+    expect(parseAndValidate(yaml)).toContain(
+      "ars.role must be one of initialization | core | phase-gate | structural, got string"
+    );
+  });
+
+  test("targets and cost are required; cost stays on the 1..5 scale", () => {
+    expect(parseAndValidate(withArs("ars:\n  role: core\n"))).toContain(
+      "ars.targets is required (an empty list is allowed)|ars.cost is required (null marks a stage that is not numerically screenable)"
+    );
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 7\n"))).toContain(
+      "ars.cost must be null or an integer 1..5, got number"
+    );
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2.5\n"))).toContain(
+      "ars.cost must be null or an integer 1..5, got number"
+    );
+    // A block-list value is not silently mis-read: it fails the list check.
+    expect(parseAndValidate(withArs("ars:\n  targets:\n    - ve\n  cost: 2\n"))).toContain(
+      "ars.targets must be a list, got string"
+    );
+  });
+
+  test("project_types must be a non-empty, duplicate-free subset of brownfield | greenfield", () => {
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2\n  project_types: []\n"))).toContain(
+      "ars.project_types must be a non-empty list, got array"
+    );
+    const out = parseAndValidate(
+      withArs("ars:\n  targets: [ve]\n  cost: 2\n  project_types: [brownfield, brownfield, mars]\n")
+    );
+    expect(out).toContain('ars.project_types[1] repeats "brownfield"');
+    expect(out).toContain("ars.project_types[2] must be one of brownfield | greenfield, got string");
+  });
+});
+
+// ============================================================
+// ars block across blank lines, comment lines and inline comments
+// ============================================================
+describe("ars block layout (blank lines, comments)", () => {
+  const withArs = (block: string): string =>
+    ALL_ABSENT.replace("inputs: a\n", `${block}inputs: a\n`);
+
+  test("a blank line or a comment line inside the block keeps every child", () => {
+    // Stopping at the blank line drops project_types and role, which
+    // changes the screening decision.
+    const yaml = withArs(
+      "ars:\n  targets: [ve]\n  cost: 4\n\n  # restricted to legacy work\n  project_types: [brownfield]\n  role: structural\n"
+    );
+    expect((parseStageFrontmatter(yaml) as Record<string, unknown>).ars).toEqual({
+      targets: ["ve"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+    const emitted = emitStageFrontmatter(parseStageFrontmatter(yaml) as Record<string, unknown>);
+    expect(emitted).toContain("ars:\n  targets: [ve]\n  cost: 4\n  role: structural\n  project_types: [brownfield]\n");
+  });
+
+  test("a trailing comment is not part of the value, outside quotes only", () => {
+    const yaml = withArs(
+      "ars:\n  targets: [ve, r]   # components\n  cost: 4 # 1..5\n  role: \"structural\"  # optional\n  project_types: [brownfield] # optional\n"
+    );
+    expect((parseStageFrontmatter(yaml) as Record<string, unknown>).ars).toEqual({
+      targets: ["ve", "r"],
+      cost: 4,
+      role: "structural",
+      project_types: ["brownfield"],
+    });
+    expect(parseAndValidate(yaml)).toBe("VALID");
+    // A # inside quotes stays in the value (and the validator then names it).
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 2\n  role: \"core # x\"\n"))).toContain(
+      "ars.role must be one of initialization | core | phase-gate | structural, got string"
+    );
+  });
+
+  test("a malformed inline list is rejected, never read as a shorter or empty one", () => {
+    for (const list of ["[[ve]]", "[ , ]", "[ve,,r]"]) {
+      expect(parseAndValidate(withArs(`ars:\n  targets: ${list}\n  cost: 4\n`)), list).toContain(
+        "ars.targets must be a list, got string"
+      );
+    }
+    expect(parseAndValidate(withArs("ars:\n  targets: [ve]\n  cost: 4\n  project_types: [[brownfield]]\n"))).toContain(
+      "ars.project_types must be a non-empty list, got string"
+    );
+    // One trailing comma is valid YAML flow syntax and reads as written.
+    const trailing = parseStageFrontmatter(withArs("ars:\n  targets: [ve, r,]\n  cost: 4\n")) as Record<string, unknown>;
+    expect(trailing.ars).toEqual({ targets: ["ve", "r"], cost: 4 });
+  });
+
+  test("a child named like an inherited property is reported, not dropped", () => {
+    for (const key of ["constructor", "__proto__"]) {
+      expect(parseAndValidate(withArs(`ars:\n  targets: [ve]\n  cost: 4\n  ${key}: 3\n`)), key).toContain(
+        `ars has unknown key "${key}"`
+      );
+    }
+  });
+
+  test("the next top-level key ends the block; a stray line inside it is rejected", () => {
+    const obj = parseStageFrontmatter(withArs("ars:\n  targets: [ve]\n  cost: 2\n")) as Record<string, unknown>;
+    expect(obj.inputs).toBe("a");
+    expect(parseCatching(withArs("ars:\n  targets: [ve]\n  cost: 2\n  not a key\n"))).toContain(
+      "ERR:Malformed ars entry in frontmatter: not a key"
+    );
   });
 });

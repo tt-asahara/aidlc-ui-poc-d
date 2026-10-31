@@ -1,24 +1,37 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
 import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
+import {
+  assertNoSymlinkInChainOrThrow,
   listSpaces,
   readIntentRegistry,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
+  resolveWorkflowSelection,
+  sessionRecordPath,
   SPACE_NAME_REGEX,
   sessionsDir,
+  validSessionId,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 import { resolveAidlcSettings } from "./aidlc-settings.ts";
 
 // The copy of a request an engine question was asked about, so its answer
 // commands carry a short id instead of the request text. Each question gets
-// its own file in the gitignored session directory, written once and never
-// rewritten, with the same operating-system permissions as the rest of the
-// workspace. The file is removed when the question starts work; an unanswered
-// one is kept unless `question-retention-days` is set.
+// its own file in the gitignored session directory, written once and rewritten
+// only to mark it answered, with the same operating-system permissions as the
+// rest of the workspace. The file is removed when the question starts work; an
+// unanswered one is kept unless `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
 // new-work-routing ask is about work that already exists. A `compose` entry is
@@ -54,6 +67,12 @@ export interface StoredQuestion {
    */
   composedFrom?: string;
   /**
+   * The request whose answer started work from this question's chain (the one
+   * derived from it, or beside it from the same root). This copy is kept so a
+   * repeated answer by it carries on with that work, and it is no longer open.
+   */
+  answeredBy?: string;
+  /**
    * For a routing question shown with options: the asked workflow's state
    * digest when it was asked, or asked while none was selected, the digest of
    * the records it offered. It marks a question a reply naming one of its
@@ -73,6 +92,14 @@ export interface StoredQuestion {
    * the routing question answers it, so the work starts once.
    */
   approvedRequest?: string;
+  /** The person's message the words came in, by its record's id; a question derived from another keeps that one's. */
+  messageId?: string;
+  /**
+   * For a plan question for new work (a root `front` or `compose` question, or one derived from a routing question
+   * the person answered with new work): the chat that asked it, so the agent's writes in that chat before the person
+   * picks a plan are kept (aidlc-before-pick.ts) while it is open.
+   */
+  asker?: string;
   createdAt: string;
 }
 
@@ -99,7 +126,8 @@ function isSettingTokens(value: unknown): value is string[] {
 export const QUESTION_UNAVAILABLE =
   "That question is no longer available; please describe the work again.";
 
-const QUESTION_ID = /^[0-9a-f]{8}$/;
+const QUESTION_ID_BODY = "[0-9a-f]{8}";
+const QUESTION_ID = new RegExp(`^${QUESTION_ID_BODY}$`);
 // A record folder name as the record list reports it: any single path
 // component (legacy and migrated folders may hold spaces or punctuation), or
 // "" for a workflow without one.
@@ -149,7 +177,11 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.settings === undefined ||
       (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork))) &&
     (question.approvedRequest === undefined ||
-      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest)))
+      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
+    (question.answeredBy === undefined ||
+      (typeof question.answeredBy === "string" && QUESTION_ID.test(question.answeredBy))) &&
+    (question.messageId === undefined || (typeof question.messageId === "string" && QUESTION_ID.test(question.messageId))) &&
+    (question.asker === undefined || (typeof question.asker === "string" && validSessionId(question.asker) === question.asker))
   ) {
     return question as StoredQuestion;
   }
@@ -171,13 +203,14 @@ function readStoredQuestion(projectDir: string, id: string): StoredQuestion | nu
 }
 
 /**
- * The question behind `id`; null when it is missing, unreadable, or older than
+ * The question behind `id`; null when it is missing, unreadable, older than
  * the project's retention period (an expired question is never answered, even
- * before a later question prunes its file).
+ * before a later question prunes its file), or answered by a request that
+ * started work (`startedRequestFor` names that request).
  */
 export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
   const question = readStoredQuestion(projectDir, id);
-  if (question?.origin === "compose") return null;
+  if (question?.origin === "compose" || question?.answeredBy !== undefined) return null;
   const days = question ? retentionDays(projectDir) : null;
   if (question && days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
   return question;
@@ -219,6 +252,7 @@ export function pruneExpiredQuestions(projectDir: string): void {
   const days = retentionDays(projectDir);
   if (days === null) return;
   const cutoff = Date.now() - days * DAY_MS;
+  pruneExpiredRestartRequests(projectDir, cutoff);
   let names: string[];
   try {
     names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
@@ -258,6 +292,7 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || question.origin === "routing" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
     if (latest === null || at > latest.at) latest = { id, at };
@@ -281,6 +316,7 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || Number.isNaN(at)) continue;
     if (latest === null || at > latest.at) latest = { question, at };
@@ -288,6 +324,20 @@ export function latestQuestion(projectDir: string): StoredQuestion | null {
   if (latest === null) return null;
   const { question } = latest;
   return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/** The open questions kept from the person's message `messageId` (unanswered, unexpired), oldest first. */
+export function questionsFromMessage(projectDir: string, messageId: string): StoredQuestion[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names
+    .map((name) => (name.endsWith(".json") ? readQuestion(projectDir, name.slice(0, -".json".length)) : null))
+    .filter((question): question is StoredQuestion => question?.messageId === messageId)
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
 }
 
 /**
@@ -316,6 +366,7 @@ export function firstFrontQuestionSince(
     const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
+    if (question?.answeredBy !== undefined) continue;
     const at = Date.parse(question?.createdAt ?? "");
     if (question === null || (question.origin === "routing" && !options.routing) || Number.isNaN(at) ||
       at < from || at - from > withinMs) continue;
@@ -324,7 +375,6 @@ export function firstFrontQuestionSince(
   return first?.id ?? null;
 }
 
-// Whether a work-list row already names `id` as the question that started it.
 function startedWorkUses(projectDir: string, id: string): boolean {
   return listSpaces(projectDir).some(({ name }) =>
     readIntentRegistry(projectDir, name).some((row) => row.request === id)
@@ -343,7 +393,7 @@ export function mintQuestionId(
     const id = candidate();
     if (!QUESTION_ID.test(id)) continue;
     const taken = existsSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir, id))) ||
-      startedWorkUses(projectDir, id);
+      startedWorkUses(projectDir, id) || restartIdUsed(projectDir, id);
     if (!taken) return id;
   }
 }
@@ -363,11 +413,20 @@ export function saveQuestion(
   stateSha256?: string,
   settings?: QuestionSettings,
   approvedRequest?: string,
+  messageId?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   // A question derived from another keeps that one's root, never the parent, so
-  // a chain of asks stays one hop from where the person's words were said.
-  const root = composedFrom ? readStoredQuestion(projectDir, composedFrom)?.composedFrom ?? composedFrom : undefined;
+  // a chain of asks stays one hop from where the person's words were said, and
+  // the message they came in.
+  const parent = composedFrom ? readStoredQuestion(projectDir, composedFrom) : null;
+  const root = composedFrom ? parent?.composedFrom ?? composedFrom : undefined;
+  const carried = parent?.messageId ?? messageId;
+  // A routing question stays open when its answer goes on with existing work, so it opens no window; the plan
+  // question its new-work answer leads to does.
+  const opensWindow = (origin === "front" || origin === "compose") &&
+    (!root || readStoredQuestion(projectDir, root)?.origin === "routing");
+  const asker = opensWindow ? validSessionId(askingChat(projectDir) ?? undefined) : null;
   const question: StoredQuestion = {
     id: mintQuestionId(projectDir),
     text,
@@ -379,13 +438,74 @@ export function saveQuestion(
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
+    ...(carried && QUESTION_ID.test(carried) ? { messageId: carried } : {}),
+    ...(asker ? { asker } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);
+  // Which question is this chat's open plan question, read on every write the agent makes: one small file, so the
+  // guard reads one question and never scans the store. A later plan question beside it (the same routing root)
+  // keeps the window it opened.
+  const open = asker ? openPlanQuestion(projectDir, asker) : null;
+  if (asker && !(open !== null && root !== undefined && open.composedFrom === root)) {
+    try {
+      writeRecordFileNoFollow(projectDir, relative(projectDir, `${sessionRecordPath(projectDir, asker)}.plan-question`), `${question.id}\n`);
+    } catch {
+      // Unkept: the agent's writes before this pick go unnamed, never misnamed.
+    }
+  }
   return question;
 }
 
-/** Remove a question's copy once it started work; a missing file is already gone. */
+// The chat this engine process runs in, read without binding it.
+function askingChat(projectDir: string): string | null {
+  try {
+    return resolveWorkflowSelection(projectDir, { bind: false }).sessionId;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * This chat's plan question for new work while it is open: asked by this chat, not yet answered by work it started
+ * (`retireRequest`), not expired (`pruneExpiredQuestions`). Null otherwise.
+ */
+export function openPlanQuestion(projectDir: string, chat: string): StoredQuestion | null {
+  const path = sessionRecordPath(projectDir, chat);
+  if (!path) return null;
+  let id: string;
+  try {
+    id = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relative(projectDir, `${path}.plan-question`)), "plan question", 64,
+    ).toString("utf-8").trim();
+  } catch {
+    return null;
+  }
+  const question = readStoredQuestion(projectDir, id);
+  if (question === null || question.asker !== chat || question.answeredBy !== undefined) return null;
+  const days = retentionDays(projectDir);
+  if (days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
+  return question;
+}
+
+/**
+ * The plan question window question `id` closes when its answer starts work: the chat that asked it and the root of
+ * its chain. Null when no chat asked it as a plan question for new work.
+ */
+export function planQuestionWindow(projectDir: string, id: string): { chat: string; chain: string } | null {
+  const question = readStoredQuestion(projectDir, id);
+  if (question === null) return null;
+  const chain = question.composedFrom ?? question.id;
+  const chat = (question.composedFrom ? readStoredQuestion(projectDir, chain)?.asker : undefined) ?? question.asker;
+  return chat ? { chat, chain } : null;
+}
+
+/** Whether question `id` is `chain`'s root or one derived from it. */
+export function inQuestionChain(projectDir: string, id: string, chain: string): boolean {
+  return id === chain || readStoredQuestion(projectDir, id)?.composedFrom === chain;
+}
+
+/** Remove a question's copy once it is spent; a missing file is already gone. */
 export function deleteQuestion(projectDir: string, id: string): void {
   if (!QUESTION_ID.test(id)) return;
   try {
@@ -395,6 +515,245 @@ export function deleteQuestion(projectDir: string, id: string): void {
   } catch {
     // Best effort: the work list already records which question started the work.
   }
+}
+
+// A `next` the hooks-off step stopped where that step has the person start a
+// new chat, kept under its own id so the line they are shown names it
+// (`<entry> --request <id>`) and the new chat runs it once, as if they had
+// typed it there. It is its own kind of entry, in its own folder, so no
+// question read or scan ever sees it; the id shares the questions' namespace,
+// so `--request` names one or the other. Running it leaves a marker beside it,
+// so a second run of the same id does nothing again.
+export interface RestartRequest {
+  id: string;
+  /** The stopped `next`'s arguments, a request file already read into them. */
+  args: string[];
+  space: string;
+  /** The work it was stopped in, by folder and immutable uuid; null before any. */
+  workflow: QuestionTarget | null;
+  /** The chat it was stopped in, when the engine knew it. */
+  session?: string;
+  createdAt: string;
+}
+
+// A kept stop's file or its mark, by its id.
+const RESTART_FILE = new RegExp(`^(${QUESTION_ID_BODY})\\.(json|taken)$`);
+
+function restartRel(projectDir: string, name?: string): string {
+  const dir = join(sessionsDir(projectDir), "restarts");
+  return relative(projectDir, name === undefined ? dir : join(dir, name));
+}
+
+// A kept stop and its taken marker go with the questions' retention period.
+function pruneExpiredRestartRequests(projectDir: string, cutoff: number): void {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir)));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!RESTART_FILE.test(name)) continue;
+    try {
+      const path = recordFileTargetOrThrow(projectDir, restartRel(projectDir, name));
+      if (lstatSync(path).isFile() && lstatSync(path).mtimeMs < cutoff) {
+        removeRecordFileNoFollow(projectDir, restartRel(projectDir, name));
+      }
+    } catch {
+      // Not ours to remove, or already gone: keep going.
+    }
+  }
+}
+
+function restartIdUsed(projectDir: string, id: string): boolean {
+  try {
+    return existsSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.json`))) ||
+      restartRequestTaken(projectDir, id);
+  } catch {
+    // A folder reached through a link holds no request this engine reads.
+    return false;
+  }
+}
+
+/**
+ * Keep a stopped `next` for the chat its step restarts into; returns its id.
+ * The same command stopped again in the same chat and work keeps the id it has
+ * while that one has not run, so two lines shown for it can never both run it,
+ * and is kept from now on, so the line just shown never names one about to
+ * expire. A stop in another chat is its own request.
+ */
+export function saveRestartRequest(
+  projectDir: string,
+  args: readonly string[],
+  space: string,
+  workflow: QuestionTarget | null,
+  keptAs?: string,
+  session?: string,
+): string {
+  pruneExpiredQuestions(projectDir);
+  const same = keptAs !== undefined ? { id: keptAs } : session === undefined ? undefined : keptRestartRequests(projectDir).find((kept) =>
+    kept.session === session &&
+    kept.space === space && kept.args.length === args.length && kept.args.every((arg, i) => arg === args[i]) &&
+    (kept.workflow === null
+      ? workflow === null
+      : workflow !== null && kept.workflow.intent === workflow.intent && kept.workflow.uuid === workflow.uuid) &&
+    !restartRequestTaken(projectDir, kept.id)
+  );
+  const entry: RestartRequest = {
+    id: same?.id ?? mintQuestionId(projectDir),
+    args: [...args],
+    space,
+    workflow: workflow ? { intent: workflow.intent, uuid: workflow.uuid } : null,
+    ...(session === undefined ? {} : { session }),
+    createdAt: new Date().toISOString(),
+  };
+  writeRecordFileNoFollow(projectDir, restartRel(projectDir, `${entry.id}.json`), `${JSON.stringify(entry)}\n`);
+  return entry.id;
+}
+
+function keptRestartRequests(projectDir: string): RestartRequest[] {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, restartRel(projectDir)));
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    const file = RESTART_FILE.exec(name);
+    const kept = file?.[2] === "json" ? readRestartRequest(projectDir, file[1]) : null;
+    return kept === null ? [] : [kept];
+  });
+}
+
+/** The stopped `next` kept under `id`, or null when there is none to read. */
+export function readRestartRequest(projectDir: string, id: string): RestartRequest | null {
+  if (!QUESTION_ID.test(id)) return null;
+  try {
+    const target = recordFileTargetOrThrow(projectDir, restartRel(projectDir, `${id}.json`));
+    const raw = JSON.parse(readRegularFileNoFollowOrThrow(target, "restart request", QUESTION_MAX_BYTES).toString("utf-8"));
+    const workflow = raw?.workflow === null ? null : isTargetList([raw?.workflow]) ? raw.workflow as QuestionTarget : undefined;
+    if (
+      raw?.id !== id || !Array.isArray(raw.args) || !raw.args.every((arg: unknown) => typeof arg === "string") ||
+      typeof raw.space !== "string" || !SPACE_NAME_REGEX.test(raw.space) || workflow === undefined ||
+      typeof raw.createdAt !== "string"
+    ) {
+      return null;
+    }
+    const days = retentionDays(projectDir);
+    if (days !== null && Date.parse(raw.createdAt) < Date.now() - days * DAY_MS) return null;
+    return {
+      id, args: raw.args, space: raw.space, workflow,
+      ...(typeof raw.session === "string" ? { session: raw.session } : {}),
+      createdAt: raw.createdAt,
+    };
+  } catch {
+    // Missing, redirected, or unreadable: there is nothing to run.
+    return null;
+  }
+}
+
+/**
+ * The id a line names when it is `--request <id>` and nothing else; null for
+ * any other line, which runs no kept stop.
+ */
+export function keptRestartLine(args: readonly string[]): string | null {
+  return args.length === 2 && args[0] === "--request" && QUESTION_ID.test(args[1]) ? args[1] : null;
+}
+
+/**
+ * The kept stop a `next` runs: its arguments when the line is `--request <id>`
+ * alone (keptRestartLine), naming a kept stop that has not run; null otherwise.
+ * The engine runs those arguments in its place, and a host adapter judges the
+ * command by them.
+ */
+export function keptRestartRun(projectDir: string, args: readonly string[]): RestartRequest | null {
+  const id = keptRestartLine(args);
+  if (id === null) return null;
+  const request = readRestartRequest(projectDir, id);
+  return request === null || restartRequestTaken(projectDir, id) ? null : request;
+}
+
+/** Whether the stopped `next` kept under `id` was already run once (a link in the mark's place counts). */
+export function restartRequestTaken(projectDir: string, id: string): boolean {
+  if (!QUESTION_ID.test(id)) return false;
+  try {
+    // The folder through no link; the mark itself may be one.
+    const dir = recordFileTargetOrThrow(projectDir, restartRel(projectDir));
+    lstatSync(join(dir, `${id}.taken`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark the stopped `next` under `id` as run, once: only the first caller gets
+ * "taken", so two chats given the same line never both run it, and a later one
+ * gets "ran". A mark that cannot be written ("unmarked") does not keep the
+ * person's request from running; the caller says so.
+ */
+export function takeRestartRequest(projectDir: string, id: string): "taken" | "ran" | "unmarked" {
+  if (!QUESTION_ID.test(id)) return "ran";
+  if (restartRequestTaken(projectDir, id)) return "ran";
+  let target: string;
+  try {
+    const rel = restartRel(projectDir, `${id}.taken`);
+    const anchor = realpathSync(projectDir);
+    mkdirSync(dirname(assertNoSymlinkInChainOrThrow(anchor, rel)), { recursive: true });
+    target = assertNoSymlinkInChainOrThrow(anchor, rel);
+  } catch {
+    return "unmarked";
+  }
+  try {
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0);
+    closeSync(openSync(target, flags, 0o600));
+    return "taken";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EEXIST" ? "ran" : "unmarked";
+  }
+}
+
+/**
+ * Retire a request once its answer started work: its own copy is removed, and
+ * the other questions of the same request (the one it was derived from and
+ * every question derived from that root: the proposal step's question, the
+ * routing question beside it) are marked answered by it. None of them is open
+ * any more (one left open would meet the person's next words as a question
+ * they have not answered, about work already built), and a repeated answer by
+ * any of them still finds that work.
+ */
+export function retireRequest(projectDir: string, id: string): void {
+  if (!QUESTION_ID.test(id)) return;
+  const root = readStoredQuestion(projectDir, id)?.composedFrom ?? id;
+  const chain = new Set([root]);
+  try {
+    for (const name of readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)))) {
+      const other = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+      if (QUESTION_ID.test(other) && readStoredQuestion(projectDir, other)?.composedFrom === root) chain.add(other);
+    }
+  } catch {
+    // No question directory: nothing derived is left to mark.
+  }
+  chain.delete(id);
+  for (const member of chain) {
+    const kept = readStoredQuestion(projectDir, member);
+    if (kept === null || kept.answeredBy !== undefined) continue;
+    try {
+      writeRecordFileNoFollow(projectDir, questionRel(projectDir, member), `${JSON.stringify({ ...kept, answeredBy: id })}\n`);
+    } catch {
+      // Best effort: the copy stays as it was.
+    }
+  }
+  deleteQuestion(projectDir, id);
+}
+
+/**
+ * The request a repeated answer is about: for a question marked answered by a
+ * request that started work, that request (the work list names it); otherwise
+ * the question itself.
+ */
+export function startedRequestFor(projectDir: string, id: string): string {
+  return readStoredQuestion(projectDir, id)?.answeredBy ?? id;
 }
 
 /**

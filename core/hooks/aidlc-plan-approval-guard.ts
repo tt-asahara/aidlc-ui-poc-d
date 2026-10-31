@@ -16,11 +16,30 @@
 // This is one of the framework's flow-altering hooks. Its contract is the
 // harness-native PreToolUse block: print a reason to stderr and exit 2 to
 // refuse the tool call, exit 0 to allow. The refusal is scoped tightly to
-// code-generation: developer-agent dispatch and workspace mutation are both
-// blocked until the same approval evidence is current. Writes inside the
-// selected code-generation record dir remain available to create the plan,
-// instructions, questions, and diary that make approval possible. So does the
-// composer's grid proposal file, which a composition requested mid-stage writes.
+// code-generation, and to the three doors to the person's code: the
+// developer-agent dispatch, a file-tool or shell write to a path inside the
+// project outside AI-DLC's own folders, and a shell command whose writes cannot
+// be seen. All three wait until the same approval evidence is current.
+// AI-DLC's own bookkeeping never meets this guard: a write whose every target is
+// a stage's record output under aidlc/spaces (not the engine's own files there)
+// passes, and so does a direct, unwrapped invocation of the installed engine,
+// whose verbs the engine judges itself (a Code Generation completion waits for
+// its plan in `report`, codeGenerationCompletionWaits, and in `unit complete`,
+// codeGenerationCompletionPlanWaits).
+// Where no tool of the engine's owns the call, a condition stays here
+// (engineCommandAdmitted): a recorded switch that turns a check off, four config
+// settings that can take a check away, and a release fetched or applied, pass
+// once a person has asked; a jump waits for the person's move (the jump `next`
+// names back to a stage the person just added excepted): the restart
+// they picked at the recovery question, or one they asked for, unless the
+// engine's last step was superseded (a `jump execute`, or the `jump reopen` it
+// printed, to the stage the agent's own settled `next --stage` claimed on this
+// state excepted) or is its Code Generation recovery question and the jump is
+// one it offers or not the choice the person just picked there. While the
+// person is editing the plan files themselves, those files are theirs
+// (personIsEditingPlanFile). Three kinds of files pass too: the composer's grid
+// proposal, a person's answer text and a person's request file, which the
+// engine reads and nothing else.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -33,17 +52,18 @@
 // those exact bytes. Missing, conflicting, unknown, stale, and
 // post-approval-modified evidence blocks instead of guessing.
 //
-// Fail-open outside code-generation: a missing or unreadable state file, an
-// active directive/current stage other than code-generation, malformed stdin,
-// an unknown/read-only tool, a non-developer subagent target, or any throw
-// allows the call. Once a code-generation generation path is identified,
-// missing or ambiguous target evidence blocks. The deterministic
-// off-switch AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement (the
-// documented escape hatch for false-positive storms, mirroring the
-// reviewer-scope guard's off-switch) but is no longer silent: while a workflow
-// exists it appends one GUARD_DISABLED audit row per streak of disabled calls.
-// Every genuine block emits a PLAN_APPROVAL_BLOCKED audit event so the run's
-// record shows when the ordering bit; audit failures never change the decision.
+// Fail-open outside code-generation: a missing state file, no code-generation
+// stage (active directive or Current Stage) and no explicit plan dispatch,
+// malformed stdin, a read-only tool, or a non-developer subagent target allows
+// the call. Once a code-generation generation path is identified, missing or
+// ambiguous target evidence blocks, and so does any throw while the authority is
+// evaluated (an unreadable state file included). The deterministic off-switch
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement (the documented
+// escape hatch for false-positive storms, mirroring the reviewer-scope guard's
+// off-switch) but is not silent: while a workflow exists it appends one
+// GUARD_DISABLED audit row per streak of disabled calls. Every genuine block
+// emits a PLAN_APPROVAL_BLOCKED audit event so the run's record shows when the
+// ordering bit; audit failures never change the decision.
 
 import {
   existsSync,
@@ -55,11 +75,15 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
+import { keepWritesBeforePick, keepWritesDuringWork, workBeforeCodeGeneration } from "../tools/aidlc-before-pick.ts";
+import { openPlanQuestion } from "../tools/aidlc-question-store.ts";
+import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
+  type EngineInvocation,
   guardOperationMatchesRemedy,
-  isGuardRecoveryEngineInvocation,
   parseGuardRestartContinuationCommand,
+  renderEngineInvocation,
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
@@ -71,14 +95,20 @@ import {
   auditBlockField,
   auditFilePath,
   type ClaudeCodeHookInput,
+  codeGenerationIsTheStep,
   composerProposalPath,
   docsRoot,
-  ANSWER_TEXT_DIR,
+  ENGINE_TEXT_DIRS,
+  REQUEST_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
-  guardRecoveryAnswerAdmits,
-  guardRecoveryRecordWorkOpen,
+  loadScopeMapping,
+  loadStageGraph,
+  nextLineFlags,
+  normalizeStageName,
+  parseCheckboxes,
+  parseStateStageSuffixes,
   PLAN_APPROVAL_ASK_TYPE,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
@@ -89,17 +119,10 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
-  loadScopeMapping,
-  loadStageGraph,
-  parseCheckboxes,
-  parseStateStageSuffixes,
+  CEREMONY_ENV,
   personAskedSinceGate,
-  personCheckSwitchAllowed,
-  personSpokeSinceGate,
   readActiveDirectiveMarker,
-  readAuditShardEvents,
-  REVIEW_RECORDS_DIR,
-  reviewerDispatchPath,
+  readIssuedDirectiveMarker,
   spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
@@ -107,13 +130,34 @@ import {
   resolveBoltDag,
   resolveProjectFlag,
   resolveProjectDirFromHook,
-  resolveWorkflowSelection,
-  SKELETON_STANCES,
+  jumpClaimSha256,
+  nextStageClaimSha256,
+  nextStageInvocation,
+  type NextStageUnits,
+  selectedRecordIsFinished,
+  stateDigest,
   stateFilePath,
+  owedJumpBack,
+  worktreesDir,
+  writeGuardAgentContext,
   writeGuardStoodAside,
+  ActiveDirectiveLockFolderHeldError,
+  activeDirectiveLockHeldAfterStepLine,
+  activeDirectiveLockHeldNote,
+  markPersonLineHeardThisTurn,
+  personLineHeardThisTurn,
+  takeActiveDirectiveReleaseHeld,
+  recordGuardBlockedRow,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
+import {
+  LOCK_FOLDER_HELD_GUARD_STEP_KEY,
+  LOCK_FOLDER_HELD_SAID_KEY,
+  lockFolderHeldGoesOnStep,
+} from "../tools/aidlc-lock-line.ts";
+import { personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -129,20 +173,40 @@ import {
   evaluateCodeGenerationApproval,
   planReviewAppendix,
   promptTestingContractMarkers,
+  setAsideBuildUnderOff,
+  stepNextCommand,
+  WORKER_BRIEF_SECTIONS,
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
-export {
-  questionsFileApproved,
-  questionsFileHasPendingPlanApproval,
-} from "../tools/aidlc-testing-posture.ts";
+export { questionsFileHasPendingPlanApproval } from "../tools/aidlc-testing-posture.ts";
 
 const HOOK_NAME = "plan-approval-guard";
 
-// The one stage this hook guards and the one dispatch target it inspects.
 const GUARDED_STAGE = "code-generation";
 const GUARDED_AGENT = "aidlc-developer-agent";
 const STAGE_TARGET = "stage-level";
+// Shells and evaluators that run text the lexer does not read: what such a
+// command writes is not visible, so it keeps the build's verdict.
+const SHELL_INTERPRETERS = new Set([
+  ".", "bash", "busybox", "cmd", "dash", "eval", "exec", "fish", "ksh", "powershell", "pwsh", "sh", "source", "zsh",
+]);
+// Language runtimes given a program on the command line (`bun -e`, `python -c`)
+// are evaluators of text the lexer does not read either; a script file or a
+// heredoc is a program the person can see.
+const INLINE_CODE_RUNTIMES = new Set(["bun", "deno", "node", "perl", "php", "python", "python2", "python3", "ruby"]);
+const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-E", "-p", "-r", "--eval", "--print", "eval"]);
+// AI-DLC's command named in a dynamic command, where a variable or
+// substitution may hide its invocation: a tools script (`aidlc.ts`,
+// `aidlc-<route>.ts`) or the launcher with its extension (`aidlc.exe`,
+// `.cmd`, `.ps1`, which a Windows path the POSIX reading drops the backslashes
+// of still shows) anywhere, or the bare launcher run by a substitution, which
+// the lexer does not read. The bare launcher as a command word is the literal
+// check's in mutationIntent, and a variable run as a command is
+// runsHiddenCommand's; a bare `aidlc` anywhere else is the record folder
+// (`R=aidlc`, `ls aidlc`, `aidlc/spaces`), not that command.
+const ENGINE_WORD =
+  /(?:(?:^|[\s;|&()<>'"`=:/\\])aidlc(?:(?:-[A-Za-z0-9._-]+)?\.ts|\.exe|\.cmd|\.ps1)|(?:\$\(|`)\s*aidlc)(?=$|[\s;|&()<>'"`])/i;
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const SAFE_READ_TOOLS = new Set([
   "Read",
@@ -225,6 +289,7 @@ const READ_ONLY_POWERSHELL_CMDLETS = new Set([
   "get-content",
   "get-item",
   "measure-object",
+  "out-null",
   "out-string",
   "resolve-path",
   "select-object",
@@ -244,15 +309,15 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
 const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
-// The engine asked the person how to recover and is waiting for the answer.
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
+// Under strict every landing of the stage checks the main checkout against the
+// stage's start (assertAggregateSourceBeforeMerge), so nothing else changes it
+// while a parallel batch is out.
+const SWARM_MAIN_CHECKOUT_HELD =
+  "While the Units are built in parallel, the main checkout changes only by their landings, so each landing can check it";
 
-// --- The pure decision --------------------------------------------------------
-//
-// Everything below up to the main section is side-effect free and exported so
-// the decision table is unit-testable without a live session. The hook body
-// only wires stdin, the state file, and the exit code around it.
+// --- The decision -------------------------------------------------------------
 
 /** Per-unit evidence the main body gathers from disk. */
 export interface UnitEvidence {
@@ -267,8 +332,8 @@ export interface UnitEvidence {
   /** The plan's structured Testing Contract matches the current effective posture. */
   contractValid: boolean;
   /** The recorded approval fingerprint matches the plan, instructions, and contract. */
-  fingerprintValid: boolean;
-  receiptValid: boolean;
+  fingerprintValid: boolean | null;
+  receiptValid: boolean | null;
   /** The current approved Testing Contract hash, used to bind the worker brief. */
   contractHash: string | null;
   /**
@@ -298,10 +363,10 @@ export interface PlanApprovalVerdict {
 
 /**
  * A developer handoff that names no target or several, names one this
- * workflow does not build, or carries the wrong contract line for an
- * approved plan.
+ * workflow does not build, carries the wrong contract line for an approved
+ * plan, or carries the marker lines without the brief they head.
  */
-export type HandoffDefect = "targets" | "unknown-target" | "contract";
+export type HandoffDefect = "targets" | "unknown-target" | "contract" | "brief";
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
   return (
@@ -309,18 +374,13 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
     evidence.instructionsExist &&
     evidence.approved &&
     evidence.contractValid &&
-    evidence.fingerprintValid &&
-    evidence.receiptValid &&
+    evidence.fingerprintValid === true &&
+    evidence.receiptValid === true &&
     evidence.contractHash !== null
   );
 }
 
-// Normalize a state-file stage value for comparison: the field usually holds
-// the slug (code-generation) but a display-cased value (Code Generation) must
-// compare equal rather than silently disable enforcement.
-export function normalizeStageName(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-");
-}
+export { normalizeStageName };
 
 const UNIT_MARKER_RE = /^[ \t]*AIDLC-UNIT[ \t]*:[ \t]*(.*?)[ \t]*$/;
 const STAGE_MARKER_RE = /^[ \t]*AIDLC-STAGE[ \t]*:[ \t]*(.*?)[ \t]*$/;
@@ -396,18 +456,29 @@ export function evaluatePlanApprovalDispatch(
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
   const approved = approvalEvidenceIsCurrent(target);
   const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  // The marker lines head the brief; alone they hand the developer none of the
+  // plan or instructions the approval covers. The brief's own sections, as the
+  // brief command prints them, say the brief is there.
+  const briefCarried = promptCarriesBriefSections(promptText);
   const handoff: HandoffDefect | undefined = target === undefined
     ? "unknown-target"
-    : approved && !contractMatches ? "contract" : undefined;
+    : approved && !contractMatches ? "contract" : approved && !briefCarried ? "brief" : undefined;
   return {
-    block: target === undefined || !approved || !contractMatches || appendixInBrief,
+    block: target === undefined || !approved || !contractMatches || appendixInBrief || !briefCarried,
     mentioned,
     ...(appendixInBrief ? { appendixInBrief: true } : {}),
     ...(handoff ? { handoff } : {}),
   };
 }
 
-/** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
+/** One line of each of the brief's section families, whitespace-folded: the
+ *  plan and instructions headings in their fence-on or fence-off wording. */
+export function promptCarriesBriefSections(promptText: string): boolean {
+  const fold = (text: string): string => text.replace(/\s+/g, " ").trim();
+  const folded = fold(promptText);
+  return WORKER_BRIEF_SECTIONS.every((family) => family.some((heading) => folded.includes(fold(heading))));
+}
+
 function promptCarriesReviewAppendix(
   promptText: string,
   appendix: string | undefined,
@@ -421,12 +492,32 @@ function promptCarriesReviewAppendix(
   return fold(promptText).includes(content);
 }
 
+// The step this call judged, so a refusal names that step's own `next`
+// (stepNextCommand): an isolated Code Generation run's while its attempt is
+// open, since a bare `next` routes the main workflow. Reset at the start of
+// every call, since an adapter can run several calls through this module
+// (runHookHere), and the command is worked out only when a refusal names it.
+let judgedStep: { projectDir: string; marker: ActiveDirectiveMarker | null; next?: string } | null = null;
+
+function workflowNext(): string {
+  return `${aidlcToolInvocation("orchestrate")} next`;
+}
+
+function stepNext(): string {
+  if (judgedStep === null) return workflowNext();
+  judgedStep.next ??= stepNextCommand(judgedStep.projectDir, judgedStep.marker);
+  return judgedStep.next;
+}
+
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`), and `next` is always named
-// with how to run it so this guard reads it as that command.
-function nextOnItsOwn(): string {
-  return `\`${aidlcToolInvocation("orchestrate")} next\` ${AS_ITS_OWN_COMMAND}`;
+// with how to run it so this guard reads it as that command. The `next --stage`
+// a held jump's wait names is the invocation its claim is hashed over
+// (nextStageInvocation).
+function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
+  const command = wayOn === null ? stepNext() : renderEngineInvocation(wayOn);
+  return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
 /** The Code Generation targets the current step builds (null: the zero-Unit stage-level work). */
@@ -469,6 +560,24 @@ export function appendixBlockReason(mentioned: string[]): string {
   );
 }
 
+// The last clause of a refusal that waits on the plan: what `next` does with
+// it. With plan approval on, next asks the person. With it off for this work,
+// next starts the build without asking anyone, so the clause says that and
+// tells the agent not to ask for an approval nobody wants. The agent repeats
+// these words to the person, so the clause names no engine part and no
+// switch: the command it follows is already named once, and "it" is enough.
+// An isolated run's build comes from that command again, never a bare `next`.
+function nextAfterPlanClause(planApprovalOff: boolean, handsOver: boolean): string {
+  if (planApprovalOff) {
+    return "plan approval is off for this work, so it starts the build without asking anyone; " +
+      "do not ask the person to approve the plan.";
+  }
+  const again = stepNext() === workflowNext() ? "the `next`" : "that command again";
+  return handsOver
+    ? `the engine asks the person to approve the plan, and ${again} after their answer hands over the build.`
+    : "the engine asks the person to approve it before any code is written.";
+}
+
 // The block reason handed back to the conductor through the harness's
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
@@ -477,6 +586,7 @@ export function blockReason(
   mentioned: string[],
   detail: string | null = null,
   targets: BriefTargets | null = null,
+  planApprovalOff = false,
 ): string {
   const scope =
     mentioned.length === 1
@@ -488,9 +598,8 @@ export function blockReason(
         : "one target, but the brief does not name it";
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
-    `not approved yet.${detail ? ` Reason: ${detail}.` : ""} Finish code-generation-plan.md and ` +
-    `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
-    `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
+    `not approved yet.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Finish code-generation-plan.md and ` +
+    `unit-test-instructions.md, then run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, true)} Then hand the ` +
     `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
     "target and its Testing Contract."
   );
@@ -509,7 +618,9 @@ export function handoffBlockReason(
       : "names no target"
     : cause === "unknown-target"
       ? `names ${mentioned[0]}, which is not a Code Generation target of this workflow`
-      : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
+      : cause === "brief"
+        ? "carries the marker lines without the brief they head"
+        : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
   return (
     `Code generation cannot start: the developer handoff ${what}. Hand the developer the output of ` +
     `${briefCommand(mentioned, targets)} first, exactly as printed: it names the one target and its ` +
@@ -539,6 +650,7 @@ export function mutationBlockReason(
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
+  planApprovalOff = false,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
@@ -547,9 +659,8 @@ export function mutationBlockReason(
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
-    `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
-    `the person to approve it before any code is written.`
+    `matching approval.${detail ? ` Reason: ${detail.replace(/\.+$/, "")}.` : ""} Writes inside the selected code-generation record directory remain ` +
+    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: ${nextAfterPlanClause(planApprovalOff, false)}`
   );
 }
 
@@ -578,12 +689,15 @@ interface PlanStanding {
 
 // What ends an authority refusal, said the same way under every Guard Policy:
 // what is stale, where the person's approval stands when it does, and the fresh
-// `next` that issues the current step again. The agent never asks the person
-// again for a judgement they already gave.
+// `next` that issues the current step again, or for a jump the person asked for
+// the step its wait lets it through after (`wayOn`, from jumpIsPersonsMove).
+// The agent never asks the person again for a judgement they already gave.
 function authorityRemedy(
   reason: string,
   standing: PlanStanding | null,
   asked: ReturnType<typeof planApprovalAskState> = null,
+  editingReply: string | null = null,
+  wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
@@ -597,9 +711,13 @@ function authorityRemedy(
       return `The person has answered the plan question. Run ${nextOnItsOwn()}, and follow the step ` +
         "it prints: it carries out their choice. Do not show them the question again.";
     }
+    // Once they reply while editing, the ask tool's step records it (editingReply).
     if (asked === "editing") {
-      return "The person is editing the plan files themselves: leave those files to them. When they say " +
-        `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
+      return editingReply
+        ? `The person is editing the plan files themselves and has replied since: ${editingReply}. Then run ` +
+          `${nextOnItsOwn()}, and follow the step it prints.`
+        : "The person is editing the plan files themselves: leave those files to them. When they say " +
+          `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
     // Some hosts show this refusal to the person as written, so it is only their
     // sentence; the agent's steps for it are in the skill's refusal clause.
@@ -614,20 +732,26 @@ function authorityRemedy(
         ? `Plan approval is off for the plan for ${standing.scope}, so it needs no approval: ` +
           "do not ask the person to approve it. "
         : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
-  return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
+  return `${reason}. ${stands}Run ${nextOnItsOwn(wayOn)}, and follow the step it prints.`;
 }
 
 function authorityBlockReason(
   reason: string,
   standing: PlanStanding | null = null,
   asked: ReturnType<typeof planApprovalAskState> = null,
+  editingReply: string | null = null,
+  wayOn: EngineInvocation | null = null,
 ): string {
+  if (reason === SWARM_MAIN_CHECKOUT_HELD) {
+    return `${authorityRemedy(reason, standing)} A change the person asks for in the main checkout can be made once ` +
+      "Code Generation is over.";
+  }
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
-    return authorityRemedy(reason, standing, asked);
+    return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
-    authorityRemedy(reason, standing)
+    authorityRemedy(reason, standing, null, null, wayOn)
   );
 }
 
@@ -719,9 +843,9 @@ function planAppendixFor(projectDir: string, unit: string | null): string | unde
   }
 }
 
-export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvidence[] {
+export function gatherUnitEvidence(projectDir: string, units: string[], issued?: CodeGenerationIssuance): UnitEvidence[] {
   return units.map((unit) => {
-    const approval = evaluateCodeGenerationApproval(projectDir, { unit });
+    const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
     const reviewAppendix = planAppendixFor(projectDir, unit);
     return {
       unit,
@@ -738,8 +862,8 @@ export function gatherUnitEvidence(projectDir: string, units: string[]): UnitEvi
   });
 }
 
-export function gatherApprovalEvidence(projectDir: string, units: string[]): UnitEvidence[] {
-  const stageApproval = evaluateCodeGenerationApproval(projectDir, { unit: null });
+export function gatherApprovalEvidence(projectDir: string, units: string[], issued?: CodeGenerationIssuance): UnitEvidence[] {
+  const stageApproval = evaluateCodeGenerationApproval(projectDir, { unit: null }, issued);
   const reviewAppendix = planAppendixFor(projectDir, null);
   return [
     {
@@ -754,7 +878,7 @@ export function gatherApprovalEvidence(projectDir: string, units: string[]): Uni
       ...(stageApproval.ok ? {} : { reason: stageApproval.reason }),
       ...(reviewAppendix === undefined ? {} : { reviewAppendix }),
     },
-    ...gatherUnitEvidence(projectDir, units),
+    ...gatherUnitEvidence(projectDir, units, issued),
   ];
 }
 
@@ -827,6 +951,57 @@ function isPlanWaitSideWrite(projectDir: string, target: string, planPaths: stri
   });
 }
 
+// A path into the project spelled another way than the project is (a Windows
+// 8.3 short name, a linked parent folder, a drive letter substituted for the
+// project folder, which is a drive root), spelled from the project folder, so
+// every check reads it as the project's own. The folder is found by identity
+// and what lies under it stays as written, so a link inside is still seen.
+function inProjectSpelling(projectDir: string, target: string): string {
+  const projectLexical = resolve(projectDir);
+  if (isWithinDir(target, projectLexical)) return target;
+  for (let folder = target; ; folder = dirname(folder)) {
+    if (sameDirectoryIdentity(folder, projectLexical)) return join(projectLexical, relative(folder, target));
+    if (dirname(folder) === folder) return target;
+  }
+}
+
+// A real path with any Windows 8.3 short name expanded: Bun's realpathSync
+// keeps the short name, realpathSync.native expands it. Where native cannot
+// answer (some volumes, such as a RAM disk), the realpathSync answer stands;
+// no test can make native fail.
+function expandedRealPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return realpathSync(path);
+  }
+}
+
+// A write outside the project is never the plan's business: the path as
+// written lies outside the project, and so does the real path of its deepest
+// existing ancestor, so a link from outside into the project counts as inside
+// (a dangling link resolves to nothing and counts as inside too).
+function isOutsideProject(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const projectReal = expandedRealPath(projectLexical);
+    const targetAbs = resolve(target);
+    if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
+    const suffix: string[] = [];
+    let cursor = targetAbs;
+    while (lstatSync(cursor, { throwIfNoEntry: false }) === undefined) {
+      const parent = dirname(cursor);
+      if (parent === cursor) return false;
+      suffix.unshift(basename(cursor));
+      cursor = parent;
+    }
+    const real = join(expandedRealPath(cursor), ...suffix);
+    return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
+  } catch {
+    return false;
+  }
+}
+
 // The files and folders the waiting plans name, loaded only while the engine's
 // Plan Approval question is open, or one target's plan before it is asked.
 // Null when that module cannot be read.
@@ -836,18 +1011,6 @@ function planApprovalPlanNamedPaths(projectDir: string, unit?: string | null): s
     return unit === undefined ? ask.planApprovalPlanNamedPaths(projectDir) : ask.codeGenerationPlanNamedPaths(projectDir, unit);
   } catch {
     return null;
-  }
-}
-
-// The asked plans' own plan files the person's reply opened, loaded only while
-// the engine's Plan Approval question is open. Nothing is open when that module
-// cannot be read, so the write is refused as before.
-function planApprovalReplyEditableFiles(projectDir: string): string[] {
-  try {
-    return (require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts"))
-      .planApprovalReplyEditableFiles(projectDir);
-  } catch {
-    return [];
   }
 }
 
@@ -869,42 +1032,74 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
   }
 }
 
-// A review the person asked for while the plan waits writes only its open
-// request's own review file (the Review File of a REVIEW_REQUESTED with no
-// REVIEW_COMPLETED for its request id yet) and, while one is open, the reviewer
-// dispatch record beside it. Nothing is open when the trail cannot be read.
-function openReviewRequestFiles(projectDir: string): string[] {
+// The listed Unit `prepare` bound a Bolt worktree to: `folder` is a folder
+// directly under `.aidlc/worktrees/`, reached through no symlink, whose own
+// delegated approval (written by `prepare`) lets that Unit build. The judgement
+// is the one the worker's own hook makes inside the worktree, so a lowered
+// fence counts here exactly as it counts there, and a plan changed since
+// approval refuses here as it does there. Null for any other folder, or one
+// bound to no listed Unit.
+function worktreeBoundUnit(projectDir: string, folder: string, units: readonly string[]): string | null {
   try {
-    const record = docsRoot(projectDir);
-    const open = new Map<string, string>();
-    for (const row of readAuditShardEvents(projectDir)) {
-      const id = auditBlockField(row.block, "Request Id");
-      if (id === null) continue;
-      if (row.event === "REVIEW_COMPLETED") open.delete(id);
-      if (row.event !== "REVIEW_REQUESTED") continue;
-      // Audit rows are project text: only a slot inside the record's reviews
-      // folder, as `log review` writes it, counts.
-      const file = auditBlockField(row.block, "Review File");
-      const slot = file === null ? null : resolve(record, file);
-      const reviews = resolve(record, REVIEW_RECORDS_DIR);
-      if (slot !== null && !isAbsolute(file as string) && slot.startsWith(`${reviews}${sep}`)) open.set(id, slot);
-    }
-    return open.size === 0 ? [] : [...open.values(), resolve(reviewerDispatchPath(projectDir))];
+    const projectLexical = resolve(projectDir);
+    const root = resolve(worktreesDir(projectDir));
+    const folderAbs = resolve(folder);
+    const inside = relative(root, folderAbs);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside) || /[\\/]/.test(inside)) return null;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, folderAbs));
+    if (!lstatSync(folderAbs, { throwIfNoEntry: false })?.isDirectory()) return null;
+    return units.find((unit) => codeGenerationExecutionAllowed(folderAbs, { unit })) ?? null;
   } catch {
-    return [];
+    return null;
   }
 }
 
-// One of those files exactly, reached through no symlink and not hard-linked
-// to another file.
-function isOpenReviewTarget(projectDir: string, target: string, files: string[]): boolean {
+// The one prepared Bolt worktree every target lies in, named as the listed
+// Unit the engine bound it to (worktreeBoundUnit). Null when a target lies
+// elsewhere, names the folder itself, or when two worktrees are named.
+function preparedBoltWorktreeUnit(projectDir: string, targets: string[], units: readonly string[]): string | null {
   try {
     const projectLexical = resolve(projectDir);
-    const targetAbs = resolve(target);
-    if (!files.some((file) => normalizeDriveLetter(file) === normalizeDriveLetter(targetAbs))) return false;
-    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
-    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
-    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    const projectReal = realpathSync(projectLexical);
+    const root = resolve(worktreesDir(projectDir));
+    let worktree: string | null = null;
+    for (const target of targets) {
+      const targetAbs = resolve(target);
+      const inside = relative(root, targetAbs);
+      if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return null;
+      const folder = resolve(root, inside.split(/[\\/]/)[0]);
+      if (folder === targetAbs || (worktree !== null && worktree !== folder)) return null;
+      worktree = folder;
+      assertNoSymlinkInChainOrThrow(projectReal, relative(projectLexical, targetAbs));
+    }
+    return worktree === null ? null : worktreeBoundUnit(projectDir, worktree, units);
+  } catch {
+    return null;
+  }
+}
+
+// Every target is a file of a landing AI-DLC staged in the main checkout for
+// one of `units` that git could not merge or that was combined since, or, for a
+// clean merge whose commit the person's hook refused, that the landing staged
+// (the landing owns which: stagedLandingClashFiles), reached through no
+// symlink and linked to no other file. Loaded only here, off every other tool
+// call's path.
+async function landingClashFilesOnly(projectDir: string, targets: string[], units: readonly string[]): Promise<boolean> {
+  if (units.length === 0) return false;
+  try {
+    const { stagedLandingClashFiles } = await import("../tools/aidlc-worktree.ts");
+    const files = new Set(stagedLandingClashFiles(projectDir, units));
+    if (files.size === 0) return false;
+    const projectLexical = resolve(projectDir);
+    const projectReal = realpathSync(projectLexical);
+    return targets.every((target) => {
+      const targetAbs = resolve(target);
+      const inside = relative(projectLexical, targetAbs);
+      if (!files.has(inside.split(sep).join("/"))) return false;
+      assertNoSymlinkInChainOrThrow(projectReal, inside);
+      const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+      return existing === undefined || (existing.isFile() && existing.nlink === 1);
+    });
   } catch {
     return false;
   }
@@ -917,7 +1112,7 @@ function isOpenReviewTarget(projectDir: string, target: string, files: string[])
 // symlink and not hard-linked to another file, is exempt.
 // A stage's own record output inside AI-DLC's records (`aidlc/spaces`): reached
 // through no symlink, not hard-linked to another file, and not the work's state,
-// audit trail or engine control files, which only the engine writes.
+// audit trail, receipts or engine control files, which only the engine writes.
 function isStageRecordOutput(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
@@ -927,8 +1122,17 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
     const segments = inside.split(/[\\/]/);
     if (
       basename(targetAbs) === "aidlc-state.md" || basename(targetAbs) === "intents.json" ||
-      segments.includes(".aidlc-engine") || segments.includes("audit")
+      segments.includes("audit") || segments.includes(".aidlc-plan-approval")
     ) return false;
+    // Inside the engine's control folder only the reviewer's own records are
+    // the agent's to write: a review file and the reviewer dispatch record.
+    const engine = segments.indexOf(".aidlc-engine");
+    if (engine >= 0) {
+      const within = segments.slice(engine + 1);
+      const reviewerRecord = (within[0] === "reviews" && within.length > 1) ||
+        (within.length === 1 && within[0] === "reviewer-dispatch.json");
+      if (!reviewerRecord) return false;
+    }
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
@@ -937,13 +1141,34 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
   }
 }
 
-// The record folder where the agent writes a person's answer text for
-// `log answer --details-file`: a plain file inside the work's own record,
-// reached through no link. Writing it changes nothing and builds nothing.
-function isAnswerTextTarget(projectDir: string, target: string): boolean {
+// The record folders where the agent writes text only the engine reads
+// (ENGINE_TEXT_DIRS): a person's answer text for `log answer --details-file`,
+// and a stage's learnings picks for `learnings persist` (#1592), which runs
+// while Code Generation is still the current stage. A plain file inside the
+// work's own record, reached through no link. Writing it changes nothing and
+// builds nothing.
+function isEngineTextTarget(projectDir: string, target: string): boolean {
   try {
     const record = docsRoot(projectDir);
-    if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
+    if (!record || !ENGINE_TEXT_DIRS.some((dir) => isTrustedRecordTarget(projectDir, target, join(record, dir)))) {
+      return false;
+    }
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// The project folder where the agent writes a person's request for `next
+// --request-file` (REQUEST_TEXT_DIR): a plain file directly inside it, the only
+// place the engine reads it, reached through no link. Writing it changes
+// nothing and builds nothing; the engine reads the file and removes it.
+function isRequestTextTarget(projectDir: string, target: string): boolean {
+  try {
+    const folder = join(projectDir, REQUEST_TEXT_DIR);
+    if (normalizeDriveLetter(dirname(resolve(target))) !== normalizeDriveLetter(resolve(folder))) return false;
+    if (!isTrustedRecordTarget(projectDir, target, folder)) return false;
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
@@ -970,39 +1195,17 @@ interface MutationIntent {
   targets: string[];
   opaqueShell: boolean;
   shellCommand: string | null;
-  swarmUnits?: string[];
-  /** The command runs AI-DLC itself, or may (a dynamic command naming it). */
-  runsAidlc?: boolean;
+  /** False when the lexer could not read the whole command: a variable or
+   *  substitution, whitespace or an operator it does not decode, a shell or
+   *  evaluator (a shell script, inline code) that runs text it cannot see, a
+   *  write through an option, or a PowerShell command not read as plain. */
+  readable?: boolean;
+  /** AI-DLC's own command that the shell reading or engineCommandAdmitted refuses. */
+  engineRefused?: boolean;
 }
 
 function normalizedCommandName(name: string): string {
   return basename(name).toLowerCase().replace(/\.exe$/, "");
-}
-
-function lastFlagValue(args: string[], flag: string): string | null {
-  let value: string | null = null;
-  for (let index = 0; index < args.length; index++) {
-    if (args[index] !== flag) continue;
-    const candidate = args[index + 1];
-    if (!candidate || candidate.startsWith("--")) return null;
-    value = candidate;
-    index++;
-  }
-  return value;
-}
-
-// Diagnostics that change nothing a plan governs. Refusing them while a plan
-// waits for approval left the person unable to ask what was wrong (#1383,
-// #1418). A doctor export writes a bundle, so it keeps the normal verdict.
-function isReadOnlyDiagnostic(args: readonly string[]): boolean {
-  const [head = "", ...rest] = args;
-  if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
-  // The engine's clock, for a time a document asks for.
-  if (head === "engine" && rest.length === 1 && rest[0] === "now") return true;
-  if (head !== "doctor" && head !== "--doctor") return false;
-  return !rest.some((arg) =>
-    arg === "--export" || arg === "--output" ||
-    arg.startsWith("--export=") || arg.startsWith("--output="));
 }
 
 // A recorded switch turned off or back on, and nothing else: `config flags`
@@ -1023,6 +1226,9 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
   if (args[0] !== "config" || args[1] !== "flags") return false;
   let changes = false;
   let lowers = false;
+  // Plan approval's own switch stands only on what can turn plan approval off
+  // while a plan question waits (planApprovalOffStands).
+  let planApprovalOff = false;
   for (let index = 2; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--bypass" || arg === "--clear-bypass") {
@@ -1030,6 +1236,10 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       if (!(RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name)) return false;
       changes = true;
       lowers ||= arg === "--bypass";
+      planApprovalOff ||= arg === "--bypass" && name === CEREMONY_ENV.plan_approval;
+    } else if (arg === "--message") {
+      // The message the person asked in, which the setter itself proves.
+      if (args[++index] === undefined) return false;
     } else if (arg === "--project-dir") {
       // The way back the engine prints names this project when it ran
       // elsewhere: the same folder by identity, however it is spelled.
@@ -1039,19 +1249,7 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
       return false;
     }
   }
-  return changes && (!lowers || personAskedSinceGate(projectDir));
-}
-
-// A check for this piece of work turned off or back on with `engine config set`,
-// and nothing else. Turning one on, or raising Guard Policy, only adds a stop,
-// so it never waits. Turning one off is the person's call, so while a plan
-// waits it passes once they have asked in the chat since the last decision:
-// the setter then records it with their words and says how to undo it. Plan
-// approval itself is admitted beside the other plan-wait prerequisites.
-function chatSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
-  if (args.length !== 5 || args[0] !== "engine" || args[1] !== "config" || args[2] !== "set") return false;
-  if (args[3] === "plan-approval" || args[3] === "guard.plan-approval") return false;
-  return personCheckSwitchAllowed(projectDir, args[3], args[4]);
+  return changes && (!lowers || personAskedSinceGate(projectDir, { planApprovalOff }));
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
@@ -1065,12 +1263,15 @@ interface ShellDialect {
   // aidlc.cmd and absolute paths to the installed launcher or active
   // executable name the engine, as they do on Windows.
   enginePaths: boolean;
+  // A PowerShell cmdlet whose written paths the reader binds exactly.
+  pathBoundWriter: (name: string) => boolean;
 }
 
 const POSIX_DIALECT: ShellDialect = {
   powerShell: false,
   pathsAsWritten: false,
   enginePaths: false,
+  pathBoundWriter: () => false,
 };
 
 // A PowerShell stream redirect that writes no file: to $null, or into output.
@@ -1088,19 +1289,26 @@ const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)
 // this reading admits only lines it can render exactly.
 function plainPowerShell(
   command: string,
-): { commands: string[][]; rendering: string } | null {
+  pathBoundWriter: (name: string) => boolean = () => false,
+): { commands: string[][]; starts: number[]; rendering: string } | null {
   // Controls, whitespace other than a space, and the typographic dashes and
   // quotes PowerShell reads as - and as quotes.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
   if (/[\x00-\x1f\x7f-\x9f\u2013-\u2015\u2018-\u201f]|[^\S ]/u.test(command)) return null;
+  // A cmdlet is handed its words as written, never through a native command
+  // line, so only a native program meets 5.1's splitting.
+  const cmdlet = (name: string): boolean =>
+    READ_ONLY_POWERSHELL_CMDLETS.has(name.toLowerCase()) || pathBoundWriter(name);
   const commands: string[][] = [];
   const joins: string[] = [];
+  // Where each command starts in the line as written.
+  const starts: number[] = [0];
   let words: string[] = [];
   let call = false;
   const finish = (): boolean => {
     if (words.length === 0) return false;
     if (
-      !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()) &&
+      !cmdlet(words[0]) &&
       words.slice(1).some((word) => word === "" || word.includes('"') || word.endsWith("\\"))
     ) return false;
     commands.push(words);
@@ -1119,6 +1327,7 @@ function plainPowerShell(
       if (command[i + 1] === "|" || !finish()) return null;
       joins.push(ch);
       i++;
+      starts.push(i);
       continue;
     }
     const redirect = POWERSHELL_NULL_REDIRECT.exec(command.slice(i));
@@ -1144,7 +1353,9 @@ function plainPowerShell(
     } else {
       word = /^[^ ;|&'"]+/.exec(command.slice(i))?.[0] ?? "";
       if (
-        /[`$@(){}#<>,%^![\]]/.test(word) ||
+        /[`$@(){}#<>%^![\]]/.test(word) ||
+        // A read-only cmdlet's list (Select-Object Name,Length) writes nothing.
+        (word.includes(",") && (first || !READ_ONLY_POWERSHELL_CMDLETS.has(words[0].toLowerCase()))) ||
         /\\(?![A-Za-z0-9._-])/.test(word) ||
         /^-[^-].*\./.test(word) ||
         (first && !call && !/^[A-Za-z][A-Za-z0-9._:\\/-]*$/.test(word))
@@ -1161,6 +1372,7 @@ function plainPowerShell(
     /^[A-Za-z0-9._/:+,@%-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
   return {
     commands,
+    starts,
     rendering: commands
       .map((command, index) =>
         `${index > 0 ? ` ${joins[index - 1]} ` : ""}${command.map(posixWord).join(" ")}`
@@ -1179,8 +1391,9 @@ function powerShellReading(
     args: string[]; executable?: string; launchers?: string[];
     dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
   }>,
-): string | null {
-  const plain = plainPowerShell(command);
+  pathBoundWriter: (name: string) => boolean,
+): { rendering: string; starts: number[] } | null {
+  const plain = plainPowerShell(command, pathBoundWriter);
   if (!plain) return null;
   const invocations = invocationsOf(plain.rendering);
   const faithful = invocations.length === plain.commands.length &&
@@ -1191,7 +1404,7 @@ function powerShellReading(
         invocation.args.length === args.length &&
         invocation.args.every((arg, at) => arg === args[at]);
     });
-  return faithful ? plain.rendering : null;
+  return faithful ? { rendering: plain.rendering, starts: plain.starts } : null;
 }
 
 function sameFileIdentity(left: string, right: string): boolean {
@@ -1227,285 +1440,80 @@ function installedEngine(path: string): "launcher" | "executable" | null {
   return null;
 }
 
-// The dispatcher's top-level park runs `engine orchestrate park` and gets its
-// verdict: the engine names that spelling for a typed park.
-function asEngineRoute(args: string[]): string[] {
-  return args[0] === "park" ? ["engine", "orchestrate", ...args] : args;
+// A file a command writes through an option or a second operand, which the
+// lexer does not place among the write targets: it is a write all the same.
+function writesThroughOption(name: string, args: readonly string[]): boolean {
+  if (name === "sort" || name === "git") {
+    return args.some((arg) => (name === "sort" && arg === "-o") || arg === "--output" || arg.startsWith("--output="));
+  }
+  if (name === "uniq") return args.filter((arg) => !arg.startsWith("-")).length >= 2;
+  return false;
 }
 
-// The native engine, by name or (with enginePaths) by the installed launcher
-// or executable path, running a command `admitted` accepts.
-function isNativePlanApprovalPrerequisite(
-  name: string,
-  args: string[],
-  admitted: (engineArgs: string[]) => boolean,
-  enginePaths = false,
-): boolean {
-  const command = name.toLowerCase();
-  if (command === "aidlc" || command === "aidlc.exe") {
-    return admitted(asEngineRoute(args));
+function gitSubcommand(args: string[]): string | null {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (["-C", "--git-dir", "--work-tree", "--namespace"].includes(arg)) {
+      i++;
+      continue;
+    }
+    if (
+      arg.startsWith("--git-dir=") ||
+      arg.startsWith("--work-tree=") ||
+      arg.startsWith("--namespace=")
+    ) {
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return arg;
   }
-  if (!enginePaths || !admitted(asEngineRoute(args))) return false;
+  return null;
+}
+
+// The native engine by name (`aidlc`, `aidlc.exe`) or, where the shell keeps
+// Windows paths as written, by the installed launcher or active executable
+// path. cmd.exe parses a .cmd launcher's arguments again, where these
+// characters expand variables or start another command.
+function isNativeEngine(name: string, args: readonly string[], enginePaths: boolean): boolean {
+  const command = name.toLowerCase();
+  if (command === "aidlc" || command === "aidlc.exe") return true;
+  if (!enginePaths) return false;
   const engine = command === "aidlc.cmd" ? "launcher" : installedEngine(name);
-  // cmd.exe parses a .cmd launcher's arguments again, where these characters
-  // expand variables or start another command.
   return engine === "executable" ||
     (engine === "launcher" && args.every((arg) => arg !== "" && !/["%&<>^|!\r\n]/.test(arg)));
 }
 
-// The same diagnostics through their source tools (aidlc-doctor.ts,
-// aidlc-utility.ts), which the unified entry point dispatches to.
-function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
-  if (stem === "doctor") return args[0] === "doctor" && isReadOnlyDiagnostic(args);
-  return stem === "utility" &&
-    (args[0] === "status" || args[0] === "version" || (args[0] === "now" && args.length === 1));
-}
-
-// Construction entry choices the person makes before the first Unit's plan
-// exists. On a scope whose first Construction stage is Code Generation
-// (express, for one) they are recorded while this guard is already watching.
-const CONSTRUCTION_ENTRY_SETTERS = new Set([
-  "set-construction-checkpoints",
-  "set-construction-execution",
-  "set-construction-iteration",
-  "set-construction-verification-command",
-]);
-
-// The durable state holds the Code Generation completion gate open: the stage
-// is still current and its checkbox reads awaiting-approval.
-function codeGenerationGateHeld(state: string): boolean {
-  return normalizeStageName(getField(state, "Current Stage") ?? "") === GUARDED_STAGE &&
-    parseCheckboxes(state).some(
-      (entry) => entry.slug === GUARDED_STAGE && entry.state === "awaiting-approval",
-    );
-}
-
-// What the engine names while a plan waits, other than building it: steps that
-// change nothing a plan governs, admitted at any time, and moves a person asks
-// for (`asked`), admitted once a person has spoken since the last decision.
-// Each is matched on `engine <noun> <verb>`; `admits` checks what follows the
-// noun. Code stays held for the approved plan either way.
-interface EngineDirectedRoute {
-  noun: string;
-  verbs?: readonly string[];
-  asked?: true;
-  admits?: (afterNoun: readonly string[]) => boolean;
-}
-
-// Only these flags, each with its value.
-function onlyFlags(args: readonly string[], allowed: readonly string[]): boolean {
-  for (let i = 0; i < args.length; i++) {
-    const [flag, inline] = args[i].split("=", 2);
-    if (!allowed.includes(flag)) return false;
-    if (inline === undefined) i++;
-  }
-  return true;
-}
-
-// The settings a scope or setting change the person asked for may carry. Guard
-// Policy, plan approval and the person's checks keep their own switch rules.
-const PLAN_WAIT_SETTINGS = ["depth", "test-strategy", "review", "sensors", "learnings", "collaborators"] as const;
-const PLAN_WAIT_SETTING_FLAGS = PLAN_WAIT_SETTINGS.map((setting) => `--${setting}`);
-
-const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
-  // The review brief and the stage's own question rows (a checkpoint row keeps
-  // its own rule).
-  { noun: "review-brief", verbs: ["review", "context", "summary"] },
-  {
-    noun: "log", verbs: ["decision", "answer"],
-    admits: (afterNoun) =>
-      lastFlagValue(afterNoun.slice(1), "--stage") === GUARDED_STAGE &&
-      !afterNoun.some((arg) => arg === "--checkpoint" || arg.startsWith("--checkpoint=")),
-  },
-  // Status and help as the engine prints them.
-  { noun: "status" },
-  { noun: "orchestrate", verbs: ["help"] },
-  // The resume menu's choice: it only names the move, which is judged itself.
-  {
-    noun: "orchestrate", verbs: ["report"],
-    admits: (afterNoun) =>
-      lastFlagValue(afterNoun.slice(1), "--result") === "resumed" && !afterNoun.includes("--stage"),
-  },
-  // Moves the person asked for: a jump, a skip or add, new work, what the
-  // folder is, and the scan that follows it.
-  { noun: "jump", verbs: ["execute", "reopen"], asked: true },
-  { noun: "recompose", asked: true, admits: (afterNoun) => onlyFlags(afterNoun, ["--skip", "--add", "--reason"]) },
-  // A scope or setting change, which keeps the plan's question open.
-  {
-    noun: "scope", verbs: ["change"], asked: true,
-    admits: (afterNoun) => onlyFlags(afterNoun.slice(1), ["--scope", ...PLAN_WAIT_SETTING_FLAGS]),
-  },
-  {
-    noun: "config", verbs: ["set"], asked: true,
-    admits: (afterNoun) =>
-      (PLAN_WAIT_SETTINGS as readonly string[]).includes(afterNoun[1] ?? "") && afterNoun[2] !== undefined &&
-      onlyFlags(afterNoun.slice(3), PLAN_WAIT_SETTING_FLAGS),
-  },
-  { noun: "intent", verbs: ["create"], asked: true },
-  { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
-  // A review the person asks for: its request and its verdict.
-  { noun: "log", verbs: ["review"], asked: true },
-];
-
-function engineDirectedWhilePlanWaits(args: readonly string[], personAsked: () => boolean): boolean {
-  if (args[0] !== "engine") return false;
-  const [noun, verb] = [args[1], args[2]];
-  return ENGINE_DIRECTED_WHILE_PLAN_WAITS.some((route) =>
-    route.noun === noun &&
-    (route.verbs === undefined || route.verbs.includes(verb ?? "")) &&
-    (route.admits === undefined || route.admits(args.slice(2))) &&
-    (route.asked !== true || personAsked()));
-}
-
-// The engine's last step is current and was delivered as issued, and it is not
-// its recovery question, whose own picked remedy is the one move it carries out
-// (guardRecoveryAnswerAdmits). A step gone stale or superseded since names
-// nothing the person's earlier words still ask for: `next` names the step now.
-// Parked work's last step is the park, which no issued step outlives: what the
-// person types over it is theirs to make, and `next` names it.
-function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
-  try {
-    const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
-    const marker = readActiveDirectiveMarker(projectDir, state);
-    return marker !== null && marker.delivery !== "superseded" &&
-      !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
-  } catch {
-    return false;
-  }
-}
-
-// Everything admitted while a plan waits, in one place: the prerequisites
-// below, the open question's own answers, read-only diagnostics, a recorded
-// switch, and what the engine names.
-function planWaitAdmits(
+// The engine's own arguments when a shell invocation runs AI-DLC as installed:
+// the native engine, or Bun running `aidlc.ts` or an `aidlc-<route>.ts` that is
+// a real file under this harness's tools directory (no symlink, no wrapper, no
+// data-driven argument, no changed executable resolution, no preloaded code).
+// A per-tool script is read as its engine route (`aidlc-<route>.ts <args>` is
+// `engine <route> <args>`), so one verb is never two commands. Null for any
+// other program, which the shell reading judges.
+function installedEngineArgs(
   projectDir: string,
-  engineArgs: string[],
-  gateHeld: boolean,
-  askAdmits: (engineArgs: readonly string[]) => boolean,
-): boolean {
-  const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
-  return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
-    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs) ||
-    engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
-}
-
-function isPlanApprovalPrerequisite(
+  cwd: string,
+  name: string,
   args: string[],
-  gateHeld = false,
-  personSpoke: () => boolean = () => false,
-): boolean {
-  if (args[0] !== "engine") return false;
-  // Direct refusals can offer the abort or the fence switch without publishing
-  // a selection marker. The strict drift ask in this hook prints
-  // config set guard.plan-approval off. Preserve the trusted source-tool
-  // recovery route in native installs:
-  // conductor-prose-obtained consent remains the trust boundary for abort.
-  // A mistaken abort --discard parks work for aidlc engine worktree restore
-  // --slug <slug>; a mechanical selection receipt remains a future candidate.
-  // isSelectedGuardRestartContinuation verifies the published restart choice.
-  if (isGuardRecoveryEngineInvocation(args)) return true;
-
-  const noun = args[1];
-  const verb = args[2];
-  // The conductor re-enters through next on each human turn, and continue
-  // delivers the remaining stage rules. Requiring approval for that transport
-  // traps installations before they can finish presenting or answering it.
-  // Lifecycle reports and generation remain subject to the approval guard.
-  if (noun === "orchestrate" && (verb === "next" || verb === "continue")) {
-    return true;
-  }
-  // Stopping for now and coming back are the person's call at any point, and
-  // the engine names both commands itself. They record the stop in the state
-  // and audit only; after unpark the build still waits for the directive next
-  // issues and the plan's recorded approval.
-  if (noun === "orchestrate" && verb === "park") return true;
-  if (noun === "state" && verb === "unpark") return true;
-  // The open Code Generation gate belongs to the human. Opening it moved the
-  // state past the issued directive, so no current directive can name a target
-  // any more, and the human's answer is the only move left. The engine requires
-  // that exact answer and generates nothing for it: approval completes the
-  // stage, Request Changes retires the Plan Approval. Any other report, and any
-  // workspace change while the gate is open, still needs a current directive.
-  if (noun === "orchestrate" && verb === "report" && gateHeld) {
-    const routeArgs = args.slice(3);
-    return (
-      lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
-      ["approved", "rejected"].includes(lastFlagValue(routeArgs, "--result") ?? "")
-    );
-  }
-  // reply only reads what the human-turn hook recorded; the conductor needs it
-  // before approval on harnesses that never show the hook's notice. restore
-  // writes back only the files the person approved, so their approval holds.
+  unwrapped: boolean,
+  enginePaths: boolean,
+): string[] | null {
+  if (!unwrapped) return null;
+  if (isNativeEngine(name, args, enginePaths)) return args;
+  if (!["bun", "bun.exe"].includes(name.toLowerCase()) && !isThisBun(name)) return null;
   if (
-    noun === "testing-posture" &&
-    ["resolve", "render", "fingerprint", "verify", "reply", "restore"].includes(verb)
-  ) {
-    return true;
-  }
-  // The runtime summary only reads runtime-graph.json and the state file.
-  // Refusing it sent planning agents into retries before the plan existed.
-  if (noun === "runtime" && verb === "summary") return true;
-  // Both only read the audit trail. Refusing them before the plan exists
-  // would send planning agents into retries, as with the runtime summary.
-  if (noun === "log" && verb === "answers") return true;
-  if (noun === "audit" && verb === "history") return true;
-  // Checkpoint review owns its own audit/readiness/human authority. It must
-  // remain reachable after the engine replaces invoke-swarm with its gate
-  // successor, including when Request Changes retired the old Plan Approval.
-  // Verification executes a supplied command and still requires approval.
-  if (noun === "bolt" && (verb === "checkpoint" || verb === "swarm-checkpoint")) {
-    const routeArgs = args.slice(3);
-    const action = lastFlagValue(routeArgs, "--action");
-    return action === null
-      ? !routeArgs.includes("--action")
-      : ["status", "ask", "approve", "reject"].includes(action);
-  }
-  // Unit lifecycle receipts and the Construction entry choices record what the
-  // person decided and what the Unit did; none writes workspace source. The
-  // protocol records `unit start` before the Unit's plan exists, so refusing it
-  // here left the documented native form refused while the per-tool form
-  // passed (#1387) and Units without the receipts the team gate needs (#1289).
-  // Completing a Unit settles it, so before approval that is only the recovery
-  // remedy the person picked (guardRecoveryAnswerAdmits).
-  if (noun === "state" && verb === "unit") {
-    return ["start", "pause", "resume"].includes(args[3] ?? "");
-  }
-  if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
-  if (noun === "bolt" && verb === "set-autonomy") return true;
-  // Plan approval on or off for this piece of work is the person's call, said
-  // in their own words. On only adds the stop; off is carried out when a person
-  // has spoken since the last decision, so the conductor runs what they asked.
-  if (
-    noun === "config" && verb === "set" && args.length === 5 &&
-    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") &&
-    (args[4] === "on" || (args[4] === "off" && personSpoke()))
-  ) {
-    return true;
-  }
-  // Recording the remedy the person picked on the engine's recovery question
-  // writes nothing in the workspace; the picked remedy is admitted after it.
-  if (noun === "log" && verb === "answer" && lastFlagValue(args.slice(3), "--checkpoint") === "guard-recovery") {
-    return true;
-  }
-  // The walking-skeleton stance is the same kind of entry choice, recorded
-  // through report without a stage result.
-  if (noun === "orchestrate" && verb === "report") {
-    const routeArgs = args.slice(3);
-    return (SKELETON_STANCES as readonly string[]).includes(lastFlagValue(routeArgs, "--skeleton-stance") ?? "") &&
-      !routeArgs.includes("--result") && !routeArgs.includes("--stage");
-  }
-  // Generation start refuses itself without the human's receipt-backed
-  // approval, so the owner answers with the precise reason.
-  if (noun === "testing-posture" && verb === "begin") return true;
-  if (noun !== "log" || (verb !== "decision" && verb !== "answer")) return false;
-
-  const routeArgs = args.slice(3);
-  return (
-    lastFlagValue(routeArgs, "--stage") === GUARDED_STAGE &&
-    lastFlagValue(routeArgs, "--checkpoint") === "plan-approval"
-  );
+    args.some((arg) =>
+      arg === "-r" || arg === "--require" || arg === "--preload" ||
+      arg.startsWith("--require=") || arg.startsWith("--preload="))
+  ) return null;
+  const scriptIndex = args[0] === "run" ? 1 : 0;
+  const script = args[scriptIndex];
+  if (!script || script.startsWith("-") || !isTrustedToolFile(projectDir, cwd, script)) return null;
+  const stem = basename(isAbsolute(script) ? resolve(script) : resolve(cwd, script));
+  const toolArgs = args.slice(scriptIndex + 1);
+  if (stem === "aidlc.ts") return toolArgs;
+  const route = /^aidlc-([A-Za-z0-9._-]+)\.ts$/.exec(stem)?.[1];
+  return route ? ["engine", route, ...toolArgs] : null;
 }
 
 function isSelectedGuardRestartContinuation(
@@ -1568,109 +1576,222 @@ function isSelectedGuardRestartContinuation(
   return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
 }
 
-function gitSubcommand(args: string[]): string | null {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (["-C", "--git-dir", "--work-tree", "--namespace"].includes(arg)) {
-      i++;
-      continue;
-    }
-    if (
-      arg.startsWith("--git-dir=") ||
-      arg.startsWith("--work-tree=") ||
-      arg.startsWith("--namespace=")
-    ) {
-      continue;
-    }
-    if (arg.startsWith("-")) continue;
-    return arg;
-  }
-  return null;
+// What AI-DLC's own command still waits on in the step at hand: whether a jump
+// is the person's move (jumpIsPersonsMove).
+interface EngineCommandContext {
+  jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-function isFrameworkToolInvocation(
+// The jump tool's verb (`execute` or `reopen`), its `--target`, a reopen's
+// `--units` and `--via`, and every argument after `jump`, verb first.
+interface JumpCommand {
+  verb: string;
+  target: string | undefined;
+  units: string | undefined;
+  via: string | undefined;
+  direction: string | undefined;
+  args: readonly string[];
+}
+
+const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
+
+// Whether the engine's last step leaves the jump to the person's turn: true
+// when it does; when a superseded step holds back a `jump execute` or a `jump
+// reopen` to a stage that is an identifier, the `next --stage` its one
+// exception admits the jump after; else false. A superseded step waits for a
+// fresh `next`, with one exception: Copilot's settle supersedes the step after
+// every print, the jump print `next --stage` gives at Code Generation included
+// (elsewhere it makes the jump itself), so a `jump execute` to the
+// stage the state-bound step's settled claim asked for with `next --stage`, on
+// the state as it is now, is the agent carrying that print out, and so is the
+// `jump reopen` it prints for a unit-major walk: one Unit's (with `--unit`,
+// that Unit's only), every reached Unit's after `--every-unit`, and the
+// person's change (`--via change`) only after `--change`. A picked restart's own `next` is not (its claim carries the
+// pick, and the settle keeps the question only for its exact print); a
+// `next --stage` carrying anything else, a stage that is no identifier, and a
+// step with no settled claim (a compaction, a status sync) fall to the wait.
+// At its Code Generation recovery question, a restart the question offers runs
+// only as the person's pick of it (isSelectedGuardRestartContinuation), bound
+// to the state it was picked at; a Unit reopen it offers has no pick path
+// (that check reads `jump execute` only), so it stays refused while this
+// question is the published step, picked or not; and right after they
+// picked one of its choices exactly (the hook's record on the current step)
+// another jump goes against that pick. Any other jump is their own move. The
+// report that opens the gate moves the state and writes no
+// step, so the step the person answers there is the one the engine issued last
+// (readIssuedDirectiveMarker); whether their turn still stands is
+// personTurnStands's (no decision after it, so the approval they just gave
+// never also reopens what it approved). With no step on record there is
+// nothing to wait for.
+// Parked work's last step is the park, which no issued step outlives.
+function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | EngineInvocation {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
+    const current = readActiveDirectiveMarker(projectDir, state);
+    const marker = current ?? readIssuedDirectiveMarker(projectDir);
+    if (marker === null) return true;
+    if (marker.delivery === "superseded") {
+      const attempt = current?.active_attempt;
+      // The same exception's other case: the jump a settled print named as its
+      // own step (noteNamedJump), run as named on the state it was named on, is
+      // the agent carrying that print out.
+      if (
+        attempt?.status === "settled" && current?.kind === "print" &&
+        attempt.named_jump_sha256 === jumpClaimSha256(jump.args) &&
+        attempt.named_jump_state_sha256 === stateDigest(state) &&
+        attempt.guard_recovery_selection_sha256 === undefined
+      ) return true;
+      const target = jump.target;
+      // The `next --stage` forms that print this reopen: for one Unit, plain
+      // or naming it; for any number, for every Unit; each with `--change`
+      // exactly when the reopen is the person's change. The way on is the form
+      // that names its Units.
+      const units = jump.verb === "reopen" ? jump.units?.split(",") ?? [] : [];
+      if (target === undefined || (jump.verb !== "execute" && units.length === 0)) return false;
+      const change = jump.via === "change";
+      const one = units.length === 1 ? units[0] : undefined;
+      const named: NextStageUnits = jump.verb === "execute" ? {} : one === undefined ? { everyUnit: true, change } : { unit: one, change };
+      const forms: NextStageUnits[] = jump.verb === "execute"
+        ? [{}]
+        : [...(one === undefined ? [] : change ? [named] : [{}, named]), { everyUnit: true, change }];
+      const wayOn = nextStageInvocation(target, named);
+      const claims = forms.map((form) => nextStageClaimSha256(target, form));
+      if (wayOn === null || claims.includes(null)) return false;
+      return (attempt?.status === "settled" &&
+        attempt.command_kind === "next" && claims.includes(attempt.command_sha256) &&
+        attempt.guard_recovery_selection_sha256 === undefined &&
+        attempt.issued_state_sha256 === stateDigest(state)) || wayOn;
+    }
+    if (marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE) return true;
+    const reply = current?.guard_recovery_response;
+    return jump.target !== undefined &&
+      !(marker.remedies ?? []).some(({ operation }) =>
+        (operation?.kind === "restart-stage" || operation?.kind === "reopen-unit") && operation.stage === jump.target) &&
+      !(reply?.picked_by === "person" && reply.selected_op && reply.feedback_sha256 === undefined);
+  } catch {
+    return false;
+  }
+}
+
+// A jump is the person's move: the restart they picked at the engine's recovery
+// question, or one they asked for since the last decision that the last step
+// does not hold back (lastStepAdmitsPersonsMoves). The jump tool checks
+// neither. One they asked for that a superseded step holds back gets, on
+// Copilot, the operation that lets it through, for the refusal to name: only
+// Copilot's adapter writes the settled claim that exception reads, and on every
+// other harness a fresh `next` delivers the step, so `next` stays their way on.
+// The harness name says which, never the step's attempt: freshActiveDirectiveMarker
+// gives every harness a settled attempt, so a Claude Code step can carry one.
+function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
-  name: string,
-  args: string[],
-  executableResolutionChanged = false,
-  dataDriven = false,
-  wrapped = false,
-  gateHeld = false,
-  enginePaths = false,
-  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
+  command: unknown,
+  state: string,
+  marker: ActiveDirectiveMarker | null,
+  jump: JumpCommand,
+): boolean | EngineInvocation {
+  if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
+  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
+  const last = lastStepAdmitsPersonsMoves(projectDir, jump);
+  return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
+}
+
+// The jump `next` names back to a stage on the plan the work has passed and
+// not run (owedJumpBack, the check `next` prints it from): Reverse Engineering
+// the person put back behind the cursor, or a stage they added after the work
+// had just passed over it. It is their own change carried out, leaving Code
+// Generation before anything of it is written, so it waits for no further turn
+// of theirs.
+function jumpNextNamesBack(projectDir: string, state: string, jump: JumpCommand): boolean {
+  if (jump.verb !== "execute" || jump.target === undefined) return false;
+  try {
+    const owed = owedJumpBack(state, projectDir);
+    return owed !== null && owed.target === jump.target && owed.direction === jump.direction;
+  } catch {
+    return false;
+  }
+}
+
+// The last value given for a flag, as `--flag value` or `--flag=value`.
+function lastFlag(args: readonly string[], name: string): string | undefined {
+  let value: string | undefined;
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === name) value = args[index + 1];
+    else if (args[index].startsWith(`${name}=`)) value = args[index].slice(name.length + 1);
+  }
+  return value;
+}
+
+// The config setup tool's own arguments (its section first), in either spelling
+// that runs it: `config ...` or its script, `aidlc-init.ts`, which drops a
+// leading `config` or `init` itself. Null for every other command, and for
+// `config set|get|list`, the per-work setter's verbs.
+const CONFIG_SETTER_VERBS = new Set(["set", "get", "list"]);
+
+function configToolArgs(engineArgs: readonly string[]): readonly string[] | null {
+  const rest = engineArgs[0] === "config"
+    ? engineArgs.slice(1)
+    : engineArgs[0] === "engine" && engineArgs[1] === "init"
+      ? (engineArgs[2] === "config" || engineArgs[2] === "init" ? engineArgs.slice(3) : engineArgs.slice(2))
+      : null;
+  return rest === null || CONFIG_SETTER_VERBS.has(rest[0] ?? "") ? null : rest;
+}
+
+// Two config forms keep a condition, because the config tool has no other owner
+// for them. A release fetched or applied replaces the engine itself: `--download`,
+// `--release-base-url`, `--ca-bundle`, `--from` outside `config models`, or a
+// setup run with no section (other than `--help` and `--statusline`). Kiro's
+// Workflows on, the sensor timeout, which plugins are on and `config project
+// --reset` can take a check away or change the stations. Each passes once a
+// person has asked since the last decision (their "update AI-DLC" is that), and
+// never on an unattended run.
+const RELEASE_FLAGS = new Set(["--download", "--release-base-url", "--ca-bundle"]);
+
+function configToolAdmitted(projectDir: string, rest: readonly string[]): boolean {
+  const names = rest.map((arg) => (arg.startsWith("--") && arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg));
+  const valueAt = (index: number): string | undefined =>
+    rest[index].includes("=") ? rest[index].slice(rest[index].indexOf("=") + 1) : rest[index + 1];
+  const section = rest[0] ?? "";
+  const sectioned = (CONFIG_SECTIONS as readonly string[]).includes(section);
+  const release = (!sectioned && !names.includes("--help") && !names.includes("--statusline")) ||
+    names.some((name) => RELEASE_FLAGS.has(name)) || (section !== "models" && names.includes("--from"));
+  const lowers = release ||
+    names.some((name, index) => (name === "--kiro-workflows" || name === "--kiro-cli-workflows") && valueAt(index) !== "off") ||
+    names.includes("--sensor-timeout-ms") || names.includes("--plugins") ||
+    (section === "project" && names.includes("--reset"));
+  return !lowers || personAskedSinceGate(projectDir);
+}
+
+// What this guard still asks of AI-DLC's own command: a recorded switch that
+// turns a check off (`--bypass <switch>`, in any spelling) passes only once a
+// person has asked since the last decision, because its setter never refuses
+// and the next tool call would pass under the switch. As `config flags` it is
+// judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
+// keep theirs. One more has no other owner: a jump (the jump tool checks no pick
+// and no person) waits for the person's move (jumpIsPersonsMove), unless it is
+// the one `next` names back to a stage the work passed and has not run
+// (jumpNextNamesBack). Every other engine command is the engine's to judge, a
+// Code Generation completion included: `report` and `unit complete` hold it
+// while its plan waits.
+function engineCommandAdmitted(
+  projectDir: string,
+  engineArgs: readonly string[],
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
 ): boolean {
-  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
-  if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
-    // A wrapper (env -C, sudo -D, xargs) can run it against another directory
-    // than the one these admissions were judged for.
-    return !executableResolutionChanged && !dataDriven && !wrapped;
-  }
-  if (normalizedCommandName(name) !== "bun") return false;
-  if (
-    args.some((arg) =>
-      arg === "-r" ||
-      arg === "--require" ||
-      arg === "--preload" ||
-      arg.startsWith("--require=") ||
-      arg.startsWith("--preload=")
-    )
-  ) {
-    return false;
-  }
-  let scriptIndex = 0;
-  if (args[0] === "run") scriptIndex = 1;
-  const script = args[scriptIndex];
-  if (!script || script.startsWith("-")) return false;
-  const projectLexical = resolve(projectDir);
-  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
-  const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
-  const unifiedEntryPoint = basename(absolute) === "aidlc.ts";
-  const toolStem = unifiedEntryPoint
-    ? null
-    : /^aidlc-([A-Za-z0-9._-]+)\.ts$/.exec(basename(absolute))?.[1] ?? null;
-  if (
-    relative(trustedToolsDir, dirname(absolute)) !== "" ||
-    (!unifiedEntryPoint && toolStem === null)
-  ) {
-    return false;
-  }
-  // The installed Bun entry point dispatches both planning and mutation routes.
-  // Give it the native planning exceptions only, after checking the interpreter
-  // and arguments. Wrappers may change cwd after parsing, so require a direct
-  // invocation. The same real-file/no-symlink boundary below still applies.
-  const toolArgs = args.slice(scriptIndex + 1);
-  if (
-    unifiedEntryPoint &&
-    (
-      !["bun", "bun.exe"].includes(name.toLowerCase()) ||
-      wrapped ||
-      executableResolutionChanged ||
-      dataDriven ||
-      !(admitted(asEngineRoute(toolArgs)) || isReadOnlyDiagnostic(toolArgs))
-    )
-  ) {
-    return false;
-  }
-  // A per-tool script gets the verdict of the engine route it implements:
-  // `aidlc-<route>.ts <args>` is judged as `engine <route> <args>`, so one
-  // operation is never refused in one spelling and allowed in the other (#1387).
-  // It runs as a direct invocation of the installed Bun, by name or by the
-  // same absolute path this hook runs under (the engine's own spelling), with
-  // no wrapper, data-driven argument, or changed executable resolution.
-  if (
-    toolStem !== null &&
-    (
-      !(["bun", "bun.exe"].includes(name.toLowerCase()) || isThisBun(name)) ||
-      wrapped ||
-      executableResolutionChanged ||
-      dataDriven ||
-      (!admitted(["engine", toolStem, ...toolArgs]) && !isReadOnlyToolDiagnostic(toolStem, toolArgs))
-    )
-  ) {
-    return false;
-  }
-  return isTrustedToolFile(projectDir, cwd, script);
+  const configArgs = configToolArgs(engineArgs);
+  if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
+  const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via"), direction: lastFlag(args, "--direction"), args: args.slice(1) })) return false;
+  // `next` takes no `--bypass`: on its line the token is one of the person's
+  // words ("add a --bypass option"), never a check turned off, as the engine's
+  // own reading says (nextLineFlags). Every other command is read whole, as its
+  // tool reads it.
+  const nextAt = args[0] === "next" ? 0 : args[0] === "orchestrate" && args[1] === "next" ? 1 : -1;
+  const switches = nextAt >= 0 ? nextLineFlags(args.slice(nextAt + 1)).map((flag) => flag.token) : args;
+  if (!switches.some((arg) => arg === "--bypass" || arg.startsWith("--bypass="))) return true;
+  if (args[0] === "config" && args[1] === "flags") return recordedSwitchChangeAdmitted(projectDir, args);
+  return personAskedSinceGate(projectDir);
 }
 
 // The Bun binary running this hook, named by absolute path. Compared by file
@@ -1701,20 +1822,20 @@ function isThisBun(name: string): boolean {
 function isTrustedToolFile(projectDir: string, cwd: string, script: string): boolean {
   if (!script) return false;
   const projectLexical = resolve(projectDir);
-  const absolute = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
+  const written = isAbsolute(script) ? resolve(script) : resolve(cwd, script);
   const trustedToolsDir = resolve(projectLexical, harnessDir(), "tools");
-  if (relative(trustedToolsDir, dirname(absolute)) !== "") return false;
+  // One folder has several spellings (another case on Windows, an 8.3 short
+  // name, a linked parent), so the folder itself decides, and the checks below
+  // read the installed spelling. A distinct case-sensitive folder or a copy of
+  // the tools elsewhere does not inherit the installed tool's authority.
+  if (dirname(written) !== trustedToolsDir && !sameDirectoryIdentity(dirname(written), trustedToolsDir)) return false;
+  const absolute = join(trustedToolsDir, basename(written));
   try {
     const projectReal = realpathSync(projectLexical);
     assertNoSymlinkInChainOrThrow(
       projectReal,
       relative(projectLexical, absolute),
     );
-    // Windows realpath can preserve caller casing. For a case-only spelling
-    // difference, require the same directory identity as well: a distinct
-    // case-sensitive directory must not inherit the installed tool's authority.
-    if (dirname(absolute) !== trustedToolsDir &&
-      !sameDirectoryIdentity(dirname(absolute), trustedToolsDir)) return false;
     return lstatSync(absolute).isFile() && !lstatSync(absolute).isSymbolicLink();
   } catch {
     return false;
@@ -1734,18 +1855,19 @@ function shellInvocationNeedsApproval(
   },
   hasConcreteTargets: boolean,
   rawCommand: string,
-  gateHeld = false,
   dialect: ShellDialect = POSIX_DIALECT,
-  askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
 ): boolean {
   const name = normalizedCommandName(invocation.name);
   const executable = invocation.executable ?? invocation.name;
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
-  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
+  // A path to a program keeps its backslashes only under PowerShell; such a
+  // path names the installed engine or nothing this guard reads.
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
-    !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
+    !(unwrapped && isNativeEngine(executable, invocation.args, true) &&
+      engineCommandAdmitted(projectDir, invocation.args, context))
   ) return true;
   if (name === "cd" || (dialect.powerShell && POWERSHELL_SET_LOCATION.has(name))) {
     // The shared lexer is intentionally not a full Bash parser. Do not grant
@@ -1766,53 +1888,33 @@ function shellInvocationNeedsApproval(
       target.split(/[\\/]+/).some((part) => part === "." || part === "..")) return true;
     const current = resolve(cwd);
     const destination = resolve(target);
-    return relative(current, destination) !== "" ||
-      !sameDirectoryIdentity(current, destination);
+    // The same folder however it is spelled (see isTrustedToolFile).
+    return !sameDirectoryIdentity(current, destination);
   }
   if (dialect.powerShell && READ_ONLY_POWERSHELL_CMDLETS.has(name)) {
     // A path, extension or wrapper would name some other program.
     return executable.toLowerCase() !== name || !unwrapped;
   }
-  if (name === "sort") {
-    return invocation.args.some(
-      (arg) => arg === "-o" || arg === "--output" || arg.startsWith("--output="),
-    );
+  // A cmdlet whose written paths are bound as PowerShell binds them writes
+  // only what the targets show, as a tracked mutator does.
+  if (dialect.powerShell && dialect.pathBoundWriter(name)) {
+    return executable.toLowerCase() !== name || !unwrapped || !hasConcreteTargets;
   }
-  if (name === "uniq") {
-    const operands = invocation.args.filter((arg) => !arg.startsWith("-"));
-    return operands.length >= 2;
-  }
+  if (name === "sort" || name === "uniq") return writesThroughOption(name, invocation.args);
   if (READ_ONLY_SHELL_COMMANDS.has(name)) return false;
   if (name === "git") {
-    if (
-      invocation.args.some(
-        (arg) => arg === "--output" || arg.startsWith("--output="),
-      )
-    ) {
-      return true;
-    }
+    if (writesThroughOption(name, invocation.args)) return true;
     const subcommand = gitSubcommand(invocation.args);
     if (subcommand === "branch") {
       return !invocation.args.includes("--show-current");
     }
     return subcommand === null || !READ_ONLY_GIT_SUBCOMMANDS.has(subcommand);
   }
-  if (
-    isFrameworkToolInvocation(
-      projectDir,
-      cwd,
-      invocation.executable ?? invocation.name,
-      invocation.args,
-      invocation.executableResolutionChanged,
-      invocation.dataDriven,
-      (invocation.launchers?.length ?? 0) > 0,
-      gateHeld,
-      dialect.enginePaths,
-      askAdmits,
-    )
-  ) {
-    return false;
-  }
+  // AI-DLC's own command, run as installed and unwrapped: the engine judges its
+  // own verbs (generation start, a gate approval, a receipt), so this guard does
+  // not, except for the conditions owned by engineCommandAdmitted.
+  const engineArgs = installedEngineArgs(projectDir, cwd, executable, invocation.args, unwrapped, dialect.enginePaths);
+  if (engineArgs !== null) return !engineCommandAdmitted(projectDir, engineArgs, context);
   if (
     TRACKED_SHELL_MUTATORS.has(name) &&
     hasConcreteTargets &&
@@ -1821,6 +1923,17 @@ function shellInvocationNeedsApproval(
     return false;
   }
   return true;
+}
+
+// A command word that is itself an expansion (`$x`, `"$A"`, `${cmd:-aidlc}`,
+// `$(...)`, a backtick), or a program that runs text the lexer does not read
+// (the interpreters, a runtime given its program inline): in a dynamic command
+// that names aidlc, it may run AI-DLC's command from a variable.
+function runsHiddenCommand(invocation: { name: string; args: string[]; executable?: string }): boolean {
+  const word = invocation.executable ?? invocation.name;
+  const program = normalizedCommandName(word);
+  return /^[$`]/.test(word) || SHELL_INTERPRETERS.has(program) ||
+    (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
 }
 
 function shellUsesDynamicEvaluation(command: string): boolean {
@@ -1856,136 +1969,30 @@ function shellUsesDynamicEvaluation(command: string): boolean {
   return false;
 }
 
-function swarmCommandUnits(
-  projectDir: string,
-  cwd: string,
-  command: string,
-  invocations: Array<{
-    name: string; args: string[]; executable?: string; launchers?: string[];
-    dataDriven?: boolean; executableResolutionChanged?: boolean; ambiguous?: boolean;
-  }>,
-): string[] | null {
-  // A direct literal invocation keeps its project and targets inspectable.
-  // Assignments, wrappers and additional commands retain opaque-shell policy.
-  if (invocations.length !== 1 ||
-    !/^\s*(?:aidlc(?:\.exe)?|bun(?:\.exe)?)\s/i.test(command)) return null;
-  const invocation = invocations[0];
-  if (invocation.ambiguous || invocation.dataDriven || invocation.executableResolutionChanged ||
-    invocation.launchers?.length) return null;
-  const executable = (invocation.executable ?? invocation.name).toLowerCase();
-  let args = invocation.args;
-  if (executable === "bun" || executable === "bun.exe") {
-    const scriptIndex = args[0] === "run" ? 1 : 0;
-    const script = args[scriptIndex];
-    if (!script || script.startsWith("-")) return null;
-    const entry = resolve(cwd, script);
-    if (basename(entry) !== "aidlc.ts" ||
-      dirname(entry) !== resolve(projectDir, harnessDir(), "tools")) return null;
-    try {
-      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(resolve(projectDir), entry));
-      if (!lstatSync(entry).isFile() || lstatSync(entry).isSymbolicLink()) return null;
-    } catch {
-      return null;
-    }
-    args = args.slice(scriptIndex + 1);
-  } else if (executable !== "aidlc" && executable !== "aidlc.exe") {
-    return null;
-  }
-  if (args[0] !== "engine" || args[1] !== "swarm") return null;
-  const verb = args[2];
-  if (verb !== "prepare" && verb !== "check" && verb !== "finalize") return null;
-  const valueFlags = {
-    prepare: ["--project-dir", "--intent", "--space", "--repo", "--batch", "--units",
-      "--base", "--concurrency", "--degraded-from"],
-    check: ["--project-dir", "--unit", "--check-cmd", "--test-file"],
-    finalize: ["--project-dir", "--batch", "--units", "--claimed", "--check-cmd", "--test-file", "--reasons"],
-  }[verb];
-  const flags = new Map<string, string>();
-  const positional: string[] = [];
-  for (let index = 3; index < args.length; index++) {
-    const arg = args[index];
-    if (!arg.startsWith("--")) {
-      positional.push(arg);
-      continue;
-    }
-    const equal = arg.indexOf("=");
-    const key = equal < 0 ? arg : arg.slice(0, equal);
-    if (flags.has(key)) return [];
-    if (verb === "prepare" && key === "--resume-existing") {
-      if (equal >= 0 && arg.slice(equal + 1) !== "true") return [];
-      flags.set(key, "true");
-      continue;
-    }
-    if (!valueFlags.includes(key)) return [];
-    const value = equal >= 0 ? arg.slice(equal + 1) : args[++index];
-    if (value === undefined || value.startsWith("--") ||
-      (value === "" && key !== "--claimed" && key !== "--reasons")) return [];
-    flags.set(key, value);
-  }
-  try {
-    const pathKey = (path: string): string => {
-      const canonical = realpathSync(path).replaceAll("\\", "/");
-      return process.platform === "win32" ? canonical.toLowerCase() : canonical;
-    };
-    const selectedProject = flags.get("--project-dir") ??
-      process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR ?? cwd;
-    if (pathKey(resolve(cwd, selectedProject)) !== pathKey(projectDir)) return [];
-    if (flags.has("--intent") || flags.has("--space")) {
-      const active = resolveWorkflowSelection(projectDir);
-      const selected = resolveWorkflowSelection(projectDir, {
-        intent: flags.get("--intent"), space: flags.get("--space"),
-      });
-      if (active.intent !== selected.intent || active.space !== selected.space) return [];
-    }
-  } catch {
-    return [];
-  }
-  const names = (value: string): string[] | null => {
-    const units = value.split(",").map((unit) => unit.trim());
-    return units.length > 0 && units.every(Boolean) && new Set(units).size === units.length ? units : null;
-  };
-  if (verb === "check") {
-    if (positional.length > 1 || (positional.length > 0 && flags.has("--unit"))) return [];
-    const unit = positional[0] ?? flags.get("--unit");
-    return unit && !unit.includes(",") ? [unit] : [];
-  }
-  if (positional.length > (verb === "finalize" && !flags.has("--batch") ? 1 : 0)) return [];
-  const units = names(flags.get("--units") ?? (verb === "finalize" ? flags.get("--claimed") ?? "" : ""));
-  if (!units) return [];
-  const claimedValue = flags.get("--claimed");
-  if (verb === "finalize" && claimedValue !== undefined) {
-    const claimed = claimedValue === "" ? [] : names(claimedValue);
-    if (!claimed?.every((unit) => units.includes(unit))) return [];
-  }
-  return units;
-}
-
 async function mutationIntent(
   projectDir: string,
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
   cwd: string,
-  state: string,
-  activeDirective: ActiveDirectiveMarker | null,
   powerShellHint = false,
+  context: EngineCommandContext = NO_ENGINE_CONTEXT,
 ): Promise<MutationIntent> {
   let targets: string[] = [];
   let opaqueShell = false;
   let shellCommand: string | null = null;
-  let swarmUnits: string[] | null = null;
-  let runsAidlc = false;
+  let readable = true;
+  let engineRefused = false;
   if (toolName === "Bash") {
     const command = toolInput?.command;
     if (typeof command !== "string") {
       return { targets: [], opaqueShell: false, shellCommand: null };
     }
     shellCommand = command;
-    if (isSelectedGuardRestartContinuation(projectDir, cwd, command, state, activeDirective)) {
-      return { targets: [], opaqueShell: false, shellCommand };
-    }
     const {
+      leadingDirectoryChange,
       shellCommandAltersExecutableResolution,
       shellCommandInvocationDetails,
+      powerShellPathBoundWriter,
       shellWriteTargets,
     } = await import("./aidlc-review-freeze.ts");
     // A command the adapter ran in PowerShell is read as PowerShell when it is
@@ -1993,39 +2000,71 @@ async function mutationIntent(
     // reading: Bash drops the backslashes a Windows path is written with.
     // An unhinted shell may not be PowerShell, so it never gets the cmdlets
     // or Set-Location.
-    const powerShellCommand = powerShellHint
-      ? powerShellReading(command, shellCommandInvocationDetails)
+    const powerShellLine = powerShellHint
+      ? powerShellReading(command, shellCommandInvocationDetails, powerShellPathBoundWriter)
       : null;
-    const analysed = powerShellCommand ?? command;
+    const powerShellCommand = powerShellLine?.rendering ?? null;
     const dialect: ShellDialect = {
       powerShell: powerShellCommand !== null,
       pathsAsWritten: powerShellCommand !== null,
       enginePaths: powerShellCommand !== null || process.platform === "win32",
+      pathBoundWriter: powerShellCommand !== null ? powerShellPathBoundWriter : () => false,
     };
-    targets = shellWriteTargets(analysed, cwd);
+    // `cd <folder> && <command>` runs <command> from <folder>, so it is read
+    // from there, each time the line starts by moving to a folder the reader
+    // is certain of. Any other move stays opaque (shellInvocationNeedsApproval).
+    let analysed = powerShellCommand ?? command;
+    let from = cwd;
+    const shell = dialect.powerShell ? "powershell" : "posix";
+    let moves = 0;
+    for (let move = leadingDirectoryChange(analysed, from, shell); move !== null;
+      move = leadingDirectoryChange(analysed, from, shell)) {
+      ({ dir: from, rest: analysed } = move);
+      moves++;
+    }
+    // A line read as PowerShell writes what PowerShell binds: a cmdlet's named
+    // values (New-Item -ItemType Directory) are not paths, and a \ separates
+    // a path on every host. Each move above was one of its commands.
+    const targetWords: string[] = [];
+    targets = powerShellLine
+      ? shellWriteTargets(command.slice(powerShellLine.starts[moves]), from, targetWords, "powershell")
+      : shellWriteTargets(analysed, from);
+    // A PowerShell wildcard in a bound path names files the reading cannot
+    // list, and the reading drops it from the targets.
+    const wildcardTargets = targetWords.some((word) => /[*?[\]]/.test(word));
+    const concreteTargets = targets.length > 0 && !wildcardTargets;
     const invocations = shellCommandInvocationDetails(analysed);
     const dynamic =
       shellUsesDynamicEvaluation(analysed) ||
       shellCommandAltersExecutableResolution(analysed);
-    const gateHeld = codeGenerationGateHeld(state);
-    // While the engine's recovery question is open, the commands that carry out
-    // an answer it offers are that answer's transport, not work (#1317).
-    const askAdmits = (engineArgs: readonly string[]): boolean =>
-      guardRecoveryAnswerAdmits(activeDirective, engineArgs, projectDir);
     opaqueShell =
       dynamic ||
       invocations.some((invocation) =>
-        shellInvocationNeedsApproval(
-          projectDir, cwd, invocation, targets.length > 0, analysed, gateHeld, dialect, askAdmits,
-        )
+        shellInvocationNeedsApproval(projectDir, from, invocation, concreteTargets, analysed, dialect, context)
       );
-    if (!dynamic && targets.length === 0) {
-      swarmUnits = swarmCommandUnits(projectDir, cwd, analysed, invocations);
-    }
-    runsAidlc = invocations.some((invocation) =>
-      normalizedCommandName(invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
+    // A command that names AI-DLC and that the shell reading refused: an
+    // untrusted spelling (a retained version, a copy of the tools outside the
+    // trusted folder, a shim), a wrapper or a `cd` it cannot follow, a second
+    // command beside it, or a command engineCommandAdmitted refuses. The passes
+    // below for a command that writes nothing never admit it: it lives or dies
+    // by the shell reading.
+    const looksLikeEngine = invocations.some((invocation) =>
+      normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
-      (dynamic && /\baidlc\b/i.test(analysed));
+      (dynamic && (ENGINE_WORD.test(analysed) || (/\baidlc\b/i.test(analysed) && invocations.some(runsHiddenCommand))));
+    engineRefused = looksLikeEngine && opaqueShell;
+    // An escaped operator (`\>`, `\&`) is read as the lexer decodes it, which
+    // is not trusted here; a variable, substitution or backtick (`dynamic`) can
+    // hide a command or a write target, and a shell script run by name hides
+    // commands the lexer never sees.
+    readable = !dynamic && !/[^\S \t\n]/u.test(command) && !command.includes("\\\n") && !/\\[<>&|;]/.test(command) &&
+      !(powerShellHint && powerShellCommand === null) && !wildcardTargets &&
+      !invocations.some((invocation) => {
+        const program = normalizedCommandName(invocation.executable ?? invocation.name);
+        return SHELL_INTERPRETERS.has(program) || writesThroughOption(program, invocation.args) ||
+          /\.(?:ps1|sh|bash|zsh|ksh|cmd|bat)$/.test(program) ||
+          (INLINE_CODE_RUNTIMES.has(program) && invocation.args.some((arg) => INLINE_CODE_FLAGS.has(arg)));
+      });
   } else if (WRITE_TOOLS.has(toolName)) {
     const input = toolInput ?? {};
     const add = (value: unknown) => {
@@ -2038,18 +2077,80 @@ async function mutationIntent(
   }
   return {
     targets: targets.map((target) =>
-      isAbsolute(target) ? resolve(target) : resolve(cwd, target)
+      inProjectSpelling(projectDir, isAbsolute(target) ? resolve(target) : resolve(cwd, target))
     ),
     opaqueShell,
     shellCommand,
-    ...(swarmUnits ? { swarmUnits } : {}),
-    ...(runsAidlc ? { runsAidlc } : {}),
+    ...(readable ? {} : { readable }),
+    ...(engineRefused ? { engineRefused } : {}),
   };
+}
+
+// The agent's write while this chat's plan question for new work is open, kept
+// with what each file was just before, so the pick can say what changed and
+// how to undo it; otherwise, while the work this chat takes part in is before
+// Code Generation at a stage that writes only AI-DLC's records, kept with that
+// work for its next approval to say (aidlc-before-pick.ts). It reads the
+// targets this guard reads and refuses nothing; a failure keeps nothing, and
+// the write goes unnamed.
+async function keepWriteBeforePick(
+  parsed: ClaudeCodeHookInput,
+  workflow: ReturnType<typeof enterHookWorkflow>,
+): Promise<void> {
+  try {
+    const toolName = parsed.tool_name ?? "";
+    const selection = workflow.selection;
+    const chat = selection?.sessionId;
+    if ((toolName !== "Bash" && !WRITE_TOOLS.has(toolName)) || !selection || !chat) return;
+    const projectDir = workflow.projectDir;
+    const question = openPlanQuestion(projectDir, chat);
+    const work = question === null && selection.intent !== null && workflow.participation === "participant"
+      ? { intent: selection.intent, space: selection.space, stage: workBeforeCodeGeneration(projectDir, selection) }
+      : null;
+    if (question === null && !work?.stage) return;
+    const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
+    const { targets } = await mutationIntent(
+      projectDir, toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell",
+    );
+    const inside = targets.filter((target) => !isOutsideProject(projectDir, target));
+    if (question !== null) keepWritesBeforePick(projectDir, chat, question, inside);
+    else if (work?.stage) keepWritesDuringWork(projectDir, work, work.stage, inside);
+  } catch {
+    // Unkept.
+  }
+}
+
+// The person is editing the plan files themselves (they answered the plan
+// question with "I'll edit the files"), and the write names one of the asked
+// plans' own plan or test-instruction files: those are theirs while they edit.
+async function personIsEditingPlanFile(
+  projectDir: string,
+  activeDirective: ActiveDirectiveMarker | null,
+  targets: string[],
+): Promise<boolean> {
+  if (
+    activeDirective?.version !== 2 || activeDirective.kind !== "ask" ||
+    activeDirective.ask_type !== PLAN_APPROVAL_ASK_TYPE
+  ) return false;
+  try {
+    const { planApprovalAskState } = await import("../tools/aidlc-plan-approval-ask.ts");
+    if (planApprovalAskState(projectDir) !== "editing") return false;
+  } catch {
+    return false;
+  }
+  // The asked plans' own files, from the ask's Unit(s): while the person edits,
+  // the engine opens none of them to the agent, so the list is built here.
+  const units = activeDirective.units ?? [activeDirective.unit?.trim() || null];
+  const theirs = units.flatMap((unit) => {
+    const dir = codeGenerationRecordDir(projectDir, unit);
+    return [join(dir, "code-generation-plan.md"), join(dir, "unit-test-instructions.md")];
+  });
+  return targets.some((candidate) => isRepliedPlanFileTarget(projectDir, candidate, theirs));
 }
 
 // --- Main ---------------------------------------------------------------------
 
-// The off-switch is deterministic but no longer silent: while a workflow exists,
+// The off-switch is deterministic but not silent: while a workflow exists,
 // the first tool call that passes under it appends one GUARD_DISABLED row, and
 // consecutive calls append nothing until some other row lands in the active
 // shard. Every failure in this bookkeeping still allows the call.
@@ -2091,6 +2192,30 @@ function recordGuardDisabled(input: string): void {
   }
 }
 
+// The row a set-aside build step's pass leaves, the stand-aside account of
+// what the lowered fence let through. Nothing is said: under Guard Policy off
+// the row is the whole account, and a ledger that cannot take it never stops
+// the build (the doctor lists the miss).
+function recordSetAsidePass(
+  projectDir: string,
+  hookInput: ClaudeCodeHookInput,
+  issued: NonNullable<ReturnType<typeof setAsideBuildUnderOff>>,
+  details: string,
+): void {
+  try {
+    const target = { unit: issued.unit?.trim() || null };
+    const gate = codeGenerationPlanApprovalFence(projectDir, target, { hookInput });
+    const recorded = recordGuardStoodAside(projectDir, {
+      fence: "plan-approval", authority: gate.authority, stage: GUARDED_STAGE, tool: hookInput.tool_name ?? "", details,
+    });
+    if (!recorded) {
+      recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${details}`);
+    }
+  } catch (e) {
+    recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
+  }
+}
+
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -2113,8 +2238,12 @@ async function evaluate(
   input: string,
   workflow: ReturnType<typeof enterHookWorkflow>,
 ): Promise<number> {
+  judgedStep = null;
   // Runtime integrity is not a fence and cannot be disabled with this hook.
   if (refuseRuntimeIntegrityViolation(parsed)) return 2;
+  // Kept whatever this guard then decides, in a chat that joined no work too:
+  // a record, never a gate.
+  await keepWriteBeforePick(parsed, workflow);
 
   // A conversation that has not joined the selected workflow is not held to its
   // Plan Approval: its ordinary edits pass as in a workspace with no workflow.
@@ -2145,10 +2274,9 @@ async function evaluate(
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
-  // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
-      recordGuardDisabled(input);
+      if (!selectedRecordIsFinished(projectDir, workflow.selection)) recordGuardDisabled(input);
     } catch {
       // Fail-open: disabled fence bookkeeping does not refuse the call.
     }
@@ -2184,48 +2312,168 @@ async function evaluate(
   let briefTargets: BriefTargets | null = null;
   // The person's answer to the open Plan Approval question, when one is recorded.
   let asked: ReturnType<typeof planApprovalAskState> = null;
+  // How to record the person's reply while they edit the plan files, once they replied.
+  let editingReply: string | null = null;
   // What is wrong with the developer handoff itself, said only once the plan it
   // hands over may be built: before that, the `brief` it would name refuses too.
   let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
+  // A parallel batch is out and this write is not one of the three the batch
+  // admits: the refusal stands with the fence on, and a lowered fence stands
+  // aside for it as for any other write of an approved plan.
+  let swarmBatchOut = false;
+  // The build step set aside since it was issued, when the fence is lowered and
+  // the person's approval for it still stands (setAsideBuildUnderOff): the last
+  // instruction on record, so its work goes on as it did before.
+  let setAside: ReturnType<typeof setAsideBuildUnderOff> = null;
+  // Why that step went out of date, for the row its pass leaves.
+  let setAsideWhy = "";
   // Plain sentences: some hosts (Codex) show a hook's refusal to the person as
   // it is written. A path or command the reason quotes stays on the one line.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
-  const refuseProvenanceFailure = (reason: string): number => {
-    recordHookDrop(projectDir, HOOK_NAME, reason);
-    process.stderr.write(
-      `Code Generation source provenance could not be committed. ${oneLine(reason)} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.\n`,
-    );
-    return 2;
-  };
-  // `lead` false: the reason is already a whole refusal that says what cannot happen.
-  // `settingNote` false: a question waiting on the person, where the setting is not in play.
-  const refuseExecutionIneligible = (reason: string, lead = true, settingNote = true): number => {
-    process.stderr.write(
-      `${lead ? "Code Generation cannot start: " : ""}${oneLine(reason).trim().replace(/\.*$/, ".")}${
-        settingNote ? " The plan-approval setting is unchanged." : ""
-      }\n`,
-    );
-    return 2;
-  };
   let blockedMutation: {
     target: string;
     unit: string | null;
     opaqueShell: boolean;
     detail: string | null;
   } | null = null;
+  const refusalFields = (): { tool: string; target: string; unit?: string } => {
+    const unit = blockedMutation?.unit ?? (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
+      ? STAGE_TARGET
+      : verdict.mentioned.join(", ") || "(missing marker)");
+    return {
+      tool: toolName,
+      target: guardedDispatch ? subagentType : blockedMutation?.target ?? "",
+      ...(unit ? { unit } : {}),
+    };
+  };
+  const planRefusalReason = (): string => "plan-approval";
+  const refuseProvenanceFailure = (reason: string): number => {
+    recordHookDrop(projectDir, HOOK_NAME, reason);
+    process.stderr.write(
+      `Code Generation source provenance could not be committed. ${oneLine(reason)} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.\n`,
+    );
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "start-record",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
+    return 2;
+  };
+  // A program holding the project's folders (on Windows, a dev server's file
+  // watcher) keeps the build's start from being recorded. Where the fence
+  // stands aside (off, relaxed, or the person's own switch) the call goes on
+  // with one line a turn and records no pass for a start that was not
+  // published. With the fence up it is refused: a write let through now would
+  // read as drift to the next strict call, which asks for the plan again.
+  const fenceStandsAside = (): boolean => {
+    try {
+      const marker = readActiveDirectiveMarker(projectDir, state ?? "");
+      return codeGenerationPlanApprovalFence(
+        projectDir,
+        { unit: marker?.unit ?? marker?.units?.[0] ?? null },
+        { hookInput: parsed },
+      ).decision === "stand-aside";
+    } catch {
+      return false; // An unreadable fence stays up.
+    }
+  };
+  // Once a turn, whichever of its lines: it stays true until the program stops.
+  // The program is most often one the agent, or the agent it sent, left
+  // running, so where the harness hands the agent a line on a call that goes
+  // on, the turn's first hit is the agent's step (lockFolderHeldGoesOnStep) and
+  // its second, the folder still held, is the person's line.
+  const sayLockHeldOnce = (line: string | null): void => {
+    if (line === null) return;
+    const session = typeof parsed?.session_id === "string" ? parsed.session_id : "";
+    if (session && personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_SAID_KEY)) return;
+    if (!session || !personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_GUARD_STEP_KEY)) {
+      if (writeGuardAgentContext(lockFolderHeldGoesOnStep(line))) {
+        if (session) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_GUARD_STEP_KEY);
+        return;
+      }
+    }
+    writeGuardStoodAside(line);
+    if (session) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_SAID_KEY);
+  };
+  const lockFolderHeld = (error: unknown): number | null => {
+    if (!(error instanceof ActiveDirectiveLockFolderHeldError)) return null;
+    if (!fenceStandsAside()) {
+      if (!error.personLine) return refuseProvenanceFailure(errorMessage(error));
+      recordHookDrop(projectDir, HOOK_NAME, error.message);
+      process.stderr.write(`${oneLine(error.message)}\n`);
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "start-record",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
+      return 2;
+    }
+    recordHookDrop(projectDir, HOOK_NAME, error.message);
+    sayLockHeldOnce(activeDirectiveLockHeldNote());
+    return 0;
+  };
+  // This call and its record went through, but its own release left the lock
+  // folder held, so the next one meets it. With the fence up it says nothing:
+  // the next write is refused with the line, which is then true. The line is
+  // said only as the call's whole output (one JSON line on Claude Code); where
+  // the call prints more, the next step says it.
+  const sayOwnReleaseHeld = (otherOutput: boolean): void => {
+    if (!takeActiveDirectiveReleaseHeld() || otherOutput || !fenceStandsAside()) return;
+    sayLockHeldOnce(activeDirectiveLockHeldAfterStepLine());
+  };
+  // `lead` false: the reason is already a whole refusal that says what cannot happen.
+  // `settingNote` false: a question waiting on the person, where the setting is not in play.
+  const refuseExecutionIneligible = (
+    reason: string,
+    lead = true,
+    settingNote = true,
+    code = "plan-approval",
+  ): number => {
+    process.stderr.write(
+      `${lead ? "Code Generation cannot start: " : ""}${oneLine(reason).trim().replace(/\.*$/, ".")}${
+        settingNote ? " The plan-approval setting is unchanged." : ""
+      }\n`,
+    );
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: code,
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
+    return 2;
+  };
+  // The step a held jump's wait lets it through after (jumpIsPersonsMove), for
+  // the refusal to name in place of `next`.
+  let jumpWayOn: EngineInvocation | null = null;
   try {
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open
     state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
-    const activeDirective = readActiveDirectiveMarker(projectDir, state);
+    let activeDirective = readActiveDirectiveMarker(projectDir, state);
+    judgedStep = { projectDir, marker: activeDirective };
     const durableStage = normalizeStageName(currentStage);
-    const directiveStage = normalizeStageName(activeDirective?.stage ?? "");
-    const issuance = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
-      ? codeGenerationIssuance(activeDirective)
+    let directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+    setAside = (activeDirective === null && durableStage === GUARDED_STAGE) ||
+        (activeDirective?.version === 2 && directiveStage === GUARDED_STAGE)
+      ? setAsideBuildUnderOff(projectDir, activeDirective)
       : null;
+    if (setAside !== null) {
+      setAsideWhy = activeDirectiveOutOfDateReason(activeDirective) ?? "the Code Generation step went out of date";
+    }
+    const issuance = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
+      ? codeGenerationIssuance(activeDirective) ?? setAside
+      : setAside;
     if (issuance !== null) briefTargets = issuanceTargets(issuance);
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
@@ -2234,27 +2482,35 @@ async function evaluate(
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
-    // A run of another stage on its own while Code Generation is current (the
-    // Reverse Engineering a person asked for once the folder turned out to hold
-    // existing code): its steps and its writes inside AI-DLC's own folder are
-    // that stage's work; a write to the workspace source still waits for the
-    // approved plan.
-    const otherStageRunning = activeDirective?.version === 2 && activeDirective.kind === "run-stage" &&
-      directiveStage !== "" && directiveStage !== GUARDED_STAGE;
+    // The step on record is the engine's to read too: where it is Code
+    // Generation, `next --stage` leaves a jump to the `jump execute` judged here.
     const codeGenerationRelevant =
-      directiveStage === GUARDED_STAGE ||
-      durableStage === GUARDED_STAGE ||
+      codeGenerationIsTheStep(directiveStage, durableStage) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
       toolName === "Bash" || WRITE_TOOLS.has(toolName);
+    // A call to one of the person's own MCP servers, as the harness adapter
+    // marks it outside the agent's input, runs like their other requests at any
+    // point of Code Generation: the host's own approval and their settings
+    // decide it. A marked write, shell or dispatch gets no such pass.
+    if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) return 0;
     const mutation: MutationIntent = guardedDispatch
       ? { targets: [], opaqueShell: false, shellCommand: null }
       : knownMutationTool
         ? await mutationIntent(
-            projectDir, toolName, toolInput, cwd, state, activeDirective,
+            projectDir, toolName, toolInput, cwd,
             // Set by the adapter that ran the tool, outside the agent's input.
             parsed.aidlc_shell === "powershell",
+            {
+              jumpAdmitted: (jump) => {
+                const move = toolName === "Bash" &&
+                  (jumpNextNamesBack(projectDir, state ?? "", jump) ||
+                    jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump));
+                if (typeof move === "object") jumpWayOn = move;
+                return move === true;
+              },
+            },
           )
         : {
             targets: [],
@@ -2264,16 +2520,38 @@ async function evaluate(
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
       return 0;
     }
+    // What the plan never governs, at any point of Code Generation and under
+    // every Guard Policy: a command the lexer read whole that names no file it
+    // writes and is not AI-DLC's own (a read, a scan, a test run), and a write
+    // whose every target is outside the project. The build waits:
+    // the developer, the plan's files and the code, AI-DLC's records and
+    // AI-DLC's own commands, and a command whose writes cannot be seen.
     if (
-      otherStageRunning && directiveStage !== GUARDED_STAGE && !guardedDispatch && knownMutationTool &&
-      mutation.targets.every((candidate) => isStageRecordOutput(projectDir, candidate))
+      !guardedDispatch && knownMutationTool && mutation.readable !== false && !mutation.engineRefused &&
+      mutation.targets.every((candidate) => isOutsideProject(projectDir, candidate))
+    ) {
+      return 0;
+    }
+    // AI-DLC's own records are not the person's code: a file-tool or shell
+    // write whose every target is a stage's record output under aidlc/spaces
+    // (not the state, the intents index, an engine control, receipt or audit
+    // file; reached through no link) passes in every Plan Approval state. The
+    // engine owns what those files mean: a plan edited after its approval is
+    // asked about again by `next`, and an answer the agent writes has no
+    // receipt. One exception: while the person is editing the plan files
+    // themselves, the asked plans' own files are theirs, and a write to one is
+    // refused below with that sentence (personIsEditingPlanFile).
+    if (
+      !guardedDispatch && knownMutationTool && !mutation.opaqueShell && mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isStageRecordOutput(projectDir, candidate)) &&
+      !(await personIsEditingPlanFile(projectDir, activeDirective, mutation.targets))
     ) {
       return 0;
     }
     // A file-tool write of the composer's proposal alone passes in every Plan
     // Approval state, before the directive checks, and never starts
     // generation. A shell write, or one that also names another file, is
-    // judged below as before.
+    // judged below.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
@@ -2283,17 +2561,32 @@ async function evaluate(
       return 0;
     }
     // A file-tool write of a person's answer text, for the log to read with no
-    // shell on the way, passes in every Plan Approval state too.
+    // shell on the way, or of a stage's learnings picks, for `learnings
+    // persist`, passes in every Plan Approval state too, and so does one of a
+    // person's request, for `next --request-file`.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
-      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
+      mutation.targets.every((candidate) =>
+        isEngineTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
+      )
     ) {
       return 0;
     }
 
-    rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
+    // At the held gate the step its own report retired stands
+    // (setAsideBuildUnderOff) for every call but AI-DLC's own commands the
+    // admission holds, which wait for a current step.
+    if (activeDirective === null && setAside !== null) {
+      if (mutation.engineRefused) setAside = null;
+      else {
+        activeDirective = readIssuedDirectiveMarker(projectDir);
+        directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+        judgedStep = { projectDir, marker: activeDirective };
+      }
+    }
+    rulesArriving = codeGenerationRulesArrivingReason(activeDirective, projectDir);
     if (
       activeDirective?.version !== 2 ||
       directiveStage !== GUARDED_STAGE
@@ -2306,7 +2599,7 @@ async function evaluate(
       verdict = { block: true, mentioned: [] };
     } else {
       const recordDir = docsRoot(projectDir);
-      units = gatherApprovalEvidence(projectDir, knownUnits(projectDir, recordDir));
+      units = gatherApprovalEvidence(projectDir, knownUnits(projectDir, recordDir), setAside ?? undefined);
       if (guardedDispatch) {
         verdict = evaluatePlanApprovalDispatch(toolName, subagentType, dispatchPrompt, {
           currentStage: activeDirective.stage,
@@ -2322,45 +2615,17 @@ async function evaluate(
           standing = planStanding(projectDir, activeDirective);
         } else if (
           verdict.handoff &&
-          briefTargets?.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }))
+          briefTargets?.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }, undefined, setAside ?? undefined))
         ) {
           handoffDefect = verdict.handoff;
-        }
-      } else if (mutation.swarmUnits) {
-        const selected = mutation.swarmUnits;
-        const foreign = selected.filter((unit) =>
-          activeDirective.kind !== "invoke-swarm" || !activeDirective.units?.includes(unit));
-        verdict = {
-          block: selected.length === 0 || foreign.length > 0 || selected.some((unit) => {
-            const evidence = units.find((entry) => entry.unit === unit);
-            return !approvalEvidenceIsCurrent(evidence) || evidence?.reason !== undefined;
-          }),
-          mentioned: selected,
-        };
-        if (!selected.length) {
-          authorityFailure = "swarm command has an ambiguous or foreign Unit/project selection";
-        } else if (foreign.length) {
-          authorityFailure = `swarm command names Units outside the emitted batch: ${foreign.join(", ")}`;
         }
       } else if (
         activeDirective.kind === "ask" &&
         activeDirective.ask_type === GUARD_RECOVERY_ASK_TYPE
       ) {
         // The engine asked the person how to recover and waits for the answer.
-        // Once they pick a fix whose work happens while the question is open
-        // (repairing a reviewed artifact, re-saving outputs, finishing a
-        // revision), its writes inside the ask's own record folder go through.
-        // Source changes wait until the engine routes work again.
-        const askDir = resolve(
-          codeGenerationRecordDir(projectDir, activeDirective.unit?.trim() || null),
-        );
-        const outsideRecord = mutation.targets.find(
-          (candidate) => !isTrustedRecordTarget(projectDir, candidate, askDir),
-        );
-        if (
-          guardRecoveryRecordWorkOpen(activeDirective) &&
-          mutation.targets.length > 0 && !outsideRecord && !mutation.opaqueShell
-        ) return 0;
+        // Its records passed above; source changes wait until the engine
+        // routes work again.
         authorityFailure = ENGINE_QUESTION_OPEN;
         verdict = { block: true, mentioned: [] };
       } else if (
@@ -2368,27 +2633,14 @@ async function evaluate(
         activeDirective.ask_type === PLAN_APPROVAL_ASK_TYPE
       ) {
         // The engine is asking the person to approve the plan. Nothing is
-        // built or changed until they reply, so an answer the agent wrote can
-        // never stand in for theirs. After their reply, the asked plan's own
-        // plan and test instructions can change for what they asked; the
-        // questions file, other plans, and code still wait.
-        const editable = planApprovalReplyEditableFiles(projectDir);
-        if (
-          WRITE_TOOLS.has(toolName) && !mutation.opaqueShell && mutation.targets.length > 0 &&
-          mutation.targets.every((candidate) => isRepliedPlanFileTarget(projectDir, candidate, editable))
-        ) return 0;
-        // A review the person asked for runs while the plan waits: its own
-        // review file and dispatch record, and nothing else.
-        const reviewing = openReviewRequestFiles(projectDir);
-        if (
-          reviewing.length > 0 && !mutation.opaqueShell && mutation.targets.length > 0 &&
-          mutation.targets.every((candidate) => isOpenReviewTarget(projectDir, candidate, reviewing))
-        ) return 0;
-        // Only the build waits for the plan: the developer, the files the plan
-        // names, AI-DLC's own records, and AI-DLC's own commands. What else the
-        // person asks for runs now: a commit, an install, a test run, or a
-        // write to a file the plan does not name, under every Guard Policy.
-        if (knownMutationTool && !mutation.runsAidlc) {
+        // built until they reply: an answer the agent writes has no receipt,
+        // and a plan changed under the question is asked about again by
+        // `next`. The records passed above; code waits.
+        // Only the build waits for the plan: the developer and the files the
+        // plan names. What else the person asks for runs now: a commit, an
+        // install, a test run, or a write to a file the plan does not name,
+        // under every Guard Policy.
+        if (knownMutationTool && !mutation.engineRefused) {
           const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
           if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
         }
@@ -2397,39 +2649,91 @@ async function evaluate(
         // Loaded only here: the question's own record, read the way its owner
         // reads it, and kept off the path every other tool call takes.
         try {
-          const { planApprovalAskState: askState } = await import("../tools/aidlc-plan-approval-ask.ts");
+          const { planApprovalAskState: askState, planApprovalEditingReplyStep } = await import(
+            "../tools/aidlc-plan-approval-ask.ts"
+          );
           asked = askState(projectDir);
+          editingReply = asked === "editing" ? planApprovalEditingReplyStep(projectDir) : null;
         } catch {
           asked = null;
         }
         verdict = { block: true, mentioned: [] };
-      } else if (
-        activeDirective.kind === "invoke-swarm" &&
-        !mutation.opaqueShell &&
-        mutation.targets.every((candidate) =>
-          (activeDirective.units ?? []).some((unit) =>
-            isTrustedRecordTarget(projectDir, candidate, resolve(codeGenerationRecordDir(projectDir, unit)))))
-      ) {
+      } else if (activeDirective.kind === "invoke-swarm") {
         // A swarm batch plans in the main workspace, one record directory per
-        // listed Unit, before any worktree exists. Writes there are planning;
-        // implementation still waits for the approved, prepared workers.
-        return 0;
-      } else if (activeDirective.kind !== "run-stage") {
+        // listed Unit, before any worktree exists; each Unit's code is written
+        // by its worker inside the worktree `prepare` created and bound to it,
+        // judged as the worker's own hook judges it; its review is requested
+        // and recorded against that worktree, and the reviewer writes its open
+        // request's own file while the parent holds the dispatch record. The
+        // worker and the reviewer are subagents of this session, so this hook,
+        // with the parent as its project, is the one that sees their writes.
+        // A write seen anywhere else in the main checkout waits until the batch
+        // lands.
+        const listed = activeDirective.units ?? [];
+        if (
+          !mutation.opaqueShell && mutation.targets.length > 0 &&
+          preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
+        ) return 0;
+        // A listed Unit's landing that clashed in the main checkout, or whose
+        // commit the person's hook refused, is finished there: the files git
+        // could not merge, or combined since, or for a clean merge the files it
+        // staged, are the agent's to write, as the landing's own line says.
+        if (
+          !mutation.opaqueShell && mutation.targets.length > 0 &&
+          await landingClashFilesOnly(projectDir, mutation.targets, listed)
+        ) return 0;
+        // While every listed Unit's approved plan holds, a command whose writes
+        // cannot be seen runs, as a serial build's does once its plan is
+        // approved (below), whatever it is spelled as. What it is seen to write
+        // still lands only in one prepared worktree; whether the main checkout
+        // changed during the build is the landing's to say.
+        const seen = mutation.targets.filter((candidate) => !isOutsideProject(projectDir, candidate));
+        if (
+          mutation.opaqueShell && listed.length > 0 &&
+          (seen.length === 0 || preparedBoltWorktreeUnit(projectDir, seen, listed) !== null) &&
+          gatherUnitEvidence(projectDir, listed).every(approvalEvidenceIsCurrent)
+        ) return 0;
+        swarmBatchOut = true;
+        // A write seen only in the main checkout, at a step still current,
+        // waits for the landings; one that reaches under the worktrees folder
+        // (a Unit's own worktree whose approval no longer holds included), or a
+        // step that lists no Unit or is out of date, is refused as any other.
+        // Where a target lies decides it, never what its approval says.
+        const outOfDate = outOfDateClause(activeDirective);
+        const worktrees = resolve(worktreesDir(projectDir));
+        const mainCheckoutOnly = listed.length > 0 && outOfDate === "" && seen.length > 0 &&
+          seen.length === mutation.targets.length &&
+          seen.every((candidate) => {
+            const inside = relative(worktrees, resolve(candidate));
+            return inside.startsWith("..") || isAbsolute(inside);
+          });
+        authorityFailure = mainCheckoutOnly
+          ? SWARM_MAIN_CHECKOUT_HELD
+          : `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDate;
+        standing = planStanding(projectDir, activeDirective);
+        verdict = { block: true, mentioned: listed };
+        blockedMutation = {
+          target: mutation.targets[0] ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
+          unit: null,
+          opaqueShell: mutation.targets.length === 0,
+          detail: null,
+        };
+      } else if (activeDirective.kind !== "run-stage" && setAside === null) {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
           outOfDateClause(activeDirective);
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
-        const unit = activeDirective.unit?.trim() || null;
+        const unit = (setAside ?? activeDirective).unit?.trim() || null;
         const target: CodeGenerationTarget = { unit };
         const approvalDir = resolve(codeGenerationRecordDir(projectDir, unit));
         const outsideRecord = mutation.targets.find(
-          (candidate) =>
-            !isTrustedRecordTarget(projectDir, candidate, approvalDir),
+          (candidate) => !isTrustedRecordTarget(projectDir, candidate, approvalDir),
         );
         if (!outsideRecord && !mutation.opaqueShell) return 0;
-        const approval = evaluateCodeGenerationApproval(projectDir, target);
+        const approval = evaluateCodeGenerationApproval(projectDir, target, setAside ?? undefined);
         const evidence: UnitEvidence = {
           unit,
           planExists: approval.planExists,
@@ -2446,7 +2750,7 @@ async function evaluate(
         // written as the person asked, goes through (before any plan, only a
         // document). Once they approved, every write waits on that approval.
         if (
-          !evidence.approved && knownMutationTool && !mutation.opaqueShell && !mutation.runsAidlc &&
+          !evidence.approved && knownMutationTool && !mutation.opaqueShell && !mutation.engineRefused &&
           mutation.targets.length > 0 &&
           mutation.targets.every((candidate) =>
             isPlanWaitSideWrite(projectDir, candidate, planApprovalPlanNamedPaths(projectDir, unit)))
@@ -2476,26 +2780,46 @@ async function evaluate(
   // plan is asked about again by `next`, and the reason says so. The same words
   // refuse with the fence on and, where a lowered fence still refuses, with it
   // off; `detail` is then the evaluator's reason for the target it could not start.
+  // The last clause says what `next` does with the plan: with plan approval off
+  // for this work it starts the build without asking anyone, and a refusal that
+  // says the person will be asked is a wrong line the agent repeats to them. The
+  // setting is read only when refusing, off the path every other call takes; a
+  // setting that cannot be read keeps the asking wording, which is the stop's own.
+  let planApprovalOff = false;
+  if (verdict.block && !authorityFailure) {
+    try {
+      const { resolvePlanApprovalSetting } = await import("../tools/aidlc-guard-switch.ts");
+      planApprovalOff = resolvePlanApprovalSetting(projectDir, state).value === "off";
+    } catch {
+      planApprovalOff = false;
+    }
+  }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing, asked)
+      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
+          planApprovalOff,
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
       : handoffDefect
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
-      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
+      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
-  // The rules still arriving is about the delivery, not the plan, so it holds
-  // under every Guard Policy and is said on its own: a lowered fence has
-  // nothing to stand aside for, and no Plan Approval block is recorded.
   if (rulesArriving !== null) {
     process.stderr.write(`${rulesArriving}\n`);
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "rules-arriving",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
     return 2;
   }
   if (!verdict.block) {
@@ -2508,21 +2832,30 @@ async function evaluate(
         const targets = verdict.mentioned.map((mentioned) => ({
           unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned,
         }));
-        changeNotices.push(...beginCodeGenerationBatch(projectDir, targets));
+        changeNotices.push(...beginCodeGenerationBatch(projectDir, targets, {}, setAside ?? undefined));
       } else if (blockedMutation === null) {
         const state = readFileSync(stateFilePath(projectDir), "utf-8");
         const marker = readActiveDirectiveMarker(projectDir, state);
         if (marker?.version === 2 && marker.kind === "run-stage") {
           changeNotices.push(...beginCodeGeneration(projectDir, { unit: marker.unit?.trim() || null }));
+        } else if (setAside !== null) {
+          changeNotices.push(...beginCodeGeneration(projectDir, { unit: setAside.unit?.trim() || null }, {}, setAside));
         }
       }
     } catch (e) {
+      const held = lockFolderHeld(e);
+      if (held !== null) return held;
       // Source that moved after approval never stops the build (it is one
-      // notice line), so a start that throws is a provenance failure.
+      // notice line) unless it moved while the start was being published, so a
+      // start that throws is a provenance failure.
       return refuseProvenanceFailure(errorMessage(e));
     }
+    sayOwnReleaseHeld(!verdict.block && changeNotices.length > 0);
     if (!verdict.block) {
       for (const notice of changeNotices) process.stdout.write(`${notice}\n`);
+    }
+    if (!verdict.block && setAside !== null) {
+      recordSetAsidePass(projectDir, parsed, setAside, `${guardedDispatch ? `dispatch of ${subagentType}` : toolName}; ${setAsideWhy}`);
     }
   }
   if (!verdict.block) return 0;
@@ -2532,7 +2865,6 @@ async function evaluate(
   // own `guard.plan-approval off` switch. A human message, however recent, does
   // not lower it: see decideGuard in aidlc-lib.ts for why. Standing aside costs
   // one printed line and one audit row; the approval gate itself is untouched.
-  // Otherwise the refusal below carries the switch, so the way past is in hand.
   {
     let gate: ReturnType<typeof codeGenerationPlanApprovalFence> | null = null;
     try {
@@ -2549,50 +2881,60 @@ async function evaluate(
       // A lowered fence lets changed content through after an approval; it never
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
-      if (authorityFailure) {
+      if (authorityFailure && !swarmBatchOut) {
         // The plan question is open: the same words as with the fence on.
         const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked), !waiting, !waiting);
+        return refuseExecutionIneligible(
+          authorityRemedy(authorityFailure, standing, asked, editingReply, jumpWayOn), !waiting, !waiting,
+          planRefusalReason(),
+        );
       }
       if (verdict.mentioned.length === 0) {
-        return refuseExecutionIneligible(refusalProse(null), false);
+        return refuseExecutionIneligible(refusalProse(null), false, true, "plan-approval");
       }
+      const issued = setAside ?? undefined;
       const selected = verdict.mentioned.map((mentioned) => {
         const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
-        return { target, approval: evaluateCodeGenerationApproval(projectDir, target) };
+        return { target, approval: evaluateCodeGenerationApproval(projectDir, target, issued) };
       });
       // Lowering this fence permits changed content after initial approval.
       // It does not supply missing approval, artifacts, target or attempt
       // authority. Validate the whole selection before publishing any start.
       for (const { target, approval } of selected) {
         if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
-        if (!codeGenerationExecutionAllowed(projectDir, target, approval)) {
-          return refuseExecutionIneligible(refusalProse(approval.reason || null), false);
+        if (!codeGenerationExecutionAllowed(projectDir, target, approval, issued)) {
+          return refuseExecutionIneligible(refusalProse(approval.reason || null), false, true, "plan-approval");
         }
       }
       // A blocked path is written the way the write-audit hook writes one
       // (forward slashes, upper-case drive), so the ledger reads the same on
       // every platform. A shell command stays verbatim: its backslashes are text.
-      const detail = guardedDispatch
+      const called = guardedDispatch
         ? `dispatch of ${subagentType}`
         : blockedMutation
           ? blockedMutation.opaqueShell
             ? blockedMutation.target
             : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
           : toolName;
+      const detail = setAside === null ? called : `${called}; ${setAsideWhy}`;
       // A lowered fence keeps its permission decision, but an existing genuine
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
+      let printed = 0;
       try {
         for (const notice of beginCodeGenerationBatch(
-          projectDir, selected.map(({ target }) => target), { recordContinuation: false },
+          projectDir, selected.map(({ target }) => target), { recordContinuation: false }, issued,
         )) {
           process.stdout.write(`${notice}\n`);
+          printed++;
         }
       } catch (e) {
+        const held = lockFolderHeld(e);
+        if (held !== null) return held;
         return refuseProvenanceFailure(errorMessage(e));
       }
+      sayOwnReleaseHeld(printed > 0 || guardStandAsideSpeaks(gate));
       // The row is written once the build has started (the start just held and
       // released the same lock), so it never claims a pass that did not happen.
       // It is this fence's account of what it let through, not approval
@@ -2609,51 +2951,23 @@ async function evaluate(
         recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
       }
       if (guardStandAsideSpeaks(gate)) {
-        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
+        // Re-approval is named while any plan in the batch was approved by a person.
+        const planSkipped = selected.every(({ approval }) => approval.skipped === true);
+        writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded, planSkipped));
       }
       return 0;
     }
   }
 
-  // Audit the refusal so the run's record shows when the ordering bit.
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
-  // the block decision is already made, and a dropped advisory row is
-  // preferable to a slow block.
-  try {
-    if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
-          appendAuditEntryUnlocked(
-            "PLAN_APPROVAL_BLOCKED",
-            {
-              Tool: toolName,
-              Target: guardedDispatch ? subagentType : blockedMutation?.target ?? "",
-              Stage: GUARDED_STAGE,
-              Unit:
-                blockedMutation?.unit ??
-                (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
-                  ? STAGE_TARGET
-                  : verdict.mentioned.join(", ") || "(missing marker)"),
-            },
-            projectDir,
-          );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(
-          projectDir,
-          HOOK_NAME,
-          "audit lock contended; PLAN_APPROVAL_BLOCKED row dropped (block still enforced)",
-        );
-      }
-    }
-  } catch {
-    // Advisory emission only.
-  }
-
   process.stderr.write(`${refusalProse(null)}\n`);
+  recordGuardBlockedRow(projectDir, {
+    eventType: "PLAN_APPROVAL_BLOCKED",
+    hook: HOOK_NAME,
+    reason: planRefusalReason(),
+    ...refusalFields(),
+    stage: GUARDED_STAGE,
+    session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+  });
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

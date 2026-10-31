@@ -28,9 +28,9 @@ At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what 
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
 3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
 4. **Delegates across stage topologies** — For focused autonomous work and multi-agent collaboration, dispatches subagents as a hub-and-spoke, pipeline, or mob
-5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
+5. **Presents approval gates**: after each stage from Ideation on, you review and approve before the workflow advances (in Construction you can choose to let routine checkpoints pass without stopping)
 
-The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a `pipeline`, and User Stories as a `mob`. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Their support agents take part when collaborators are on (only `enterprise` turns them on by default); otherwise each of these stages runs its lead agent alone, and Reverse Engineering's pipeline is one link instead of two. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
 
 ## Who This Guide Is For
 
@@ -49,10 +49,10 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
 | Stages | 33 |
 | Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
-| Scopes | 11 (enterprise through express, plus workshop) + auto-detect |
+| Scopes | 11 (enterprise through express, plus workshop) + a plan the agent proposes from your words |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 115 |
+| Audit event types | 126 |
 
 ## Guide Map
 
@@ -79,7 +79,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
-| [Install and Lifecycle](18-install-and-lifecycle.md) | Native install, init, upgrades, rollback, pins, offline packages, and uninstall |
+| [Install and Lifecycle](18-install-and-lifecycle.md) | Native install, init, upgrades, rollback, pins, offline packages, uninstall, and removing AI-DLC from a project |
 | [Multi-Team Construction and Workshop Mode](workshop-mode.md) | Claim, build, pinned merge-back, release, and workshop flow for clone and sibling-worktree teams |
 | [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, or GitHub Copilot, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

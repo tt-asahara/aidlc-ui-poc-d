@@ -19,10 +19,9 @@ import { join, relative } from "node:path";
 import type { GraphStage } from "./aidlc-graph.ts";
 import { errorMessage, isPluginEnabled, toPosix } from "./aidlc-lib.ts";
 
-// Walk a knowledge directory into path-roster entries. Knowledge remains
-// path-loaded until the future retrieval layer lands. We do a cheap read
-// preflight so an unreadable file produces an actionable warning instead of a
-// path the conductor cannot use.
+// Knowledge remains path-loaded until the future retrieval layer lands. We do
+// a cheap read preflight so an unreadable file produces an actionable warning
+// instead of a path the conductor cannot use.
 function assertReadableUtf8(path: string): void {
   const bytes = readFileSync(path);
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -97,7 +96,8 @@ export function inlineAgentsFor(node: GraphStage): string[] {
 // belongs to (null for the aidlc-shared tree, which belongs to every agent) -
 // the deliver-once derivation filters on it. inlineContextPaths below is the
 // path-only projection the directive's roster field carries.
-export type InlineContextEntry = { abs: string; rel: string; agent: string | null };
+// `persona` marks a persona file, which the roster lists before any knowledge.
+export type InlineContextEntry = { abs: string; rel: string; agent: string | null; persona?: true };
 type PluginKnowledgeOwners = ReadonlyMap<string, ReadonlySet<string>>;
 
 // Minimal scopes still load every active-space rule, persona, stage file,
@@ -137,6 +137,7 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
   Record<string, ReadonlySet<string>>
 > = {
   "aidlc-shared": new Set([
+    "adding-a-repo.md",
     "ai-dlc-principles.md",
     "brownfield.md",
     "rules-reading.md",
@@ -166,14 +167,21 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
 // taxonomy, the worktree info schema, and the state, memory and knowledge
 // README templates. They ship beside the methodology but never join a roster,
 // at any depth: each place that needs one names it by path and the agent reads
-// it there.
-const SHIPPED_FORMAT_DOCS: ReadonlySet<string> = new Set([
+// it there. A dispatched agent's knowledge preflight leaves them out the same way.
+export const SHIPPED_FORMAT_DOCS: ReadonlySet<string> = new Set([
   "audit-format.md",
   "knowledge-readme-template.md",
   "memory-template.md",
   "state-template.md",
   "worktree-info-schema.md",
 ]);
+
+// The shared folder as a dispatched agent's preflight names it.
+export function sharedKnowledgeWithoutFormatDocs(harnessDir: string): string {
+  const docs = [...SHIPPED_FORMAT_DOCS].map((doc) => `\`${doc}\``);
+  return `\`${harnessDir}/knowledge/aidlc-shared/\` (all but its format references ` +
+    `${docs.slice(0, -1).join(", ")} and ${docs[docs.length - 1]}: a step that needs one names it)`;
+}
 
 // Roster metadata read from a checkout (compiled graph, selection, ownership
 // records): only a regular file that is not a symlink and fits the cap. A FIFO,
@@ -211,6 +219,12 @@ export function readBoundedRegularFile(path: string, maxBytes: number): string |
 // A directive's inline_context_paths is capped by serialized size; paths past
 // the cap are omitted (the orchestrator warns) and never sent to the agent.
 export const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
+
+// The one line the person reads when optional persona or knowledge files did
+// not fit the list: about their work, with no field name and no byte cap.
+export function omittedContextWarning(_omitted: number): string {
+  return "Some of this step's optional reference files were left out to fit; the work goes on without them.";
+}
 
 export function capInlineContextPaths(allPaths: readonly string[]): { paths: string[]; omitted: number } {
   const paths: string[] = [];
@@ -336,8 +350,13 @@ export function shippedInlineContextEntries(
     : new Map();
 
   for (const agent of agents) {
-    const persona = join(harnessRoot, "agents", `${agent}.md`);
-    const rel = toPosix(join(harnessPrefix, "agents", `${agent}.md`));
+    // Where the agent file carries the harness's dispatch fields (Kiro IDE's
+    // tool permissions), the persona without them ships as a copy: read that.
+    const folder = existsSync(join(harnessRoot, "aidlc-common", "personas", `${agent}.md`))
+      ? ["aidlc-common", "personas"]
+      : ["agents"];
+    const persona = join(harnessRoot, ...folder, `${agent}.md`);
+    const rel = toPosix(join(harnessPrefix, ...folder, `${agent}.md`));
     if (!existsSync(persona)) {
       warnings.push(
         `Warning: optional persona/knowledge file "${rel}" is missing. ` +
@@ -358,6 +377,7 @@ export function shippedInlineContextEntries(
       abs: persona,
       rel,
       agent,
+      persona: true,
     });
   }
   const sharedRoot = join(harnessRoot, "knowledge", "aidlc-shared");

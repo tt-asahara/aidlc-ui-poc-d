@@ -2,7 +2,7 @@
 // agent harness, which Kiro IDE 1.x and Kiro CLI v3 both run and both read
 // from the same .kiro/ tree.
 //
-//   - Agents ship as Markdown only. The conductor is an authored aidlc.md;
+//   - Agents ship as Markdown only. The conductor is an authored aidlc-aidlc.md;
 //     persona files come from core and receive native tools/permissions.
 //   - settings/cli.json pins Kiro CLI to the v3 engine and to the aidlc agent.
 //     The default v2 engine runs no .kiro/hooks at all, and a hook cannot
@@ -46,15 +46,21 @@ const DELEGATION_AGENTS = [
 // (the proposalPath detect --json prints). It writes no scope and not the
 // scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
-const spacePaths = ["aidlc/spaces/**"];
+// A side-by-side worker's own unit records sit in its worktree, a top-level dot
+// entry (`.aidlc/worktrees/bolt-<id8>_<slug>`); its code there still asks.
+const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
+// The name a plugin's agent stands under here: the guard admits it no role of
+// its own, so its deny is the one most personas carry.
+const PLUGIN_AGENT = "plugin-agent";
+
 // Each persona's shell deny admits what the guard admits that persona, and
 // refuses a risky shell form on any AI-DLC command.
 const copyShellDeny = new Map<string, string[]>(
-  DELEGATION_AGENTS.map((agent) => [agent, [
+  [...DELEGATION_AGENTS, PLUGIN_AGENT].map((agent) => [agent, [
     ...shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent)),
     ...riskyFormDenyLines(["bun .kiro/tools/aidlc"]),
   ]]),
@@ -67,23 +73,30 @@ const copyShellDeny = new Map<string, string[]>(
 // does not rest on how a Kiro build splits a command. A bare PowerShell
 // grouping is the terminal guard's (aidlcCodeArgumentHazard in the Kiro IDE
 // adapter).
-// Ask beats every allow, so a command holding one asks the person whatever it
-// starts with. The conductor (agents/aidlc.md) carries the same list; t148
-// checks every agent.
-const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `*${form}*`);
+// An AI-DLC command holding one asks the person: the allow above names one
+// command, and such a form would stretch it to another. The asks start with
+// the same AI-DLC prefix as the persona deny (riskyFormDenyLines), so the
+// person's own commands (a build, a test, a probe, with their redirects and
+// chains) meet no AI-DLC rule: Kiro's own rules and their Always allow decide
+// them (#2199). The conductor (agents/aidlc-aidlc.md) carries the same list; t148
+// checks every agent; the native release spells the prefix `aidlc`
+// (rewriteKiroNativeAllowlists in scripts/package.ts).
+const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*${form}*`);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
-// conductor's tools list selects those (agents/aidlc.md). On that path its
+// conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
-// every dispatch path; it names no MCP server, so a persona reaches none (an
-// @mcp wildcard would expose every user- and workspace-level server).
+// every dispatch path. includeMcpJson gives a persona every server in the
+// person's workspace and user mcp.json; no rule allows an MCP call, so each
+// one asks.
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
+    "includeMcpJson: true",
     "permissions:",
     "  rules:",
     "    - capability: shell",
@@ -133,16 +146,36 @@ const KIRO_IDE_TRUST_STEP =
   "carry on.";
 
 // The same step outside Kiro IDE, for Kiro CLI and an ACP client on this tree.
-const KIRO_CLI_ACP_STEP =
-  "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
-  "the Kiro IDE guide names what that client must send.";
+const KIRO_CLI_RESTART = "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder";
+const KIRO_ACP_CLIENT = "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.";
+const KIRO_CLI_ACP_STEP = `${KIRO_CLI_RESTART}. ${KIRO_ACP_CLIENT}`;
+
+// The agent's own step when the hooks never ran: the new chat never saw the
+// request, so the person is told to type the entry there, and the engine fills
+// it with the id it kept the stopped command under (`<entry> --request <id>`),
+// before a workflow or inside one. The missed-reply line is shown unfilled, so
+// <entry> stays out of the constant it shares.
+const KIRO_CLI_ACP_RESTART_STEP = `${KIRO_CLI_RESTART}, then type <entry> to carry on. ${KIRO_ACP_CLIENT}`;
 
 // The words the agent relays when the person's answer was not recorded.
 const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
 
+// Inside Kiro IDE: its agent's own commands carry TERM_PROGRAM=kiro, its hooks
+// VSCODE_IPC_HOOK and VSCODE_PID and no TERM_PROGRAM (measured live on Kiro IDE
+// 1.2.37, #2167). Another TERM_PROGRAM rules Kiro IDE out: Kiro CLI started from
+// VS Code's terminal has TERM_PROGRAM=vscode beside VS Code's own VSCODE_PID.
+const KIRO_IDE_AGENT_SHELL = ["TERM_PROGRAM=kiro", "VSCODE_IPC_HOOK", "VSCODE_PID"];
+
+// What the agent does when Kiro is not running AI-DLC's hooks, before the one line it shows.
+const KIRO_HOOKS_OFF_AGENT =
+  "Kiro is not running AI-DLC's hooks in this folder. You cannot change that from inside the chat: " +
+  "do not approve, retry, or ask the person to answer again.";
+
 const manifest: HarnessManifest = {
   name: "kiro-ide",
-  productName: "Kiro IDE",
+  // One tree for Kiro IDE and Kiro CLI, so it is named after neither.
+  productName: "Kiro",
+  choiceNote: "Kiro IDE and Kiro CLI on its v3 engine",
   configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
   // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
   // folder is trusted and the window reloads; until then the first approval
@@ -184,15 +217,17 @@ const manifest: HarnessManifest = {
     recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_STEP}`,
     // Says what happened, asks for nothing again, and gives the person the step
     // for the tool they are in, in fixed words the agent relays without
-    // explaining why. Inside Kiro IDE (VSCODE_IPC_HOOK or VSCODE_PID set, the
-    // adapter's own signal) that is the Kiro IDE step alone; elsewhere Kiro
-    // CLI and an ACP client, which nothing tells apart, each get their line.
+    // explaining why. Inside Kiro IDE that is the Kiro IDE step alone;
+    // elsewhere Kiro CLI and an ACP client, which nothing tells apart, each get
+    // their line. Kiro IDE's hooks carry VSCODE_IPC_HOOK and VSCODE_PID, but the
+    // agent's own commands, where this refusal comes from, carry neither: they
+    // carry TERM_PROGRAM=kiro (measured live on Kiro IDE 1.2.37, #2167).
     missedReply:
       "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
       "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
       `"${ANSWER_NOT_RECORDED}" ${KIRO_CLI_ACP_STEP}`,
     missedReplyInHost: {
-      env: ["VSCODE_IPC_HOOK", "VSCODE_PID"],
+      env: KIRO_IDE_AGENT_SHELL,
       text:
         "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
         `Tell them exactly this, with nothing about why: "${ANSWER_NOT_RECORDED} ${KIRO_IDE_TRUST_STEP}"`,
@@ -204,7 +239,24 @@ const manifest: HarnessManifest = {
       "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
+      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+    // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
+    // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
+    // started with hooks off for the untrusted folder ("hooks.v2.execution
+    // DisabledUntrustedWorkspace") and runs none, and offers no aidlc agent,
+    // until Developer: Reload Window. The guard hook on the agent's own shell
+    // command beats before the engine runs, even with its fence switched off,
+    // so a record with no heartbeat proves it, and `next` stops with the step
+    // instead of the person finding out at the first approval. Given both
+    // lines, Kiro IDE's agent showed the Kiro CLI one there (live, 1.2.37), so
+    // inside Kiro IDE, by the missed-reply line's signal, it gets its own alone.
+    agentStep: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_CLI_ACP_RESTART_STEP}" Then end your turn.`,
+    agentStepInHost: {
+      env: KIRO_IDE_AGENT_SHELL,
+      text: `${KIRO_HOOKS_OFF_AGENT} Show the person this line: "${KIRO_IDE_TRUST_STEP}" Then end your turn.`,
+    },
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
@@ -229,6 +281,15 @@ const manifest: HarnessManifest = {
           "sha256:88d6960720e5cd14f848a5e93ba9a503322518fe180c4bf55bcc3a6b8c151394",
           // The variant shipped before AI-DLC wrote the memory text into the steering file.
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
+          // The variant shipped before the block ignored .kiro/agents/aidlc-scoped-review-*.md
+          // (a review's reviewer copy).
+          "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
         ],
       },
     },
@@ -283,21 +344,27 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // The reference form; the packager writes the shipped memory's text over
     // it, as the engine does with the project's own memory for every chat.
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
-    { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
+    // The conductor file sorts before the aidlc-*-agent.md helpers ("aidlc-ai"
+    // before "aidlc-ar"): Kiro lists agents in file-name order, agents before
+    // skills, so Kiro's `/` menu and the picker show `aidlc` first and a bare
+    // `/aidlc` + Enter stays `/aidlc`. It ends in no -agent.md, so nothing that
+    // selects the personas by that suffix takes it for one; its `display_name:`
+    // is for the 2.11.0 agent loader, which claims every aidlc-*.md file and
+    // validates a refresh's projection before the new tools are in place.
+    { src: "agents/aidlc-aidlc.md", dst: "agents/aidlc-aidlc.md" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },
-    { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
+    // Kiro IDE shows a card for every hook run, so one registration runs the two
+    // hooks for each message and another the four tool-call checks (#2022). What
+    // ran after a write or a command is done by the next card (catch-up).
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
-    { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },
-    // Kiro IDE shows a card for every hook run, so one registration runs the
-    // five tool-call checks and another the two hooks after a shell command (#2022).
     { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
-    { src: "hooks/aidlc-after-shell.json", dst: "hooks/aidlc-after-shell.json" },
     // No session-end registration: Kiro's Stop trigger fires at the end of every
     // assistant turn (not at conversation close) on both surfaces, so a
     // registration would append a spurious SESSION_ENDED between prompts.
@@ -328,6 +395,7 @@ const manifest: HarnessManifest = {
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),
   })),
+  pluginAgentFrontmatter: personaFrontmatter(PLUGIN_AGENT),
   // The native release keys the persona shell deny on the `aidlc engine`
   // routes its conductor allow covers (delegate-shell-deny.ts), one rule per
   // distinct persona deny.
