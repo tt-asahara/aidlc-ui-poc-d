@@ -21,7 +21,7 @@
 
 import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { activeSpace, intentsDir, listIntents, spacesRoot } from "../../core/tools/aidlc-lib.ts";
+import { activeSpace, intentsDir, listIntents, markdownBlocks, spacesRoot } from "../../core/tools/aidlc-lib.ts";
 
 export const DESIGN_DOCUMENT_DIRNAME = "design-document";
 export const DOC_SNAPSHOT_DIRNAME = ".aidlc-d-doc-snapshot";
@@ -235,6 +235,68 @@ export function docReviewCheck(projectDir: string): { pass: boolean; findings: s
   return { pass: problems.length === 0, findings: problems, changed, counts };
 }
 
+// ---------------------------------------------------------------------------
+// Figures: every Mermaid diagram and every draw.io figure is followed by a
+// `Text fallback:` line, every local link or image in the document resolves,
+// and every figures/*.drawio file is a draw.io document. Block structure
+// comes from core's markdownBlocks, the one Markdown block interpreter.
+// ---------------------------------------------------------------------------
+const FALLBACK = "Text fallback:";
+const LINK = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+export function figureFindings(rel: string, text: string, exists: (target: string) => boolean): string[] {
+  const out: string[] = [], lines = text.split("\n"), info = markdownBlocks(text).lines;
+  const body = (i: number) => (lines[i] ?? "").slice(info[i]?.contentStart ?? 0);
+  const fallbackAfter = (end: number) => {
+    for (let k = end + 1, seen = 0; k < lines.length && seen < 3; k++) {
+      if (info[k]?.kind === "blank" || !lines[k]!.trim()) continue;
+      if (body(k).trimStart().startsWith(FALLBACK)) return true;
+      seen++;
+    }
+    return false;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = info[i];
+    if (line?.kind === "codeFenced" && (i === 0 || info[i - 1]?.block !== line.block) && /^(`{3,}|~{3,})\s*mermaid\b/.test(body(i).trimStart())) {
+      let end = i;
+      while (end + 1 < lines.length && info[end + 1]?.block === line.block) end++;
+      if (!fallbackAfter(end)) out.push(`${rel}:${i + 1} a Mermaid diagram has no "${FALLBACK}" line after it`);
+      i = end;
+      continue;
+    }
+    if (line && (line.kind === "codeFenced" || line.kind === "codeIndented" || line.kind === "htmlFlow")) continue;
+    for (const match of lines[i]!.matchAll(LINK)) {
+      const target = match[1]!;
+      if (/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(target)) continue;
+      const path = decodeURI(target.split("#")[0]!);
+      if (!exists(path)) out.push(`${rel}:${i + 1} links to ${path}, which does not exist`);
+      else if (path.endsWith(".drawio") && !fallbackAfter(i)) out.push(`${rel}:${i + 1} the draw.io figure ${path} has no "${FALLBACK}" line after it`);
+    }
+  }
+  return out;
+}
+
+export function drawioFindings(rel: string, text: string): string[] {
+  const body = text.trim();
+  if (!body.startsWith("<mxfile") || !body.endsWith("</mxfile>")) return [`${rel} is not a draw.io file (it must be one <mxfile> document, uncompressed XML)`];
+  const diagrams = [...body.matchAll(/<diagram\b[^>]*>([\s\S]*?)<\/diagram>/g)];
+  if (!diagrams.length) return [`${rel} has no <diagram> page`];
+  return diagrams.some((d) => !/<mxGraphModel\b/.test(d[1]!)) ? [`${rel} has a page without an <mxGraphModel> (save it uncompressed)`] : [];
+}
+
+export function docFiguresCheck(projectDir: string): { pass: boolean; findings: string[]; figures: number } {
+  const doc = designDocumentDir(projectDir), out: string[] = [];
+  for (const rel of markdownFiles(doc)) {
+    const base = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    out.push(...figureFindings(rel, readFileSync(join(doc, rel), "utf8"), (target) => existsSync(join(doc, base, target))));
+  }
+  const figuresDir = join(doc, "figures");
+  const drawios = existsSync(figuresDir) ? readdirSync(figuresDir).filter((name) => name.endsWith(".drawio")).sort() : [];
+  for (const name of drawios) out.push(...drawioFindings(`figures/${name}`, readFileSync(join(figuresDir, name), "utf8")));
+  const figures = existsSync(figuresDir) ? readdirSync(figuresDir).filter((name) => !name.startsWith(".")).length : 0;
+  return { pass: out.length === 0, findings: out, figures };
+}
+
 function main(argv: string[]): number {
   const [subcommand, ...rest] = argv;
   const json = rest.includes("--json");
@@ -270,12 +332,17 @@ function main(argv: string[]): number {
     }
     return 0;
   }
+  if (subcommand === "doc-figures-check") {
+    const result = docFiguresCheck(projectDir);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result.pass ? 0 : 1;
+  }
   if (subcommand === "doc-review-check") {
     const result = docReviewCheck(projectDir);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return result.pass ? 0 : 1;
   }
-  process.stderr.write(`Usage: design-document.ts <doc-manifest|doc-snapshot|doc-review-check> [--json] [--project-dir <abs>]\n`);
+  process.stderr.write(`Usage: design-document.ts <doc-manifest|doc-snapshot|doc-review-check|doc-figures-check> [--json] [--project-dir <abs>]\n`);
   return 2;
 }
 

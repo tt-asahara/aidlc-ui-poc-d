@@ -699,6 +699,25 @@ B/D はそれぞれ専用骨格なので、該当する同名章がある場合�
 - 状態遷移図はマトリクスと矛盾させない。マトリクスの抜け（G-N）は、図上でも `要確認` として見えるようにする。
 - 図が大きくなりすぎる場合は、全体図 + 詳細図に分割する。1図に 12〜15 ノードを超えて詰め込まない。
 
+#### draw.io を選ぶとき
+
+既定は Mermaid（GitHub と Markdown プレビューでそのまま見える）。次のどれかに当たる図だけ draw.io にする。
+
+- 分割しても 1 図に 25 ノード前後を超え、全体を 1 枚で見せる意味がある（全画面の遷移マップなど）。
+- 配置そのものが意味を持つ（画面のサムネイル付きの画面遷移、ネットワーク／ゾーンを区切ったシステム構成）。
+- 人が後から手で配置を直して使い続ける図だと、設計書・依頼者が明示している。
+
+draw.io の図は `figures/<名前>.drawio`（**非圧縮の XML**、`<mxfile>` の中に `<diagram>` と `<mxGraphModel>`）
+として書き、本文からは `[<図の名前>（draw.io）](figures/<名前>.drawio)` でリンクする。GitHub では開けないため、
+直後に `Text fallback:` を必ず置き、可能なら同じ内容の要約 Mermaid か、ブラウザで開ける画面のスクリーンショットを
+並べる。画面の絵は draw.io に描き起こさず、基準資料のスクリーンショット（`figures/*.png`）を使う。
+
+#### 図の機械検査（`doc-figures-check`）
+
+`bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-figures-check --project-dir "$PWD"` は、
+すべての Mermaid と draw.io リンクの直後に `Text fallback:` があること、設計書内の相対リンク・画像が実在すること、
+`figures/*.drawio` が draw.io の形式であることを確かめる。`--doc` と `--doc --review` の最後に通す。
+
 ### 1. 要件一覧と採番（`00_設計管理/要件一覧.md`）
 
 - `requirements.md` の `## Functional Requirements` / `## Non-functional Requirements` 節にある

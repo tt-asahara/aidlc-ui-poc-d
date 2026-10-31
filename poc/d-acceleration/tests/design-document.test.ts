@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { docManifest, docReviewCheck, docSnapshot } from "../design-document.ts";
+import { docFiguresCheck, docManifest, docReviewCheck, docSnapshot, drawioFindings, figureFindings } from "../design-document.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 const cli = join(import.meta.dir, "..", "design-document.ts");
@@ -169,5 +169,39 @@ describe("/aidlc --doc --review check", () => {
     expect(text).toContain("severity must be one of");
     expect(text).toContain("location nope.md does not exist");
     expect(text).toContain("no snapshot of the document from before the review");
+  });
+});
+
+describe("/aidlc --doc figure check", () => {
+  const all = () => true;
+  test("every Mermaid diagram needs a Text fallback line after it, and a fence that is not Mermaid does not", () => {
+    const ok = "# 画面\n\n```mermaid\nflowchart LR\nA-->B\n```\n\nText fallback: A から B\n\n```ts\nconst x = 1;\n```\n";
+    expect(figureFindings("a.md", ok, all)).toEqual([]);
+    const missing = "```mermaid\nflowchart LR\nA-->B\n```\n\n次の段落\n";
+    expect(figureFindings("a.md", missing, all)).toEqual(['a.md:1 a Mermaid diagram has no "Text fallback:" line after it']);
+  });
+
+  test("local links and images must exist, a draw.io link needs a Text fallback, and code is ignored", () => {
+    const text = "![画面](figures/a.png)\n[図](figures/map.drawio)\n\n[外](https://example.com) [節](#x)\n\n```md\n[ignored](nope.md)\n```\n";
+    const exists = (p: string) => p === "figures/a.png" || p === "figures/map.drawio";
+    expect(figureFindings("b.md", text, exists)).toEqual(['b.md:2 the draw.io figure figures/map.drawio has no "Text fallback:" line after it']);
+    expect(figureFindings("b.md", "![x](figures/none.png)\n", () => false)).toEqual(["b.md:1 links to figures/none.png, which does not exist"]);
+  });
+
+  test("a draw.io file must be one uncompressed mxfile with a graph model per page", () => {
+    const good = '<mxfile><diagram name="p1"><mxGraphModel><root/></mxGraphModel></diagram></mxfile>';
+    expect(drawioFindings("figures/a.drawio", good)).toEqual([]);
+    expect(drawioFindings("figures/b.drawio", "<svg/>")[0]).toContain("is not a draw.io file");
+    expect(drawioFindings("figures/c.drawio", '<mxfile><diagram name="p1">7ZdNb</diagram></mxfile>')[0]).toContain("save it uncompressed");
+  });
+
+  test("the check walks the whole document and its figures folder", () => {
+    const root = project();
+    const doc = join(root, "aidlc", "spaces", "default", "design-document");
+    mkdirSync(join(doc, "figures"), { recursive: true });
+    mkdirSync(join(doc, "02_基本設計"), { recursive: true });
+    writeFileSync(join(doc, "figures", "map.drawio"), '<mxfile><diagram name="p"><mxGraphModel/></diagram></mxfile>');
+    writeFileSync(join(doc, "02_基本設計", "04_画面設計.md"), "[全画面遷移（draw.io）](../figures/map.drawio)\n\nText fallback: 全画面の遷移\n");
+    expect(docFiguresCheck(root)).toEqual({ pass: true, findings: [], figures: 1 });
   });
 });
