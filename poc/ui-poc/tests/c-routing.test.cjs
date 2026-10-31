@@ -328,12 +328,18 @@ test('a design skill installed from a local folder verifies like a fetched one, 
   fs.rmSync(path.join(f.project,'.agents/skills/ponta-pass-design/SKILL.md'));
   assert.match(tools.routing.designSkillStatus('ponta-pass-design',f.project).detail,/--skill ponta-pass-design --source <your ponta-pass-design folder>$/);
 });
-test('ponta-pass-design asks every run for the original screens folder instead of an environment or default path', () => {
-  const adapter=JSON.parse(fs.readFileSync(path.join(__dirname,'../tools/ui-poc/c-stage-routing.json'),'utf8')).designSkillChoices['ponta-pass-design'].adapter;
-  assert.match(adapter,/on every run of this stage, ask the person through AI-DLC's pending-question flow for the absolute path of their folder of original Pontaパス screens/);
-  assert.match(adapter,/Never take the folder from PONTA_PASS_EXPORT, the skill's default ~\/Downloads folder, or an earlier run without asking/);
-  assert.match(adapter,/Pass the folder as ref\.py's first argument on every call/);
-  assert.match(adapter,/never the folder path/);
+test('ponta-pass-design works on a copy of the design baseline and asks for the folder through AI-DLC', () => {
+  const choice=JSON.parse(fs.readFileSync(path.join(__dirname,'../tools/ui-poc/c-stage-routing.json'),'utf8')).designSkillChoices['ponta-pass-design'];
+  assert.deepEqual(choice.baseline.name,'ponta-pass');
+  const adapter=choice.adapter;
+  assert.match(adapter,/ask the person through AI-DLC's pending-question flow, never a separate prompt/);
+  assert.match(adapter,/use the space's Pontaパス baseline \(recommended\), or give another folder/);
+  assert.match(adapter,/use it for this intent only, or replace the space baseline/);
+  assert.match(adapter,/Never take a folder from PONTA_PASS_EXPORT, the skill's default ~\/Downloads folder, or an earlier run, and never record the folder path/);
+  assert.match(adapter,/always passing the copy as ref\.py's first argument/);
+  assert.match(adapter,/Flow-00-transition`, `Flow-01-journeys-v2`, `Flow-02-screen-map`, `Flow-03-userflow`/);
+  assert.match(adapter,/Only changed and added screens get a refined contract page under `refined\/`/);
+  assert.match(adapter,/6\) Run `verify`/);
 });
 test('verify still requires the creator-confirmed Design Context for a selected design skill', t => {
   const tools=fakeDesignTools(t,'ui-ux-pro-max'),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'ui-ux-pro-max'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
