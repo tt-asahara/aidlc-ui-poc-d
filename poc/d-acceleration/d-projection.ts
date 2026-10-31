@@ -71,6 +71,25 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "worker-adapters.ts",
 ];
 
+/**
+ * The D configuration resolver and its import closure. Harnesses without the
+ * D runtime still ship it, because the ui-poc plugin reads its settings
+ * (uiDesign.refinedMockupSkill, image features) through this one owner.
+ */
+export const D_CONFIG_RUNTIME: readonly string[] = [
+  "d-config.ts",
+  "execution.ts",
+  "grounding.ts",
+  "issue-autopilot.ts",
+  "native-commands.ts",
+  "native-runtime.ts",
+  "pr-lens-pin.ts",
+  "worker-adapters.ts",
+];
+
+/** Harnesses that get only D_CONFIG_RUNTIME; Claude gets the full D runtime. */
+export const D_CONFIG_HARNESSES: readonly string[] = ["kiro", "kiro-ide", "codex"];
+
 /** D-owned hook adapters use the stock dispatcher seam; runtime modules stay separate. */
 export function dProjectionPath(file: string): string {
   return file.startsWith("hooks/") ? file : `${D_PROJECTION_SUBDIR.split(sep).join("/")}/${file}`;
@@ -119,13 +138,13 @@ function projectCoreImports(text: string): string {
 }
 
 /** Copy the D runtime into `<treeRoot>/tools/d-acceleration/`, refusing any collision first. */
-export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME): void {
+export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME, harness = "claude"): void {
   for (const file of runtime) {
     const source = join(accelerationRoot, file);
-    if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`[claude] D acceleration runtime source is missing: ${file}`);
+    if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`[${harness}] D acceleration runtime source is missing: ${file}`);
   }
   const collisions = dProjectionCollisions(projectedPaths(treeRoot), runtime);
-  if (collisions.length) throw new Error(`[claude] D acceleration runtime would overwrite or shadow a projected core file: ${collisions.join(", ")}`);
+  if (collisions.length) throw new Error(`[${harness}] D acceleration runtime would overwrite or shadow a projected core file: ${collisions.join(", ")}`);
   for (const file of runtime) {
     const source = join(accelerationRoot, file);
     const destination = join(treeRoot, dProjectionPath(file));

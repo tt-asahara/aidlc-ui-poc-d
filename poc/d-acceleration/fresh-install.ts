@@ -111,7 +111,7 @@ export function configConflicts(p: ReturnType<typeof paths>): string[] {
 }
 
 const C_PAYLOAD_ROOT = ".agents";
-function placeCPayload(S: string, P: string): { added: number; identical: number } {
+export function placeCPayload(S: string, P: string): { added: number; identical: number } {
   const files = git(S, ["ls-files", C_PAYLOAD_ROOT]).split("\n").filter(Boolean);
   if (!files.length) throw new SetupStop("SRC has no tracked C payload under .agents");
   const differing = files.filter((rel) => existsSync(join(P, rel)) && fileHash(join(P, rel)) !== fileHash(join(S, rel)));

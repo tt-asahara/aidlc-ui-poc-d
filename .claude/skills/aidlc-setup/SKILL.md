@@ -7,7 +7,7 @@ user-invocable: true
 
 # Set up AI-DLC D on the Arm C UI baseline
 
-Invoke from the D checkout containing this skill. D retains the complete pinned Arm C UI treatment and installs bounded acceleration into the ordinary `/aidlc` wave path. Invocation permits inspection and dry-run only; applying reviewed product changes requires separate explicit authorization.
+Invoke from the D checkout containing this skill. This skill sets up a Claude Code PRODUCT; for Kiro CLI, Kiro IDE, or Codex, which get the C UI baseline without D acceleration, use `poc/ui-poc/scripts/setup-ui-poc.ts` as `poc/ui-poc/README.md` ("Kiro CLI, Kiro IDE, and Codex") shows. D retains the complete pinned Arm C UI treatment and installs bounded acceleration into the ordinary `/aidlc` wave path. Invocation permits inspection and dry-run only; applying reviewed product changes requires separate explicit authorization.
 
 ## Establish boundaries
 
