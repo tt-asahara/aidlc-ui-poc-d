@@ -57,6 +57,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "official-acceptance-criteria.ts",
   "official-next-adapter.ts",
   "parallel-guard.ts",
+  "person-turn.ts",
   "pr-lens-gate.ts",
   "pr-lens-pin.ts",
   "question-wait.ts",
@@ -113,6 +114,7 @@ function projectCoreImports(text: string): string {
     .replaceAll('from "../../core/tools/aidlc.ts"', 'from "../aidlc.ts"')
     .replaceAll('from "../../core/tools/aidlc-hook-trace.ts"', 'from "../aidlc-hook-trace.ts"')
     .replaceAll('from "../../core/tools/aidlc-color.ts"', 'from "../aidlc-color.ts"')
+    .replaceAll('from "../../core/tools/aidlc-message-store.ts"', 'from "../aidlc-message-store.ts"')
     .replaceAll('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
 }
 

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { latestPersonTurn } from "../../core/tools/aidlc-lib.ts";
+import { latestPersonTurn } from "./person-turn.ts";
 import { AI_QUESTION_ANSWER_LEDGER } from "./ai-question-answers.ts";
 import { resolveDDecisionIssueSummary } from "./d-config.ts";
 import { ghAuthPreflight, githubHostFromRepository, type GhAuthResult } from "./gh-host.ts";
@@ -59,8 +59,8 @@ export const DECISION_SUMMARY_REPOSITORY = /^(?:[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+\/
 
 /**
  * Publication needs the person's exact permission words as the latest
- * host-recorded human turn. The turn is read through the upstream engine's own
- * read-only `latestPersonTurn` (the record-human-turn hook writes it); D never
+ * host-recorded human turn. The turn is read through D's
+ * read-only `latestPersonTurn` over the record-human-turn hook's own records; D never
  * writes engine state or audit and never treats its own text as the person's.
  */
 async function verifyPublicationPermission(input: { projectDir: string; repository: string; intent: string; payloadSha256: string }): Promise<{ authorized: boolean; receipt?: Record<string, unknown>; reason?: string }> {

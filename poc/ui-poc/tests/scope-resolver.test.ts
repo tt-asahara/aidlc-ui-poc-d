@@ -5,9 +5,14 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const repo = join(import.meta.dir, "..", "..", "..");
-const utility = join(repo, "core", "tools", "aidlc-utility.ts");
+const lib = join(repo, "core", "tools", "aidlc-lib.ts");
 
-function resolver() {
+// Upstream AI-DLC v2.11.2 removed the engine's keyword classifier
+// (`inferScopeFromText`): the agent reads the person's words and proposes one
+// of the install's plans, and the person confirms it. What the agent reads is
+// each plan's description and author hints from the scope metadata, so the UI
+// scopes must reach that list with theirs.
+function planMetadata() {
   const root = mkdtempSync(join(tmpdir(), "aidlc-ui-scope-"));
   const scopes = join(root, "scopes");
   cpSync(join(repo, "core", "scopes"), scopes, { recursive: true });
@@ -15,15 +20,13 @@ function resolver() {
   cpSync(join(repo, "poc", "ui-poc", "scopes", "ui-poc-comparison.md"), join(scopes, "ui-poc-comparison.md"));
   cpSync(join(repo, "poc", "ui-poc", "scopes", "ui-poc-requirements.md"), join(scopes, "ui-poc-requirements.md"));
   const grid = join(root, "scope-grid.json"); writeFileSync(grid, "{}\n");
-  return (input: string) => {
-    const env = { ...process.env, INPUT: input, AIDLC_SCOPES_DIR: scopes, AIDLC_SCOPE_GRID: grid };
-    delete env.AIDLC_SCOPE_MAPPING;
-    const result = spawnSync(process.execPath, ["-e", `import { inferScopeFromText } from ${JSON.stringify(utility)}; process.stdout.write(inferScopeFromText(process.env.INPUT).scope)`], {
-      cwd: repo, encoding: "utf8", env,
-    });
-    if (result.status !== 0) throw new Error(result.stderr || result.stdout);
-    return result.stdout;
-  };
+  const env = { ...process.env, AIDLC_SCOPES_DIR: scopes, AIDLC_SCOPE_GRID: grid };
+  delete env.AIDLC_SCOPE_MAPPING;
+  const result = spawnSync(process.execPath, ["-e", `import { loadScopeMetadata, validScopes } from ${JSON.stringify(lib)}; const m = loadScopeMetadata(); process.stdout.write(JSON.stringify({ scopes: [...validScopes()], meta: m }))`], {
+    cwd: repo, encoding: "utf8", env,
+  });
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout);
+  return JSON.parse(result.stdout) as { scopes: string[]; meta: Record<string, { description?: string; keywords?: string[] }> };
 }
 
 function detectExplicitScope(scope: string, input: string) {
@@ -47,30 +50,20 @@ function detectExplicitScope(scope: string, input: string) {
 }
 
 describe("ordinary UI application scope resolver", () => {
-  // Routing uses only the upstream core resolver (core/ is byte-identical to
-  // AI-DLC v2.11.0): plugin scope keywords route short ASCII requests. Long
-  // prose and Japanese text fall back to the stock default, and the person
-  // picks the UI scope at the official scope confirmation or names it.
-  test("routes a short English UI request through the plugin keywords", () => {
-    const infer = resolver();
-    expect(infer("Build a budget web app")).toBe("ui-poc-application");
-    expect(infer("budget dashboard")).toBe("ui-poc-application");
-    expect(infer("requirements-loop for budget planner")).toBe("ui-poc-requirements");
+  // Routing is the upstream core's (core/ is byte-identical to AI-DLC v2.11.2):
+  // the agent proposes a plan from the install's plan list, and the person
+  // confirms it or names another. No D or C code classifies the request.
+  test("the UI scopes reach the plan list the agent proposes from, with their hints", () => {
+    const { scopes, meta } = planMetadata();
+    for (const scope of ["ui-poc-application", "ui-poc-comparison", "ui-poc-requirements"]) {
+      expect(scopes).toContain(scope);
+      expect(meta[scope]?.description ?? "").not.toBe("");
+    }
+    expect(meta["ui-poc-application"]?.keywords).toEqual(expect.arrayContaining(["web app", "dashboard"]));
   });
-  test("long or Japanese UI prose stays on the stock default (no core change for plugin specificity or CJK keywords)", () => {
-    const infer = resolver();
-    expect(infer("Build a household budget web app with monthly planning transaction tracking category summaries and a responsive interface")).toBe("classic");
-    expect(infer("家計管理のWebアプリを作りたい")).toBe("classic");
-    // The README's long example, verbatim: it gets the standard proposal.
-    expect(infer("Build a household budget web app with monthly planning, transaction tracking,\ncategory summaries, and a responsive user interface.")).toBe("classic");
-    expect(infer("家計管理アプリの要件定義ループを回したい")).toBe("classic");
-  });
-  test("leaves non-UI and negated UI requests on the stock default", () => {
-    const infer = resolver();
-    expect(infer("Build a command line parser for monthly ledger imports")).toBe("classic");
-    expect(infer("Build a command line tool, not a web app, for monthly ledger imports")).toBe("classic");
-    expect(infer("WebアプリではなくCLIツールを作りたい")).toBe("classic");
-    expect(infer("requirements only, no code")).toBe("classic");
+  test("stock plans stay on the list beside the UI scopes", () => {
+    const { scopes } = planMetadata();
+    for (const scope of ["classic", "feature", "poc", "bugfix"]) expect(scopes).toContain(scope);
   });
   test("explicit scope remains authoritative instead of consulting inference", () => {
     expect(detectExplicitScope("mvp", "Build a budget web app")).toEqual({

@@ -14,7 +14,7 @@ function fixture(config: object) {
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2), at = args.indexOf("--project-dir"), root = args[at + 1];
-writeFileSync(join(root, "official-argv.json"), JSON.stringify(args.slice(0, at)));
+writeFileSync(join(root, "official-argv.json"), JSON.stringify(args.filter((_, i) => i !== at && i !== at + 1)));
 process.stdout.write(JSON.stringify({ kind: "ask", ask_type: "scope-confirm", gate: true, question: "Choose scope" }));
 `);
   return root;
@@ -32,7 +32,7 @@ function policyTools(root: string) {
   writeFileSync(join(root, ".claude", "tools", "aidlc-orchestrate.ts"), `process.stdout.write(JSON.stringify({kind:"run-stage",stage:"intent-capture",receipt:"first"}));\n`);
   writeFileSync(join(root, ".claude", "tools", "aidlc-state.ts"), `
 import { appendFileSync } from "node:fs"; import { join } from "node:path";
-const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at+1]; appendFileSync(join(root,"policy-calls"),args.slice(0,at).join(" ")+"\\n"); process.stdout.write(JSON.stringify({updated:true}));
+const args=process.argv.slice(2), at=args.indexOf("--project-dir"), root=args[at+1]; appendFileSync(join(root,"policy-calls"),args.filter((_,i)=>i!==at&&i!==at+1).join(" ")+"\\n"); process.stdout.write(JSON.stringify({updated:true}));
 `);
 }
 const run = (root: string, args: string[]) => spawnSync(process.execPath, [cli, ...args, "--project-dir", root], { cwd: root, encoding: "utf8" });

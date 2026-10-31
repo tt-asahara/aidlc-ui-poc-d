@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { resolveDConstructionDefaults, resolveDModels, resolveDParallel } from "../d-config.ts";
+import { recordHumanTurn } from "./human-turn.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 beforeAll(() => {
@@ -30,12 +31,25 @@ describe("ordinary /aidlc D integration", () => {
 
     const started = invoke(["start", "--description-file", ".aidlc-engine/request.txt"]);
     expect(started.status, started.stderr).toBe(0);
-    const ask = JSON.parse(started.stdout).directive;
+    const routed = JSON.parse(started.stdout).directive;
+    // Upstream v2.11.2 hands plan choice to the host: the official print asks
+    // the agent to propose a plan (`next --propose <plan> --request <id>`), and
+    // that returns the scope question for the person. This test plays the host.
+    let ask = routed;
+    if (routed.kind === "print") {
+      const proposeRequest = /next --propose <plan> --request ([A-Fa-f0-9]{8})/.exec(routed.message)?.[1];
+      expect(proposeRequest, routed.message).toBeString();
+      const proposed = spawnSync(process.execPath, [join(root, ".claude", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--propose", "poc", "--request", proposeRequest!, "--project-dir", root], { cwd: root, encoding: "utf8" });
+      expect(proposed.status, proposed.stderr).toBe(0);
+      ask = JSON.parse(proposed.stdout);
+    }
     expect(ask).toMatchObject({ kind: "ask" });
     const selectedCommand = ask.ask_type === "scope-confirm" ? ask.confirm_command : ask.scope_commands.find((entry: { scope: string }) => entry.scope === "poc")?.command;
     const scope = /--scope ([A-Za-z0-9._-]+)/.exec(selectedCommand)?.[1];
     const request = /--request ([A-Fa-f0-9]{8})/.exec(selectedCommand)?.[1];
     expect(scope).toBeString(); expect(request).toBeString();
+    // The plan is the person's to pick: their reply arrives through the real hook.
+    recordHumanTurn(root, "Go ahead with that plan.");
     const confirmed = spawnSync(process.execPath, [join(root, ".claude", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--scope", scope!, "--request", request!, "--project-dir", root], { cwd: root, encoding: "utf8" });
     expect(confirmed.status, confirmed.stderr).toBe(0);
     const creation = JSON.parse(confirmed.stdout);

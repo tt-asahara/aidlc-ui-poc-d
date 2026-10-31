@@ -17,7 +17,9 @@ const runtime = join(product, ".claude", "tools");
 const hostCli = join(import.meta.dir, "host-session-cli.ts");
 
 function runJson(executable: string, args: string[]): Json {
-  const result = runEngineSync(executable, [...args, "--project-dir", product], { cwd: product, encoding: "utf8", env: { ...process.env, AIDLC_UNATTENDED: "1" } });
+  // The engine takes its launcher options only in front of the person's words,
+  // so `--project-dir` goes right after the subcommand, never after a request.
+  const result = runEngineSync(executable, [...args.slice(0, 1), "--project-dir", product, ...args.slice(1)], { cwd: product, encoding: "utf8", env: { ...process.env, AIDLC_UNATTENDED: "1" } });
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || result.error?.message || "command failed").trim());
   try { return JSON.parse(result.stdout) as Json; }
   catch { throw new Error("command did not return a JSON directive"); }

@@ -41,7 +41,7 @@ intent作成前にfail-closedで停止し、approval recordを作成しません
 
 `aiApproval.mode` は既定 `human` です。`stage-gates` は、利用者の事前委任
 （`AI-DLC delegate-ai-approvals ...` の完全一致文。host記録の最新human turn
-（`latestPersonTurn`）と一致する場合のみ `grant` が作成され、そのturnのTimestamp/Sessionを
+（D の `person-turn.ts` が公式 `HUMAN_TURN` 行と、その `Message Id` が指すメッセージ記録から読み取る）と一致する場合のみ `grant` が作成され、そのturnのTimestamp/Sessionを
 grantに束縛し、controllerとsettlerの双方が公式auditの `HUMAN_TURN` 行を再確認します）を
 hash-bound grantとしてactive Intentへ保存した場合に限り、`[AI-Autonomy]: low-risk-reversible` を付けた通常stage質問だけをAIが
 回答できるようにします。stage gateのAI承認は廃止しました: core/ を上流AI-DLC v2.11.0
@@ -62,8 +62,8 @@ script、別名dispatcherは拒否します。より厳格な固定が必要な�
 `decisionIssueSummary.enabled` は、active IntentのD台帳 `decisions/ai-question-answers.jsonl`
 （委任された低risk質問へのAI回答。公式auditではない）からIntent単位のGitHub Issue要約payloadを
 生成する既定OFFの機能です。台帳がない・空の場合は `nothing-to-publish` を返して何も送信しません。外部送信にはrepository・active Intent・生成payload hashを完全一致で
-指定した最新のhost記録済み人間permissionが必要です（D側で、engine自身の読み取り専用
-`latestPersonTurn` を使って照合します）。許可後もpending receiptを検索・照合してから同じIssueを更新し、
+指定した最新のhost記録済み人間permissionが必要です（D側で、`person-turn.ts` が公式の
+`HUMAN_TURN` 行とメッセージ記録を読み取り専用で照合します）。許可後もpending receiptを検索・照合してから同じIssueを更新し、
 未解決事項の別Issueを自動作成しません。
 `send: true` には同様にhost process環境の `AIDLC_GH_EXECUTABLE_PATH` と
 `AIDLC_GH_EXECUTABLE_SHA256` が必要です。

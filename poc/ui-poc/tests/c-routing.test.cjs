@@ -119,12 +119,12 @@ test('ordinary UI routing is distinct, reproducible, and preserves explicit choi
   assert.doesNotMatch(fs.readFileSync(path.join(root,'core/aidlc-common/stages/inception/delivery-planning.md'),'utf8'),/ui-poc-application/);
   assert.match(delivery,/wait for the person's answer at the official gate/);
   const readme=fs.readFileSync(path.join(root,'poc/ui-poc/README.md'),'utf8');
-  // The auto-routing example is short ASCII; long or Japanese requests are
-  // documented as selecting ui-poc-application at scope confirmation.
-  assert.match(readme,/```text\n\/aidlc\nBuild a budget web app\n```/);
+  // Since upstream v2.11.2 the agent proposes the plan and the person confirms
+  // it, so English and Japanese requests are documented the same way.
   assert.match(readme,/\/aidlc\n家計管理のWebアプリを作りたい/);
-  assert.match(readme,/Select `ui-poc-application` there/);
-  assert.match(readme,/byte-identical\s+to AI-DLC v2\.11\.0/);
+  assert.match(readme,/proposes the plan that fits it/);
+  assert.match(readme,/`\/aidlc --scope ui-poc-application`/);
+  assert.match(readme,/byte-identical\s+to AI-DLC v2\.11\.2/);
   assert.doesNotMatch(readme,/\/aidlc --scope ui-poc-comparison/);
 });
 test('unrelated stages deterministically select no skills', () => {

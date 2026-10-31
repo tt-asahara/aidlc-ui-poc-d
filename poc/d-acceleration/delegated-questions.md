@@ -24,8 +24,9 @@ questions files advance through the ordinary stage protocol either way.
 
 `ai-approval-controller.ts grant` mints the delegation only when the words in
 `--user-message-file` equal the person's latest host-recorded turn, read
-through core's read-only `latestPersonTurn` (the record-human-turn hook is the
-only writer). A missing turn, a later turn, or different words refuse with one
+by D's read-only `person-turn.ts` from the official `HUMAN_TURN` row and the
+message record its `Message Id` names (the record-human-turn hook is the only
+writer of both). A missing turn, a later turn, or different words refuse with one
 line: ask the person to type the exact `AI-DLC delegate-ai-approvals ...`
 command, then rerun `grant`. The grant (`schemaVersion: 2`) records
 `humanTurn: { at, session, wordsSha256 }` inside its request hash. The one
