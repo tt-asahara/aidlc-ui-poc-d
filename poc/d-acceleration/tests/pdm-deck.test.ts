@@ -1,6 +1,7 @@
 // The PdM service proposal deck: every catalog page is built in order, a page
-// without material is still built as 未検討, the check refuses a topic-only
-// title and other overflows, and the template's own slides never reach the deck.
+// without material is still built as 未検討 with its questions, the check
+// refuses a topic-only title, a subtitle line and other overflows, summary rows
+// point at real page numbers, and the template's own slides never reach the deck.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -51,34 +52,44 @@ describe("PdM deck tool", () => {
     edit(spec, (pages) => {
       Object.assign(pages["competitors"], { status: "done", title: "競合比較", lead: "", blocks: [{ kind: "table", columns: ["a"], rows: Array.from({ length: 13 }, () => ["x"]) }], sources: [] });
       Object.assign(pages["roadmap"], { status: "partial", title: "段階的に出す", blocks: [{ kind: "timeline", periods: ["1月"], lanes: [{ label: "開発", items: [{ label: "x", start: 0, end: 3 }] }] }], sources: ["plan.md"] });
+      Object.assign(pages["risks"], { status: "done", title: "最大のリスクは誤解による解約である", lead: "補足", sources: ["f.md"],
+        blocks: [{ kind: "table", columns: ["リスク", "影響"], rows: [["誤解", "大"]], heat: [1] }] });
+      Object.assign(pages["executive-summary"], { status: "done", title: "上位プランで単価を上げる", sources: ["i.md"],
+        blocks: [{ kind: "summary", items: [{ text: "結論", ref: "nowhere" }] }] });
     });
     const findings = JSON.parse(run("check", "--spec", spec).stdout).findings.join("\n");
     expect(findings).toContain("competitors: the title only names the topic");
     expect(findings).toContain("competitors: a done page needs its sources");
-    expect(findings).toContain("table is larger than 12 rows");
+    expect(findings).toContain("table is larger than 10 rows");
     expect(findings).toContain("roadmap: a partial page needs gaps");
     expect(findings).toContain("must span period indexes 0..0");
+    expect(findings).toContain("risks: lead is not used");
+    expect(findings).toContain("heat column 1 must be a column index whose cells are 高, 中 or 低");
+    expect(findings).toContain("ref 'nowhere' is not a page id");
     const value = JSON.parse(readFileSync(spec, "utf8"));
     value.pages.reverse();
     writeFileSync(spec, JSON.stringify(value));
     expect(JSON.parse(run("check", "--spec", spec).stdout).findings[0]).toContain("every catalog page in catalog order");
   });
 
-  test.skipIf(!hasPptx)("build makes the cover, a divider per section, and every page, with 未検討 pages for missing material", () => {
+  test.skipIf(!hasPptx)("build makes the cover and every page, with 未検討 pages for missing material and summary rows pointing at page numbers", () => {
     const dir = temp(), spec = ghostSpec(dir), out = join(dir, "deck.pptx");
     edit(spec, (pages) => Object.assign(pages["executive-summary"], {
-      status: "done", title: "上位プランで高利用層の単価を上げ ARPU を改善する", lead: "単一価格では上位層の価値を収益化できない", sources: ["intent-statement.md"],
-      blocks: [{ kind: "cards", items: [{ title: "状況", body: "a" }, { title: "課題", body: "b" }] }, { kind: "bullets", items: ["付議事項"] }],
+      status: "done", title: "上位プランで高利用層の単価を上げ ARPU を改善する", sources: ["intent-statement.md"],
+      blocks: [{ kind: "summary", items: [{ text: "単一価格では上位層の価値を収益化できない", details: ["上位2割が利用の6割"], ref: "background" }] }],
     }));
+    const check = run("check", "--spec", spec);
+    expect(check.status).toBe(0);
     const result = run("build", "--spec", spec, "--out", out);
     expect(result.status).toBe(0);
     const built = JSON.parse(result.stdout);
-    const dividers = catalog.sections.filter((s) => s.id !== "summary").length;
-    expect(built.slides).toBe(1 + dividers + catalog.pages.length);
+    expect(built.slides).toBe(1 + catalog.pages.length);
     const text = spawnSync("python3", ["-I", "-c", `from pptx import Presentation\nimport sys\np=Presentation(sys.argv[1])\nprint("\\n".join(sh.text_frame.text for s in p.slides for sh in s.shapes if sh.has_text_frame))`, out], { encoding: "utf8" }).stdout;
     expect(text).toContain("上位プランで高利用層の単価を上げ ARPU を改善する");
     expect(text).toContain("背景と現状：未検討");
-    expect(text).toContain("「背景と現状」はまだ検討されていません");
+    expect(text).toContain("このページで答える問い");
+    const backgroundSlide = 2 + catalog.pages.findIndex((p) => p.id === "background");
+    expect(text).toContain(`P.${backgroundSlide}`);
   });
 
   test.skipIf(!hasPptx)("a template's own slides are dropped and its layouts are used; template adoption checks the file", () => {
