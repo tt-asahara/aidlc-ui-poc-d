@@ -24,8 +24,9 @@
 // silently to no-data.
 //
 // Contract. This hook OBSERVES only - it must never alter Claude Code's flow. It
-// prints NOTHING on success (any stdout could be read as hook output), never
-// throws (everything is wrapped), and exits 0 in every case.
+// prints NOTHING on success (any stdout could be read as hook output), guards
+// its own parse and state read (the ledger writers in aidlc-usage.ts guard
+// theirs), and returns 0 on every path.
 
 import { existsSync, readFileSync } from "node:fs";
 
@@ -89,6 +90,7 @@ export async function run(input: string): Promise<number> {
   if (!transcriptPath) return 0;
   const [
     {
+      readActiveDirectiveMarker,
       resolveProjectDirFromHook,
       resolveWorkflowSelection,
       stateFilePathForSelection,
@@ -136,7 +138,11 @@ export async function run(input: string): Promise<number> {
     }
     const statePath = stateFilePathForSelection(projectDir, selection);
     if (existsSync(statePath)) {
-      currentStage = currentStageSlug(readFileSync(statePath, "utf-8")) || null;
+      // Under unit-major Current Stage stays on the block's first stage while
+      // a later stage runs for a Unit; the active directive names that stage.
+      const stateContent = readFileSync(statePath, "utf-8");
+      currentStage = readActiveDirectiveMarker(projectDir, stateContent)?.stage ??
+        (currentStageSlug(stateContent) || null);
     }
   } catch {
     currentStage = null;

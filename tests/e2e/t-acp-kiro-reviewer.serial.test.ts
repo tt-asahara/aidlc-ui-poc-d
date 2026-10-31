@@ -9,9 +9,8 @@
 // contracts (conductor `subagent.trustedAgents` includes the two reviewer
 // slugs; the reviewer agents' `fs_write` is capped to the `aidlc/spaces/**`
 // workspace; the SKILL.md gate flow names the §12a step). All three are pinned
-// deterministically by dist parity, but until this test NO live check proved a
-// Kiro conductor actually runs the reviewer sub-agent end-to-end — the live
-// reviewer evidence lived only on the Claude TUI leg (t-tui-t51-poc-scope).
+// deterministically by dist parity; this test is the live proof that a Kiro
+// conductor actually runs the reviewer sub-agent end-to-end.
 // This is the Kiro logic-half twin: same stage (requirements-analysis, poc,
 // `reviewer: aidlc-product-lead-agent` per its frontmatter), ACP-native shape.
 //
@@ -30,10 +29,12 @@
 //      the same pattern as driveCodekbUntilBothRepos, NOT a tool-title stop.
 //   2. The stage's clarifying questions render as numbered PROSE in the
 //      agent's text (question-rendering annex), not a protocol gate the driver
-//      can answer — so the opening prompt grants one-stage self-answer
-//      permission up front, and if the model still ends its turn to ask, ONE
-//      bounded follow-up turn on the SAME keepAlive session answers with the
-//      recommended defaults. Two turns maximum; the disk poll spans both.
+//      can answer - so the first turn ends on them, and ONE bounded follow-up
+//      turn on the SAME keepAlive session answers with the recommended
+//      defaults. An isolated run still asks its summary confirmation after
+//      that (it reads only its own scope's setting, so "do not ask me" does not
+//      switch it off), and a third turn answers it. Three turns maximum; the
+//      disk poll spans them all.
 //
 // ASSERTABLE SURFACES (on-disk + tool trace, never prose):
 //   - requirements.md exists without an embedded review. REVIEW_COMPLETED
@@ -88,7 +89,7 @@ function remainingWorkMs(): number {
   })!;
 }
 
-// Two drive turns share the budget; leave headroom for setup/asserts.
+// The drive turns share the budget; leave headroom for setup/asserts.
 
 const REVIEWER_SLUG = "aidlc-product-lead-agent";
 const STAGE = "requirements-analysis";
@@ -221,6 +222,12 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
               ` stage now, including the reviewer step. Do not ask me anything.`,
           );
         }
+        // Bounded third turn: the person confirms the summary the isolated run
+        // still asks before it generates.
+        let r3: Awaited<ReturnType<typeof driveKiroAcp>> | undefined;
+        if (!completedReview(proj) && r2?.stopReason === "end_turn") {
+          r3 = await driveUntilReview(session, proj, "Looks correct");
+        }
 
         // §12a on disk: the primary artifact and the separately recorded review
         // both exist. The completion verifies record bytes and receipt ownership.
@@ -250,19 +257,23 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         });
         expect(["READY", "NOT-READY"]).toContain(review.record.verdict);
         expect(review.record.body.trim().length).toBeGreaterThan(0);
-        expect(validateReviewAppendix(Buffer.from(review.record.body), {
+        const validity = validateReviewAppendix(Buffer.from(review.record.body), {
           verdict: review.record.verdict,
           reviewer: REVIEWER_SLUG,
           iteration: review.record.iteration,
           reviewChallenge: null,
           standalone: true,
-        })).toEqual({ valid: true });
+        });
+        expect(validity.valid).toBe(true);
+        // A live reviewer following its template answers the question it was not
+        // asked with `no`; an older template leaves the line out. Never `yes` here.
+        expect([null, "no"]).toContain(validity.valid ? validity.verdictDictated : "invalid");
 
         // The retired flat layout must not reappear: a reviewer (or conductor)
         // still pointed at the dead root path would recreate it here.
         expect(existsSync(join(proj, "aidlc-docs"))).toBe(false);
 
-        const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? [])];
+        const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? []), ...(r3?.toolCalls ?? [])];
         // The request's project-relative reviewFile is the native write target.
         // The logger deletes this draft on commit, so inspect the completed tool
         // call and retained record body instead of requiring the draft to remain.
@@ -296,7 +307,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // test; a SYSTEMATIC failure is. Reject only issues that the on-disk
         // outcome (asserted above) did not absorb: hook blocks and repeated
         // failures of the same call.
-        const issues = [...r1.toolCallIssues, ...(r2?.toolCallIssues ?? [])];
+        const issues = [...r1.toolCallIssues, ...(r2?.toolCallIssues ?? []), ...(r3?.toolCallIssues ?? [])];
         const systematic = issues.filter(
           (issue) =>
             issue.output.join("\n").includes("PreToolHook blocked") ||

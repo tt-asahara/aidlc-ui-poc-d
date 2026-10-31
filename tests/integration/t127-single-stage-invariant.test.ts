@@ -1,68 +1,47 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport, function:clearActiveDirectiveMarker, function:refuseReservedCliEvent, function:refuseReservedCliBatch
 //
-// t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 milestone 14).
-// Migrated from tests/integration/t127-single-stage-invariant.sh (TAP plan 16).
+// t127 - the `--single` stage-runner invariant.
 // Mechanism: cli. The whole subject is the engine's PROCESS boundary —
 // `next --stage <slug> --single` / `report --single --stage <slug>` argv,
 // the JSON directive on stdout, the bytes the synthetic lifecycle appends
-// to aidlc-docs/audit.md, AND the pointer-invariant read of the main state
-// file via aidlc-state.ts get. Every assertion is observable only across
+// to the per-intent audit shard, AND the pointer-invariant read of the main
+// state file via aidlc-state.ts get. Every assertion is observable only across
 // that boundary, so each case SPAWNS the real tool via the BUN runtime
-// against the .ts path (the same pattern t104.cli credits), exactly as the
-// .sh shelled out to `bun "$TOOL" ...`.
+// against the .ts path.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   :910  next Branch 4b — `if (flags.single)` short-circuits BEFORE the
+//   handleNext - `if (flags.single)` short-circuits BEFORE the
 //          jump/scope-change branches (so no mutating path is reached): rejects
-//          --single+--phase (:911), requires --stage (:919), else delegates to
-//   :1246 emitSingleRunStage(slug, scope, projectType): builds the lone
-//          run-stage directive from the GRAPH NODE alone (stateContent: null →
-//          never reads/writes the main pointer), attaches conductor_persona
-//          (D-E, :1281). Rejects an initialization stage (:1258 SINGLE_INIT_ERROR)
-//          and a SKIP-for-scope stage with the verbatim skip wording (:1264).
-//   :1741 handleSingleReport(flags, projectDir): requires --result (:1745),
+//          --single+--phase, requires --stage, else delegates to
+//   emitSingleRunStage: builds the lone run-stage directive from the GRAPH
+//          NODE alone (stateContent: null -> never reads/writes the main
+//          pointer), attaches conductor_persona. Refuses an initialization
+//          stage (SINGLE_INIT_ERROR); a SKIP-for-scope stage runs, with a change
+//          notice saying it is not part of the plan.
+//   handleSingleReport(flags, projectDir): requires --result,
 //          and the EXPLICIT half of the pointer rule — refuses a --single report
-//          with NO --stage as an attempt to advance the main workflow (:1762).
+//          with NO --stage as an attempt to advance the main workflow.
 //          `next --single` records STAGE_STARTED before dispatch; on success
 //          report records STAGE_COMPLETED under the same synthetic id
 //          `single-stage:<slug>`, then emits a `done` directive.
-//          report Branch -1 (:1833) routes here before any main-workflow branch.
+//          report routes here before any main-workflow branch.
 //   The companion never dispatches advance/approve/complete-workflow, so the
 //   main pointer is structurally untouchable from a single-stage run.
 //
-// The state-pointer read uses aidlc-state.ts `get "Current Stage"` (the .sh's
-// $STATE_TOOL), spawned the same way, asserting the field is `feasibility`
-// before AND after each --single leg.
+// The state-pointer read uses aidlc-state.ts `get "Current Stage"`, spawned the
+// same way, asserting the field is `feasibility` before AND after each --single
+// leg.
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh 1  (main starts parked at feasibility)          -> test "1: main workflow starts parked at feasibility"
-//   .sh 2  (next --single emits run-stage)              -> test "2: next --single emits a run-stage directive"
-//   .sh 3  (targets requested stage, not Current Stage) -> test "3: next --single targets the requested stage"
-//   .sh 4  (conductor_persona on first directive, D-E)  -> test "4: next --single delivers the conductor persona"
-//   .sh 5  (next --single leaves Current Stage)         -> test "5: next --single leaves main Current Stage untouched"
-//   .sh 6  (report --single emits done)                 -> test "6: report --single emits a done directive"
-//   .sh 7  (report --single leaves Current Stage)       -> test "7: report --single leaves main Current Stage untouched"
-//   .sh 8  (exactly one STAGE_STARTED)                  -> test "8: next --single commits exactly one STAGE_STARTED"
-//   .sh 9  (exactly one STAGE_COMPLETED)                -> test "9: report --single commits exactly one STAGE_COMPLETED"
-//   .sh 10 (pair tagged with single-stage workflow id)  -> test "10: synthetic pair tagged with single-stage workflow id"
-//   .sh 11 (report --single no --stage errors)          -> test "11: report --single with no --stage errors"
-//   .sh 12 (refused report commits no STAGE_COMPLETED)  -> test "12: refused report --single commits no STAGE_COMPLETED"
-//   .sh 13 (next --single no --stage errors)            -> test "13: next --single with no --stage errors"
-//   .sh 14 (next --single rejects init stage)           -> test "14: next --single rejects an initialization stage"
-//   .sh 15 (next --single on a SKIP-for-scope stage)     -> test "15: next --single runs a SKIP-for-scope stage and says it is not in the plan"
-//   .sh 16 (next --single --phase mutually exclusive)   -> test "16: next --single --phase errors"
-//
-// §6-E note: tests 11/13/14/15/16 are the tool-enforced REFUSALS — each
-// asserts the `error` directive ACTUALLY fires (the verbatim refusal string),
-// and test 12 proves the refused report commits NOTHING (zero STAGE_COMPLETED
-// on disk). The happy-path pointer cases (5,7) additionally read the real
-// state file back, proving the pointer is unmoved — not merely absent of a
-// move directive.
+// Tests 11/13/14/16 are the tool-enforced REFUSALS - each asserts the `error`
+// directive ACTUALLY fires (the verbatim refusal string), and test 12 proves the
+// refused report commits NOTHING (zero STAGE_COMPLETED on disk). The happy-path
+// pointer cases (5,7) additionally read the real state file back, proving the
+// pointer is unmoved - not merely absent of a move directive.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -73,12 +52,19 @@ import {
   seedAuditFile,
   seededAuditShard,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  createCodeGenerationProject,
+  next as codeGenerationNext,
+  writePlan,
+} from "../harness/code-generation-states.ts";
+import {
   artifactFilename,
   loadStageGraphAll,
+  STOP_HOOK_PROBE_ENV,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
   summaryConfirmationContentHash,
   stateDigest,
@@ -86,12 +72,21 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
+
+// These legs write no plan, so plan approval is off for the work and the
+// isolated report closes the run; with it on, an isolated Code Generation run
+// waits for its plan first (t-code-generation-completion-owner).
+function planApprovalOff(proj: string): void {
+  const file = seededStateFile(proj);
+  writeFileSync(file, readFileSync(file, "utf-8")
+    .replace("- **Revision Count**: 0", "- **Revision Count**: 0\n- **Plan Approval**: off (set by you)"));
+}
 
 function activeDirectiveMarkerPath(proj: string): string {
   return join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
@@ -103,14 +98,13 @@ afterEach(() => {
   for (const p of projects.splice(0)) cleanupTestProject(p);
 });
 
-/** A fresh temp project registered for teardown (mirrors create_test_project). */
 function freshProject(): string {
   const proj = createOrchestrationTestProject();
   projects.push(proj);
   return proj;
 }
 
-/** Combined stdout+stderr of a spawned orchestrate/state invocation (the .sh's 2>&1). */
+/** Combined stdout+stderr of a spawned orchestrate/state invocation. */
 function run(tool: string, args: string[]): { out: string; status: number } {
   if (tool === TOOL && args[0] === "next") {
     const projectIndex = args.indexOf("--project-dir");
@@ -158,19 +152,14 @@ function startSingle(proj: string, stage: string): void {
   expect(result.out).toContain(`"stage":"${stage}"`);
 }
 
-/** `aidlc-state.ts get "Current Stage"` — the main pointer the .sh read. */
 function currentStage(proj: string): string {
   return run(STATE_TOOL, ["get", "Current Stage", "--project-dir", proj]).out.trim();
 }
 
-/**
- * count_event (t127:38-40): audit rows of one event type. The .sh grepped
- * `^**Event**: <TYPE>$`; here we count lines that equal `**Event**: <TYPE>`.
- */
 function countEvent(proj: string, event: string): number {
-  // P9: the synthetic pair lands in the seeded record's per-clone shard
-  // (seedAuditFile pins the clone-id, so the report subprocess and the test
-  // resolve the SAME shard), not the flat aidlc-docs/audit.md.
+  // The synthetic pair lands in the seeded record's per-clone shard
+  // (the fixture pins the clone-id, so the report subprocess and the test
+  // resolve the SAME shard).
   const body = readFileSync(seededAuditShard(proj), "utf-8");
   return body.split("\n").filter((l) => l === `**Event**: ${event}`).length;
 }
@@ -179,9 +168,8 @@ function countEvent(proj: string, event: string): number {
 // Tests 1-7: pointer invariant across next --single + report --single.
 // Seed an ACTIVE feature workflow parked at `feasibility` (Current Stage),
 // run a DIFFERENT stage (code-generation) via --single, and prove neither
-// leg moves the main pointer off `feasibility`. The .sh ran these against a
-// single shared project; here each test rebuilds the same seeded project so
-// the cases are order-independent (STRONGER isolation, same observables).
+// leg moves the main pointer off `feasibility`. Each test rebuilds the same
+// seeded project so the cases are order-independent.
 // ===========================================================================
 describe("t127 --single pointer invariant (migrated from t127-single-stage-invariant.sh, plan 16)", () => {
   test("1: main workflow starts parked at feasibility [.sh 1]", () => {
@@ -232,16 +220,15 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("5: next --single leaves the main Current Stage untouched [.sh 5]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
-    // before
     expect(currentStage(proj)).toBe("feasibility");
     run(TOOL, ["next", "--stage", "code-generation", "--single", "--project-dir", proj]);
-    // after — read the real state file back; the pointer must be unmoved.
     expect(currentStage(proj)).toBe("feasibility");
   });
 
   test("6: report --single emits a done directive [.sh 6]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     startSingle(proj, "code-generation");
     const r = run(TOOL, [
       "report", "--single", "--stage", "code-generation", "--result", "completed",
@@ -255,6 +242,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("7: report --single leaves the main Current Stage untouched [.sh 7]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
       "report", "--single", "--stage", "code-generation", "--result", "completed",
@@ -272,6 +260,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("8: next --single commits exactly one STAGE_STARTED [.sh 8]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
@@ -284,6 +273,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("9: report --single commits exactly one STAGE_COMPLETED [.sh 9]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
@@ -296,6 +286,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("10: the synthetic pair is tagged with the single-stage workflow id [.sh 10]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
@@ -304,8 +295,6 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     ]);
     const body = readFileSync(seededAuditShard(proj), "utf-8");
     // syntheticWorkflowId("code-generation") === "single-stage:code-generation".
-    // STRONGER than the .sh's single grep: BOTH committed rows must carry the
-    // `**Workflow**: single-stage:code-generation` tag (the .sh proved one).
     const tagged = body
       .split("\n")
       .filter((l) => l === "**Workflow**: single-stage:code-generation").length;
@@ -376,7 +365,6 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "report", "--single", "--result", "completed", "--project-dir", proj,
     ]);
     expect(r.out).toContain('"kind":"error"');
-    // STRONGER: pin the verbatim refusal wording (aidlc-orchestrate.ts:1763).
     expect(r.out).toContain("must not advance the main workflow");
   });
 
@@ -803,7 +791,6 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     seedStateFile(proj, STATE_FIXTURE);
     const r = run(TOOL, ["next", "--single", "--project-dir", proj]);
     expect(r.out).toContain('"kind":"error"');
-    // STRONGER: pin the verbatim wording (aidlc-orchestrate.ts:921).
     expect(r.out).toContain("--single requires --stage");
   });
 
@@ -828,9 +815,8 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   // =========================================================================
   test("15: next --single runs a SKIP-for-scope stage and says it is not in the plan [.sh 15]", () => {
     const proj = freshProject();
-    // No-state project: createTestProject already leaves aidlc-docs/ empty, so
-    // there is no aidlc-state.md (the .sh did `rm -f` defensively — here it
-    // never existed). The flag --scope bugfix therefore resolves.
+    // No-state project: freshProject leaves no aidlc-state.md. The flag --scope
+    // bugfix therefore resolves.
     const r = run(TOOL, [
       "next", "--stage", "user-stories", "--single", "--scope", "bugfix",
       "--project-dir", proj,
@@ -861,5 +847,475 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "next", "--single", "--phase", "inception", "--project-dir", proj,
     ]);
     expect(r.out).toContain("Cannot use --single with --phase");
+  });
+
+  // =========================================================================
+  // Test 17 (#2654): a depth or test strategy typed with --single is that
+  // run's alone. It is recorded on the isolated start and rides on the
+  // run-stage; the workflow's own settings stay as they are. A Guard Policy or
+  // check cannot be the run's own, so it is refused, naming no config set.
+  // Review and ceremony flags meet their own refusals earlier in handleNext.
+  // =========================================================================
+  type SingleDirective = {
+    kind?: string;
+    message?: string;
+    single?: boolean;
+    depth?: string;
+    test_strategy?: string;
+  };
+
+  function nextSingleStage(proj: string, stage: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", stage, "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
+  }
+
+  function nextSingle(proj: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", "build-and-test", "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
+  }
+
+  function startedBlocks(proj: string): string[] {
+    return readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n---")
+      .filter((block) => block.includes("**Event**: STAGE_STARTED"));
+  }
+
+  function seededSingleProject(): string {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    return proj;
+  }
+
+  test("17: next --single --test-strategy runs the stage with it and leaves the workflow's as it is", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(directive.depth).toBeUndefined();
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toContain("**Workflow**: single-stage:build-and-test");
+    expect(started[0]).toContain("**Test Strategy**: Comprehensive");
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(currentStage(proj)).toBe("feasibility");
+  });
+
+  test("17b: next --single with a depth and a test strategy carries both", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--depth", "minimal", "--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.depth).toBe("Minimal");
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(startedBlocks(proj)[0]).toContain("**Depth**: Minimal");
+  });
+
+  test("17c: a re-run of the open attempt keeps its settings; a different one starts it over", () => {
+    const proj = seededSingleProject();
+    expect(nextSingle(proj, ["--depth", "minimal"]).kind).toBe("run-stage");
+    const again = nextSingle(proj, []);
+    expect(again.kind, JSON.stringify(again)).toBe("run-stage");
+    expect(again.depth).toBe("Minimal");
+    expect(startedBlocks(proj)).toHaveLength(1);
+    // The person asked for Standard: the stage starts over with it. The
+    // unfinished attempt is set aside, never recorded as completed.
+    const other = nextSingle(proj, ["--depth", "standard"]) as SingleDirective & { change_notices?: string[] };
+    expect(other.kind, JSON.stringify(other)).toBe("run-stage");
+    expect(other.depth).toBe("Standard");
+    expect(other.change_notices?.join("\n")).toContain("starts over with the settings you gave");
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(2);
+    expect(started[1]).toContain("**Depth**: Standard");
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).not.toContain("**Event**: STAGE_COMPLETED");
+    // Its re-run keeps the new attempt's setting.
+    expect(nextSingle(proj, []).depth).toBe("Standard");
+  });
+
+  test("17c2: a typed depth picks the knowledge the stage loads, on the first part and after the steering continuation", () => {
+    const roster = (extra: string[], steered: boolean) => {
+      const proj = freshProject();
+      // Rules too large for one message make the step arrive in parts, so the
+      // final run-stage is the one `continue` rebuilds from the recorded start.
+      if (steered) {
+        writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+          Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+      }
+      const r = runOrchestrateNext(TOOL, proj, [
+        "--scope", "bugfix", "--stage", "requirements-analysis", "--single", ...extra,
+      ]);
+      const directive = r.directive as { kind?: string; depth?: string; test_strategy?: string; inline_context_paths?: string[] } | null;
+      expect(directive?.kind, r.out).toBe("run-stage");
+      if (steered) expect(r.steering.length, r.out).toBeGreaterThan(1);
+      return { paths: directive?.inline_context_paths ?? [], depth: directive?.depth, testStrategy: directive?.test_strategy };
+    };
+    // bugfix runs at Minimal, which prunes the lead's knowledge.
+    const minimal = roster([], false);
+    const comprehensive = roster(["--depth", "comprehensive"], false);
+    expect(comprehensive.paths.length).toBeGreaterThan(minimal.paths.length);
+    for (const path of minimal.paths) expect(comprehensive.paths).toContain(path);
+    const continued = roster(["--depth", "comprehensive", "--test-strategy", "comprehensive"], true);
+    expect(continued.depth).toBe("Comprehensive");
+    expect(continued.testStrategy).toBe("Comprehensive");
+    expect(continued.paths).toEqual(comprehensive.paths);
+  });
+
+  test("17c3: an isolated Code Generation run's Testing Contract follows its own test strategy; the workflow's does not", () => {
+    const proj = seededSingleProject();
+    const POSTURE_TOOL = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
+    const contractStrategy = (): string => {
+      const r = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      const json = r.stdout.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "{}";
+      return (JSON.parse(json) as { test_strategy?: string }).test_strategy ?? "";
+    };
+    expect(contractStrategy()).toBe("standard");
+
+    const started = nextSingleStage(proj, "code-generation", ["--test-strategy", "comprehensive"]);
+    expect(started.kind, JSON.stringify(started)).toBe("run-stage");
+    expect(started.test_strategy).toBe("Comprehensive");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The plan carries that contract, and the engine takes it: it asks for
+    // Plan Approval instead of calling the contract out of date.
+    const planDir = join(seededRecordDir(proj), "construction", "code-generation");
+    mkdirSync(planDir, { recursive: true });
+    const render = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+    writeFileSync(
+      join(planDir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" + render.stdout,
+      "utf-8",
+    );
+    writeFileSync(join(planDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const asked = nextSingleStage(proj, "code-generation", []) as SingleDirective & { ask_type?: string };
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The workflow's own setting and contract stay as they were.
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(run(TOOL, ["next", "--project-dir", proj]).status).toBe(0);
+    expect(contractStrategy()).toBe("standard");
+  });
+
+  test("17c4: an interrupted isolated Code Generation run leaves the workflow's own plan approval as it was", () => {
+    const proj = createCodeGenerationProject();
+    projects.push(proj);
+    writePlan(proj);
+    // The workflow's Standard plan is ready: the engine asks to approve it.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An isolated Comprehensive run starts and is left open.
+    const isolated = codeGenerationNext(proj, ["--stage", "code-generation", "--single", "--test-strategy", "comprehensive"]);
+    expect(isolated).toMatchObject({ kind: "run-stage", single: true, test_strategy: "Comprehensive" });
+    // Back on the workflow, its plan still matches its own Testing Contract.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {
+    const proj = freshProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.test_strategy).toBe("Comprehensive");
+  });
+
+  for (const [flag, value] of [
+    ["--guard-policy", "relaxed"],
+    ["--guard.review-freeze", "off"],
+  ] as const) {
+    test(`17e: next --single ${flag} errors, names no config set and starts nothing`, () => {
+      const proj = seededSingleProject();
+      const directive = nextSingle(proj, [flag, value]);
+      expect(directive.kind, JSON.stringify(directive)).toBe("error");
+      expect(directive.message).toContain(`Cannot use --single with ${flag}.`);
+      expect(directive.message).not.toContain("config set");
+      expect(startedBlocks(proj)).toHaveLength(0);
+    });
+  }
+
+  test("17f: next --single with a ceremony flag stays refused", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--sensors", "off"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("error");
+    expect(directive.message).toContain("Cannot combine ceremony flags");
+    expect(startedBlocks(proj)).toHaveLength(0);
+  });
+
+  test("17g: plain next --stage build-and-test --single carries no settings of its own", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, []);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(directive.depth).toBeUndefined();
+    expect(directive.test_strategy).toBeUndefined();
+    expect(startedBlocks(proj)).toHaveLength(1);
+  });
+
+  test("17h: a workflow's own step carries the workflow's depth and test strategy, after its rules arrive in parts too", () => {
+    for (const steered of [false, true]) {
+      const proj = seededSingleProject();
+      const file = seededStateFile(proj);
+      writeFileSync(file, readFileSync(file, "utf-8")
+        .replace("- **Depth**: Standard", "- **Depth**: Minimal")
+        .replace("- **Test Strategy**: Standard", "- **Test Strategy**: Comprehensive"));
+      if (steered) {
+        writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+          Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+      }
+      const r = runOrchestrateNext(TOOL, proj);
+      if (steered) expect(r.steering.length, r.out).toBeGreaterThan(1);
+      const directive = r.directive as SingleDirective | null;
+      expect(directive?.kind, r.out).toBe("run-stage");
+      expect(directive?.single).toBeUndefined();
+      expect(directive?.depth).toBe("Minimal");
+      expect(directive?.test_strategy).toBe("Comprehensive");
+    }
+  });
+});
+
+// ===========================================================================
+// #2897: an isolated run writes its documents where the work keeps that
+// stage's, so when the work's record already holds files for the stage (an
+// approved stage, a Unit's step), the run's start copies them first, into the
+// record's archive/ folder that the stage protocol's "Archive before change"
+// names, and one line says so with the folder. A stage with no files yet, and
+// a run with no work, get neither.
+// ===========================================================================
+describe("t127 an isolated run over the work's own files keeps a copy of them (#2897)", () => {
+  type Step = { kind?: string; change_notices?: string[]; depth?: string };
+
+  const keepsLine = (name: string) =>
+    `This run writes its documents where your work keeps ${name}'s, so your work goes on from what it writes; ` +
+    "a copy of them as they were is in ";
+
+  function workProject(fixture = STATE_FIXTURE): string {
+    const proj = freshProject();
+    seedStateFile(proj, fixture);
+    seedAuditFile(proj);
+    return proj;
+  }
+
+  function writeFiles(proj: string, files: Record<string, string>): void {
+    for (const [rel, body] of Object.entries(files)) {
+      const path = join(seededRecordDir(proj), rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body, "utf-8");
+    }
+  }
+
+  function copies(proj: string, slug: string): string[] {
+    const archive = join(seededRecordDir(proj), "archive");
+    return existsSync(archive)
+      ? readdirSync(archive).filter((name) => name.endsWith(`-${slug}`)).map((name) => join(archive, name))
+      : [];
+  }
+
+  function projectPath(proj: string, path: string): string {
+    return relative(proj, path).split("\\").join("/");
+  }
+
+  function single(proj: string, stage: string, extra: string[] = []) {
+    const r = runOrchestrateNext(TOOL, proj, ["--stage", stage, "--single", ...extra]);
+    expect(r.status, r.out).toBe(0);
+    return { step: (r.directive ?? {}) as Step, steering: r.steering.length, out: r.out };
+  }
+
+  function latestStart(proj: string, slug: string): string {
+    const blocks = readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n---")
+      .filter((block) =>
+        block.includes("**Event**: STAGE_STARTED") && block.includes(`**Workflow**: single-stage:${slug}`)
+      );
+    return blocks.at(-1) ?? "";
+  }
+
+  const MARKET = {
+    "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nAPPROVED\n",
+    "ideation/market-research/market-research-questions.md": "# Questions\n\nQ1 answered: A\n",
+  };
+
+  test("an approved stage's files are copied at the start, and one line names the copy", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    const { step } = single(proj, "market-research");
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    for (const [rel, body] of Object.entries(MARKET)) {
+      expect(readFileSync(join(kept[0], rel.split("/").at(-1)!), "utf-8")).toBe(body);
+      expect(readFileSync(join(seededRecordDir(proj), rel), "utf-8")).toBe(body);
+    }
+    expect(step.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    expect(latestStart(proj, "market-research")).toContain(`**Kept Copy**: ${projectPath(proj, kept[0])}`);
+    expect(currentStage(proj)).toBe("feasibility");
+  });
+
+  test("the copy's folder name has no colon, so it is a valid Windows name", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(kept[0].split(/[\\/]/).at(-1)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-market-research$/);
+  });
+
+  test("the open attempt's next names the same copy and makes no other", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    const again = single(proj, "market-research").step;
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(again.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a different depth starts the attempt over and keeps its first copy", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    // The set-aside attempt had already written over the stage's files.
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nHALF REDONE\n" });
+    const over = single(proj, "market-research", ["--depth", "minimal"]).step;
+    expect(over.depth).toBe("Minimal");
+    expect(over.change_notices?.join("\n")).toContain("starts over with the settings you gave");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "competitive-analysis.md"), "utf-8")).toBe(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(over.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    expect(latestStart(proj, "market-research")).toContain("**Depth**: Minimal");
+    expect(latestStart(proj, "market-research")).toContain(`**Kept Copy**: ${projectPath(proj, kept[0])}`);
+  });
+
+  test("a per-Unit stage keeps every Unit's folder", () => {
+    // functional-design is [x] for widget-cart and [-] for widget-checkout.
+    const proj = workProject("state-construction.md");
+    writeFiles(proj, {
+      "construction/widget-cart/functional-design/entities.md": "# Entities\n\nCART APPROVED\n",
+      "construction/widget-checkout/functional-design/entities.md": "# Entities\n\nCHECKOUT IN PROGRESS\n",
+    });
+    const { step } = single(proj, "functional-design");
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    const kept = copies(proj, "functional-design");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "widget-cart", "entities.md"), "utf-8")).toBe("# Entities\n\nCART APPROVED\n");
+    expect(readFileSync(join(kept[0], "widget-checkout", "entities.md"), "utf-8")).toBe("# Entities\n\nCHECKOUT IN PROGRESS\n");
+    expect(step.change_notices).toContain(`${keepsLine("Functional Design")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a step delivered in parts still says the line, and keeps the team's rules", () => {
+    const proj = workProject();
+    // Rules too large for one message make the step arrive in parts, so the
+    // final run-stage is the one `continue` rebuilds.
+    writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    writeFiles(proj, MARKET);
+    const { step, steering, out } = single(proj, "market-research");
+    expect(steering, out).toBeGreaterThan(1);
+    expect(step.kind, out).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(step.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    // The not-in-plan line takes the same path: the step still arrives in
+    // parts with the team's rules, and the rebuilt run-stage says it.
+    const offPlan = freshProject();
+    writeFileSync(join(offPlan, "aidlc/spaces/default/memory/org.md"),
+      Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+    const skipped = runOrchestrateNext(TOOL, offPlan, ["--stage", "user-stories", "--single", "--scope", "bugfix"]);
+    expect(skipped.steering.length, skipped.out).toBeGreaterThan(1);
+    expect((skipped.directive as Step | null)?.change_notices).toContain(
+      "\"user-stories\" is not part of the bugfix plan. It runs on its own because you asked for it; " +
+        "the plan and your workflow stay as they are.",
+    );
+  });
+
+  test("a run after a finished one keeps its own copy of what that run wrote", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    single(proj, "market-research");
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nREDONE\n" });
+    appendAuditEntry("STAGE_COMPLETED", {
+      Stage: "market-research",
+      Details: "Single-stage run of market-research completed",
+      Workflow: "single-stage:market-research",
+    }, proj);
+    const second = single(proj, "market-research").step;
+    const kept = copies(proj, "market-research").sort();
+    expect(kept).toHaveLength(2);
+    const bodies = kept.map((dir) => readFileSync(join(dir, "competitive-analysis.md"), "utf-8"));
+    expect(bodies).toContain(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(bodies).toContain("# Competitive Analysis\n\nREDONE\n");
+    const named = kept.find((dir) => readFileSync(join(dir, "competitive-analysis.md"), "utf-8").includes("REDONE"))!;
+    expect(second.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, named)}/.`);
+  });
+
+  test("an open attempt started before the copy existed keeps one at its next step, once", () => {
+    // An earlier version's isolated start records no Kept Copy; the person
+    // upgrades and types the same runner while the attempt is still open.
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    appendAuditEntry("STAGE_STARTED", {
+      Stage: "market-research",
+      Agent: "aidlc-product-agent",
+      Workflow: "single-stage:market-research",
+      Scope: "feature",
+    }, proj);
+    const started = latestStart(proj, "market-research");
+    const resumed = single(proj, "market-research").step;
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+    const kept = copies(proj, "market-research");
+    expect(kept).toHaveLength(1);
+    expect(readFileSync(join(kept[0], "competitive-analysis.md"), "utf-8")).toBe(MARKET["ideation/market-research/competitive-analysis.md"]);
+    expect(resumed.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+    // The same attempt goes on: no new start, so its receipts still count.
+    expect(latestStart(proj, "market-research")).toBe(started);
+    const again = single(proj, "market-research").step;
+    expect(copies(proj, "market-research")).toHaveLength(1);
+    expect(again.change_notices).toContain(`${keepsLine("Market Research")}${projectPath(proj, kept[0])}/.`);
+  });
+
+  test("a start with nothing to keep says so on its row, and its next step copies nothing", () => {
+    const proj = workProject();
+    single(proj, "market-research");
+    expect(latestStart(proj, "market-research")).toContain("**Kept Copy**: none");
+    // The run's own first files are not the work's earlier ones.
+    writeFiles(proj, { "ideation/market-research/competitive-analysis.md": "# Competitive Analysis\n\nDRAFT\n" });
+    const again = single(proj, "market-research").step;
+    expect(existsSync(join(seededRecordDir(proj), "archive"))).toBe(false);
+    expect((again.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+  });
+
+  test("a read-only probe copies nothing and starts nothing", () => {
+    const proj = workProject();
+    writeFiles(proj, MARKET);
+    const probe = runOrchestrateNext(TOOL, proj, ["--stage", "market-research", "--single"], {
+      env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+    });
+    expect((probe.directive as Step | null)?.kind, probe.out).toBe("run-stage");
+    expect(existsSync(join(seededRecordDir(proj), "archive"))).toBe(false);
+    expect(latestStart(proj, "market-research")).toBe("");
+    expect(((probe.directive as Step | null)?.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+  });
+
+  test("a stage with no files in the work, and a run with no work, get no copy and no line", () => {
+    const ahead = workProject();
+    const aheadStep = single(ahead, "requirements-analysis").step;
+    expect(aheadStep.kind, JSON.stringify(aheadStep)).toBe("run-stage");
+    expect(existsSync(join(seededRecordDir(ahead), "archive"))).toBe(false);
+    expect((aheadStep.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+
+    // With no workflow (as 17d) files already where the run writes are no
+    // work's, so nothing is copied or said.
+    const first = freshProject();
+    const produces = (runOrchestrateNext(TOOL, first, ["--stage", "market-research", "--single", "--scope", "feature"])
+      .directive as { produces?: string[] } | null)?.produces ?? [];
+    expect(produces.length).toBeGreaterThan(0);
+    const bare = freshProject();
+    for (const rel of produces) {
+      mkdirSync(dirname(join(bare, rel)), { recursive: true });
+      writeFileSync(join(bare, rel), "# Earlier\n", "utf-8");
+    }
+    const noWork = runOrchestrateNext(TOOL, bare, ["--stage", "market-research", "--single", "--scope", "feature"]);
+    expect((noWork.directive as Step | null)?.kind, noWork.out).toBe("run-stage");
+    expect(((noWork.directive as Step | null)?.change_notices ?? []).join("\n")).not.toContain("This run writes its documents");
+    expect(readdirSync(join(bare, "aidlc"), { recursive: true }).some((entry) => String(entry).split(/[\\/]/).includes("archive"))).toBe(false);
   });
 });

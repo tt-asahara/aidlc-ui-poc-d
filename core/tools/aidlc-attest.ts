@@ -68,6 +68,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  agentFileText,
   type AuditShardEvent,
   auditBlockField,
   copiedAuditBlocks,
@@ -100,6 +101,7 @@ import {
   UNBINDABLE_FINGERPRINT,
   unitStageRecordRelPath,
   type WorkspaceSourceListing,
+  committedTextBytes,
 } from "./aidlc-lib.ts";
 
 // --- Report vocabulary ---
@@ -129,8 +131,9 @@ export const FAILABLE_STATUSES = [
  *                 computes this exact report — but the tree may be the commit
  *                 under test, which means the change may have authored the very
  *                 receipts it is judged against (`trust.selfAttested`)
- *  independent    reproducible, and the queried range does not touch the record:
- *                 the receipts existed before the change under test
+ *  independent    reproducible, and the record read excludes the range's own
+ *                 record edits: the range touches no record path, or
+ *                 `--record-ref` pins a ref that does not descend from head
  *  signed         independent, and every authority-bearing input the verdict
  *                 rests on — each relied-upon unit's receipt shard AND the
  *                 evidence file that receipt's fingerprint selects — arrived in a
@@ -465,7 +468,6 @@ function readBlobs(dir: string, oids: readonly string[]): Map<string, Buffer> {
 
 const treeShellCache = new Map<string, ReadonlySet<string>>();
 
-/** Harness shell dirs at the root of `commit`'s tree. */
 function commitHarnessShellDirs(dir: string, commit: string): ReadonlySet<string> {
   const cacheKey = `${dir}\0${commit}`;
   const cached = treeShellCache.get(cacheKey);
@@ -776,7 +778,7 @@ interface UnitOwnership {
   evidenceListing: WorkspaceSourceListing | null;
   evidencePath: string | null;
   evidenceSource: "committed" | "local" | null;
-  /** Commit that introduced the relied-upon evidence file, and git's `%G?` code
+  /** Commit that last wrote the relied-upon evidence file, and git's `%G?` code
    *  for it. Both null when the view cannot attribute a commit (worktree) or the
    *  unit binds no committed evidence — either way the unit cannot reach `signed`. */
   evidenceCommit: string | null;
@@ -825,7 +827,7 @@ function parseManifestClaims(
 ): SourceClaimModel | null {
   let value: unknown;
   try {
-    value = JSON.parse(bytes.toString("utf-8"));
+    value = JSON.parse(agentFileText(bytes));
   } catch {
     return null;
   }
@@ -972,11 +974,16 @@ function buildOwnershipIndex(
               const label = view.label(space, info.dirName, candidate.rel);
               const bytes = view.readRecordFile(space, info.dirName, candidate.rel);
               if (bytes === null) continue;
-              if (createHash("sha256").update(bytes).digest("hex") !== hex) {
+              // A checkout with CRLF line endings holds the same listing.
+              const text = committedTextBytes(bytes);
+              if (
+                createHash("sha256").update(text).digest("hex") !== hex &&
+                createHash("sha256").update(bytes).digest("hex") !== hex
+              ) {
                 problem = `evidence at ${label} does not hash to the receipt fingerprint`;
                 continue;
               }
-              const parsed = parseUnitSourceListing(bytes.toString("utf-8"));
+              const parsed = parseUnitSourceListing(text.toString("utf-8"));
               if (parsed === null) {
                 problem = `evidence at ${label} is not a parseable unit source listing`;
                 continue;
@@ -1023,10 +1030,12 @@ function buildOwnershipIndex(
         );
         let claims: SourceClaimModel | null = null;
         let claimsSource: UnitOwnership["claimsSource"] = null;
+        // A checkout with CRLF line endings holds the same manifest.
         if (
           manifestBytes !== null &&
           manifestSha !== null &&
-          createHash("sha256").update(manifestBytes).digest("hex") === manifestSha
+          (createHash("sha256").update(manifestBytes).digest("hex") === manifestSha ||
+            createHash("sha256").update(committedTextBytes(manifestBytes)).digest("hex") === manifestSha)
         ) {
           claims = parseManifestClaims(manifestBytes, recordedRepos);
           if (claims !== null) claimsSource = "manifest";
@@ -1048,7 +1057,6 @@ function buildOwnershipIndex(
           evidenceRel !== null && evidenceSource === "committed"
             ? view.lastWriter(space, info.dirName, evidenceRel)
             : null;
-        // Who vouched for the receipt that chose that evidence in the first place.
         const receipt = view.shardOrigin(chosen.shard);
 
         ownerships.push({
@@ -1146,8 +1154,8 @@ function classifyPath(
   headListing: WorkspaceSourceListing,
   exclusion: SourceExclusionContext,
 ): PathReport {
-  // Exclusion reads the commit's own shell dirs, never the checkout's, so a
-  // path's `excluded` verdict is fixed by the SHA.
+  // Exclusion reads the range's base-tree shell dirs, never the checkout's, so a
+  // path's `excluded` verdict is fixed by the range.
   if (sourcePathIsExcluded(path, query.carriesShell, undefined, exclusion)) {
     return { path, status: "excluded" };
   }
@@ -1210,22 +1218,17 @@ function unitFullyLanded(
 }
 
 /** Review evidence hashes working-tree bytes; commit listings hash repository
- *  bytes with checkout filters deliberately off. Where the repo converts between
- *  the two forms, unchanged content can report `drifted`, so say so up front. */
+ *  bytes with checkout filters deliberately off. Both read CRLF text as LF, so
+ *  core.autocrlf is no change; where .gitattributes converts otherwise (LFS
+ *  pointers, encodings), unchanged content can report `drifted`, so say so up
+ *  front. */
 function byteFormWarning(query: RepoQuery, head: string): string | null {
-  const autocrlf = git(query.dir, ["config", "--get", "core.autocrlf"])
-    .stdout.trim()
-    .toLowerCase();
-  const converts = autocrlf === "true" || autocrlf === "input";
   const attributes = git(query.dir, ["cat-file", "-e", `${head}:.gitattributes`]).status === 0;
-  if (!converts && !attributes) return null;
-  const cause = converts
-    ? `core.autocrlf=${autocrlf}${attributes ? " and .gitattributes" : ""}`
-    : ".gitattributes";
+  if (!attributes) return null;
   return (
-    `${cause} may convert bytes between the working tree and the repository; ` +
-    `reviewed evidence records working-tree bytes while this report reads repository ` +
-    `bytes, so converted paths (CRLF, LFS pointers, encodings) can report drifted`
+    ".gitattributes may convert bytes between the working tree and the repository; " +
+    "reviewed evidence records working-tree bytes while this report reads repository " +
+    "bytes, so converted paths (LFS pointers, encodings) can report drifted"
   );
 }
 
@@ -1302,7 +1305,7 @@ function computeTrust(
     prefix === null ? [] : paths.filter((path) => path.startsWith(`${prefix}/`)).sort();
 
   // Does the record we read already contain this change's own record edits? If
-  // the pinned ref does not descend from head, the receipts predate the change.
+  // the pinned ref does not descend from head, its record is taken not to hold them.
   const recordIncludesChange =
     view.commit === null ||
     view.commit === head ||
@@ -1733,8 +1736,7 @@ anchor   Append SOURCE_COMMITTED enrichment events for commits that landed
          anchors, so anchoring is optional and never gates a report.`;
 
 /** Each verb accepts only its own flags: a flag the other verb owns is a usage
- *  error, never a silently ignored argument (`resolve --commit X` used to report
- *  HEAD while looking like it honoured X). */
+ *  error, never a silently ignored argument. */
 const RESOLVE_FLAGS = new Set([
   "diff",
   "commit",

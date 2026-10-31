@@ -61,9 +61,11 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  agentFileText,
   assertNoSymlinkInChainOrThrow,
+  toPosix,
   auditBlockField,
   auditShardName,
   documentExtractors,
@@ -1159,7 +1161,7 @@ export function resolveSpaceFlag(raw: string | undefined, projectDir: string): s
   // The FALLBACK is validated exactly like an explicit flag, not trusted raw:
   // every downstream path in this file is a plain `join()` off `space`. The
   // cursor itself already reads as "default" unless it names a space this
-  // project has (activeSpace in aidlc-lib.ts), so this keeps one rule for both.
+  // project has (activeSpace in aidlc-locks.ts), so this keeps one rule for both.
   const raw_ = raw === undefined;
   const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);
@@ -2172,6 +2174,44 @@ export const UNTRUSTED_TAGS_NOTICE =
  * FIRST line, ahead of any name it describes. A verb added later inherits both
  * by calling these instead of `process.stdout.write`.
  */
+/**
+ * What to say when the document the person named was copied in for them: what
+ * was copied, where it is now (once), how many files inside a named folder were
+ * left out because git ignores them, that the knowledge base reads the copy
+ * from here on, and, when their original is git-ignored, that this copy is not.
+ * Null when nothing was copied. Plain words: no record paths, no flags.
+ *
+ * It does NOT say to add the document again after editing the original: a
+ * second add copies the original beside the first (`vision-2.md`, or a new
+ * folder), which would leave two live rows for one document.
+ */
+export function onboardCopyNote(
+  projectDir: string,
+  copiedFrom: string | undefined,
+  target: string | undefined,
+  gitIgnored: string | undefined,
+  indexed: number,
+  leftOut = 0,
+): string | null {
+  if (copiedFrom === undefined || target === undefined) return null;
+  const name = basename(copiedFrom);
+  const where = toPosix(relative(projectDir, target));
+  const what = indexed === 1 ? "it" : `${indexed} documents`;
+  const theirs = indexed === 1 ? `your own ${name}` : "your own copies";
+  const skipped = leftOut > 0
+    ? ` ${leftOut} ${leftOut === 1 ? "file" : "files"} inside it ${leftOut === 1 ? "is" : "are"} kept out of ` +
+      `git, so ${leftOut === 1 ? "it was" : "they were"} not copied; name one directly to add it.`
+    : "";
+  const ignored = gitIgnored === "yes" || gitIgnored === "unknown"
+    ? ` Your ${name} is ${gitIgnored === "yes" ? "" : "likely "}kept out of git, but this copy is not, ` +
+      "so it will be committed unless you keep it out there too."
+    : "";
+  return `Copied ${name} into AI-DLC's documents as ${where} and added ${what}.` +
+    skipped +
+    ` The knowledge base reads that copy from now on, not ${theirs}.` +
+    ignored;
+}
+
 function emitJson(payload: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify({ path_notice: UNTRUSTED_PATH_NOTICE, ...payload })}\n`);
 }
@@ -4138,7 +4178,8 @@ function parseFlags(
     } else if (a === "--allow-inactive") {
       allowInactive = true;
     } else if (
-      a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags"
+      a === "--to" || a === "--text-file" || a === "--source-revision" || a === "--tags" ||
+      a === "--copied-from" || a === "--copied-ignored" || a === "--copied-left-out"
     ) {
       if (!allowedValueFlags.has(a)) throw new Error(`Unknown flag: ${a}`);
       if (values[a] !== undefined) throw new Error(`${a} may be specified only once`);
@@ -4170,7 +4211,12 @@ export function main(argv: string[]): void {
   try {
     switch (subcommand) {
       case "onboard": {
-        const { space: spaceFlag, intent, allowInactive, positional } = parseFlags(args.slice(1));
+        // `--copied-from`, `--copied-ignored` and `--copied-left-out` are set
+        // by the dispatcher when it copied a document the person named from
+        // elsewhere in the project (withNamedDocumentCopied in aidlc.ts). They
+        // say what happened; the indexing below is the same either way.
+        const { space: spaceFlag, intent, allowInactive, positional, values } =
+          parseFlags(args.slice(1), ["--copied-from", "--copied-ignored", "--copied-left-out"]);
         const pd = resolveProjectDir(projectDir);
         const space = resolveSpaceFlag(spaceFlag, pd);
         assertKnowledgeRootTrusted(pd, space);
@@ -4183,7 +4229,18 @@ export function main(argv: string[]): void {
         if (result.refused) {
           error(`Refused ${result.refused.path}: ${result.refused.reason}`);
         }
-        emitJson(result as unknown as Record<string, unknown>);
+        const note = onboardCopyNote(
+          pd,
+          values["--copied-from"],
+          positional[0],
+          values["--copied-ignored"],
+          result.indexed.length,
+          Number(values["--copied-left-out"] ?? 0),
+        );
+        emitJson({
+          ...(note === null ? {} : { onboard_note: note }),
+          ...(result as unknown as Record<string, unknown>),
+        });
         break;
       }
       case "list": {
@@ -4283,7 +4340,7 @@ export function main(argv: string[]): void {
           ? values["--tags"].split(",")
           : undefined;
         const out = summarizeDocument(
-          pd, space, positional[0], textBuf.toString("utf-8"), values["--source-revision"], tags,
+          pd, space, positional[0], agentFileText(textBuf), values["--source-revision"], tags,
         );
         if (json) emitJson(out as unknown as Record<string, unknown>);
         else {

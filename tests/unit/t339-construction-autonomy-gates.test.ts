@@ -18,6 +18,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   isAutonomousConstructionGate,
   readAllAuditShards,
@@ -79,8 +80,14 @@ function setup(
     { Stage: stage },
     project,
   );
-  appendAuditEntry("HUMAN_TURN", {}, project);
-  const grant = run("bolt", ["set-autonomy", "--mode", "autonomous"]);
+  // The person's "Continue automatically", the message the grant names.
+  const chose = saveMessage(project, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "Continue automatically",
+    picker: null, words: "Continue automatically", settings: [],
+    route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": chose.id }, project);
+  const grant = run("bolt", ["set-autonomy", "--mode", "autonomous", "--message", chose.id]);
   expect(grant.status, grant.output).toBe(0);
 }
 
@@ -152,7 +159,6 @@ describe("t339 on-demand autonomy preserves protected stage approvals", () => {
     const reportRefused = run("orchestrate", [
       "report", "--stage", "nfr-requirements", "--result", "approved",
     ]);
-    // The agent's next step, with the question still open.
     expect(JSON.parse(reportRefused.stdout).kind).toBe("print");
     expect(JSON.parse(reportRefused.stdout).message).toContain('The question for "nfr-requirements" is still open.');
     expect(reportRefused.output).toContain("names no choice");

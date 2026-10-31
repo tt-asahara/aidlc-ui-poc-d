@@ -5,9 +5,9 @@
 // Mirrors t01's pattern for the Kiro shell: the SHIPPED dist/kiro tree has
 // the right shape — core dirs present and populated, authored shell files
 // present, agent configs are valid JSON with the load-bearing fields the
-// design pinned (allowedCommands-only shell grant per findings 0.9b; no
-// subagent tool on delegation targets; chat.defaultAgent activation; hooks
-// registered through the adapter). Pure fs reads — no spawn, no LLM.
+// design pinned (allowedCommands-only shell grant; no subagent tool on
+// delegation targets; chat.defaultAgent activation; hooks registered through
+// the adapter). File reads plus a spawned doctor run; no LLM.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -22,6 +22,7 @@ import {
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -128,11 +129,11 @@ describe("t148 dist/kiro file structure", () => {
   });
 
   test("ships the method ('memory') tree at the workspace root aidlc/spaces/default/memory/", () => {
-    // The AIDLC method relocated OUT of the harness dir (the old .kiro/steering/
-    // rule layers) to the workspace root under aidlc/spaces/default/memory/ — one
-    // hand-editable source of truth, identical on every harness, read by Kiro via
-    // the agent JSON `resources` globs (file://aidlc/spaces/default/memory/**/*.md).
-    // It sits beside .kiro/, so resolve from KIRO, not K.
+    // The AIDLC method lives at the workspace root, aidlc/spaces/default/memory/:
+    // one hand-editable source of truth, identical on every harness, read by Kiro
+    // via the agent JSON `resources` globs of the engine's git-ignored copy of the
+    // active space (file://aidlc/active-memory/**/*.md). It sits beside .kiro/, so
+    // resolve from KIRO, not K.
     const mem = (...parts: string[]) =>
       join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
     for (const f of ["org.md", "team.md", "project.md"]) {
@@ -141,7 +142,7 @@ describe("t148 dist/kiro file structure", () => {
     for (const p of ["ideation", "inception", "construction", "operation"]) {
       expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
     }
-    // Steering now carries onboarding, not copies of the workspace method.
+    // Steering carries onboarding, not copies of the workspace method.
     expect(readdirSync(join(K, "steering"))).toEqual(["aidlc-onboarding.md"]);
   });
 
@@ -203,8 +204,8 @@ describe("t148 dist/kiro file structure", () => {
     expect(cmds.some((c) => c.includes(".kiro/tools/"))).toBe(true);
     // No `.kiro/tools/` grant may end in an open wildcard: Kiro matches the
     // whole command string, so a trailing `.*` after the directory swallows
-    // path traversal (`bun .kiro/tools/../../anything.ts` ran unprompted before
-    // 2.5.16). t252 asserts the resulting accept/reject behaviour in full.
+    // path traversal (`bun .kiro/tools/../../anything.ts`).
+    // t252 asserts the resulting accept/reject behaviour in full.
     for (const c of cmds) {
       if (!c.includes(".kiro/tools/")) continue;
       expect(c, `open wildcard after .kiro/tools/: ${c}`)
@@ -253,11 +254,15 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
       expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
+      // A side-by-side worker's own unit records in its worktree.
+      expect(fm, agent).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
       // Exactly the read-only version check; `bun test` and the rest still ask.
       expect(fm, agent).toContain(`        - "bun --version"`);
       expect(fm, agent).not.toContain(`        - "bun *"`);
       expect(fm, agent).not.toContain("disallowedTools:");
     }
+    // A delegate runs under the conductor's allow on Kiro's 3.0 engine and in Kiro IDE.
+    expect(frontmatter(join(ideAgents, "aidlc-aidlc.md"))).toContain(`        - ".aidlc/worktrees/*/aidlc/spaces/**"`);
   });
 
   test("the Kiro CLI composer may write only its grid proposal file", () => {
@@ -275,7 +280,7 @@ describe("t148 dist/kiro file structure", () => {
     const names = readdirSync(join(KI, "agents")).sort();
     expect(names.filter((name) => name.endsWith(".json"))).toEqual([]);
     expect(names.filter((name) => name.endsWith(".md")).length).toBe(15);
-    expect(names).toContain("aidlc.md");
+    expect(names).toContain("aidlc-aidlc.md");
     expect(names.filter((name) => name.endsWith("-agent.md")).length).toBe(14);
     // Kiro CLI's default v2 engine runs no .kiro/hooks at all, and no hook can
     // detect that from inside, so the project settings file is the only guard.
@@ -319,7 +324,8 @@ describe("t148 dist/kiro file structure", () => {
     // every dispatch path; the persona's own permissions bind only on the
     // invoke_sub_agent / orchestrate_subagent path the conductor selects. The
     // kiro-ide manifest injects both during projection; they must land on
-    // every delegation target there and must NOT leak into any other
+    // every delegation target there. The tools line also ships on the kiro
+    // row (t-kiro-cli-persona-tools); it must NOT leak into any other
     // harness's agents (on Claude a `tools:` frontmatter field would RESTRICT
     // the agent to non-Claude tool names, breaking it).
     const IDE_AGENTS = join(KI, "agents");
@@ -362,10 +368,10 @@ describe("t148 dist/kiro file structure", () => {
     // its own permissions (Kiro IDE accepts only invoke_sub_agent, Kiro CLI
     // only orchestrate_subagent), not the `subagent` category, whose
     // subagent_<name> dispatch ignores them.
-    expect(fmToolsOf(join(IDE_AGENTS, "aidlc.md"))).toBe(
+    expect(fmToolsOf(join(IDE_AGENTS, "aidlc-aidlc.md"))).toBe(
       `["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`,
     );
-    // Leak guard: the grant is IDE-native and must not ship anywhere else.
+    // Leak guard: the grant is Kiro-native and must not ship anywhere else.
     const nonIdeAgentTrees = HARNESS_MATRIX.filter(
       (harness) => !harness.capabilities.ideAgentTools,
     ).map((harness) => join(harness.engineRoot, "agents"));
@@ -374,6 +380,26 @@ describe("t148 dist/kiro file structure", () => {
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
         expect(fmToolsOf(join(tree, f))).toBeUndefined();
       }
+    }
+  });
+
+  test("a plugin's agent gets the dispatch lines a persona without a role of its own carries, in both channels", () => {
+    // Compose adds tools/data/plugin-agent.md's lines to every agent a plugin
+    // ships (#2892). The quality persona has no role-only verbs, so its lines
+    // (its agent file's frontmatter after the persona copy's) are a plugin
+    // agent's: the same tools, MCP opt-in, allows, asks and deny.
+    for (const { tree } of KIRO_IDE_CHANNELS) {
+      const kiroIde = join(REPO_ROOT, tree, "kiro-ide", ".kiro");
+      const persona = frontmatter(join(kiroIde, "agents", "aidlc-quality-agent.md"));
+      const copy = frontmatter(join(kiroIde, "aidlc-common", "personas", "aidlc-quality-agent.md"));
+      expect(persona.startsWith(`${copy}\n`), tree).toBe(true);
+      const template = readFileSync(join(kiroIde, "tools", "data", "plugin-agent.md"), "utf-8");
+      expect(template, tree).toBe(`---\n${persona.slice(copy.length + 1)}\n---\n`);
+      expect(template, tree).toContain("      effect: deny");
+      const kiro = join(REPO_ROOT, tree, "kiro", ".kiro");
+      expect(readFileSync(join(kiro, "tools", "data", "plugin-agent.md"), "utf-8"), tree).toBe(
+        `---\ntools: ["read", "write", "shell"]\nincludeMcpJson: true\n---\n`,
+      );
     }
   });
 
@@ -649,7 +675,7 @@ describe("t148 dist/kiro file structure", () => {
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       for (const allow of allows) {
-        expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+        expect(frontmatter(join(agents, "aidlc-aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
       }
       expect(readdirSync(agents), `${tree} agents`).toContain("aidlc-pipeline-deploy-agent.md");
       for (const file of readdirSync(agents).filter((name) => name.endsWith("-agent.md"))) {
@@ -686,7 +712,7 @@ describe("t148 dist/kiro file structure", () => {
     const cliConductor = readJson(
       join(REPO_ROOT, "harness", "kiro", "agents", "aidlc.json"),
     );
-    const markdown = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    const markdown = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n+/, "").trim();
     expect(typeof cliConductor.prompt).toBe("string");
     expect(body).toBe(cliConductor.prompt as string);
@@ -695,10 +721,13 @@ describe("t148 dist/kiro file structure", () => {
     expect(body).toContain(
       "when their whole message is one of those, treat it as `/aidlc` with nothing after it, and say nothing about it.",
     );
-    const fm = frontmatter(join(KI, "agents", "aidlc.md"));
+    const fm = frontmatter(join(KI, "agents", "aidlc-aidlc.md"));
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");
-    expect(fm).toContain("      effect: deny");
+    // The conductor refuses no command: a push or a recursive delete the
+    // person asks for gets Kiro's own card, where their Always allow decides
+    // (an AI-DLC ask takes Always allow off that card, measured on 1.2.37).
+    expect(fm).not.toContain("    - capability: shell\n      effect: deny");
     // Settings changes and the per-harness hook entry ask the person even
     // though the tool grant allows the rest (ask outranks allow in Kiro IDE).
     expect(fm).toContain(
@@ -713,6 +742,8 @@ describe("t148 dist/kiro file structure", () => {
     }
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+    // The request file a request after `next` goes through on Windows (next --request-file).
+    expect(fm).toContain(`        - "aidlc/.aidlc-request-text/**"`);
   });
 
   // Kiro's documented shell matching (kiro.dev/docs/permissions): a command
@@ -749,6 +780,23 @@ describe("t148 dist/kiro file structure", () => {
   const KIRO_IDE_CHANNELS = [
     { tree: "dist", invoke: "bun .kiro/tools/aidlc.ts" },
     { tree: "dist-release", invoke: "aidlc" },
+  ];
+  // A project's own commands as a build or a probe writes them, redirects and
+  // chains included (#2199): no AI-DLC rule matches them, so Kiro's own rules
+  // and the person's Always allow decide them. Only an AI-DLC command asks on
+  // a form that could stretch its allow to another command.
+  const PROJECT_COMMANDS = [
+    "pnpm build 2>&1",
+    "npm test -- --watch=false > /dev/null",
+    "(docker info >/dev/null 2>&1 && echo DOCKER_AVAILABLE) || echo DOCKER_UNAVAILABLE",
+    "echo $HOME",
+    "git log --oneline -3 | cat",
+    "cat README.md",
+    // A push and a recursive delete the person asks the agent for.
+    "git push",
+    "git push -u origin greet-by-name",
+    "cd web && git push",
+    "rm -rf scratch",
   ];
   // A command that would run, expand, or redirect more than the allowed one,
   // on POSIX shells and PowerShell, after each allowed prefix.
@@ -797,7 +845,7 @@ describe("t148 dist/kiro file structure", () => {
       const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
       expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
       expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
-      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
       // Ordinary engine commands, a quoted label included, run with no card.
       for (const command of [
         "bun --version",
@@ -868,6 +916,15 @@ describe("t148 dist/kiro file structure", () => {
       ]) {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("ask");
       }
+      for (const command of PROJECT_COMMANDS) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("none");
+      }
+      // An AI-DLC command that expands or redirects still asks; one that joins
+      // another command is judged part by part (above) and never runs as allowed.
+      for (const tail of ["> out.txt", "$(id)", "2>&1"]) {
+        expect(kiroShellEffect(fm, `${invoke} engine orchestrate next ${tail}`), `${tree} conductor: ${tail}`).toBe("ask");
+      }
+      expect(kiroShellEffect(fm, `${invoke} engine orchestrate next && echo x`), `${tree} conductor: && echo x`).not.toBe("allow");
       const prefixes = [`${invoke} engine log decision --stage s --decision`, `${invoke} engine now`];
       if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
       for (const prefix of prefixes) {
@@ -922,6 +979,9 @@ describe("t148 dist/kiro file structure", () => {
             expect(kiroShellEffect(fm, `${command} ${tail}`), `${tree} ${persona}: ${command} ${tail}`).toBe("deny");
           }
         }
+        for (const command of PROJECT_COMMANDS) {
+          expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).toBe("none");
+        }
       }
     }
   });
@@ -943,6 +1003,12 @@ describe("t148 dist/kiro file structure", () => {
       }
     }
     const agents: { path: string; rules: KiroRule[] }[] = [];
+    // The lines compose gives a plugin's agent are a built agent's rules too.
+    for (const path of agentDirs.map((dir) => join(dir, "..", "tools", "data", "plugin-agent.md"))) {
+      if (!existsSync(path)) continue;
+      const rules = (Bun.YAML.parse(frontmatter(path)) as { permissions?: { rules?: unknown } } | null)?.permissions?.rules;
+      if (Array.isArray(rules)) agents.push({ path, rules: rules as KiroRule[] });
+    }
     for (const dir of agentDirs.filter((candidate) => existsSync(candidate))) {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
@@ -1008,7 +1074,7 @@ describe("t148 dist/kiro file structure", () => {
     expect(checked).toBeGreaterThanOrEqual(30);
     // The forms the rules exist for still reach the person on the conductor.
     for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
-      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc-aidlc.md"));
       for (const command of [
         `${invoke} config flags --bypass AIDLC_SKIP_ARTIFACT_GUARD --local --yes`,
         `${invoke} engine config set depth minimal`,
@@ -1066,7 +1132,7 @@ describe("t148 dist/kiro file structure", () => {
     // so they must not send a Kiro IDE user to /aidlc while the chat is still on
     // Default.
     const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
-    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
+    expect(readme.split("\n").find((line) => line.startsWith("| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
       "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
     );
     expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");
@@ -1078,12 +1144,12 @@ describe("t148 dist/kiro file structure", () => {
       .find((line) => line.startsWith("| Kiro IDE |"));
     expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
     const gettingStarted = read("01-getting-started.md");
-    expect(gettingStarted).toContain("| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |");
-    expect(gettingStarted).toContain("| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |");
     const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
     for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");
-    const conductor = readFileSync(join(KI, "agents", "aidlc.md"), "utf-8");
+    const conductor = readFileSync(join(KI, "agents", "aidlc-aidlc.md"), "utf-8");
     expect(conductor).toContain("description: AI-DLC. Choose this agent in the agent picker");
   });
 
@@ -1100,7 +1166,7 @@ describe("t148 dist/kiro file structure", () => {
         return `${result.stdout ?? ""}${result.stderr ?? ""}`;
       };
       const ide = run(KIRO_IDE);
-      expect(ide).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(ide).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
       expect(ide).not.toContain("settings/cli.json present");
       const pin = 'settings/cli.json pins "chat.agentEngine": "v3" and "chat.defaultAgent": "aidlc"';
       expect(ide).toContain(`ok    ${pin}`);
@@ -1128,7 +1194,7 @@ describe("t148 dist/kiro file structure", () => {
       }
 
       const cli = run(KIRO);
-      expect(cli).toContain("ok    agents/aidlc.{json,md} present (conductor wiring)");
+      expect(cli).toContain("ok    agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)");
       expect(cli).toContain(
         "ok    settings/cli.json present (workspace default-agent activation)",
       );
@@ -1174,8 +1240,8 @@ describe("t148 dist/kiro file structure", () => {
       .map((h) => h.command)
       .sort();
     expect(subagentCommands).toEqual([
-      "bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules",
-      "bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard",
+      `bun .kiro/tools/aidlc.ts engine adapter kiro deliver-stage-rules${kiroManifest.hookCommandSuffix}`,
+      `bun .kiro/tools/aidlc.ts engine adapter kiro plan-approval-guard${kiroManifest.hookCommandSuffix}`,
     ]);
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);

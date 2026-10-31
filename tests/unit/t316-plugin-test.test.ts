@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -21,8 +22,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginBuildLockPath } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -38,12 +40,17 @@ const SOURCE_PLUGIN = join(REPO_ROOT, "plugins", "test-pro");
 const CLAUDE_INSTALL = join(REPO_ROOT, "dist", "claude");
 const KIRO_INSTALL = join(REPO_ROOT, "dist", "kiro");
 const OPENCODE_INSTALL = join(REPO_ROOT, "dist", "opencode");
+const CODEX_INSTALL = join(REPO_ROOT, "dist", "codex");
+const KIRO_IDE_INSTALL = join(REPO_ROOT, "dist", "kiro-ide");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t316-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const testTool = join(copiedTools, "aidlc-plugin-test.ts");
 // Only the compound compose cases use this backstop. Quiet Windows runs took
 // 5–6s for fixture copying, graph compilation and the idempotence compose pass.
 const COMPOSE_CASE_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
+// A 0500 folder refuses only a process its mode bits bind: Windows ignores
+// them for folders, and root ignores them everywhere.
+const FOLDER_MODES_BIND = process.platform !== "win32" && process.getuid?.() !== 0;
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -180,6 +187,108 @@ describe("t316 standalone plugin compose test", () => {
     expect(treeDigest(installRoot)).toBe(before);
   }, COMPOSE_CASE_TIMEOUT_MS);
 
+  // A plugin built outside this repository shows under its author's own name,
+  // so compose keys what it records by the plugin's own manifest, even with no
+  // plugin: field in its content to read the name from.
+  test("a plugin someone else builds composes and records under its own name", () => {
+    const root = join(scratch, "own-name");
+    const pluginRoot = join(root, "acme-standards");
+    const installRoot = join(root, "install");
+    mkdirSync(join(pluginRoot, ".aidlc-plugin"), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, ".aidlc-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "acme-standards",
+        version: "1.0.0",
+        description: "Fixture",
+        author: { name: "Fixture" },
+        dependencies: ["core"],
+        aidlc: { contributes: { tools: "tools/" } },
+      }, null, 2)}\n`,
+    );
+    mkdirSync(join(pluginRoot, "tools"), { recursive: true });
+    writeFileSync(join(pluginRoot, "tools", "acme-standards-tool.ts"), 'console.log("fixture");\n');
+    cpSync(CLAUDE_INSTALL, installRoot, { recursive: true });
+    const result = run([pluginRoot, "--install", installRoot, "--json"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as { composedFiles: string[] };
+    expect(json.composedFiles).toContain(".claude/tools/acme-standards-tool.ts");
+    expect(json.composedFiles).toContain(".claude/tools/data/plugin-owned-acme-standards.json");
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
+  // Codex keeps its skills in .agents/skills/ with no .codex/skills/; compose
+  // must write the plugin's runners there instead of recording an advisory
+  // drop that fails every plugin on this harness.
+  test("test-pro composes cleanly in a disposable Codex candidate", () => {
+    const { pluginRoot, installRoot } = copyFixture("codex-clean", CODEX_INSTALL);
+    const before = treeDigest(installRoot);
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--harness",
+      "codex",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      harness: string;
+      drops: unknown[];
+      composedFiles: string[];
+      graph: { presentStages: string[]; presentScopes: string[] };
+      idempotent: boolean;
+    };
+    expect(json.valid).toBe(true);
+    expect(json.harness).toBe("codex");
+    expect(json.drops).toEqual([]);
+    expect(json.idempotent).toBe(true);
+    expect(json.graph.presentStages).toContain("test-pro-integration");
+    expect(json.graph.presentScopes).toContain("test-pro-validation");
+    expect(json.composedFiles).toContain(".agents/skills/test-pro-integration/SKILL.md");
+    expect(json.composedFiles).toContain(".agents/skills/test-pro-validation/SKILL.md");
+    expect(treeDigest(installRoot)).toBe(before);
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
+  // Kiro IDE dispatches the installed persona Markdown, and core's personas
+  // carry an ask rule; a stage naming a core reviewer must compose there, and
+  // so must the stage that requires it (#2303).
+  test("a stage naming a core reviewer composes cleanly in a disposable Kiro IDE candidate", () => {
+    const { pluginRoot, installRoot } = copyFixture("kiro-ide-core-reviewer", KIRO_IDE_INSTALL);
+    const stagePath = join(pluginRoot, "stages", "construction", "test-pro-integration.md");
+    const stage = readFileSync(stagePath, "utf-8");
+    const reviewed = stage.replace(
+      /^mode: inline$/m,
+      "mode: inline\nreviewer: aidlc-architecture-reviewer-agent\nreview_artifact: test-pro-integration-test-plan",
+    );
+    expect(reviewed).not.toBe(stage);
+    writeFileSync(stagePath, reviewed);
+    const before = treeDigest(installRoot);
+    const result = run([
+      pluginRoot,
+      "--install",
+      installRoot,
+      "--harness",
+      "kiro-ide",
+      "--json",
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as {
+      valid: boolean;
+      harness: string;
+      drops: unknown[];
+      graph: { presentStages: string[] };
+      idempotent: boolean;
+    };
+    expect(json.valid).toBe(true);
+    expect(json.harness).toBe("kiro-ide");
+    expect(json.drops).toEqual([]);
+    expect(json.idempotent).toBe(true);
+    expect(json.graph.presentStages).toContain("test-pro-integration");
+    expect(json.graph.presentStages).toContain("test-pro-full-suite");
+    expect(treeDigest(installRoot)).toBe(before);
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
   test("a colliding stage is reported as a compose drop and exits 1", () => {
     const { pluginRoot, installRoot } = copyFixture("collision");
     const stage = join(
@@ -252,6 +361,35 @@ describe("t316 standalone plugin compose test", () => {
     );
     expect(json.composedFiles).toEqual([]);
     expect(treeDigest(installRoot)).toBe(before);
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("a lock folder this user cannot write fails TEST with the folder named and the TMPDIR fix", () => {
+    const { pluginRoot, installRoot } = copyFixture("unwritable-lock-folder");
+    const temp = join(scratch, "unwritable-lock-temp");
+    const lockFolder = join(temp, basename(dirname(pluginBuildLockPath(scratch))));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    const before = treeDigest(installRoot);
+    try {
+      const result = run(
+        [pluginRoot, "--install", installRoot, "--json"],
+        { TMPDIR: temp },
+      );
+      expect(result.status).toBe(1);
+      const json = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(json.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "test-compose",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(treeDigest(installRoot)).toBe(before);
+    } finally {
+      chmodSync(lockFolder, 0o700);
+    }
   });
 
   test("non-canonical contribution paths refuse TEST without touching the live install", () => {
@@ -366,6 +504,63 @@ describe("t316 standalone plugin compose test", () => {
     expect(result.stderr).toContain("install is ambiguous");
     expect(result.stderr).toContain("--harness <name>");
   });
+
+  // alpha builds on zeta: its stage leads with zeta's agent and orders after
+  // zeta's stage. --with composes the author's zeta checkout into the
+  // candidate first, so a bare install is enough.
+  test("--with <base-root> composes the base first, so a team plugin tests clean on a bare install", () => {
+    const root = join(scratch, "layered");
+    const create = (name: string): string => {
+      const pluginRoot = join(root, name);
+      const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), name, pluginRoot], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+      expect(created.status, created.stderr).toBe(0);
+      return pluginRoot;
+    };
+    const baseRoot = create("zeta");
+    const pluginRoot = create("alpha");
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest.dependencies = ["core", "zeta@^0.1.0"];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    const stagePath = join(pluginRoot, "stages", "construction", "alpha-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8")
+        .replace("lead_agent: alpha-example-agent", "lead_agent: zeta-example-agent")
+        .replace("requires_stage: []", "requires_stage:\n  - zeta-example-stage"),
+      "utf-8",
+    );
+    const installRoot = join(root, "install");
+    cpSync(CLAUDE_INSTALL, installRoot, { recursive: true });
+    const before = treeDigest(installRoot);
+
+    const withBase = run([pluginRoot, "--install", installRoot, "--with", baseRoot, "--json"]);
+    expect(withBase.status, withBase.stdout + withBase.stderr).toBe(0);
+    const json = JSON.parse(withBase.stdout) as {
+      warnings: Array<{ rule: string }>;
+      composedFiles: string[];
+      graph: { presentStages: string[] };
+    };
+    expect(json.warnings.map((finding) => finding.rule)).not.toContain("base-reference");
+    expect(json.graph.presentStages).toEqual(["alpha-example-stage"]);
+    expect(json.composedFiles).toContain(".claude/aidlc-common/stages/construction/alpha-example-stage.md");
+    expect(json.composedFiles).not.toContain(".claude/aidlc-common/stages/construction/zeta-example-stage.md");
+
+    // Without the base the reference is unchecked, and the bare install has no
+    // zeta agent, so the candidate's graph compile fails.
+    const without = run([pluginRoot, "--install", installRoot]);
+    expect(without.status).toBe(1);
+    expect(without.stderr).toContain("[test-compose-drop]: [degraded] aidlc-graph compile failed");
+    expect(without.stderr).toContain('WARNING stages/construction/alpha-example-stage.md [base-reference]');
+    expect(treeDigest(installRoot)).toBe(before);
+
+    const bare = run([pluginRoot, "--install", installRoot, "--with"]);
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toContain("--with requires a value");
+  }, COMPOSE_CASE_TIMEOUT_MS);
 
   test("--dist is reserved and usage errors exit 2", () => {
     const { pluginRoot, installRoot } = copyFixture("usage");

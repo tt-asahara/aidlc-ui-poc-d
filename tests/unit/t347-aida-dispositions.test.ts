@@ -108,7 +108,6 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     const loaded = ledgerWith(entry("F1", "P1", [A42]), entry("F2", "P1", [A43]), entry("F3", "P2", [A42]), entry("F4", "P1", [lineAnchor(PATH, "RIGHT", "gone")]), entry("F5", "P3", [A43]), entry("F6", "P1", [lineAnchor("core/other.ts", "RIGHT", "x")]));
     const presence = (anchor: { sha256: string }) => anchor.sha256 !== lineAnchor(PATH, "RIGHT", "gone").sha256;
     const dispositions = new Map<string, "resolved" | "still-open">([["F1", "resolved"], ["F2", "still-open"], ["F3", "resolved"], ["F5", "still-open"], ["F6", "resolved"]]);
-    // Incremental review that changed only core/other.ts since the last review.
     const result = reconcileLedger(loaded, [], HEAD, AT, presence, dispositions, new Set(["core/other.ts"]));
     // F1 (P1, code and file unchanged) is NOT closed on the judge's word: retained for a maintainer.
     // F3 (P2) follows the judge. F6 (P1) closes because its file changed since the review.
@@ -164,7 +163,8 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
     expect(folded.kept.map(item => `${item.ledgerId}:${item.title}`)).toEqual(["F1:the restatement"]);
     expect(folded.ledger.findings).toHaveLength(1);
     expect(folded.ledger.findings[0].anchors).toHaveLength(3);
-    // Effective priority orders the publication: a restated P3 raised to its ledger P1 precedes a new P2.
+    // Effective priority orders the publication: a restatement the judge re-rated P3 lowers its
+    // ledger P1 and follows a new P2.
     const raised = reconcileLedger(
       ledgerWith(entry("F1", "P1", [A42])),
       [
@@ -173,7 +173,8 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       ],
       HEAD, AT, () => true,
     );
-    expect(raised.kept.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P1:F1", "P2:F2"]);
+    expect(raised.kept.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P2:F2", "P3:F1"]);
+    expect(raised.ledger.findings.find(item => item.id === "F1")?.priority).toBe("P3");
   });
 
   test("end to end: a restatement under new wording keeps its id, a declared fix resolves, and the review says what happened", () => {
@@ -195,22 +196,22 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       expect(applied.review.ledger?.retained.map(item => item.id)).toEqual(["F1", "F3"]);
       const body = renderReview(applied.review, CONTEXT_ID).body;
       expect(body).toContain("**P1 [F2]: Restated as number 1**");
-      expect(body).toContain("1 open entry left undisposed by the judge (F3); the judge declared F1 corrected but the cited code and files are unchanged, so it stays retained until a maintainer accepts.");
+      expect(body).toContain("1 open entry left undisposed by the judge (F3); the judge declared F1 corrected but the cited code and files are unchanged, so it stays retained until a maintainer accepts or rejects it.");
       expect(body).toContain("**P1 [F1]: Finding F1** — first reported at");
       expect(body).toContain("**P1 [F3]: Finding F3** — first reported at");
       expect(body).not.toContain("[F4]");
 
-      // An open P1 restated as P2 keeps the ledger's P1 and the action follows the EFFECTIVE priority:
-      // the judge's merge becomes author/change instead of aborting validation.
+      // An open P1 restated as P2 drops to P2 (the judge re-rated it); the action still follows the
+      // EFFECTIVE state, so the retained P1s turn the judge's merge into author/change.
       const softened = applyLedgerToReview(
         parseStructuredReview(review([{ priority: "P2", line: 44 }], [{ id: "F2", disposition: "still-open", findingIndex: 0 }, { id: "F1", disposition: "still-open", findingIndex: null }, { id: "F3", disposition: "still-open", findingIndex: null }], { actor: "maintainer", action: "merge", rationale: "Only advisory work remains." }), BASE, HEAD, MANIFEST, METADATA),
         loaded, root, root, AT,
       );
-      expect(softened.review.findings.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P1:F2"]);
+      expect(softened.review.findings.map(item => `${item.priority}:${item.ledgerId}`)).toEqual(["P2:F2"]);
       expect(softened.review.decision.action).toBe("change");
-      expect(softened.review.decision.rationale).toBe("Re-derived from the ledger: 2 open blocking findings (F1, F3) were not restated this run and the cited code is unchanged; F2 keeps the ledger's blocking priority, so the author still needs to act. Judge's note, superseded by finding severity: Only advisory work remains.");
+      expect(softened.review.decision.rationale).toBe("Re-derived from the ledger: 2 open blocking findings (F1, F3) were not restated this run and the cited code is unchanged, so the author still needs to act. Judge's note, superseded by finding severity: Only advisory work remains.");
       expect(softened.review.ledger?.decisionAdjusted).toBe(true);
-      expect(renderReview(softened.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");
+      expect(renderReview(softened.review, CONTEXT_ID).event).toBe("COMMENT");
 
       // An untagged P1 that folds into an explicitly restated P2 raises the entry and the published
       // finding to P1, so the action is the author's, not the maintainer's.
@@ -224,7 +225,7 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       expect(foldedUp.review.findings[0].evidence).toEqual([{ source: "DIFF", path: PATH, line: 42, side: "RIGHT" }]);
       expect(foldedUp.ledger.findings[0]).toMatchObject({ id: "F1", priority: "P1", title: "Restated as number 1" });
       expect(foldedUp.review.decision.action).toBe("change");
-      expect(renderReview(foldedUp.review, CONTEXT_ID).event).toBe("REQUEST_CHANGES");
+      expect(renderReview(foldedUp.review, CONTEXT_ID).event).toBe("COMMENT");
 
       // In an incremental review whose change set includes F1's file, the same disposition resolves it.
       const incremental = parseStructuredReview(raw, BASE, HEAD, MANIFEST, METADATA, { mode: "incremental", since: OLD_HEAD, reason: "r", files: [{ path: PATH, added: [{ start: 44, end: 44 }], deleted: [], deletedFile: false }] });
@@ -249,7 +250,6 @@ describe("t347 AIDA judge dispositions of open ledger entries", () => {
       const advisory = ledgerWith(entry("F1", "P2", [A42]));
       const kept = applyLedgerToReview(parseStructuredReview(review([], [{ id: "F1", disposition: "still-open", findingIndex: null }]), BASE, HEAD, MANIFEST, METADATA), advisory, root, root, AT);
       expect(kept.review.ledger?.retained.map(item => item.id)).toEqual(["F1"]);
-      // Not blocking: the action is the maintainer's merge decision and no blocking event is raised.
       expect(kept.review.decision.action).toBe("merge");
       expect(kept.review.decision.rationale).toContain("No P0 or P1 finding survives, so the next action is the maintainer's merge decision");
       expect(renderReview(kept.review, CONTEXT_ID).event).toBe("COMMENT");

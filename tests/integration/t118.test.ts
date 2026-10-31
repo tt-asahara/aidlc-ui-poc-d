@@ -54,7 +54,7 @@
 //   WALK B gated approve (3): N1 stage==="feasibility" gate===true; STAGE_STARTED
 //     count===1 (no double-advance); N2 stage==="scope-definition".
 //   WALK C classify round-trip (3) — v0.6.0 Wave 2 milestone 9, per the engine
-//     design, .sh:235-260: the skeleton-stance classify round-trip across the report
+//     design (the .sh): the skeleton-stance classify round-trip across the report
 //     dispatcher's STANCE branch AND the next decision rule's gate computation:
 //     - .sh step 1 `stage|gate == functional-design|unresolved` -> N1
 //       stage==="functional-design" AND gate==="unresolved" (the STRING, not the
@@ -98,17 +98,17 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCHESTRATE = join(TOOLS, "aidlc-orchestrate.ts");
 const JUMP = join(TOOLS, "aidlc-jump.ts");
 
-// Clear leaked AWS_AIDLC_DEFAULT_SCOPE so scope resolves from the state file
-// (mirrors the .sh's reset_aidlc_env at line 54).
+// Clear leaked AWS_AIDLC_DEFAULT_SCOPE so scope resolves from the state file.
 resetAidlcEnv();
 
 const tempDirs: string[] = [];
@@ -118,7 +118,7 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
@@ -137,9 +137,9 @@ function run(
 }
 
 /** Fresh temp project seeded from a FIXTURES_DIR state fixture. Seeds the
- *  shipped method tree too: since the load-steering migration, `next` on a
- *  run-stage route FAILS CLOSED when a required rule file is missing, so a
- *  walk that reaches run-stage needs the memory tree the engine ships. */
+ *  shipped method tree too: `next` on a run-stage route FAILS CLOSED when a
+ *  required rule file is missing, so a walk that reaches run-stage needs the
+ *  memory tree the engine ships. */
 function projWithState(fixtureName: string): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -157,7 +157,7 @@ function nextDirective(p: string, args: string[] = []): any {
   return r.directive;
 }
 
-/** Fresh CLEAN temp project — an empty workspace, NO intent record (SP5a). P9:
+/** Fresh CLEAN temp project - an empty workspace, NO intent record (SP5a).
  *  createTestProject seeds a default record + cursor, so strip it; otherwise the
  *  engine resolves the seeded intent instead of naming intent-create. */
 function cleanProj(): string {
@@ -167,7 +167,7 @@ function cleanProj(): string {
   return p;
 }
 
-// P9 per-intent layout. seedStateFile writes the record's aidlc-state.md; the
+// Per-intent layout. seedStateFile writes the record's aidlc-state.md; the
 // audit lands in the record's per-clone shard dir (deterministic — the fixture
 // pins the clone-id). statePath is the record's state file; readAudit globs the
 // shard dir.
@@ -181,17 +181,11 @@ function readAudit(p: string): string {
     .join("\n");
 }
 
-// Parse the single directive JSON the engine emits on stdout (mirrors the .sh's
-// json_field python helper, but as a real JSON.parse of the whole object).
 // biome-ignore lint/suspicious/noExplicitAny: directives are a typed union; the test reads scalar fields
 function directive(r: CliResult): any {
   return JSON.parse(r.stdout.trim());
 }
 
-/**
- * Count audit blocks with `**Event**: <ev>` on a line by itself — mirrors the
- * .sh count_event helper `grep -c "\*\*Event\*\*: $2$"` (end-anchored).
- */
 // The one line a print step tells the agent to say to the person.
 function personLine(message: string): string {
   const said = /Tell the person in one line: "([\s\S]*?)"(?: |$)/.exec(message);
@@ -212,19 +206,13 @@ function eventCount(p: string, ev: string): number {
 
 describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated from t118-engine-differential.sh, plan 24)", () => {
   // A WITH-STATE jump is a MUTATION (mark intervening [S], emit STAGE_JUMPED,
-  // pivot Current Stage) the conductor commits, so `next --stage <fp>` emits a
-  // `print` naming `aidlc-jump.ts execute` carrying the resolved target +
-  // direction, NOT a run-stage (the v0.6.0 engine cutover; pre-cutover this
-  // emitted run-stage directly, producing ZERO state change — the regression
-  // t24/t25/t26/t56/t57 caught). The corpus still pins engine-vs-tool agreement
-  // on the resolved direction.
-  test("SP1: jump forward -> print naming execute(code-generation), resolve direction=forward", () => {
+  // pivot Current Stage) the person asked for, so `next --stage <fp>` runs
+  // `aidlc-jump.ts execute` with the resolved target + direction itself and
+  // returns the target's step. The corpus pins engine-vs-tool agreement on the
+  // resolved direction: resolve says forward, and the jump the engine made is
+  // the forward one.
+  test("SP1: jump forward -> the code-generation step, jumped forward as resolve says", () => {
     const p = projWithState("state-mid-ideation.md");
-    const out = directive(
-      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
-    );
-    expect(out.kind).toBe("print");
-    expect(out.message).toContain("execute --target code-generation --direction forward");
     const res = run(JUMP, [
       "resolve",
       "--stage",
@@ -236,17 +224,21 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     expect(JSON.parse(res.stdout.trim()).direction).toBe("forward");
+    const out = directive(
+      run(ORCHESTRATE, ["next", "--stage", "code-generation", "--project-dir", p]),
+    );
+    expect(out.kind).not.toBe("print");
+    expect(out.stage).toBe("code-generation");
+    expect(readAllAuditShards(p)).toContain("**Direction**: FORWARD");
   });
 
   // SP1-exec: a forward `aidlc-jump.ts execute` does NOT auto-terminate the
-  // workflow (issue #369: the test-run forward-jump terminal-stop branch was
-  // removed; a forward jump now ALWAYS lands Running). The deterministic guard
-  // the deleted t54-compaction-and-test-run.test.ts used to carry - its SDK twin
+  // workflow (issue #369: a forward jump ALWAYS lands Running). Its SDK twin
   // (t56/t26) is claude-gated and skips without the live CLI, so this is the only
   // non-live test that pins the always-Running invariant. Asserts all three
   // observables: the tool's stdout JSON workflow_stopped:false, the post-jump
   // state Status:Running, and the audit STAGE_STARTED-present / WORKFLOW_COMPLETED-
-  // absent pair (a re-introduced terminal branch would flip any one of these).
+  // absent pair (a terminal branch would flip any one of these).
   test("SP1-exec: forward execute lands Running (workflow_stopped:false, STAGE_STARTED, no WORKFLOW_COMPLETED)", () => {
     const p = projWithState("state-mid-ideation.md");
     const res = run(JUMP, [
@@ -262,13 +254,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     const jump = JSON.parse(res.stdout.trim());
-    // The jump committed and did NOT stop the workflow.
     expect(jump.workflow_stopped).toBe(false);
     // Post-jump state: the target is Active and Running, never Completed.
     const state = readFileSync(statePath(p), "utf-8");
     expect(state).toContain("- **Status**: Running");
     expect(state).toContain("- **Current Stage**: code-generation");
-    // Audit symmetry: the target emitted STAGE_STARTED; no terminal row.
     expect(eventCount(p, "STAGE_STARTED")).toBeGreaterThanOrEqual(1);
     expect(eventCount(p, "WORKFLOW_COMPLETED")).toBe(0);
   });
@@ -337,8 +327,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "report",
       "--result",
       "resumed",
-      "--user-input",
-      "Resume from last checkpoint",
+      "--choice",
+      "resume",
       "--project-dir",
       p,
     ]);
@@ -348,66 +338,31 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
-  test("SP4c: every resume-menu choice routes to its own move; garbage errors; state untouched", () => {
+  test("SP4c: a re-entry report with no --choice routes nothing: one print names the typed form; state untouched", () => {
     const p = projWithState("state-jumped.md");
     const before = readFileSync(statePath(p), "utf-8");
-    const report = (answer: string) =>
-      directive(run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "resumed",
-        "--user-input",
-        answer,
-        "--project-dir",
-        p,
-      ]));
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
 
-    const redo = report("Redo the current stage");
-    expect(redo.kind).toBe("print");
-    expect(redo.message).toContain("aidlc-jump.ts execute");
-    expect(redo.message).toContain("--direction redo");
-
-    const jump = report("Jump to a stage");
-    expect(jump.kind).toBe("print");
-    expect(jump.message).toContain("next --stage");
-    // A stage the person already named is never asked for again.
-    expect(jump.message).toContain("for the stage the person named");
-    expect(jump.message).not.toContain("Ask the human which stage to jump to");
-
-    const fresh = report("Start fresh");
-    expect(fresh.kind).toBe("print");
-    expect(fresh.message).toContain("--new-intent");
-
-    const garbage = report("something unrecognizable");
-    expect(garbage.kind).toBe("error");
-    expect(garbage.message).toContain("Unrecognized resume choice");
+    // The person's words, or menu numbers and labels, are never read
+    // here: the conductor reads them and reports the typed choice.
+    for (const words of [
+      "1", "2", "3", "4", "5",
+      "Resume from last checkpoint", "Redo the current stage", "Jump to a stage", "Start fresh",
+      "redo the current stage", "something unrecognizable",
+    ]) {
+      const d = report("--user-input", words);
+      expect(d.kind, words).toBe("print");
+      expect(d.message, words).toContain("--choice <resume|redo|jump|fresh>");
+      for (const routed of ["--direction redo", "next --stage", "--new-intent", "Re-run `next`", "Unrecognized"]) {
+        expect(d.message, words).not.toContain(routed);
+      }
+    }
+    const bare = report();
+    expect(bare.kind).toBe("print");
+    expect(bare.message).toContain("--choice <resume|redo|jump|fresh>");
 
     // Every round-trip above is read-only: report routes, the conductor acts.
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
-  });
-
-  test("SP4d: exact numbered resume-menu answers map to the four semantic choices", () => {
-    const p = projWithState("state-jumped.md");
-    const before = readFileSync(statePath(p), "utf-8");
-    const report = (answer: string) =>
-      directive(run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "resumed",
-        "--user-input",
-        answer,
-        "--project-dir",
-        p,
-      ]));
-
-    expect(report("1").message).toContain("Re-run `next`");
-    expect(report("2").message).toContain("--direction redo");
-    expect(report("3").message).toContain("next --stage");
-    expect(report("4").message).toContain("--new-intent");
-
-    const outOfRange = report("5");
-    expect(outOfRange.kind).toBe("error");
-    expect(outOfRange.message).toContain("Accepted choices: 1/resume");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
@@ -418,26 +373,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: feature; touch pwned"), "utf-8");
     // A saved scope that is not a scope name prints no command, as everywhere.
-    for (const extra of [["--choice", "redo"], ["--user-input", "2"]]) {
-      const r = run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]);
-      expect(r.status).not.toBe(0);
-      expect(r.stdout).toBe("");
-      expect(r.out).toContain("is not a scope name, so no command was printed");
-      expect(r.out).not.toContain("touch pwned");
-    }
+    const unsafe = run(ORCHESTRATE, ["report", "--result", "resumed", "--choice", "redo", "--project-dir", p]);
+    expect(unsafe.status).not.toBe(0);
+    expect(unsafe.stdout).toBe("");
+    expect(unsafe.out).toContain("is not a scope name, so no command was printed");
+    expect(unsafe.out).not.toContain("touch pwned");
     // A blank or unknown saved scope gets no redo command either, never a default plan.
     for (const saved of ["", "nosuchscope"]) {
       writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${saved}`), "utf-8");
-      for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
-        expect(r.kind, saved).toBe("error");
-        expect(r.message).toContain("cannot be redone from here");
-        expect(r.message).not.toContain("--direction redo");
-      }
+      const r = report("--choice", "redo");
+      expect(r.kind, saved).toBe("error");
+      expect(r.message).toContain("cannot be redone from here");
+      expect(r.message).not.toContain("--direction redo");
     }
     writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
     for (const r of [
       report("--choice", "redo"),
-      report("--user-input", "2"),
       report("--choice", "redo", "--unit", "beta"),
       report("--choice", "redo", "--every-unit"),
     ]) {
@@ -593,7 +544,6 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(forBeta.message).toContain("Run `next --stage requirements-analysis --unit beta`");
     const forEvery = report("--choice", "jump", "--target", "requirements-analysis", "--every-unit");
     expect(forEvery.message).toContain("Run `next --stage requirements-analysis --every-unit`");
-    // Redoing the step for a named Unit reopens that step for it.
     const redoBeta = report("--choice", "redo", "--unit", "beta");
     expect(redoBeta.kind).toBe("print");
     expect(redoBeta.message).toMatch(/Run `next --stage [a-z-]+ --unit beta`/);
@@ -627,6 +577,38 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(dropped.message, extra.join(" ")).toContain("go only with --result resumed");
     }
 
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
+  test("SP4i: a jump to an initialization stage gets the refusal `next --stage` gives, never 'Jump accepted' first", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    for (const stage of ["workspace-scaffold", "workspace-detection", "state-init"]) {
+      const refused = nextDirective(p, ["--stage", stage]);
+      expect(refused.message, stage).toContain("Cannot jump to initialization stages");
+      // A redo of an initialization stage that ran is the jump back to it.
+      for (const choice of ["jump", "redo"]) {
+        expect(report("--choice", choice, "--target", stage), `${choice} ${stage}`).toEqual(refused);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
+  test("SP4j: a jump back to a stage the plan skips gets the question `next --stage` asks, never 'Jump accepted' first", () => {
+    // A bugfix plan at Requirements Analysis: it leaves out Intent Capture,
+    // behind the current stage, and User Stories, ahead of it.
+    const p = projWithState("state-mid-inception.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    const asked = nextDirective(p, ["--stage", "intent-capture"]);
+    expect(personLine(asked.message)).toContain("Do you want me to run it on its own now");
+    expect(report("--choice", "jump", "--target", "intent-capture")).toEqual(asked);
+    // A skipped stage ahead goes back on the plan through `next --stage`, so that jump is accepted.
+    expect(report("--choice", "jump", "--target", "user-stories").message)
+      .toContain("Jump accepted. Run `next --stage user-stories`");
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
@@ -665,12 +647,105 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_REVISING")).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("SP4h: a re-entry request that keeps the gate's --stage is carried out, never an error that ends the turn", () => {
+    const p = projWithState("state-mid-ideation.md");
+    run(ORCHESTRATE, [
+      "report", "--stage", "feasibility", "--result", "awaiting-approval", "--project-dir", p,
+    ]);
+    const atGate = readFileSync(statePath(p), "utf-8");
+    expect(atGate).toContain("- [?] feasibility");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+
+    // The agent keeps the --stage of its gate reports: the redo of the stage
+    // the work is on is that redo.
+    const redo = report("--stage", "feasibility", "--choice", "redo");
+    expect(redo.kind).toBe("print");
+    expect(redo.message).toContain('Redo accepted at "feasibility"');
+    expect(redo.message).toContain("execute --target feasibility --direction redo");
+    expect(redo.message).toBe(report("--choice", "redo").message);
+    expect(redo.message).toBe(report("--choice", "redo", "--target", "feasibility").message);
+
+    // Where the stage cannot pick the move, the report is the one without it.
+    for (const extra of [
+      ["--choice", "resume"],
+      ["--choice", "fresh"],
+      ["--choice", "jump", "--target", "market-research"],
+    ]) {
+      const kept = report("--stage", "feasibility", ...extra);
+      expect(kept.kind, extra.join(" ")).toBe("print");
+      expect(kept.message, extra.join(" ")).toBe(report(...extra).message);
+    }
+    expect(report("--stage", "scope-definition", "--choice", "redo", "--target", "feasibility").message)
+      .toBe(redo.message);
+    expect(report("--stage", "feasibility").message).toBe(report().message);
+    const unknown = report("--stage", "feasibility", "--choice", "sideways");
+    expect(unknown.kind).toBe("error");
+    expect(unknown.message).toContain('Unknown --choice "sideways"');
+
+    // Anywhere the stage would pick a move (a jump with no --target, a redo of
+    // another stage), the agent names the stage with --target: nothing moves,
+    // nothing is asked of the person.
+    for (const extra of [
+      ["--stage", "feasibility", "--choice", "jump"],
+      ["--stage", "market-research", "--choice", "redo"],
+      ["--stage", "scope-definition", "--choice", "redo"],
+      ["--stage", "no-such-stage", "--choice", "redo"],
+    ]) {
+      const named = report(...extra);
+      expect(named.kind, extra.join(" ")).toBe("print");
+      expect(named.message, extra.join(" ")).toContain("--target <stage>");
+      for (const moved of [
+        "--direction redo", "next --stage", "Redo accepted", "Ask the person", "Run nothing", "Tell the person",
+        "has not run yet",
+      ]) {
+        expect(named.message, extra.join(" ")).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(p), "utf-8")).toBe(atGate);
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    // Unit by Unit, the step the Unit is on is the stage the work is on: the
+    // kept --stage redoes that step, as --target names it, where a bare redo
+    // with no Unit work yet resets the block's first stage.
+    const u = projWithState("state-jumped.md");
+    writeFileSync(
+      statePath(u),
+      readFileSync(statePath(u), "utf-8")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
+      "utf-8",
+    );
+    const unitReport = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", u]));
+    const forTheStep = unitReport("--stage", "code-generation", "--choice", "redo");
+    expect(forTheStep.kind).toBe("print");
+    expect(forTheStep.message).toContain('Redo accepted at "code-generation"');
+    expect(forTheStep.message).not.toContain("functional-design");
+    expect(forTheStep.message).toBe(unitReport("--choice", "redo", "--target", "code-generation").message);
+    // A redo for named Units, or for every Unit, reopens the step the Unit is
+    // on: the kept --stage of that step is the same redo, and one naming the
+    // block's first stage moves nothing until the agent names it with --target.
+    const unitsBefore = readFileSync(statePath(u), "utf-8");
+    for (const units of [["--unit", "beta"], ["--every-unit"]]) {
+      const label = units.join(" ");
+      expect(unitReport("--stage", "code-generation", "--choice", "redo", ...units).message, label)
+        .toBe(unitReport("--choice", "redo", ...units).message);
+      const first = unitReport("--stage", "functional-design", "--choice", "redo", ...units);
+      expect(first.kind, label).toBe("print");
+      expect(first.message, label).toContain("--target <the stage they named>");
+      for (const moved of ["next --stage", "Redo accepted", "reopen"]) {
+        expect(first.message, label).not.toContain(moved);
+      }
+    }
+    expect(readFileSync(statePath(u), "utf-8")).toBe(unitsBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("SP4g: \"take me back to X and stop there\" makes the move, then parks instead of carrying on", () => {
     const p = projWithState("state-jumped.md");
     const report = (...extra: string[]) =>
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     const stopAsked = "The person also asked to stop there for now: make the move";
-    const parkInstead = " park` in place of that `next` and act on its `parked` directive.";
+    const parkInstead = " park --person-asked` in place of that `next` and act on its `parked` directive.";
     // Every move a re-entry request names keeps the stop the person asked for,
     // and without --park the conductor still checks their words for one.
     for (const extra of [
@@ -686,7 +761,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(stopped.message, extra.join(" ")).toContain(stopAsked);
       expect(stopped.message, extra.join(" ")).toContain(parkInstead);
       // The engine's own park, which every tool runs without asking.
-      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park` in place of that `next`/);
+      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park --person-asked` in place of that `next`/);
       const plain = report(...extra);
       expect(plain.message, extra.join(" ")).not.toContain(stopAsked);
       expect(plain.message, extra.join(" ")).toContain("If the person also asked to stop there for now, make the move");
@@ -713,18 +788,21 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
-  // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
+  // Special path 5: CREATE - (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
   // over existing state is a resume/scope-change, NOT a creation.
   // ============================================================
-  test("SP5a: named scope (clean) -> print naming intent-create, next creates NO state (read-only)", () => {
+  test("SP5a: named scope (clean) with a description -> print naming intent-create, next creates NO state (read-only)", () => {
     const p = cleanProj();
+    // Named alone, the scope first asks what the work is for (#2355).
     const r = run(ORCHESTRATE, [
       "next",
       "--scope",
       "poc",
       "--project-dir",
       p,
+      "--",
+      "prove the importer reads the old files",
     ]);
     expect(directive(r).kind).toBe("print");
     expect(directive(r).message).toContain("intent create");
@@ -732,25 +810,30 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(existsSync(statePath(p))).toBe(false);
   });
 
-  test("SP5a positional scope + description -> creation preserves the request and does not ask", () => {
+  test("SP5a positional scope + loose words -> both readings, nothing created, nothing asked", () => {
+    // A plan's name at the start of their own sentence is ambiguous with their
+    // first word, so the engine takes nothing from the line and names both
+    // readings (t-three-ways-to-read-a-line): their words are kept whole, no
+    // question is stored, and no state is written.
     const p = cleanProj();
     const r = run(ORCHESTRATE, [
+      // Ahead of their words, as every caller builds it.
       "next",
+      "--project-dir",
+      p,
       "bugfix",
       "Fix",
       "duplicate",
       "todo",
       "persistence",
-      "--project-dir",
-      p,
     ]);
     const d = directive(r);
     expect(d.kind).toBe("print");
-    expect(d.message).toContain("intent create --scope bugfix");
-    const id = String(d.message).match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-    expect(id).toMatch(/^[0-9a-f]{8}$/);
-    const stored = JSON.parse(readFileSync(join(p, "aidlc", ".aidlc-sessions", "questions", `${id}.json`), "utf-8"));
-    expect(stored.text).toBe("Fix duplicate todo persistence");
+    expect(d.message).not.toContain("intent create --scope bugfix");
+    expect(d.message).toContain("--scope bugfix -- 'Fix duplicate todo persistence'");
+    expect(d.message).toContain("'bugfix Fix duplicate todo persistence'");
+    expect(String(d.message)).not.toMatch(/--request [0-9a-f]{8}/);
+    expect(existsSync(join(p, "aidlc", ".aidlc-sessions", "questions"))).toBe(false);
     expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });
@@ -774,9 +857,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
 
   // ============================================================
   // Special path 7: NORMAL GATE - report drives aidlc-state.ts approve through
-  // the report dispatcher; the gate closes (kind==="done"). The --test-run
-  // round-trip that used to sit here was removed with the test-run mechanism
-  // (#369); this control proves the normal gate path is observable, not a no-op.
+  // the report dispatcher; the gate closes (kind==="done"). This control proves
+  // the normal gate path is observable, not a no-op.
   // ============================================================
   test("SP7-control: report --result approved --user-input -> done", () => {
     const p = projWithState("state-mid-ideation.md");
@@ -807,11 +889,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const p = projWithState("state-mid-ideation.md");
     const guardedEnv = { ...process.env };
     delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    if (revisions > 0) {
-      writeFileSync(
-        statePath(p),
-        readFileSync(statePath(p), "utf-8").replace("- **Revision Count**: 0", `- **Revision Count**: ${revisions}`),
-      );
+    // Earlier change requests at this stage's gate, as the reject path records them.
+    for (let i = 0; i < revisions; i++) {
+      appendAuditEntry("GATE_REJECTED", { Stage: "feasibility", Feedback: `change ${i + 1}` }, p);
     }
     run(ORCHESTRATE, [
       "report",
@@ -836,7 +916,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(invalid.message).toContain("names no choice");
     // Their reply is on record: the agent reports the choice it read, and the
     // person is not asked again.
-    expect(invalid.message).toContain("The person has replied since the gate was shown");
+    expect(invalid.message).toContain("The person has replied since the last decision");
     expect(invalid.message).toContain("without asking them again");
     expect(invalid.message).not.toContain("show the gate");
     expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
@@ -861,12 +941,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "GATE_REJECTED")).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-escape: Accept as-is is recorded only once it is on offer, after three revision cycles", () => {
-    const early = heldGate();
-    expect(report(early.p, early.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    expect(readAudit(early.p)).toContain("**User Input**: Approve\n");
-    expect(readAudit(early.p)).not.toContain("**User Input**: Accept as-is");
-
+  // The agent offers Accept as-is after three revision cycles and reports the
+  // person's pick; the record keeps the choice as the agent passed it.
+  test("SP7-escape: Accept as-is is recorded as the agent reports it, after three revision cycles", () => {
     const offered = heldGate(3);
     expect(report(offered.p, offered.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
     expect(readAudit(offered.p)).toContain("**User Input**: Accept as-is\n");
@@ -939,8 +1016,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // SAME stage with the now-DETERMINED gate (true). This is the THIRD component
   // walk: it exercises the report dispatcher's STANCE branch (records state
   // without committing a transition) AND the next decision rule's gate
-  // computation reading that recorded stance. (v0.6.0 Wave 2 milestone 9; per the
-  // engine design; .sh:235-260.)
+  // computation reading that recorded stance.
   test("WALK C (classify): next gate:unresolved -> report --skeleton-stance on (print, no transition) -> next gate:true", () => {
     const p = projWithState("state-construction-bolt1.md");
     // Step 1: the next decision rule defers the skeleton gate -> gate is the
@@ -949,9 +1025,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(n1.stage).toBe("functional-design");
     expect(n1.gate).toBe("unresolved");
     // Step 2: the report dispatcher's STANCE branch records the typed stance and
-    // commits NO transition — a `print` (not done/advance). STRONGER than the
-    // .sh's `kind == print`: also pin the recorded-stance message so the branch
-    // is proven to be the stance-record path, not a generic print.
+    // commits NO transition - a `print` (not done/advance). Also pin the
+    // recorded-stance message so the branch is proven to be the stance-record
+    // path, not a generic print.
     const r = run(ORCHESTRATE, [
       "report",
       "--skeleton-stance",

@@ -37,7 +37,9 @@ import {
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
 import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hookGroupMembers } from "../../core/tools/aidlc-command.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import kiroManifest from "../../harness/kiro/manifest.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -536,12 +538,20 @@ function scratchProject(): string {
     "aidlc-lib.ts",
     "aidlc-artifact-vocabulary.ts",
     "aidlc-settings.ts",
+    "aidlc-markdown.ts",
+    "aidlc-locks.ts",
+    "aidlc-review-records.ts",
+    "aidlc-learned-date.ts",
     "aidlc-install-paths.ts",
     "aidlc-distribution.ts",
     "aidlc-channel.ts",
     "aidlc-version.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
+    "aidlc-lock-line.ts",
+    "aidlc-review-manifest.ts",
+    "aidlc-command.ts",
+    "aidlc-color.ts",
     "aidlc-guard-fences.ts",
     "aidlc-guard-switch.ts",
     "aidlc-guard-operation.ts",
@@ -1019,7 +1029,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
 // ---------------------------------------------------------------------------
 
 describe("t221 (c) harness registration and protocol prose", () => {
-  test("Claude settings.json wires the hook on PreToolUse with the file/search/shell matcher", () => {
+  test("Claude settings.json wires the hook inside the one PreToolUse guard group", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "claude-settings",
     );
@@ -1029,15 +1039,25 @@ describe("t221 (c) harness registration and protocol prose", () => {
         hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
       };
       const groups = s.hooks?.PreToolUse ?? [];
+      // One process runs the PreToolUse checks (#2066): the read bound is a
+      // member of the guard group, and keeps the matcher its own row had.
       const group = groups.find((g) =>
         (g.hooks ?? []).some(
           (h) => h.command ===
-            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook reviewer-scope`,
+            `bun "$CLAUDE_PROJECT_DIR/${harness.manifest.harnessDir}/tools/aidlc.ts" engine hook guard-tool-call`,
         ),
       );
       expect(group, harness.name).toBeDefined();
-      expect(group?.matcher).toBe(
-        "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
+      expect(
+        groups.some((g) =>
+          (g.hooks ?? []).some((h) => h.command?.endsWith(" engine hook reviewer-scope"))
+        ),
+        harness.name,
+      ).toBe(false);
+      const member = (hookGroupMembers("guard-tool-call") ?? [])
+        .find((entry) => entry.hook === "reviewer-scope");
+      expect(member?.matcher, harness.name).toBe(
+        "^(?:Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash)$",
       );
     }
   });
@@ -1063,7 +1083,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
           // The registration passes its own agent name so the adapter forwards
           // a real identity instead of a bare scoped_registration.
           expect(e.command).toBe(
-            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}`,
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter kiro reviewer-scope ${agent}${kiroManifest.hookCommandSuffix}`,
           );
         }
         expect(
@@ -1124,7 +1144,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
+  test("Codex hooks.json wires the reviewer-scope bound through the one matcher-free guard-tool-call group", () => {
     const harnesses = HARNESS_MATRIX.filter(
       (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",
     );
@@ -1132,16 +1152,22 @@ describe("t221 (c) harness registration and protocol prose", () => {
     for (const harness of harnesses) {
       const wiring = JSON.parse(
         readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
-      ) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
+      ) as { hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>> };
       const pre = wiring.hooks.PreToolUse ?? [];
-      expect(
-        pre.some((g) =>
-          g.hooks.some(
-            (h) => h.command ===
-              `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex reviewer-scope`,
-          ),
+      // One process runs the five PreToolUse checks (#2066); the adapter's
+      // reviewer-scope case is a member of that group, not its own handler.
+      const group = pre.filter((g) =>
+        g.hooks.some(
+          (h) => h.command ===
+            `bun ${harness.manifest.harnessDir}/tools/aidlc.ts engine adapter codex guard-tool-call`,
         ),
-      ).toBe(true);
+      );
+      expect(group, harness.name).toHaveLength(1);
+      expect(group[0]?.matcher, harness.name).toBeUndefined();
+      expect(
+        pre.some((g) => g.hooks.some((h) => h.command.endsWith(" adapter codex reviewer-scope"))),
+        harness.name,
+      ).toBe(false);
     }
   });
 
@@ -1174,13 +1200,14 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("reviewer protocol module carries the dispatch-record write and delete", () => {
+  test("reviewer protocol module carries the dispatch-record write, and leaves the delete to the engine", () => {
+    // The dispatch record is per Unit, so it is in the per-Unit review module.
     const body = readFileSync(
       join(
         AIDLC_SRC,
         "aidlc-common",
         "protocols",
-        "stage-protocol-reviewer.md",
+        "stage-protocol-reviewer-unit.md",
       ),
       "utf-8",
     );
@@ -1192,8 +1219,11 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/append its path to `exempt`/);
     expect(body).toContain("On a harness without reviewer-scope enforcement");
     expect(body).toContain("do not write the record");
-    // Step 3: the delete on verdict read.
-    expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/s);
+    // Step 3: the engine removes the record as it records the verdict
+    // (aidlc-log.ts review --verdict); the agent is never told to delete it,
+    // so no `rm` and no permission card follows a review.
+    expect(body).toMatch(/the engine removes it when the verdict is recorded at step 3; never delete it yourself/);
+    expect(body).not.toMatch(/delete `<record>\/\.aidlc-engine\/reviewer-dispatch\.json`/);
   });
 
   test("harnesses with reviewer-scope enforcement point at the shared module", () => {

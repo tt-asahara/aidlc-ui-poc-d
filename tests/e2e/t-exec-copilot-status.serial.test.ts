@@ -7,10 +7,6 @@
 // analogue of codex's exec driver (no tmux; the model's final message + the
 // project's on-disk state are the observables).
 //
-// LIVE-PROVEN (2026-07-25, @github/copilot 1.0.74 over Bedrock BYOK): the
-// compat-spike rig ran skill discovery, hook wiring (PascalCase events →
-// snake_case payloads), PreToolUse deny, Stop block, and subagent delegation
-// on this exact surface; the private capture path is intentionally not shipped.
 // This test pins the cheap status journey so CI can re-verify the shipped
 // tree end-to-end without burning a whole workflow.
 //
@@ -28,8 +24,8 @@
 // on PATH (or AIDLC_COPILOT_BIN) + a model provider: either GitHub auth or
 // BYOK env vars (COPILOT_PROVIDER_BASE_URL etc. — pass through verbatim).
 // Skips cleanly otherwise. NOTE: hooks are deliberately NOT exercised here
-// (they need trustedFolders + GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 and a
-// mutation journey); the unit adapter test (t249) covers the hook contract.
+// (they need trustedFolders and a mutation journey); the unit adapter test
+// (t249) covers the hook contract.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
@@ -103,8 +99,6 @@ describe("t-exec-copilot-status — /aidlc --status on the shipped dist/copilot 
         rc: 0,
         tail: "",
       });
-      // The engine's no-workflow status text, surfaced verbatim by the
-      // print-directive terminal arm.
       expect(r.out.toLowerCase()).toContain("no active");
       // Read-only: the status path must not scaffold a workflow. The shipped
       // aidlc/ workspace shell (spaces/default/memory) is part of the

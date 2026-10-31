@@ -70,9 +70,10 @@ The human can also open `<record>/verification-command.txt`. The canonical
 command is a nonblank single line of at most 1024 characters. Control characters
 and display-spoofing characters (Unicode format characters, including zero-width
 and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-The human's **Approve** / **Request Changes** reply in that session binds
-the answer to the pending command. Only **Approve** authorizes the receipt;
-an unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply binds the answer to the
+pending command, in the chat that asked or in a new one while it is the newest
+question asked. Only **Approve** authorizes the receipt; an unrelated reply,
+**Request Changes**, or a reply to another question does not.
 Never write `--details "Approve"` unless the human chose it; only then run
 `state set-construction-verification-command --command-file verification-command.txt` to write the matching Runtime
 State field. A human may defer when no runnable
@@ -105,11 +106,14 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
-When it carries `rereview`, the Unit's code or documents changed since their review: run that
-request at once, without asking, then verify and ask the one approval question.
-Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
-`rereview`, a change to the Unit's code or documents is accepted with one line,
-and the Unit's approval stands. The same holds with reviews off: the line comes
+When it carries `rereview`, run that review request at once, without asking,
+then verify and ask the one approval question. `rereview` names one of three
+cases: the Unit's code or documents changed since a finished review; the Unit's
+own review has not finished (`unfinished`: no verdict yet, or NOT-READY with a
+pass left); or it was never asked for in this run of the Unit's work (`first`).
+Only Guard Policy `strict` re-checks a change after a finished review: under
+`relaxed` and `off` that change is accepted with one line and the Unit's
+approval stands, while an unfinished or never-asked review is still named. The same holds with reviews off: the line comes
 from the next checkpoint's `verify` or the Construction stage's own check, or,
 for a change made between the approval question and the person's answer, from
 their `approve`.
@@ -125,8 +129,12 @@ Only after `verify` reports `verified: true` and the current checkpoint has
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
 `aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
-Then present **Approve** / **Request Changes** and wait. The human's exact reply
-to this checkpoint question authorizes the matching action, in that chat or a
+When the Unit `ask` returns `earlier_reply`, the person already answered in
+this chat while the Unit's review ran: do not show the question, and run
+`approve` or `reject` as their words chose; when their words answer nothing,
+show the question and wait. Otherwise present **Approve** / **Request
+Changes** and wait. The human's reply
+to this checkpoint question authorizes the action the conductor reads from it, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked
 and still open. An unrelated reply, the agent's own words, or a reply to a
@@ -166,8 +174,8 @@ proof file cannot verify a Unit. On a checkout with no proof file at all (a
 fresh clone, another machine), that receipt stands in for the proof of a Unit
 already approved whose evidence is unchanged, so nothing runs again.
 
-Code Generation's Plan Approval remains a human stop before generation for every
-Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
+While `plan_approval` is on, Code Generation's Plan Approval remains a human
+stop before generation for every Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
 but still records individual receipts. Pre-generation summary confirmation is
 required only when `directive.ceremony.summary_confirmation === "on"`. See
 [Construction commands](../../guide/12-cli-commands.md#construction-order-and-execution)
@@ -238,7 +246,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
+`stage-protocol-wave.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** Follow the exact dependency-ready Units emitted by the
 engine. Explicit stage-major/swarm execution can dispatch eligible Code
@@ -291,8 +299,8 @@ post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engin
 regardless of autonomy mode. Options are retry (re-run just the failed
 Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` §§ "Unit and skeleton checkpoints" and
-"Halt-and-ask on failure" for the canonical procedures.
+artifacts. See `stage-protocol-checkpoint.md` and `stage-protocol-construction.md`
+§ "Halt-and-ask on failure" for the canonical procedures.
 The ordinary failure-prompt Abort pauses Construction with the worktree
 preserved. A stale-review recovery abort explicitly carrying `--discard` instead
 parks tracked and non-ignored untracked files and reviewed source refs, then
@@ -349,8 +357,8 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
-| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, CONDITIONAL: frontend-components.md |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
+| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
 
@@ -362,13 +370,14 @@ feasibility input.
 
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
-1. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and domain design artifacts.
+1. **Read Unit Context** -- Read the unit definition, assigned stories and
+   their acceptance criteria, requirements, and domain design artifacts.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -422,6 +431,11 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+
+Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
+rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
+Unit gets none of them.
 
 ### Approval Gate
 
@@ -453,7 +467,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, observability-requirements.md, tech-stack-decisions.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -531,6 +545,11 @@ providing testability and measurability input.
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
 | observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
+| traceability.json            | Every inception `NFR{n}` (when User Stories did not run and the story map gives the Unit NFR rows, those) mapped to its `NFRx.y` IDs, or `N/A` with the reason it does not apply |
+
+Which files a Unit gets follows its kind: scalability, reliability and
+observability requirements are for `service` Units, and performance for
+`service` and `ui` Units.
 
 ### Approval Gate
 
@@ -538,9 +557,9 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Granularity Expansion
 
-This stage produces **6 artifact files**, expanded from the upstream reference
-which defines only 2 files for NFR Requirements. This is a deliberate deviation
-documented in SKILL.md ("Deliberate Deviations from Reference"). The finer
+This stage produces **6 Markdown artifacts** plus `traceability.json`,
+expanded from the upstream reference which defines only 2 files for NFR
+Requirements. The finer
 granularity improves traceability and allows per-concern review without
 overloading a single document. The six files separate performance, security,
 scalability, reliability, and observability into dedicated artifacts, and add
@@ -563,7 +582,7 @@ a dedicated tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, observability-design.md, logical-components.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -657,6 +676,10 @@ infrastructure and platform input.
 | reliability-design.md  | Resilience patterns, circuit breakers, retry policies, failover procedures      |
 | observability-design.md | Metrics, structured logs, tracing, alerts, dashboards, SLI/SLO definitions      |
 | logical-components.md  | Component inventory, service boundaries, failure domains, blast radius mapping  |
+| traceability.json      | Every `NFRx.y` from the Unit's NFR requirements mapped to its design solution   |
+
+Which files a Unit gets follows its kind, as in NFR Requirements; `spec` and
+`packaging` Units get no logical-components.md.
 
 ### Approval Gate
 
@@ -664,10 +687,9 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- NFR Design Granularity
 
-This stage produces **6 artifact files** (5 NFR-specific designs plus
-logical-components.md), expanded from the upstream reference which defines only
-2 files for NFR Design. This is a deliberate deviation documented in SKILL.md
-("Deliberate Deviations from Reference"). The logical-components.md artifact
+This stage produces **6 Markdown artifacts** (5 NFR-specific designs plus
+logical-components.md) and `traceability.json`, expanded from the upstream
+reference which defines only 2 files for NFR Design. The logical-components.md artifact
 serves as a bridge between NFR design and Infrastructure Design (Stage 3.4)
 by mapping where NFR patterns apply at the component level.
 
@@ -688,7 +710,7 @@ by mapping where NFR patterns apply at the component level.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
 | Inputs            | NFR design artifacts, domain design, functional design                                       |
-| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md |
+| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- infrastructure-specification.md (deployment + services + CONDITIONAL shared), monitoring-design.md, cicd-pipeline.md, traceability.json (per Unit kind) |
 
 ### Purpose
 
@@ -773,6 +795,10 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 | infrastructure-specification.md | Deployment (compute/networking/storage/environments/IaC), infrastructure services, and CONDITIONAL shared resources — tabular |
 | monitoring-design.md           | Metrics, alerts, SLIs/SLOs, logs, tracing, dashboards — tabular where possible |
 | cicd-pipeline.md               | Pipeline stages, build config, deployment strategy, rollback procedures   |
+| traceability.json              | Every `NFRx.y` design decision that needs infrastructure mapped to its resource or configuration |
+
+Which files a Unit gets follows its kind: a `spec` Unit gets none of them,
+and a `library` Unit only cicd-pipeline.md and traceability.json.
 
 ### Approval Gate
 
@@ -780,7 +806,7 @@ Strictly 2-option: Approve / Request Changes.
 
 ### Notes -- Infrastructure Design Consolidation
 
-This stage produces **3 artifact files**. Deployment, infrastructure services,
+This stage produces **3 Markdown artifacts** plus `traceability.json`. Deployment, infrastructure services,
 and shared resources were consolidated into a single tabular
 `infrastructure-specification.md` (closer to the upstream reference's single
 infra doc), while `monitoring-design.md` and `cicd-pipeline.md` stay dedicated
@@ -811,8 +837,27 @@ present only when multiple units share resources.
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
-work. This is the only stage that always executes for every unit regardless of
-the execution plan. Code is written to the workspace root, never to
+work. It runs for every Unit in every scope that includes it; infra runs no
+Code Generation and no Build and Test, as its compiled plan shows:
+
+```text
+$ aidlc engine graph scope infra
+workspace-scaffold
+workspace-detection
+state-init
+practices-discovery
+requirements-analysis
+nfr-requirements
+nfr-design
+infrastructure-design
+ci-pipeline
+deployment-pipeline
+environment-provisioning
+deployment-execution
+observability-setup
+```
+
+Code is written to the workspace root, never to
 `<record>/`.
 
 ### Critical Rules
@@ -822,6 +867,15 @@ the execution plan. Code is written to the workspace root, never to
   finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
+- Files already in the project that this work did not create (a README,
+  LICENSE, docs, configs) are the person's, on a new project too: leave them
+  as they are and build the code around them; this work's own notes on what it
+  built with and how to run it go in `code-summary.md`, and its test command
+  is already in `unit-test-instructions.md`. Change one of them only when the
+  person asks for it or the work cannot be built without it (on brownfield,
+  the code the work changes): name the change in the plan and say it once at
+  the gate, naming the file and what changed in it, and the way back only when
+  there is one
 - Add `data-testid` attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with
   plan approval off, only its one-line notice), generation (Step 4), the Step 5
@@ -928,7 +982,16 @@ This stage has a **two-part structure**: planning followed by generation.
    mocking/stubbing guidance, and test data management. Every run command MUST
    be scoped to this unit using exact test file paths or an exact unit filter.
    A bare project-wide command such as `npm test` is not acceptable because
-   Build and Test executes every unit's commands.
+   Build and Test executes every unit's commands. A coverage floor set for the
+   whole project is measured by Build and Test on the full suite, not by these
+   commands (on one Unit's tests a runner's threshold can fail on source other
+   Units' tests cover); the file names the floor, and the floor's threshold in
+   the project's coverage configuration is never changed to make a Unit's run
+   pass. A command that the floor's threshold can fail keeps no step after it
+   that the threshold exit would stop, because Build and Test does not exempt
+   a command whose exit stopped a later step. A coverage target set for the
+   Unit or one of its paths gets its own Unit-scoped check.
+
 
    The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
    the engine shows the person when it asks for approval.
@@ -941,11 +1004,26 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook keeps the person's reply, from any chat on this piece of
-   work; the conductor reads it and records their choice with `answer
-   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   The human-turn hook keeps every reply of the person's after the question,
+   from any chat on this piece of work, and picks nothing from typed words (a
+   pick in a question box is the host's own structure); the conductor reads
+   which question a reply answers and records their choice with
+   `answer --checkpoint plan-approval`,
+   which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
-   row with the person's words. The
+   row with the person's words. The person may instead write their answer on the
+   questions file's own `[Answer]:` line, as that file invites, and say so: the
+   engine never overwrites an answer they wrote there while the same question
+   stands. When they say so, in any words ("done", "I put my answer in the
+   file"), the conductor reads the line and records the choice they made; the
+   line itself approves nothing, the engine's receipt does. When the person's message in
+   this chat that the question opened for already asked for a change ("go back
+   to code generation: also accept -S", on finished work too, or a redo of one
+   Unit's step that names its change) and no decision but the redo or jump it
+   asked for has used it, the conductor records it as that question's Request Changes,
+   with their words (the message record is the proof, as `--message` reads
+   it); an approval still needs a reply after the question shows, and the
+   revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
@@ -960,12 +1038,19 @@ This stage has a **two-part structure**: planning followed by generation.
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
-   the files. A different intent or target, a new attempt, or missing actual
+   the files. A swarm under `strict` is the exception for the person's own
+   files: prepare refuses until the plan is approved again, and the source
+   landing refuses the same change until it is undone or Guard Policy is
+   `relaxed`. A different intent or target, a new attempt, or missing actual
    initial approval still requires its own approval. After a rejected gate (the
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
-   that follows shows the revised plan. Re-running `next`, or a
+   that follows shows the revised plan. Reopening the step through
+   `/aidlc --stage code-generation` (`Reopen: jump`) or Redo (`Reopen: redo`)
+   starts a fresh attempt and asks about the plan as it stands, without
+   requiring an arbitrary edit. `Reopen: change` and a gate's Request Changes
+   still return `revise` with the person's feedback. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it, and
    neither does whatever the engine said in between: a chat that compacted, a
    piece of work parked and resumed, or a guard-recovery question. `next` reads
@@ -1012,7 +1097,9 @@ This stage has a **two-part structure**: planning followed by generation.
    "Generating unit-2's code for 9 plan steps. This may take several minutes
    depending on project complexity. I'll show a summary when complete." at
    the start, and where an interrupted build picks up ("Picking up unit-2's
-   code at step 5 of 9 (1-4 done)."). When the plan groups its tasks under
+   code at step 5 of 9 (1-4 done)."; with the code written and no step marked,
+   "Picking up unit-2's code: the plan marks none of its 9 steps done, checking
+   what is built."). When the plan groups its tasks under
    "Step N" headings, both lines count the tasks and name the heading
    ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
    up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
@@ -1029,12 +1116,9 @@ This stage has a **two-part structure**: planning followed by generation.
      is `AIDLC-TESTING-CONTRACT: <contract_sha256>` from the current plan. With
      its fence on, the dispatch guard rejects missing, different, or stale
      hashes. Contextual dependencies do not receive additional target markers.
-   - The lead agent's persona from `agents/aidlc-developer-agent.md` and knowledge
-     from `.claude/knowledge/aidlc-developer-agent/` (included in the prompt
-     since subagents cannot access conversation history)
    - Design artifacts for the CURRENT UNIT ONLY (not all units)
    - A 1-2 line summary of each inception-phase artifact with its file path
-     (requirements summary, stories summary, app design summary) -- the
+     (requirements summary, stories summary, domain design summary) -- the
      subagent can Read specific files if it needs full content
    - The current plan and unit-test-instructions.md, which that
      output already carries using the approval-content projection: the plan
@@ -1049,7 +1133,10 @@ This stage has a **two-part structure**: planning followed by generation.
      whose named files changed since the build started), each file a done step
      names in a code span that is not in the project (a bare file name counts
      when a file of that name is anywhere in it), stated as a fact for the
-     worker to judge, and the step to continue at. It appears only when the
+     worker to judge, and the step to continue at. When neither the ticks nor
+     the named files say what is done, it says the build wrote code and the plan
+     marks none of its steps, and asks for each finished step to be ticked.
+     It appears only when the
      build already started on the plan and instructions as they are now (the
      receipt for this target, stage attempt, and approved content is at
      `generation`, and the content on disk is the approved content or, when
@@ -1100,10 +1187,26 @@ This stage has a **two-part structure**: planning followed by generation.
    entry names its recorded `repo`; inside the worktree hosting the Bolt, paths are relative
    to that selected repo and omit `repo`.
 
+   The stage file gives this shape:
+
+   ```json
+   {
+     "stage": "code-generation",
+     "unit": "u1-auth",
+     "version": 1,
+     "writes": [
+       { "path": "src/auth/login.ts" },
+       { "path": "src/auth/generated/" },
+       { "repo": "repo-a", "path": "src/api/routes.ts" }
+     ]
+   }
+   ```
+
    The engine validates this schema and refuses to record a terminal per-unit
-   review without it. Its bytes and claims join the `Unit Source Fingerprint`;
-   changed stage-source paths outside all fresh reviewed manifests block
-   completion.
+   review without it. Its bytes and claims join the `Unit Source Fingerprint`.
+   Under Guard Policy strict, changed stage-source paths outside all fresh
+   reviewed manifests block completion; under relaxed or off they are kept and
+   the person is told once which files changed outside the Units.
 
    A zero-Unit directive (`directive.unit` absent) writes no
    `source-manifest.json` and creates no Unit directory for one: the engine
@@ -1149,10 +1252,8 @@ Strictly 2-option: Approve / Request Changes.
   Construction stages which run entirely inline.
 - **Developer-agent subagent**: Code generation uses `subagent_type="aidlc-developer-agent"`
   (delegated via Task tool), not inline execution. This is the only
-  Construction stage that uses a subagent. The subagent inherits the full
-  session toolset (the aidlc-developer-agent declares no `tools:` allowlist),
-  so it reaches Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion, and the
-  inherited MCP tools.
+  Construction stage that uses a subagent. The aidlc-developer-agent declares
+  no `tools:` allowlist and denies `Task`.
 - **Context budget**: Only the current unit's design artifacts are passed to
   the subagent. Inception-phase artifacts are summarized in 1-2 lines with
   file paths so the subagent can selectively Read what it needs.
@@ -1162,8 +1263,9 @@ Strictly 2-option: Approve / Request Changes.
 - **Source-manifest enforcement** (Unit work only): `source-manifest.json` is engine-validated,
   not a Markdown `required-sections` target. Its strict schema and
   `Unit Source Fingerprint` bind every exact/directory source claim; the engine
-  refuses the terminal review when it is absent or invalid and refuses stage
-  completion for changed source outside the fresh reviewed claims union.
+  refuses the terminal review when it is absent or invalid and, under Guard
+  Policy strict, refuses stage completion for changed source outside the fresh
+  reviewed claims union.
 - **Unit-scoped execution**: Each per-unit test instruction file uses exact
   test paths or an exact unit filter so the cross-unit execution stage does
   not rerun the project-wide suite for every unit.
@@ -1187,7 +1289,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, build-and-test-summary.md, test-results.md; strategy-dependent (declared under `optional_produces`): integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists), plus other conditional test instruction files |
 
 ### Purpose
 
@@ -1207,7 +1309,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
 - Every current `## Testing Contract` in the stage-level or per-unit
   `code-generation-plan.md`, including postapproval edits permitted by a lowered
   plan re-approval fence and plans built with plan approval off; neither is
-  described as human-approved
+  described as human-approved. A CI obligation (the contract's "Run the selected
+  tests in CI before merge." line, or a memory note's "CI execution before
+  merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
+  as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
+  `N/A` with that reason and is never a failure. While CI Pipeline is still
+  ahead (`[ ]`), the target is CI Pipeline's to meet: recorded `N/A` with Owning
+  Stage `ci-pipeline` and the reason that CI Pipeline, later in the plan, sets up
+  CI to run these tests before merge, never a failure
 
 ### Steps
 
@@ -1246,11 +1355,13 @@ with the aidlc-devsecops-agent providing security testing expertise.
    `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
-   - Coverage expectations per unit
+   - Coverage expectations for the project and each Unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
-     source-complete inventory found no applicable measurable target
+     source-complete inventory found no applicable measurable target, or for a
+     target the plan makes inapplicable here (the CI obligation of a plan that
+     runs no CI Pipeline or has it still ahead)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
@@ -1259,11 +1370,33 @@ with the aidlc-devsecops-agent providing security testing expertise.
 
     a. **Build**: Run the build commands from build-instructions.md via Bash.
        Capture output.
-    b. **Unit tests**: Collect commands from every per-unit
+    b. **Unit tests**: Collect commands from the stage-level
+       `<record>/construction/code-generation/unit-test-instructions.md` (when
+       present, including Express) and every per-unit
        `code-generation/unit-test-instructions.md`, deduplicate identical
        commands, and run each distinct command once. Commands should be
        unit-scoped; if a file contains a project-wide command, run it once,
        never once per unit. Report per-unit pass/fail without double counting.
+       When a coverage floor is set for the whole project, the project's
+       full-suite coverage command runs once with its own coverage
+       configuration (in a multi-repo intent, once in each repository the
+       floor applies to, with the repository named in the row's Evidence),
+       and that run is the evidence for a project-wide floor row in the
+       Target Verification Matrix; one repository's run is never the
+       evidence for another repository's floor. A unit-scoped command, from a
+       new or an already-approved file, whose output shows all its selected
+       tests passed and the project-wide floor's threshold (one for all
+       measured source, even when the runner checks it file by file) as the
+       only cause of its non-zero exit counts as passed, with its exit and the
+       reason recorded in test-results.md. That applies only when that exit
+       stopped no later step of the command: when a step after it did not run
+       because of it (one chained, such as `… && <lint>`, one in a script or
+       lifecycle hook the command calls, or a later task or phase of a build
+       tool; tell from the scripts, hooks and task or phase definitions the
+       command runs and from its output), the command is not exempt and its
+       non-zero exit is a failed command. Any other non-zero exit (including a
+       threshold set for one path or Unit) is a failure. A
+       target set for one Unit needs its own Unit-scoped evidence.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Other applicable checks**: Run every applicable command from
@@ -1312,14 +1445,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
        `## Loop-Back Log`: record the diagnosis + impact-estimated fix, reopen
        code-generation via the engine for the Unit(s) the fix names (every Unit
        only when the cause spans them all), and replay forward through its
-       settlement-aware route per the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       settlement-aware route per the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
        presented; its enabled learnings ritual defers to the eventual passing run. When the `learnings` module is absent, no diary or ritual runs.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
-       question from the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       question from the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`) -- the
        impact-estimated 3-option variant (Retry with fix [estimated impact] /
        Accept failure / Abort) when a candidate fix exists, or the no-fix
        2-option variant (Accept failure / Abort) when rung 2 found none.
@@ -1368,10 +1501,28 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-10. **Prepare Completion** -- Verify the build/test evidence. Do not edit
+10. **Cross-Unit Final Coverage Gate** -- Run
+    `aidlc engine sensor-traceability --stage build-and-test`. It reports every
+    `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
+    through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
+    Stories ran), each built when a stage-level or per-unit Code Generation
+    `traceability.json` covers it `OK` with an existing target file. A
+    requirement with sub-requirements is built when each Unit has built its own
+    (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
+    cover them); otherwise by its own row or, when User Stories ran, through
+    every acceptance criterion of the stories User Stories traced it to. One
+    that nothing builds is settled when the latest stage that traced it (User
+    Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
+    reason in every table there that lists it; an `N/A` with no reason is not
+    settled. Write
+    `cross-unit-traceability.md` from that output with the verdict, per-ID
+    coverage and every uncovered ID; an uncovered ID is a finding shown at the
+    approval gate.
+
+11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
     stage or phase state; the reported gate outcome owns the transition.
 
-11. **Completion** -- Present completion message and approval gate.
+12. **Completion** -- Present completion message and approval gate.
 
 ### Outputs
 
@@ -1386,6 +1537,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
 | accessibility-test-instructions.md| WCAG compliance, screen reader, keyboard nav                    | If user-facing UI  |
 | build-and-test-summary.md         | Overall status, test inventory, coverage, readiness assessment  | Always             |
 | test-results.md                   | Actual build/test execution results, pass/fail, coverage        | Always             |
+| cross-unit-traceability.md        | FR/NFR/AC coverage across all Units, verdict, uncovered IDs     | Always             |
 
 ### Approval Gate
 
@@ -1405,10 +1557,11 @@ Strictly 2-option: Approve / Request Changes.
   approach choice, the stage classifies and estimates the impact of a fix, then either runs
   the bounded autonomous loop-back to code-generation (max 3, counted by the
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
-  halt-and-ask question. See the construction protocol module
-  (`aidlc-common/protocols/stage-protocol-construction.md`),
-  "Build-and-Test failure loop-back". Re-entry is settlement-aware, preserves
-  the approved plan, and cannot reach its gate until every applicable Code
+  halt-and-ask question. See the loop-back protocol module
+  (`aidlc-common/protocols/stage-protocol-loopback.md`),
+  "Build-and-Test failure loop-back". Re-entry is settlement-aware, asks for
+  Plan Approval again on the repaired plan while `plan_approval` is on (the
+  earlier approval belongs to the previous attempt), and cannot reach its gate until every applicable Code
   Generation Unit has a fresh current-attempt review.
 - **Conditional test types**: Performance tests, security tests, contract
   tests, E2E tests, and accessibility tests are only generated when relevant
@@ -1508,8 +1661,9 @@ Strictly 2-option: Approve / Request Changes.
   to code and code traces to tests. Results are written to
   `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
-  an adequate CI pipeline. The execution plan from Delivery Planning determines
-  whether it runs.
+  an adequate CI pipeline. The plan (the scope, plus any skip or add the person
+  makes) decides whether it is reached, and the stage still applies its own
+  condition; Delivery Planning plans the Bolts, not the stages.
 - **Post-unit execution**: Like Stage 3.6, this stage runs once after all
   per-unit work is complete, not per-unit.
 
@@ -1537,15 +1691,16 @@ through a phased construction flow:
   (pipeline-deploy-led)
 
 **Key characteristics:**
-- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 ALWAYS execute; 3.7 is CONDITIONAL
-- All conditional stages follow the execution plan from Delivery Planning
+- Stages 3.1-3.4 are CONDITIONAL; 3.5-3.6 run in every scope that includes them (infra has neither); 3.7 is CONDITIONAL
+- Which conditional stages are reached comes from the plan (the scope, plus any skip or add the person makes), not from Delivery Planning; each still applies its own condition
 - New source-producing solo Unit workflows default to unit-major, serial
   execution and verified Unit checkpoints. Preserve explicit iteration choices
   and the existing legacy, design-only, no-Unit, and team-owned paths.
-- NFR artifacts use expanded granularity (6 files for requirements, 6 for
-  design) compared to the upstream reference
-- Infrastructure Design is expanded to 5 artifacts with dedicated monitoring
-  and CI/CD files
+- NFR artifacts use expanded granularity (6 Markdown files for requirements,
+  6 for design, each with a `traceability.json`) compared to the upstream
+  reference
+- Infrastructure Design produces 3 Markdown artifacts (with dedicated
+  monitoring and CI/CD files) plus `traceability.json`
 - Code generation uses the aidlc-developer-agent subagent with context budget controls
 - Build and Test performs actual command execution and automated failure
   diagnosis
@@ -1553,10 +1708,10 @@ through a phased construction flow:
   Operation
 
 **Deliberate deviations from upstream reference:**
-- NFR Requirements: 6 files (expanded from 2 in reference)
-- NFR Design: 6 files including logical-components.md (expanded from 2 in
-  reference)
-- Infrastructure Design: 3 files — a consolidated infrastructure-specification.md
+- NFR Requirements: 6 Markdown files plus traceability.json (expanded from 2 in reference)
+- NFR Design: 6 Markdown files including logical-components.md, plus
+  traceability.json (expanded from 2 in reference)
+- Infrastructure Design: 3 Markdown files plus traceability.json: a consolidated infrastructure-specification.md
   (deployment + services + shared) plus dedicated monitoring-design.md and
   cicd-pipeline.md
 - Plan/question file co-location with stage artifacts

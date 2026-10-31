@@ -198,15 +198,23 @@ existing human-authorized command. Otherwise propose a real project check from
 the project scan (`bun test`, `pytest`, `make check`, or the project's equivalent)
 alongside the iteration/execution settings. This intent-level command is reused
 at every Unit/batch checkpoint; it must check completed Units' working results
-and, with skeleton-on, demonstrate the integrated slice end to end. If no runnable
-check exists yet (greenfield), the human may defer selection; leave the field
+and, with skeleton-on, demonstrate the integrated slice end to end. It must run
+every test level the project's testing rules require (the Testing Contract that
+Code Generation renders from the memory's Testing Posture: unit, integration,
+end-to-end as applicable) and the coverage check. When a required level cannot
+run on this machine (no container runtime, no running service), say so in the
+question: add to the Approve option's description the tests the command will not
+run and why, for example "Runs typecheck and unit tests. Does not run the
+integration tests: they need Docker, which is not installed." Never pick a
+narrower command to avoid a missing runtime without saying so, and never answer
+the gap with "CI runs them" when the plan skips CI Pipeline or the repository has
+no CI configuration. If no runnable check
+exists yet (greenfield), the human may defer selection; leave the field
 unset and explain that the first checkpoint will ask before verification. Never
 invent a placeholder or treat deferral as approval.
 
-Only one protected question may be open per session. Asking any new question
-(protected or ordinary) or opening a lifecycle gate withdraws it, so ask
-protected questions one at a time and wait for the answer before anything else.
-A withdrawn question must be asked again.
+Only one protected question may be open per session. Ask protected questions
+one at a time and wait for the answer before anything else.
 
 Use one nonblank line of at most 1024 characters after trimming leading/trailing
 whitespace. The tools refuse control characters (including newline, CR, tab, or
@@ -242,9 +250,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Read the person's reply in that session and record the choice they made. The
+Read the person's reply and record the choice they made. The
 human-turn hook keeps that they replied to this question and their exact words;
-a reply from another session, or to another question, does not count. When they
+a reply typed in a new chat is kept for it while it is the newest question
+asked, and a reply to another question does not count. When they
 approve, record their answer, and set the command with the matching tool-owned
 receipt:
 
@@ -259,42 +268,11 @@ command. Never auto-approve, write the state field without the receipt, or use
 generic `state set`. A later change requires a new human decision/answer receipt
 and the typed setter; an autonomy grant does not authorize command selection.
 
-**Construction staffing.** After classifying iteration, ask:
-
-> "How do you want to staff Construction? I can run the work from this session
-> using the execution settings you chose, or each of your teams can own a Unit
-> and approve its work independently."
-
-Picking several teams is the person's request for the unit-first order above.
-If the plan is not already unit-major, switch it in the same turn and say each
-setter's `notice` line: for an explicit swarm setting, first run
-`{{INVOKE}} engine state set-construction-execution serial`, then
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-construction-iteration unit-major`.
-Then record
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-ownership team`. Team ownership
-requires the workspace root itself to be the source Git repository; intents with
-recorded sibling repos must remain solo.
-For the one-session choice, leave the field absent (the byte-identical default)
-or record `set-unit-ownership solo`.
-
-**Team check-in rhythm.** Only after team ownership is selected, ask:
-
-> "While a team builds their unit, how often should I check in for approval?
-> After each stage is the safer default: a wrong turn is caught before the next
-> stage builds on it. Once at the end means fewer interruptions: one review
-> after the unit's design and code are complete."
-
-Record the answer with
-`bun {{HARNESS_DIR}}/tools/aidlc-state.ts set-unit-gate-rhythm per-stage` or
-`... unit-end`. If the field is absent under team ownership, `per-stage` is the
-default. These names are tool vocabulary; present the plain-language choices,
-not the field or enum names.
-
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :calendar:
 Review path: `<record>/inception/delivery-planning/`
-Approval gate: Approve (proceed to Construction) / Request Changes.
+Approval gate: Approve (Continue to `<directive.next_stage>`, the stage the engine names) / Request Changes.
 
 ## Sensors
 
@@ -308,6 +286,6 @@ Upstream targets: `requirements`, `stories`, `mockups`, `components`, `unit-of-w
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

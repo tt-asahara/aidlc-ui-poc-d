@@ -1,18 +1,13 @@
 // covers: scope:enterprise
 //
-// MR9 live scope-routing journey. The deterministic scope transpose and runner
+// Live scope-routing journey. The deterministic scope transpose and runner
 // tests already prove the enterprise scope data compiles; this test drives a
-// real `/aidlc --scope enterprise` turn through the SDK and asserts the
+// real `/aidlc --scope enterprise <description>` turn through the SDK and asserts the
 // routing as data: creation stdout, state fields, and audit events. It stops at
 // the creation Bash tool_result, before any human gate or stage body, so it
 // proves live conductor-to-tool routing without spending a full workflow. (The
 // legacy `--init` flag is retired: passed through, it became the intent's
 // description and invited the conductor to ask what it meant.)
-//
-// Enterprise is the representative comprehensive v0.6.0 scope here: it was
-// still UNCOVERED in the registry on the MR8 base, while the lower-depth scope
-// families already had live or deterministic claims. This moves a real shipped
-// scope off zero without inventing custom scope units.
 
 import {
   liveCaseTimeoutMs,
@@ -86,7 +81,9 @@ describe("t141 enterprise scope routing (sdk live, MR9)", () => {
         stripEnvScope: true,
       });
       try {
-        const r = await driveAidlc(`/aidlc --scope ${SCOPE}`, {
+        // With a description: named alone, the scope first asks what the work is
+        // for (#2355), and this journey is about the creation that follows.
+        const r = await driveAidlc(`/aidlc --scope ${SCOPE} add a health endpoint returning ok`, {
           projectDir: proj,
           timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
             deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",

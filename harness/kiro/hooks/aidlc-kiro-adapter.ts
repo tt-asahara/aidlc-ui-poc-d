@@ -46,35 +46,41 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  hookOutsideGate,
   hookStandsOutside,
   enterHookWorkflow,
+  noteHelperSession,
+  validSessionId,
   activeSpace,
   agentsDir,
   classifyTerminalCommand,
+  readNextLine,
   decodeHarnessPlainText,
-  fenceCommandOutput,
-  relayAsTextBlock,
-  presenceFloorHolds,
+  terminalCommandRelay,
   hookDebug,
   hostEnvelopeTurnText,
-  humanPresenceGuardDisabled,
+  KIRO_CLI_HOST_TEMPLATES,
+  kiroTurnOrigin,
   isAidlcAgentFile,
-  isAutonomousMode,
   leadingOrchestratorVerb,
+  noteKiroCliSteerRecorded,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   stateFilePath,
   stripOrchestratorLauncherOptions,
+  unrecordedKiroCliSteers,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
-import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { SAY_ONCE_BEFORE_THEY_REPLY } from "../tools/aidlc-directive.ts";
+import { ACTIVE_MEMORY_DIR, refreshActiveMemory } from "../tools/aidlc-includes.ts";
 import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
 // the shell tool's larger response budget. Count the complete UTF-8 packet.
 const PROMPT_HOOK_MAX_BYTES = 10 * 1024;
+// A shell command that runs one of AI-DLC's own tools: the `aidlc` dispatcher,
+// or a `.kiro/tools/aidlc*.ts` file.
+const AIDLC_COMMAND = /(?:^|[\s"'`;&|(])(?:aidlc|[^\s"'`;&|()]*[\\/]tools[\\/]aidlc[\w.-]*\.ts)(?=$|[\s"'`;&|)])/;
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -189,7 +195,7 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   };
 }
 
-type PreloadFailure = { message: string; repointable: boolean };
+type PreloadFailure = { message: string };
 
 function nativePreloadError(projectDir: string, agents: string[]): PreloadFailure | null {
   // Match the shared delivery hook's installed Markdown roster, including
@@ -203,22 +209,24 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
     isAidlcAgentFile(join(rosterDir, `${agent}.md`))
   );
   if (workers.length === 0) return null;
-  // Use the same active-space cursor as repointHarnessIncludes. Validate the
-  // persisted result rather than trusting a repoint made here: Kiro may already
-  // have read the config, and a skipped or failed repoint must not silently
-  // admit work.
+  // The workers read the engine's copy of the active space's memory
+  // (aidlc-includes.ts), made current right before this check. A worker file
+  // from before the copy reads this space's files themselves, which is the
+  // same text. Validate the persisted file rather than trusting a write made
+  // here: Kiro may already have read the config, and a skipped or failed
+  // write must not silently admit work.
   const space = activeSpace(projectDir);
-  const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
+  const pattern = `${ACTIVE_MEMORY_DIR}/**/*.md`;
   const expected = `file://${pattern}`;
+  const accepted = [expected, `file://aidlc/spaces/${space}/memory/**/*.md`];
   // Each failure names the one step that repairs it. Plugin authoring reserves
   // aidlc- for core; other roster namespaces have hand-authored native JSON
   // that no AI-DLC command can repair.
-  const failure = (agent: string, reason: string, step: string, repointable = false): PreloadFailure => ({
+  const failure = (agent: string, reason: string, step: string): PreloadFailure => ({
     message:
       `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
       `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
       `${agent.startsWith("aidlc-") ? step : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.`}\n`,
-    repointable: repointable && agent.startsWith("aidlc-"),
   });
   const reinstall = `Run \`${aidlcInvocation()} config --harness kiro\` in a terminal to put AI-DLC's Kiro files back, ` +
     `then start the specialist again; /aidlc --doctor names anything still wrong.`;
@@ -232,20 +240,15 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
       ) {
         return failure(agent, "the active-space memory preload is absent", reinstall);
       }
-      if (!config.resources.includes(expected)) {
-        // A glob for another space is what a space switch repoints; any other
-        // shape needs the shipped file back.
-        const otherSpace = config.resources.some((entry: unknown) =>
+      const resources: unknown[] = config.resources;
+      if (!accepted.some((glob) => resources.includes(glob))) {
+        // A glob for another space's files is one an earlier release's space
+        // switch left; the shipped file reads the copy. Any other shape needs
+        // the shipped file back too.
+        const otherSpace = resources.some((entry: unknown) =>
           typeof entry === "string" && /^file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(entry)
         );
-        return otherSpace
-          ? failure(
-            agent,
-            "the active-space memory preload is stale",
-            `Run /aidlc space switch ${space} to point it at this space, then start the specialist again.`,
-            true,
-          )
-          : failure(agent, "the active-space memory preload is absent", reinstall);
+        return failure(agent, `the active-space memory preload is ${otherSpace ? "stale" : "absent"}`, reinstall);
       }
     } catch (error) {
       return failure(
@@ -291,6 +294,17 @@ const projectDirRaw =
 const projectDir = isAbsolute(projectDirRaw)
   ? projectDirRaw
   : resolve(process.cwd(), projectDirRaw);
+// Kiro names the chat in the hook's environment (KIRO_SESSION_ID) and the
+// payload names the session the event belongs to. A delegation (subagent) has
+// a session of its own, so when the two differ the pair is the fact the engine
+// cannot learn by itself: note it once, and every record the delegate's hooks
+// write lands on the chat that delegated. A helper picked with /agent holds the
+// chat's own id, so nothing is noted for it.
+{
+  const chat = validSessionId(process.env.KIRO_SESSION_ID?.trim());
+  const own = validSessionId(kiro.session_id?.trim());
+  if (chat && own && chat !== own) noteHelperSession(projectDir, chat, own);
+}
 const projectEnv = process.env.AIDLC_PROJECT_DIR
   ? {
       ...process.env,
@@ -347,13 +361,132 @@ function anchoredArgs(prompt: string): string | null {
 // word and runs none. Single quotes are literal in sh and in PowerShell alike;
 // a word with an apostrophe takes double quotes when nothing in it expands
 // there, and otherwise this host's own shell form.
+// A word sh reads as typed. On Windows the call runs in PowerShell, whose
+// argument mode reads a comma as a list, a leading `@` as splatting, a leading
+// `#` as a comment and a number-like word (1kb, 0x10) as a number, so there
+// only a plain word, an option or a plain number stays bare; every other word
+// is single-quoted, which PowerShell reads literally.
+const BARE_WORD = process.platform === "win32"
+  ? /^(?:--?)?[A-Za-z_][A-Za-z0-9_.:/=+%-]*$|^[0-9]+(?:\.[0-9]+)?$/
+  : /^[A-Za-z0-9_@%+=:,./-]+$/;
+// PowerShell reads the curly quotes U+2018-U+201B as single quotes and
+// U+201C-U+201F as double quotes (text pasted from a document holds them), so
+// on Windows every word that is not bare takes the single-quoted form with each
+// single-quote-class character doubled, which PowerShell reads back as typed.
+// The person's characters are never changed.
+const WIN32_SINGLE_QUOTE = /['\u2018-\u201B]/g;
+// Native Windows `aidlc` is aidlc.cmd, so the call also crosses cmd.exe, which
+// acts on & | < > ^ in a word with no space, and the launcher then reads the
+// arguments the Windows way (CommandLineToArgvW). A word holding one of those
+// characters travels as '"word"': PowerShell keeps the literal double quotes,
+// cmd.exe reads the word as quoted, and the launcher reads it back as typed (a
+// backslash run at the end doubled). A word holding a double quote of its own
+// never takes this form: cmd.exe flips its quote state at every double quote,
+// escaped or not; and cmd.exe replaces a %NAME% pair even inside quotes. Such
+// words go through the request file instead (below), off the line altogether.
+const CMD_METACHARACTER = /[&|<>^]/;
+const CMD_NAME_PAIR = /%[^%]+%/;
+function windowsArgv(arg: string): string {
+  const trailing = /\\*$/.exec(arg)?.[0] ?? "";
+  return `"${arg}${trailing}"`;
+}
+// On Windows a word holding a double quote, or a %NAME% pair, cannot cross
+// cmd.exe as written (cmd.exe flips its quote state at every double quote,
+// escaped or not, so an & | < > ^ inside such a word would run a second
+// command, and it replaces the pair with a variable's value): the hook writes the
+// person's words itself to the request file the engine reads with no shell on
+// the way, and forwards `next <flags> --request-file <path>`. The rule this
+// keeps: no forwarded token holding a double quote ever reaches the cmd.exe
+// line. The flags stay on the line because the engine reads the file as words
+// only, never as flags; which tokens are flags, and which flag takes the next
+// token as its value, is the engine's own reading (parseNextFlags), asked per
+// token, and a token holding a double quote is always a word. compose keeps
+// its verb on the line, the engine reads the file as its task text; another
+// verb (park, team-board), or a reading the hook cannot make, sends every
+// token as words: nothing runs, and at worst the engine shows a flag back as
+// words. A file that cannot be written still leaves the words off the line;
+// the engine then asks for the request again.
+const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+async function requestFileForwarding(
+  args: readonly string[],
+  cwd: string,
+): Promise<{ args: string[]; forwarded: string } | null> {
+  if (process.platform !== "win32" || !args.some((arg) => arg.includes('"') || CMD_NAME_PAIR.test(arg))) return null;
+  // A typed `--` starts the words: everything after it is the request, as the
+  // engine reads it, and the marker itself is not a word.
+  const literal = args.indexOf("--");
+  const typed = literal < 0 ? [...args] : [...args.slice(0, literal), ...args.slice(literal + 1)];
+  let flags: string[] = [];
+  let words: string[] = typed;
+  if (args[0] === "compose") {
+    flags = ["compose"];
+    words = typed.slice(1);
+  } else if (leadingOrchestratorVerb(args) === null) {
+    try {
+      const { parseNextFlags } = await import("../tools/aidlc-orchestrate.ts");
+      flags = [];
+      words = [];
+      const head = literal < 0 ? args : args.slice(0, literal);
+      // A leading plan name (`bugfix`, `classic:`) names the plan only on the
+      // line: inside the file's text the engine reads it as a word and asks
+      // for the plan again. It stays there when nothing in it needs the file.
+      let from = 0;
+      const lead = head[0];
+      if (
+        lead !== undefined && !lead.includes('"') && !CMD_NAME_PAIR.test(lead) &&
+        parseNextFlags([lead]).positionalScope !== undefined
+      ) {
+        flags.push(lead);
+        from = 1;
+      }
+      for (let i = from; i < head.length; i++) {
+        const token = head[i];
+        // On the line only when the engine on its own reads the token as a
+        // flag: a lone `-`, a `-x` or any token the engine reads as request text
+        // stays a word, in its typed place.
+        if (!token.startsWith("-") || token.includes('"') || parseNextFlags([token]).intent !== undefined) {
+          words.push(token);
+          continue;
+        }
+        flags.push(token);
+        const value = head[i + 1];
+        if (
+          value !== undefined && !value.startsWith("-") && !value.includes('"') &&
+          parseNextFlags([token, value]).intent === undefined
+        ) {
+          flags.push(value);
+          i++;
+        }
+      }
+      if (literal >= 0) words.push(...args.slice(literal + 1));
+    } catch {
+      flags = [];
+      words = typed;
+    }
+  }
+  try {
+    mkdirSync(join(cwd, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(cwd, REQUEST_FILE), `${words.join(" ")}\n`, "utf-8");
+  } catch { /* the engine reports the unread file; the words still stay off the line */ }
+  const argv = [...flags, "--request-file", REQUEST_FILE];
+  return { args: argv, forwarded: forwardedArgs(argv.join(" "), argv) };
+}
 function forwardedArgs(raw: string, args: string[]): string {
-  if (/^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw)) return raw;
+  if (
+    /^[A-Za-z0-9_@%+=:,./ \t"-]*$/.test(raw) &&
+    (process.platform !== "win32" || args.every((arg) => BARE_WORD.test(arg)))
+  ) {
+    return raw;
+  }
   const quote = (arg: string): string => {
-    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+    if (BARE_WORD.test(arg)) return arg;
+    if (process.platform === "win32") {
+      const word = CMD_METACHARACTER.test(arg) ? windowsArgv(arg) : arg;
+      return `'${word.replace(WIN32_SINGLE_QUOTE, (q) => q + q)}'`;
+    }
     if (!arg.includes("'")) return `'${arg}'`;
     if (!/["`$\\]/.test(arg)) return `"${arg}"`;
-    return `'${arg.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+    return `'${arg.replaceAll("'", "'\\''")}'`;
   };
   return args.map(quote).join(" ");
 }
@@ -413,7 +546,49 @@ const PRE_DISPATCH_FLAGS = new Set([
   "--report",
 ]);
 
+// The words of a pre-dispatched step that are the person's to hear, in the
+// order the agent says them: the step's line, then its notices, then a
+// question's numbered rendering (the engine's, with its Other line) or an
+// error's message. The warning said once per chat is left to the agent's rule,
+// and a question that is the agent's own work is no question for the person.
+// On a step the turn goes on from, its notices keep the step's own order (said
+// before the person replies), so the hand-over never says one twice.
+function personLead(step: unknown): string | null {
+  if (step === null || typeof step !== "object" || Array.isArray(step)) return null;
+  const d = step as Record<string, unknown>;
+  const lines: string[] = [];
+  const notices: string[] = [];
+  const push = (value: unknown, into = lines): void => {
+    if (typeof value === "string" && value.trim().length > 0) into.push(value.trim());
+  };
+  push(d.narration);
+  if (Array.isArray(d.change_notices)) for (const notice of d.change_notices) push(notice, notices);
+  if (d.kind === "ask" && d.agent_work !== true) {
+    lines.push(...notices);
+    push(typeof d.numbered_prose_question === "string" ? d.numbered_prose_question : d.question);
+    if (lines.length === 0) return null;
+    return "Say this to the person word for word, then end your turn (the step below is for when they reply):\n\n" +
+      lines.join("\n\n");
+  }
+  if (d.kind === "error") {
+    lines.push(...notices);
+    push(d.message);
+    return lines.length === 0 ? null : `Say this to the person word for word, then stop:\n\n${lines.join("\n\n")}`;
+  }
+  const lead = lines.length === 0
+    ? []
+    : [`Say this to the person first, word for word, with nothing in front of it:\n\n${lines.join("\n\n")}`];
+  if (notices.length > 0) lead.push(`Say this to the person ${SAY_ONCE_BEFORE_THEY_REPLY}:\n\n${notices.join("\n\n")}`);
+  return lead.length === 0 ? null : lead.join("\n\n");
+}
+
 function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  // Only a line the engine reads exactly is run from here. Anything it would
+  // hand to the agent (a flag it does not take, a value its table does not
+  // hold, a plan word at the start of their sentence, one of its nouns with
+  // their sentence after it) goes to the agent untouched, so no seam acts on
+  // the person's words before anyone has read them.
+  if (readNextLine(args).kind !== "exact") return false;
   // A single-stage next owns its issuance/audit boundary. Let the conductor's
   // exact first tool call issue it once, rather than issuing inside this hook.
   if (args.includes("--single")) return false;
@@ -434,7 +609,7 @@ if (target === "verb-intercept") {
   const humanPrompt = hostEnvelopeTurnText(kiro.prompt ?? "");
   const invocation = extractNextInvocation(humanPrompt);
   const args = invocation.args;
-  const cmd = classifyTerminalCommand(args);
+  const cmd = classifyTerminalCommand(args, projectDir, kiro.session_id?.trim() || undefined);
   // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
   // once per turn, BEFORE the cmd===null exit so a bare-next turn still advances
   // the clock and a prior turn's latch goes stale). The read-only/nav latch
@@ -473,10 +648,22 @@ if (target === "verb-intercept") {
     // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
     // (what the switch did) lead whatever this seam writes: plain stdout is
     // Kiro's only context channel here.
+    // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
+    // marks as its own, or Kiro's sub-agent synthesis sentence, is the host's
+    // (a session other than the chat's decides nothing by itself), and the core hook records it as HOST_TURN with nothing of the
+    // person's on it. Anything unknown is the person's.
     const recorded = runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
       prompt: invocation.typed,
+      origin: kiroTurnOrigin({
+        sessionId: kiro.session_id,
+        chatSessionId: process.env.KIRO_SESSION_ID,
+        prompt: invocation.typed,
+        templates: KIRO_CLI_HOST_TEMPLATES,
+      }),
+      // This seam runs a command the person typed and hands its output over below.
+      relays_terminal_output: true,
     });
     preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
@@ -508,12 +695,17 @@ if (target === "verb-intercept") {
         ).trim();
         if (run.exitCode === 0 && directive.length > 0) {
           const parsed: unknown = JSON.parse(directive);
+          // What the person reads opens the packet, the way a terminal
+          // command's output is handed over below: the turn then opens with
+          // it, and the agent needs no row to find it. The step follows, for
+          // the agent. Exact asks and notices only; a stage's work, a gate
+          // summary and a status answer stay the agent's own words.
+          const lead = personLead(parsed);
           const packet =
-            "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
-              "run the exact first `aidlc-orchestrate.ts next` invocation with " +
-              "every user argument preserved. Treat the JSON below as the " +
-              "authoritative directive and act on it now. Do NOT call `next` " +
-              "again for this invocation.\n\n" +
+            (lead === null ? "" : `${lead}\n\n`) +
+              "The first `next` for this message has already run, with every " +
+              "argument kept. Act on its reply below now; do not call `next` " +
+              "again for this message.\n\n" +
               `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`;
           // Never move the token ahead of rules to make it survive truncation.
           // Fall through without publishing either when the full packet cannot
@@ -554,22 +746,25 @@ if (target === "verb-intercept") {
     // shell-normalized argv and rejects a lossy call. A correct first next
     // consumes the latch, so subsequent loop iterations in this turn are bare.
     if (invocation.raw.length > 0) {
+      const viaFile = await requestFileForwarding(args, cwd);
+      const forwardedArgv = viaFile?.args ?? args;
+      const forwarded = viaFile?.forwarded ?? invocation.forwarded;
       try {
         writeFileSync(
           join(cwd, "aidlc", ".aidlc-forwarding-latch"),
           JSON.stringify({
             turn,
-            raw: invocation.forwarded,
-            args,
+            raw: forwarded,
+            args: forwardedArgv,
           }) + "\n",
           "utf-8",
         );
       } catch { /* forwarding backstop best-effort */ }
       process.stdout.write(
         preface +
-        "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
-          "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${invocation.forwarded}\n`,
+        "Your first tool call is exactly the call below, every argument kept; " +
+          "do not run a bare `next`.\n\n" +
+          `{{INVOKE}} engine orchestrate next ${forwarded}\n`,
       );
     } else if (preface) {
       process.stdout.write(preface);
@@ -628,11 +823,7 @@ if (target === "verb-intercept") {
   const typed = cmd.source === "read-only-flag"
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
-  process.stdout.write(
-    preface +
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
-      fenceCommandOutput(out),
-  );
+  process.stdout.write(preface + terminalCommandRelay(`/aidlc ${typed}`, out));
   return 0;
 }
 
@@ -683,7 +874,7 @@ if (target === "guard-tool-call") {
     nextArgs[0] !== "compose" &&
     leadingOrchestratorVerb(nextArgs) === null &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
-    classifyTerminalCommand(nextArgs) === null;
+    classifyTerminalCommand(nextArgs, cwd, kiro.session_id?.trim() || undefined) === null;
 
   let counter = -1;
   let latchTurn = -2;
@@ -715,9 +906,13 @@ if (target === "guard-tool-call") {
         forwarding.turn === counter &&
         Array.isArray(forwarding.args)
       ) {
+        // The call exactly as this hook asked for it is right before any
+        // re-split: PowerShell's doubled apostrophe ('can''t') does not split
+        // back to the word, and refusing it would ask for the same call again.
         const matches =
-          forwarding.args.length === raw.length &&
-          forwarding.args.every((arg, index) => arg === raw[index]);
+          (typeof forwarding.raw === "string" && m[1].trim() === forwarding.raw) ||
+          (forwarding.args.length === raw.length &&
+            forwarding.args.every((arg, index) => arg === raw[index]));
         if (!matches) {
           process.stderr.write(
             "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
@@ -737,43 +932,6 @@ if (target === "guard-tool-call") {
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
 
-  // --- human-presence floor (second exit-2 branch) ---
-  //
-  // Refuse a tool call ONLY while an approval gate is actually OPEN (a stage sits
-  // at [?] in the state file) and no HUMAN_TURN has been recorded since the last
-  // gate resolution: the hard floor that stops a model under autopilot from
-  // fabricating an approval (the verb-intercept seam above records a HUMAN_TURN
-  // on a real human turn). The gate-open predicate is load-bearing: after a
-  // legitimate approval the resolution follows the turn's HUMAN_TURN, and without
-  // it the floor would block the mandated same-turn continuation into the next
-  // stage. Distinct from the roll-forward latch above. Carve-outs mirror the core
-  // gate: autonomous Construction (swarm/Bolt) first, then the deterministic
-  // off-switch, then no-open-gate. Fail-open on any read/parse error: advisory,
-  // must never wedge a legitimate turn. A conversation that has not joined the
-  // selected workflow is not held at that workflow's gates.
-  const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
-  try {
-    if (hookOutsideGate(floorWorkflow)) return 0;
-    const content = existsSync(stateFilePath(cwd))
-      ? readFileSync(stateFilePath(cwd), "utf-8")
-      : null;
-    if (isAutonomousMode(content)) return 0; // autonomous: never block
-    if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-
-    // The shared rule: a gate the person must answer, and no turn of theirs
-    // since it opened (see presenceFloorHolds).
-    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
-      process.stderr.write(
-        // Kiro shows this to the person too: one line they can read, and the
-        // SKILL keys the agent's step on the same sentence.
-        "Nothing runs until you answer the approval question.\n",
-      );
-      return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-    }
-  } catch { /* fail open: advisory presence floor */ } finally {
-    floorWorkflow.restore();
-  }
-
   return 0;
 }
 
@@ -783,6 +941,9 @@ if (target === "state-transition-guard") {
   if (canonicalTool(tool) !== "Bash") process.exit(0);
   const command = String(kiro.tool_input?.command ?? "");
   const registeredAgent = extraArgs[0] ?? "";
+  // The first shell hook of the chat's own agent, so the guards and the
+  // AI-DLC command after it read the person's message as theirs.
+  if (!registeredAgent) recordMessagesTypedWhileWorking(command);
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const hookCommand = executable
     ? [executable, "engine", "hook", "state-transition-guard"]
@@ -853,6 +1014,7 @@ if (target === "plan-approval-guard") {
       tool_name: "Bash",
       tool_input: { command: (ti.command as string) ?? "" },
       cwd: projectDir,
+      ...shellReading(tool),
     };
   } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
     const paths = inputPaths(ti);
@@ -988,6 +1150,7 @@ if (target === "review-freeze") {
         tool_name: shell ? "Bash" : canonical === "Write" ? "Write" : "Edit",
         tool_input: coreInput,
         cwd: projectDir,
+        ...(shell ? shellReading(tool) : {}),
       }),
       "utf-8",
     ),
@@ -1027,19 +1190,12 @@ if (target === "deliver-stage-rules") {
   } finally {
     dispatchWorkflow.restore();
   }
-  let preloadError = nativePreloadError(projectDir, dispatch.agents);
-  if (preloadError?.repointable === true) {
-    // A core persona still pointed at another space: repoint it once, as a
-    // space switch would. Kiro may have read the old config for this call, so
-    // the call still stops, and starting the specialist again goes through.
-    try {
-      repointHarnessIncludes(projectDir);
-    } catch { /* the check below names the switch */ }
-    preloadError = nativePreloadError(projectDir, dispatch.agents) ?? {
-      message: "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
-      repointable: false,
-    };
-  }
+  // The copy the workers' resources read is made the active space's memory
+  // files first, so a specialist starting now reads this space's method.
+  try {
+    refreshActiveMemory(projectDir);
+  } catch { /* the check below names what is missing */ }
+  const preloadError = nativePreloadError(projectDir, dispatch.agents);
   if (preloadError !== null) {
     process.stderr.write(preloadError.message);
     hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
@@ -1109,6 +1265,15 @@ function canonicalTool(
   // did not recognise failed open there instead of being guarded.
   if (name === "shell" || name === "execute_bash" || name === "execute_pwsh") return "Bash";
   return name;
+}
+
+// The shell a Bash call ran in, for the readers that take it: `execute_pwsh`
+// runs PowerShell, as the Kiro IDE adapter marks it, and on Windows Kiro CLI
+// runs its shell tool in PowerShell under every name the call carries.
+function shellReading(name: string): { aidlc_shell?: "powershell" } {
+  return canonicalTool(name) === "Bash" && (name === "execute_pwsh" || process.platform === "win32")
+    ? { aidlc_shell: "powershell" }
+    : {};
 }
 
 type Forward = {
@@ -1277,6 +1442,28 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     ),
     code: r.exitCode ?? 0,
   };
+}
+
+// A message the person typed while the agent worked reaches no prompt hook on
+// Kiro CLI (unrecordedKiroCliSteers), so before one of AI-DLC's commands runs
+// it is recorded as their turn, in their words, each message once. What the
+// core hook prints stays here: Kiro reads this hook's stdout.
+function recordMessagesTypedWhileWorking(command: string): void {
+  const session = validSessionId(kiro.session_id?.trim());
+  if (!session || !AIDLC_COMMAND.test(command)) return;
+  try {
+    for (const steer of unrecordedKiroCliSteers(projectDir, session)) {
+      const turn = runCore("aidlc-record-human-turn.ts", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: session,
+        prompt: steer.words,
+        origin: { kind: "person", source: "record" },
+        relays_terminal_output: true,
+      });
+      if (turn.code !== 0) return;
+      noteKiroCliSteerRecorded(projectDir, session, steer.id);
+    }
+  } catch { /* an unreadable record or runtime folder records nothing */ }
 }
 
 const fwd = buildForward();

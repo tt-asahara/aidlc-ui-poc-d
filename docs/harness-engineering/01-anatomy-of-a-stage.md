@@ -28,7 +28,8 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | Field | What it decides | The judgment call |
 |-------|-----------------|-------------------|
 | `requires_stage` | Dependency and ordering edges | Does this stage genuinely consume another's output, or just need to run after it? |
-| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, and is it `conditional_on` brownfield/greenfield? |
+| `consumes` | The artifacts this stage reads | Per artifact: is it `required`, is it `conditional_on` brownfield/greenfield, and is it `cited`? |
+| `consumes[].cited` | Which optional inputs the output must cite when they exist | Is there an optional input that, whenever it is there, the output builds on? Mark it `cited: true`; the `upstream-coverage` check then asks for its citation. |
 | `produces` | The artifacts this stage writes | These are the forward edges other stages discover. |
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
 | `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
@@ -52,10 +53,10 @@ This is the orientation, not the contract. For the complete field table with typ
 Below the frontmatter, the body has three compartments, always in this order: `## Steps`, `## Sensors`, `## Learn`. Looking at `domain-design.md` shows all three populated.
 
 - **`## Steps`** is the imperative prose the agent follows — load personas, read prior context, create the questions file, generate the artifacts, present the approval gate. This is where the stage's domain work lives, and it's the compartment you'll edit most when you change *what a stage does* without touching the graph.
-- **`## Sensors`** gives a compact local summary: where outputs land, an `Imports:` line that mirrors the frontmatter `sensors:` list, and an `Upstream targets:` line that mirrors `consumes:` when `upstream-coverage` is imported. Keep stage-specific exceptions here, such as an intentionally omitted sensor or ownership of a structured output. Shared behavior lives in `stage-protocol.md` §14; Sensors are covered in full in [Sensors](06-sensors.md).
-- **`## Learn`** points to the conditional learning-loop contract in `stage-protocol-learnings.md` §13. Only when `directive.protocol_modules` lists `learnings`, maintain the four-heading diary at `directive.memory_path` while working, then surface and persist confirmed learnings before a human gate. The module owns the bootstrap, isolated-run, per-unit, and gate-revision exemptions. When absent, keep no diary and skip the ritual. Workflow-time learning never rewrites the stage body.
+- **`## Sensors`** gives a compact local summary: where outputs land, an `Imports:` line that mirrors the frontmatter `sensors:` list, and an `Upstream targets:` line that mirrors `consumes:` when `upstream-coverage` is imported. Keep stage-specific exceptions here, such as an intentionally omitted sensor or ownership of a structured output. Shared behavior lives in `stage-protocol-sensors.md`; Sensors are covered in full in [Sensors](06-sensors.md).
+- **`## Learn`** points to the conditional learning-loop contract in `stage-protocol-learnings.md` section 13. Only when `directive.protocol_modules` lists `learnings`, maintain the four-heading diary at `directive.memory_path` while working, then take the learnings step before a human gate: it asks the person something only after they corrected the agent in the stage, and persists what they keep. The module owns when it asks, and the bootstrap, isolated-run and per-unit exemptions. When absent, keep no diary and skip the step. Workflow-time learning never rewrites the stage body.
 
-These three compartments were pre-declared so that v0.5.0's additions — the populated Sensors and Learn bindings — slotted in cleanly rather than forcing a body restructure. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).
+The three compartments are fixed so that a stage's sensor bindings and its learning-loop pointer always have a place of their own, and adding one never restructures the body. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).
 
 One boundary worth internalizing: a stage file is a framework artifact, immutable in shape. The body's `## Steps` / `## Sensors` / `## Learn` structure is never rewritten by a workflow. The single sanctioned in-workflow edit is the learning loop appending a new sensor id to the frontmatter `sensors:` import list. Everything else you change in a stage file, you change deliberately as a harness engineer.
 
@@ -63,7 +64,7 @@ One boundary worth internalizing: a stage file is a framework artifact, immutabl
 
 ## consumes and produces from the graph
 
-The dependency graph isn't written anywhere directly — it emerges from the `consumes` and `produces` declarations across every stage. A stage's `produces` list is its forward edges: when another stage asks "who produces `scope-document`?", the answer is whichever stage declares it. A stage's `consumes` list is its backward edges: it can't run until those artifacts exist.
+The dependency graph isn't written anywhere directly: it emerges from the `consumes` and `produces` declarations across every stage. A stage's `produces` list is its forward edges: when another stage asks "who produces `scope-document`?", the answer is whichever stage declares it. A stage's `consumes` list is its backward edges: a `required` artifact must exist when this stage runs if its producer is in this plan, and an optional one is read when it is there (the plan-scoped rule above).
 
 `requires_stage` makes the dependency explicit and also encodes pure ordering. It carries two roles:
 
@@ -89,7 +90,12 @@ The flow is:
 edit stage .md YAML  →  compile  →  stage-graph.json  →  runtime reads it
 ```
 
-After editing any stage's frontmatter, run the compile to regenerate `stage-graph.json`, then commit both together. CI runs a drift check that fails the merge if the JSON doesn't match what the YAML would compile to — so a forgotten recompile is caught, not shipped.
+After editing a stage's frontmatter in `core/`, run `bun scripts/package.ts`, which compiles the graph into every generated tree, and commit only the `core/` edit: the generated trees are ignored and CI builds them again from source (`bun scripts/package.ts --check` builds twice and byte-compares). In an installed project tree, `aidlc engine graph compile` regenerates that tree's `stage-graph.json`, and `aidlc engine graph compile --check` says when it is out of date:
+
+```text
+$ aidlc engine graph compile --check
+stage-graph.json is out of date. Run `aidlc engine graph compile` to regenerate.
+```
 
 The rule that follows: **do not hand-edit `stage-graph.json`.** Edit the YAML, recompile. A hand-edit either gets clobbered by the next compile or trips the drift check. The compile command and the drift guard are documented in [Authoring flow](../reference/15-stage-definition.md#authoring-flow).
 

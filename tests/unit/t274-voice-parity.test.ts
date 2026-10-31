@@ -12,9 +12,9 @@
 //       loads on every stage). If it is deleted or renamed, no other test
 //       notices — the framework keeps working and just starts talking like a
 //       framework again. §1 pins the section and its substance.
-//   (b) The six authored SKILLs are near-copies maintained by hand. The
+//   (b) The seven authored SKILLs are near-copies maintained by hand. The
 //       identity paragraph that points at the contract must be present and
-//       WORD-IDENTICAL in all five: a partial edit (the t181 failure mode) would
+//       WORD-IDENTICAL in all seven: a partial edit (the t181 failure mode) would
 //       leave some harnesses on the old framework-voice identity. §2 extracts the
 //       shared core and compares it across the matrix.
 //   (c) The retired framework-voice phrases must not creep back into the
@@ -101,7 +101,7 @@ describe("t272 §1 voice contract lives in the per-stage protocol", () => {
 });
 
 // =========================================================================
-// §2 — All six authored SKILLs point at the contract, identically.
+// Section 2 - All seven authored SKILLs point at the contract, identically.
 // =========================================================================
 describe("t272 §2 the SKILL identity paragraph is shared verbatim", () => {
   const skills = authoredSkills();
@@ -128,7 +128,6 @@ describe("t272 §2 the SKILL identity paragraph is shared verbatim", () => {
       seen.push(name);
       paragraphs.set(paragraph, seen);
     }
-    // One distinct paragraph text => every harness agrees.
     expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 });
@@ -148,9 +147,8 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
       "core/templates/onboarding-harness.md",
       // The per-stage diary template. Its first line renders inside the Write
       // diff of EVERY stage, which makes it one of the most-seen strings the
-      // framework ships; it read "maintained by the orchestrator" until the
-      // Construction voice pass. t100 pins its exact new wording, this pins that
-      // the retired vocabulary cannot come back.
+      // framework ships. t100 pins its exact wording, this pins that the retired
+      // vocabulary cannot come back.
       "core/knowledge/aidlc-shared/memory-template.md",
       ...HARNESS_MATRIX.map((h) => `harness/${h.name}/onboarding.fills.ts`),
     ].sort();
@@ -180,7 +178,7 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
   // The protocol needs its own scan with ONE carve-out: the voice contract
   // quotes the retired phrases on purpose (it is the section that bans them), so
   // scanning it whole would forbid the ban from naming what it bans. Everything
-  // AFTER the contract is user-visible template prose and is scanned normally.
+  // OUTSIDE the contract is scanned normally.
   test("the protocol's user-visible templates carry no retired phrase", () => {
     const protocol = read(PROTOCOL_REL);
     const contractStart = protocol.indexOf(
@@ -191,7 +189,6 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     );
     expect(contractStart).toBeGreaterThan(-1);
     expect(contractEnd).toBeGreaterThan(contractStart);
-    // Template prose = everything outside the contract section.
     const scanned = (
       protocol.slice(0, contractStart) + protocol.slice(contractEnd)
     ).toLowerCase();
@@ -228,6 +225,29 @@ describe("t272 §3 retired framework-voice phrases stay out of user-visible pros
     walk(stagesRoot);
     expect(offenders).toEqual([]);
   });
+
+  // A live run read "This is a lead-only run, so the developer both scans and
+  // synthesizes", "the sole, final link" and "the developer is the final link"
+  // to the person, and offered "greenfield lead-only run" as a practice to
+  // keep: the words came from the stage and protocol text the agent reads. The
+  // same steps now say the lead works alone and name the last link.
+  test("no stage, protocol, agent or knowledge file names a lead-only run or a final link", () => {
+    const { readdirSync, statSync } = require("node:fs") as typeof import("node:fs");
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const abs = join(dir, entry);
+        if (statSync(abs).isDirectory()) {
+          walk(abs);
+        } else if (entry.endsWith(".md")) {
+          const hits = readFileSync(abs, "utf-8").match(/lead-only|sole and final|final link/gi) ?? [];
+          if (hits.length > 0) offenders.push(`${abs.slice(REPO_ROOT.length + 1)}: ${hits.join(", ")}`);
+        }
+      }
+    };
+    for (const root of ["aidlc-common", "knowledge", "agents"]) walk(join(REPO_ROOT, "core", root));
+    expect(offenders).toEqual([]);
+  });
 });
 
 // =========================================================================
@@ -254,22 +274,12 @@ describe("t272 §4 Construction keeps its own voice rules", () => {
     expect(flat).toContain("`narration` value already says exactly that");
   });
 
-  test("every conductor SKILL carries the Construction quiet rule, worded identically", () => {
-    // Byte-alignment across the matrix for the same reason t181 pins the
-    // narration block that way: authored once, copied six times, so a
-    // per-harness reword is drift rather than intent.
-    const MARKER = "**Inside Construction.**";
-    const paragraphs = new Map<string, string[]>();
+  test("the Construction quiet rule has one copy, the protocol's, in no conductor SKILL", () => {
+    // Every step reads the stage protocol, so a copy in each SKILL was a
+    // second account of the same rule (#1330).
     for (const { name, rel } of authoredSkills()) {
-      const body = read(rel);
-      const start = body.indexOf(MARKER);
-      expect(start, `${name} lacks the Construction quiet rule`).toBeGreaterThan(-1);
-      const paragraph = body.slice(start).split("\n\n")[0];
-      const seen = paragraphs.get(paragraph) ?? [];
-      seen.push(name);
-      paragraphs.set(paragraph, seen);
+      expect(read(rel), name).not.toContain("**Inside Construction.**");
     }
-    expect([...paragraphs.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
   test("the load-steering row forbids a substitute progress sentence", () => {
@@ -289,11 +299,11 @@ describe("t272 §4 Construction keeps its own voice rules", () => {
   });
 
   test("the engine authors a line for a building per-unit beat and none for the settle beat", () => {
-    // The narration constructors are not exported (the tools have zero exports),
-    // so this pins the two structural facts at the source: the gate test that
-    // separates a building beat from the settle beat, and the placeholder guard
-    // that keeps "{unit-name}" from ever being spoken. t-drive coverage of the
-    // emitted values lives with the live probe; this is the cheap regression net.
+    // The narration constructors are not exported, so this pins the two
+    // structural facts at the source: the gate test that separates a building
+    // beat from the settle beat, and the placeholder guard that keeps
+    // "{unit-name}" from ever being spoken. t-drive coverage of the emitted
+    // values lives with the live probe; this is the cheap regression net.
     const engine = read("core/tools/aidlc-orchestrate.ts");
     expect(engine).toContain("function narratePerUnitBeat");
     expect(engine).toContain("if (directive.gate !== false) return null;");

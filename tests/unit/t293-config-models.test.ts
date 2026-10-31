@@ -55,8 +55,6 @@ const OWN_PICKER_LINES = {
     "GitHub Copilot runs every agent on the model you choose in its model picker (/model in the Copilot CLI), so a model or effort set here is kept for other tools and changes nothing in GitHub Copilot.",
   cursor:
     "Cursor runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Cursor.",
-  "kiro-ide":
-    "Kiro IDE runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Kiro IDE.",
   kiro:
     "Kiro CLI runs every agent on your session's model and effort, so an effort set here without a model is kept for other tools and changes nothing in Kiro CLI; a preset (minimal, balanced or thorough) sets the session's effort.",
 } as const;
@@ -308,9 +306,10 @@ describe("t293 model policy resolution", () => {
       schemaVersion: 1,
       agents: { architect: { model: "raw/model", effort: "high" } },
     }, "architect", "judgment", "kiro-ide");
-    expect(ide.model).toBeUndefined();
-    expect(ide.effort).toBeUndefined();
-    expect(ide.unexpressed.sort()).toEqual(["effort", "model"]);
+    // Kiro takes one agent's own model and effort.
+    expect(ide.model).toBe("raw/model");
+    expect(ide.effort).toBe("high");
+    expect(ide.unexpressed).toEqual([]);
 
     const cursor = resolveModelPolicy({
       schemaVersion: 1,
@@ -917,7 +916,9 @@ describe("t293 config models CLI", () => {
       "config", "models", "--project-dir", profiled, "--project", "--agent", "developer", "--effort", "high", "--yes",
     ], profiled, runtimeEnv());
     expect(first.status, first.stdout + first.stderr).toBe(0);
-    expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. It was not set there before.");
+    // One agent's new key has its own way back: `default` removes just that key.
+    expect(first.stdout).toContain("developer effort: not set -> high in aidlc.settings.json. To undo: ");
+    expect(first.stdout).toContain("config models --agent developer --effort default --project --yes");
     expect(first.stdout).not.toContain("--reset");
     // A saved profile is named too, new or replaced; no one command puts an
     // earlier one back, so a replaced one has no undo of its own.
@@ -973,6 +974,72 @@ describe("t293 config models CLI", () => {
     const named = run([...request, "--harness", "claude"], project, runtimeEnv());
     expect(named.status, named.stdout + named.stderr).toBe(0);
     expect(named.stdout).toContain("developer effort: not set -> high in aidlc.settings.json.");
+    // The undo printed for a model pin names the harness once, so it runs as printed:
+    // for a new pin (back to `default`) and for a changed one (back to the earlier model).
+    const printedUndo = (stdout: string): string[] => {
+      const line = /To undo: \S+(?: \S+)*? config models (.*)$/m.exec(stdout);
+      expect(line, stdout).not.toBeNull();
+      return (line as RegExpExecArray)[1].trim().split(/\s+/);
+    };
+    const runUndo = (args: string[]) =>
+      run(["config", "models", ...(args.includes("--project-dir") ? [] : ["--project-dir", project]), ...args], project, runtimeEnv());
+    const agentModels = () => (projectSettings(project).models as { agents?: Record<string, { effort?: string; model?: Record<string, string> }> }).agents;
+    const newPin = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--model", "opus", "--harness", "claude", "--yes",
+    ], project, runtimeEnv());
+    expect(newPin.status, newPin.stdout + newPin.stderr).toBe(0);
+    const newPinUndo = printedUndo(newPin.stdout);
+    expect(newPinUndo.filter((arg) => arg === "--harness")).toEqual(["--harness"]);
+    expect(newPinUndo).toContain("default");
+    const removed = runUndo(newPinUndo);
+    expect(removed.status, removed.stdout + removed.stderr).toBe(0);
+    expect(agentModels()?.developer).toEqual({ effort: "high" });
+    const changedPin = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "opus", "--harness", "claude", "--yes",
+    ], project, runtimeEnv());
+    expect(changedPin.status, changedPin.stdout + changedPin.stderr).toBe(0);
+    expect(changedPin.stdout).toContain("architect model (claude): sonnet -> opus in aidlc.settings.json.");
+    const changedPinUndo = printedUndo(changedPin.stdout);
+    expect(changedPinUndo.filter((arg) => arg === "--harness")).toEqual(["--harness"]);
+    const restored = runUndo(changedPinUndo);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(agentModels()?.architect?.model).toEqual({ claude: "sonnet" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("one agent's setting has a per-key undo: `default` removes it, and --reset is never the undo for an agent key", () => {
+    const project = install("claude");
+    const models = (...args: string[]) => run(["config", "models", "--project-dir", project, "--project", ...args, "--yes"], project, runtimeEnv());
+    const agents = () => (projectSettings(project).models as { agents?: Record<string, { effort?: string; model?: Record<string, string> }> } | undefined)?.agents;
+    // The file's first model setting: the undo removes that one key, not the section.
+    const first = models("--agent", "developer", "--effort", "high");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
+    expect(first.stdout).toContain("config models --agent developer --effort default --project --yes");
+    expect(first.stdout).not.toContain("--reset");
+    // A second agent beside it gets its own per-key undo too.
+    const second = models("--agent", "architect", "--effort", "low");
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain("architect effort: not set -> low in aidlc.settings.json. To undo: ");
+    expect(second.stdout).toContain("config models --agent architect --effort default --project --yes");
+    expect(second.stdout).not.toContain("It was not set there before.");
+    // Running the first undo removes only the developer's effort.
+    const undone = models("--agent", "developer", "--effort", "default");
+    expect(undone.status, undone.stdout + undone.stderr).toBe(0);
+    expect(undone.stdout).toContain("developer effort: high -> not set in aidlc.settings.json. To undo: ");
+    expect(undone.stdout).toContain("config models --agent developer --effort high --project --yes");
+    expect(agents()?.developer?.effort).toBeUndefined();
+    expect(agents()?.architect?.effort).toBe("low");
+    // A model has the same way back; the agent's effort stays.
+    expect(models("--agent", "architect", "--model", "provider/raw-id").status).toBe(0);
+    expect(agents()?.architect?.model?.claude).toBe("provider/raw-id");
+    const modelGone = models("--agent", "architect", "--model", "default");
+    expect(modelGone.status, modelGone.stdout + modelGone.stderr).toBe(0);
+    expect(agents()?.architect?.model?.claude).toBeUndefined();
+    expect(agents()?.architect?.effort).toBe("low");
+    // `default` with nothing of the agent's recorded changes nothing and says so.
+    const nothing = models("--agent", "developer", "--effort", "default");
+    expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
+    expect(nothing.stdout).toContain("model policy unchanged");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {
@@ -1087,8 +1154,8 @@ describe("t293 config models CLI", () => {
     expect(effort.stdout).not.toContain("from the next step");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("on Cursor, Kiro IDE and Kiro CLI a model request they cannot apply is kept and names their own picker", () => {
-    for (const harness of ["cursor", "kiro-ide", "kiro"] as const) {
+  test("on Cursor and Kiro CLI a model request they cannot apply is kept and names their own picker", () => {
+    for (const harness of ["cursor", "kiro"] as const) {
       const project = install(harness);
       const result = run([
         "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes",
@@ -1215,6 +1282,10 @@ describe("t293 config models CLI", () => {
     ], project, { ...runtimeEnv(), ...seam.env });
     expect(saved.status, saved.stdout + saved.stderr).toBe(0);
     expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
+    // A model picked inside Kiro is the chat's alone until it is saved.
+    expect(saved.stdout).toContain(
+      "or inside Kiro with /model, then /model set-current-as-default to save it.",
+    );
     expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
     expect(existsSync(projectSettingsPath(project))).toBe(false);
 
@@ -1223,7 +1294,103 @@ describe("t293 config models CLI", () => {
       "config", "models", "--project-dir", claude, "--session-model", "claude-sonnet-4.6",
     ], claude, { ...runtimeEnv(), ...seam.env });
     expect(refused.status).toBe(2);
-    expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro CLI projects only");
+    expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro projects only");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on Kiro CLI --show says the session model is the saved one, not a /model switch", () => {
+    const note =
+      "On Kiro CLI your session model is the one saved in your Kiro settings: agents start on it, and a /model switch changes only the chat you are in until you save it with /model set-current-as-default.";
+    const project = install("kiro");
+    const shown = run(["config", "models", "--project-dir", project, "--show"], project, runtimeEnv());
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).toContain("All 14 agents inherit your session model and effort, except:");
+    expect(shown.stdout).toContain(`  Note: ${note}`);
+    const json = run(["config", "models", "--project-dir", project, "--show", "--json"], project, runtimeEnv());
+    expect((JSON.parse(json.stdout) as { data: { notes: string[] } }).data.notes).toEqual([note]);
+
+    // Kiro IDE runs every agent on its own model picker, so its row has no such line.
+    const ide = install("kiro-ide");
+    const elsewhere = run(["config", "models", "--project-dir", ide, "--show"], ide, runtimeEnv());
+    expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+    expect(elsewhere.stdout).not.toContain("set-current-as-default");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's row saves Kiro CLI's session model and no effort, whatever preset is recorded", () => {
+    const project = install("kiro-ide");
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
+    const seam = kiroSeam({});
+    const saved = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
+    expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
+    // The way out names --session-model: this row's interactive menu is the preset one.
+    const unknown = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-gone-1",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(unknown.status, unknown.stdout + unknown.stderr).toBe(2);
+    expect(unknown.stdout + unknown.stderr).toContain("config models --session-model <id>");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro IDE's row says the session model is Kiro CLI's, in a preview, a save, and a retry", () => {
+    const project = install("kiro-ide");
+    const seam = kiroSeam({});
+    const args = ["config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6"];
+    const preview = run([...args, "--dry-run"], project, { ...runtimeEnv(), ...seam.env });
+    expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+    expect(preview.stdout).toContain("Would save in your personal Kiro settings");
+    expect(preview.stdout).toContain("would save the Kiro CLI session model");
+    expect(preview.stdout).not.toContain("session model unchanged");
+    const quiet = run([...args, "--dry-run", "--quiet"], project, { ...runtimeEnv(), ...seam.env });
+    expect(quiet.stdout.trim()).toBe("would save the Kiro CLI session model");
+    const json = run([...args, "--dry-run", "--json"], project, { ...runtimeEnv(), ...seam.env });
+    const payload = JSON.parse(json.stdout) as { message: string; data: { kiroSession: { saved: object; wouldSave: object } } };
+    expect(payload.message).toBe("would save the Kiro CLI session model");
+    expect(payload.data.kiroSession).toEqual(expect.objectContaining({ saved: {}, wouldSave: { model: "claude-sonnet-4.6" } }));
+    expect(kiroWrites(seam.writes)).toEqual([]);
+
+    const saved = run(args, project, { ...runtimeEnv(), ...seam.env });
+    expect(saved.status, saved.stdout + saved.stderr).toBe(0);
+    expect(saved.stdout).toContain("Kiro CLI uses it in every project; Kiro IDE uses its own model picker:");
+    expect(saved.stdout).toContain(
+      "inside Kiro CLI with /model, then /model set-current-as-default to save it.",
+    );
+    expect(saved.stdout).not.toContain("They apply to every Kiro project you open");
+    expect(saved.stdout).toContain("saved the Kiro CLI session model");
+
+    // A write Kiro refuses names the command that repeats this exact request.
+    const refused = kiroSeam({}, { failWrite: "chat.defaultModel" });
+    const failed = run([...args, "--json"], project, { ...runtimeEnv(), ...refused.env });
+    expect(failed.status, failed.stdout + failed.stderr).toBe(5);
+    const failure = JSON.parse(failed.stdout) as {
+      message: string;
+      remediation: string;
+      data: { kiroSession: { lines: string[] } };
+    };
+    expect(failure.message).toBe("the Kiro CLI session model was not saved");
+    expect(failure.remediation).toEndWith(" config models --session-model claude-sonnet-4.6");
+    expect(failure.data.kiroSession.lines.at(-1)).toEndWith(" config models --session-model claude-sonnet-4.6` to try again.");
+    const combined = run([
+      ...args, "--project", "--preset", "thorough", "--yes", "--json",
+    ], project, { ...runtimeEnv(), ...refused.env });
+    expect(combined.status, combined.stdout + combined.stderr).toBe(5);
+    expect((JSON.parse(combined.stdout) as { remediation: string }).remediation)
+      .toEndWith(" config models --session-model claude-sonnet-4.6");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro CLI agent setting leaves the person's session effort alone", () => {
+    const project = install("kiro");
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
+    const seam = kiroSeam({ "chat.defaultModel": "claude-opus-5" });
+    // The first run changes the record, the second finds it unchanged: neither is a session request.
+    for (let pass = 0; pass < 2; pass++) {
+      const result = run([
+        "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "claude-opus-5", "--yes",
+      ], project, { ...runtimeEnv(), ...seam.env });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    }
+    expect(kiroWrites(seam.writes)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro CLI --preset sets one session effort on the person's model, with no per-agent warnings", () => {
@@ -1467,9 +1634,30 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.fix).not.toContain("effort policy");
   });
 
-  test("doctor names the session where it sets every agent, and Kiro CLI carries the preset", () => {
+  test("config models --check on kiro-ide leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown) => {
+      const project = temp("aidlc-t293-check-kiro-ide-");
+      cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check"], project, runtimeEnv());
+    };
+    const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain("model policy is reflected on kiro-ide");
+    // One agent's own model and effort are Kiro's: a file without them is drift.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { "kiro-ide": "claude-sonnet-5.5" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model inherit != claude-sonnet-5.5");
+    expect(named.stdout).toContain("architect: effort inherit != high");
+    expect(named.stdout).not.toContain("not expressible");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor names the session where a preset changes nothing, and Kiro CLI carries the preset", () => {
     // A preset recorded for the team (setup records none on these hosts) is
-    // not a problem to fix where the host cannot pin an agent's model or effort.
+    // not a problem to fix where a preset changes nothing.
     const preset = (project: string) => {
       const settings = projectSettingsPath(project);
       writeFileSync(settings, `${JSON.stringify({
@@ -1478,21 +1666,22 @@ describe("t293 doctor model policy advisory", () => {
       }, null, 2)}\n`);
       invalidateSettingsCache(settings);
     };
-    for (const [harness, product] of [
-      ["copilot", "GitHub Copilot"],
-      ["cursor", "Cursor"],
-      ["kiro-ide", "Kiro IDE"],
+    // Kiro takes one agent's own model and effort, so its line says so.
+    for (const [harness, product, own] of [
+      ["copilot", "GitHub Copilot", ""],
+      ["cursor", "Cursor", ""],
+      ["kiro-ide", "Kiro", " unless a model or effort is set for that agent"],
     ] as const) {
       const project = temp(`aidlc-t293-doctor-session-${harness}-`);
       cpSync(join(DIST, harness), project, { recursive: true });
       expect(modelsPolicyCheck(project, true), harness).toEqual({
         pass: true,
-        label: `Models: every agent uses your ${product} session's model and effort`,
+        label: `Models: every agent uses your ${product} session's model and effort${own}`,
       });
       preset(project);
       expect(modelsPolicyCheck(project, true), harness).toEqual({
         pass: true,
-        label: `Models: every agent uses your ${product} session's model and effort; ` +
+        label: `Models: every agent uses your ${product} session's model and effort${own}; ` +
           "the recorded balanced preset does not apply here",
       });
     }
@@ -1551,10 +1740,43 @@ describe("t293 doctor model policy advisory", () => {
     const inert = "the recorded balanced preset does not apply here";
     expect(modelsPolicyCheck(hosts, true)).toEqual({
       pass: true,
-      label: `Models: every agent uses your Kiro IDE session's model and effort; ${inert}; ` +
+      label: `Models: every agent uses your Kiro session's model and effort unless a model or effort is set for that agent; ${inert}; ` +
         `every agent uses your Cursor session's model and effort; ${inert}`,
     });
   });
+
+  test("config models --check on GitHub Copilot leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown, extra: string[] = []) => {
+      const project = temp("aidlc-t293-check-copilot-");
+      cpSync(join(DIST, "copilot"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check", ...extra], project, runtimeEnv());
+    };
+    const policy = { schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } };
+    // The session sets every agent here, so a clean check names it, as doctor
+    // does, rather than calling the recorded policy reflected.
+    const sessionLine = "every agent uses your GitHub Copilot session's model and effort; " +
+      "the recorded balanced preset does not apply here";
+    const shared = check(policy);
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain(sessionLine);
+    expect(shared.stdout).not.toContain("reflected");
+    const json = check(policy, ["--json"]);
+    expect(json.status, json.stdout).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      message: sessionLine,
+      data: { harness: "copilot", drift: [] },
+    }));
+    // A model recorded for Copilot by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { copilot: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on copilot");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("the host names messages use match each shipped harness", () => {
     // The names are fixed in the tools so a project file cannot change them;
@@ -1577,6 +1799,44 @@ describe("t293 doctor model policy advisory", () => {
       ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
     );
   });
+
+  test("config models --check on Cursor leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown, ...extra: string[]) => {
+      const project = temp("aidlc-t293-check-cursor-");
+      cpSync(join(DIST, "cursor"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check", ...extra], project, runtimeEnv());
+    };
+    const policy = { schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } };
+    // Nothing recorded applies on Cursor, so a clean check names the session,
+    // in doctor's words, rather than calling the policy reflected.
+    const session = "every agent uses your Cursor session's model and effort; " +
+      "the recorded balanced preset does not apply here";
+    const shared = check(policy);
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain(session);
+    expect(shared.stdout).not.toContain("model policy is reflected");
+    const agentEffort = check({ schemaVersion: 1, agents: { architect: { effort: "high" } } });
+    expect(agentEffort.status, agentEffort.stdout).toBe(0);
+    expect(agentEffort.stdout).toContain(
+      "every agent uses your Cursor session's model and effort; the recorded policy does not apply here",
+    );
+    const json = check(policy, "--json");
+    expect(json.status, json.stdout).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      message: session,
+      data: { harness: "cursor", drift: [] },
+    }));
+    // A model recorded for Cursor by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { cursor: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on cursor");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t293 projection application", () => {

@@ -21,6 +21,7 @@ import {
   resolveCeremony,
   resolveCeremonyPolicy,
   scopeCeremonyDefault,
+  summaryConfirmationOwed,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -216,7 +217,6 @@ describe("t337 scope ceremony metadata", () => {
     )).toThrow(
       `Scope file ${path} names both guard_policy ("strict") and change_control ("relaxed") with different values. Keep guard_policy only.`,
     );
-    // Agreeing values, the new key alone, and the retired key alone all read.
     writeFileSync(path, "---\nname: torn\ndepth: Standard\nguard_policy: off\nchange_control: off\n---\n");
     writeFileSync(join(scopes, "aidlc-fresh.md"), "---\nname: fresh\ndepth: Standard\nguard_policy: off\n---\n");
     writeFileSync(join(scopes, "aidlc-old.md"), "---\nname: old\ndepth: Standard\nchange_control: relaxed\n---\n");
@@ -269,6 +269,19 @@ describe("t337 scope ceremony metadata", () => {
 });
 
 describe("t337 summary confirmation policy", () => {
+  test("disabling the confirmation check preserves the stage's summary question", () => {
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" }, () => {
+      const design = loadStageGraph().find((entry) => entry.slug === "functional-design")!;
+      const code = loadStageGraph().find((entry) => entry.slug === "code-generation")!;
+      const options = { scope: "feature", stateContent: "- **Scope**: feature\n" };
+      expect(summaryConfirmationOwed(design, options)).toBe(false);
+      expect(summaryConfirmationOwed(design, { ...options, ignoreGuardSwitch: true })).toBe(true);
+      expect(summaryConfirmationOwed(code, { ...options, ignoreGuardSwitch: true })).toBe(false);
+      process.env.AIDLC_DISABLE_SUMMARY_CONFIRMATION = "1";
+      expect(summaryConfirmationOwed(design, { ...options, ignoreGuardSwitch: true })).toBe(false);
+    });
+  });
+
   test("classic can finish without a summary receipt, but intent on restores the checkpoint", () => {
     const proj = createTestProject();
     tempDirs.push(proj);

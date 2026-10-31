@@ -90,11 +90,16 @@ the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
-Stable releases start from pushed version tags in `.github/workflows/release.yml`.
-Before tagging, merge the release-preparation PR and confirm its required branch
-checks. Stable publication validates the exact tag source and release assets and
-requires a passing Full Suite for the tagged commit: `release.yml` reuses a
-passing `full-suite-result` or calls `full-suite.yml` itself.
+Stable releases promote the source commit of a selected published preview.
+Run `promote-release.yml` on `main` with a preview tag, stable version, release
+notes and, optionally, the contributor list, or with no inputs to list available previews. The prepared tag contains
+one child commit with version metadata and pinned publication controls;
+`release.yml` validates that relationship and builds the stable artifacts.
+It runs packaging and native/installer/lifecycle/upgrade checks without repeating
+CI or Full Suite. Preview results and failures remain on the preview's release
+page, the promotion record keeps its warning lines, and the stable page links
+that preview. After publication, a metadata-only branch and PR link record the version on current
+`main`. See [the release steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
@@ -116,7 +121,7 @@ Security](19-supply-chain-security.md).
 
 ## Markdown structure
 
-Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+Use `markdownBlocks` in `core/tools/aidlc-markdown.ts` for block visibility,
 containers, link reference definitions, and claim splitting. It is backed by
 the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
 preserves consumer-specific visibility options. Do not add a Markdown
@@ -125,6 +130,20 @@ dependency, a hand-rolled block scanner, or a reference-definition grammar.
 do not fold that security boundary into the block adapter. See
 [Markdown structure](01-architecture.md#markdown-structure) for how the adapter
 recovers source lines from the renderer.
+
+## Where new tool code goes
+
+`core/tools/aidlc-lib.ts` takes no new code: a new function, type or constant
+goes in its area's module under `core/tools/` (an existing `aidlc-<area>.ts`, or
+a new one), never in `aidlc-lib.ts`. Code moves out of it one area at a time,
+byte for byte, and stays importable from it through one `export ... from` line,
+so nothing that imports `aidlc-lib.ts` changes; a module split out of it never
+imports `aidlc-lib.ts`. `tests/unit/t-aidlc-lib-only-shrinks.test.ts` fails on a
+name `aidlc-lib.ts` declares that is not on
+`tests/fixtures/aidlc-lib-declarations.txt`, and on a module it imports that
+imports it back (the ones that did before this rule are listed in the test); a
+move deletes its names from that list and lowers the file's size cap in
+`biome.json`, and neither is ever raised.
 
 ## Testing
 
@@ -239,9 +258,10 @@ The intent-configuration handlers share a single mutation path:
 | `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `collaborators`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
 | `aidlc engine config list [--json]` | `config-list` | Read all thirteen settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...] [--message <id>]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same twelve settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the twelve setting flags plus `--intent`, `--space`,
+`config-change` accepts only the twelve setting flags plus `--message` (and the
+`--person-words` forms from before it, which prove nothing), `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
@@ -257,9 +277,11 @@ otherwise the current stored value stays and the output says so in one line.
 Memory continues to control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Guard Policy values use `(set by you)`, explicit
-ceremony values use `(set by you)` from a typed switch or a check the person
-asked to turn off, and `(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
+`Review Override`; explicit Guard Policy and ceremony values use `(set by you)`
+when `settingTheirs` finds the person behind them (a typed switch, their own
+terminal, or the message of theirs the agent names with `--message <id>`, once
+`proveMessage` proves it) and
+`(set by a command)` otherwise, while inherited scope defaults retain scope provenance. A
 scope change preserves explicit overrides and absent legacy Guard
 Policy/ceremony rows. Only real stored field or source changes produce setting
 events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,
@@ -338,8 +360,8 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
-   - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
+   - `keywords` (optional): hint words the agent reads when it proposes a plan for `/aidlc <freeform text>`; no tool matches them. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. An empty list carries no hints. See [the agent proposes the plan](../guide/05-scopes-and-depth.md#the-agent-proposes-the-plan).
+   - `description` (optional): one-line summary rendered in `/aidlc --help` and in the compiled scope table in `tables.md`, beside the orchestrator skill.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
@@ -372,13 +394,13 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 2. **Tag the member stages** — in each stage that should run under `hotfix` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages (`workspace-scaffold`, `workspace-detection`, `state-init`) must include it — they always run.
 
-3. **Recompile + regenerate the scope-table** — `aidlc engine graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc engine gen scope-table` prints the canonical Markdown region for SKILL.md's compiled scope table. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc engine graph compile --check` and `aidlc engine gen scope-table --check` to confirm exit 0 (no drift).
+3. **Recompile + regenerate the scope-table** — `aidlc engine graph compile` transposes the `scopes:` tags into `tools/data/scope-grid.json`. Then `aidlc engine gen scope-table` prints the canonical Markdown region for the compiled scope table in `tables.md`, beside the orchestrator skill. Keep the region between the `<!-- BEGIN: compiled ... -->` / `<!-- END: compiled ... -->` markers generated, then run `aidlc engine graph compile --check` and `aidlc engine gen scope-table --check` to confirm exit 0 (no drift).
 
 4. **Verify the scope resolves** - `bun core/tools/aidlc-utility.ts intent-create --scope hotfix --project-dir /tmp/scope-smoke` should succeed and produce a state file with `Scope: hotfix`.
 
 5. **Verify `doctor` accepts it as an env default** — `AWS_AIDLC_DEFAULT_SCOPE=hotfix aidlc doctor` should report the env var as valid.
 
-6. **Verify keyword inference** (if `keywords` populated) — `aidlc engine scope detect --from-text --input "urgent customer issue" --project-dir /tmp/scope-smoke` should return `{"scope":"hotfix","source":"keyword","matches":["urgent"]}`.
+6. **Check the plan's hints read well** (if `keywords` populated) - the engine no longer matches them; the agent reads them in the plan proposal step (`next "<a request your plan is for>" --project-dir /tmp/scope-smoke` prints every plan with its hints). Make sure the line for yours says what the plan is for in plain words.
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 aidlc engine graph resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
@@ -392,8 +414,8 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 - Error messages list the new scope in alphabetical order without any code changes.
 - `/aidlc --doctor` treats `AWS_AIDLC_DEFAULT_SCOPE=hotfix` as valid.
 - `aidlc-utility scope-change --scope hotfix` on an in-flight workflow accepts the new scope.
-- The transpose drift guard: `aidlc-graph compile --check` fails the build if a stage's `scopes:` tag was edited without recompiling `scope-grid.json`. SKILL.md's compiled scope-table has its own `--check` drift guard (t67).
-- Keyword detection for freeform `/aidlc <text>` invocations reads each scope's `keywords` from its `.claude/scopes/*.md` frontmatter. Custom scopes with their own NL triggers auto-detect as soon as the `keywords` list is populated (no SKILL.md change needed). Users can still pass `--scope hotfix` explicitly to bypass inference.
+- The transpose drift guard: `aidlc-graph compile --check` fails the build if a stage's `scopes:` tag was edited without recompiling `scope-grid.json`. The compiled scope table in `tables.md` has its own `--check` drift guard (t67).
+- The plan proposal step for freeform `/aidlc <text>` lists each scope with the `keywords` hints from its `.claude/scopes/*.md` frontmatter; the agent reads them and proposes a plan. Custom scopes appear in that list as soon as they are installed (no SKILL.md change needed). Users can still pass `--scope hotfix` explicitly to skip the proposal.
 
 ### What does NOT validate automatically
 
@@ -408,7 +430,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 1. **Write the stage file** - create `core/aidlc-common/stages/<phase>/<slug>.md`. Frontmatter declares `slug`, `phase`, `execution`/`condition`, `lead_agent` and any `support_agents` (by agent slug), `mode` (`inline`, `subagent`, `pipeline`, or `mob`; `agent-team` is reserved and not yet implemented), `consumes` / `produces` (artifact vocabulary names), `optional_produces` for artifacts the stage writes only conditionally per unit (exempt from per-unit coverage), `requires_stage` (ordering edges), the `scopes:` membership list, any `sensors:` to bind, `for_each` if it iterates per Unit, and (on a per-unit stage) an optional `produces_kinds` map to prune produces artifacts to each Unit's kind. The body carries the stage's three compartments. See [Stage Definition](15-stage-definition.md) for the full field contract.
 
-2. **Recompile the graph** — `aidlc engine graph compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `aidlc engine graph compile --check` to confirm exit 0 (no drift). Then refresh the generated SKILL.md mirrors with `aidlc engine gen stage-table` and `aidlc engine gen scope-table`, and confirm `aidlc engine gen stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `aidlc engine orchestrate next --stage <slug> --single`.
+2. **Recompile the graph** — `aidlc engine graph compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `aidlc engine graph compile --check` to confirm exit 0 (no drift). Then refresh the generated table mirrors in `skills/aidlc/tables.md` with `aidlc engine gen stage-table` and `aidlc engine gen scope-table`, and confirm `aidlc engine gen stage-table --check` plus `scope-table --check` both exit 0. The stage is runnable immediately via `aidlc engine orchestrate next --stage <slug> --single`.
 
 3. **Regenerate the runners** — `aidlc engine gen runners` emits a `/aidlc-<slug>` runner skill per runnable compiled stage, so your new stage gets its typeable command with no hand-authoring. Run `aidlc engine gen runners --check` to confirm the on-disk runner set matches the compiled stage set (the drift guard; the bootstrap initialization stages are excluded by design).
 
@@ -421,7 +443,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 ### What validates automatically
 
 - **Graph placement.** Once you `compile`, the stage's edges (`requires_stage`, `consumes`, `produces`) are resolved and ordered; `compile --check` fails the build if the on-disk `stage-graph.json` drifts from the frontmatter.
-- **Generated stage table.** SKILL.md's Stage Graph table is rendered from compiled `stage-graph.json`; `aidlc-utility stage-table --check` fails if the generated region drifts (t32).
+- **Generated stage table.** The Stage Graph table in `tables.md`, beside the orchestrator skill, is rendered from compiled `stage-graph.json`; `aidlc-utility stage-table --check` fails if the generated region drifts (t32).
 - **Schema + references.** `aidlc-graph.ts compile` validates every stage's frontmatter via `aidlc-stage-schema.ts`, and `/aidlc --doctor` re-runs `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` / `consumes` slug resolves.
 - **Runner parity.** `aidlc-runner-gen.ts check` (and `t129`) fail if a compiled stage has no runner, or a runner exists for a stage that is gone.
 

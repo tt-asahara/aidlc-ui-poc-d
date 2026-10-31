@@ -5,7 +5,7 @@ structured, verifiable software-delivery workflows. One harness-neutral core
 runs natively in Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode,
 and GitHub Copilot.
 
-![version](https://img.shields.io/badge/version-2.11.0-blue)
+![version](https://img.shields.io/badge/version-2.11.2-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 
 The Quick Start below installs the latest stable AI-DLC release.
@@ -26,8 +26,10 @@ Windows PowerShell:
 irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
 ```
 
-The installer adds the native `aidlc` command and every harness runtime. Bun
-and Node.js are not required. On Windows, it installs for the current account
+The installer sets up everything AI-DLC needs: the native `aidlc` command and
+every harness runtime. You do not need to install Bun or Node.js; a native
+install runs its hooks and commands through `aidlc` and does not call `bun`.
+On Windows, it installs for the current account
 and automatically registers the bin directory in User PATH. Run it from a normal
 PowerShell window; one opened with "Run as administrator" gets a warning and a
 prompt, since installing as administrator is less safe. Open a new terminal
@@ -37,9 +39,9 @@ current-process PATH changes, use
 Windows uninstall removes only the User PATH entry recorded as installer-owned.
 On macOS, Linux, or WSL, follow the installer's PATH instruction if needed.
 
-Cannot install a native executable, or prefer to manage the project files
-manually? Install [Bun](https://bun.sh/), download
-`aidlc-copy-runtime-X.Y.Z.tar.gz` from the
+Prefer to manage the project files yourself, or cannot install a native
+executable? The manual-copy path is the one place Bun is needed: install
+[Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
 [release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
 the complete `runtime/<harness>/` directory into your project. This path does
 not require the native `aidlc` command.
@@ -84,8 +86,8 @@ guide in the table below. The complete walkthrough is in
 | Harness | Configure | Open | Invoke | Guide |
 | --- | --- | --- | --- | --- |
 | Claude Code | `aidlc config --harness claude` | `claude` | `/aidlc` | [Getting Started](docs/guide/01-getting-started.md) |
-| Kiro CLI >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
-| Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) | `aidlc config --harness kiro-ide` | Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` | `/aidlc` | [Kiro IDE](docs/guide/harnesses/kiro-ide.md) |
+| Kiro CLI (V2) >= 2.6 | `aidlc config --harness kiro` | `kiro-cli chat` | `/aidlc` | [Kiro CLI](docs/guide/harnesses/kiro-cli.md) |
 | Codex CLI >= 0.145.0 | `aidlc config --harness codex` | `codex` | `$aidlc` | [Codex CLI](docs/guide/harnesses/codex-cli.md) |
 | Cursor | `aidlc config --harness cursor` | Open Cursor or run `agent` | `/aidlc` | [Cursor](docs/guide/harnesses/cursor.md) |
 | opencode >= 1.17 | `aidlc config --harness opencode` | `opencode` | `/aidlc` | [opencode](docs/guide/harnesses/opencode.md) |
@@ -95,7 +97,10 @@ Model-provider setup belongs to the harness. Shipped project configuration
 keeps the provider and model already selected by the user. `aidlc config
 providers` can apply Amazon Bedrock settings on supported project surfaces or
 record manual setup for other harnesses. Kiro CLI and Kiro IDE need no provider
-answer because model access comes with Kiro. The methodology itself is
+answer because model access comes with Kiro. For Kiro's v3 engine on Kiro CLI
+2.24.1 or later, use `kiro-ide`, which pins it; `kiro` is Kiro CLI (V2)
+([Kiro CLI](docs/guide/harnesses/kiro-cli.md) says how an existing `kiro`
+project switches). The methodology itself is
 provider-independent.
 
 ## Recommended Model
@@ -116,7 +121,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 115-event audit trail plus persistent state, team knowledge, and learned rules
+- 126-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
@@ -135,7 +140,7 @@ for the architecture and methodology.
 | [Getting Started](docs/guide/01-getting-started.md) | Installing, configuring, and running your first workflow |
 | [User Guide](docs/guide/00-introduction.md) | Using workflows, profiles, agents, knowledge, and approval gates |
 | [Harness guides](docs/guide/harnesses/README.md) | Handling provider, trust, and runtime differences |
-| [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, or uninstalling |
+| [Install and Lifecycle](docs/guide/18-install-and-lifecycle.md) | Updating, pinning, installing offline, using mirrors, uninstalling, or removing AI-DLC from a project |
 | [Harness Engineer Guide](docs/harness-engineering/00-overview.md) | Reshaping stages, agents, rules, sensors, and knowledge |
 | [Development and Releases](DEVELOPERS.md) | Taking a PR through AI review, preview testing, and stable publication |
 | [Developer Reference](docs/reference/00-overview.md) | Changing the engine, hooks, packaging, or tests |
@@ -143,7 +148,7 @@ for the architecture and methodology.
 ## Repository Layout
 
 - `core/` - hand-authored, harness-neutral methodology and engine
-- `core/tools/` - 87 aidlc-*.ts engine and authoring tools
+- `core/tools/` - 104 aidlc-*.ts engine and authoring tools
 - `harness/<name>/` - thin, harness-specific manifests and integrations
 - `plugins/<name>/` - optional AIDLC plugins
 - `scripts/` - packaging, binary, installer, and release tooling
@@ -181,7 +186,7 @@ Run `aidlc doctor` from the project root first. Common fixes:
 
 | Symptom | Fix |
 | --- | --- |
-| `aidlc` is not found | On Windows, open a new terminal or use the direct command printed with [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell). On Unix, apply the installer's PATH instruction. |
+| `aidlc` is not found | On Windows, quit and reopen the terminal app or IDE (a new tab inside one that was open during the install keeps the old PATH), or use the direct command printed with [`-NoModifyPath`](docs/guide/18-install-and-lifecycle.md#windows-powershell). On Unix, apply the installer's PATH instruction. |
 | Project/runtime version skew | Finish the active workflow, then run `aidlc config` |
 | Codex hooks do not run | Trust the project hooks as described in the [Codex guide](docs/guide/harnesses/codex-cli.md) |
 | Bedrock access fails | Enable the configured models and verify AWS credentials and region |

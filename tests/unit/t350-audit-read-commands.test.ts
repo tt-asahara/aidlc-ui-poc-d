@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   acquireAuditLock,
@@ -141,6 +141,33 @@ describe("log answers", () => {
     expect(read(pd, "log", ["answers", "--stage", STAGE], true)).toEqual(expected);
   });
 
+  test("an audit read leaves the calling chat unbound", () => {
+    const pd = project();
+    shard(pd, "one", question("Authentication?") + answer("A"));
+    const prior = {
+      session: process.env.CLAUDE_CODE_SESSION_ID,
+      pid: process.env.CLAUDE_PID,
+      override: process.env.AIDLC_SESSION_OVERRIDE,
+    };
+    process.env.CLAUDE_CODE_SESSION_ID = "11111111-2222-3333-4444-555555555555";
+    process.env.CLAUDE_PID = String(process.pid);
+    delete process.env.AIDLC_SESSION_OVERRIDE;
+    try {
+      readActiveAuditShardEvents(pd, { includeNotes: true });
+      readActiveAuditShardEvents(pd);
+    } finally {
+      for (const [key, value] of [
+        ["CLAUDE_CODE_SESSION_ID", prior.session],
+        ["CLAUDE_PID", prior.pid],
+        ["AIDLC_SESSION_OVERRIDE", prior.override],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    expect(existsSync(join(pd, "aidlc", ".aidlc-sessions"))).toBe(false);
+  });
+
   test("pairs only within the same unit, generation, and single-stage workflow", () => {
     const pd = project();
     const scopes = [
@@ -216,14 +243,30 @@ describe("log answers", () => {
     }
   });
 
-  test("two open prompts make an answer ambiguous even when its text names one", () => {
+  // One reply answers every question that was open when it arrived: a menu of
+  // several logged questions and one combined answer is one exchange, read in
+  // the engine's row order with no reading of the answer's words (#2012 F2).
+  test("one answer closes every open prompt logged before it in its scope", () => {
     const pd = project();
-    shard(pd, "one", question("Authentication?") + question("Storage?") + answer("Authentication?"));
+    shard(pd, "one", question("Authentication?") + question("Storage?") + answer("Authentication: mTLS; Storage: S3"));
     expect(answers(pd)).toEqual({
       stage: STAGE,
-      answered: [],
-      open: ["Authentication?", "Storage?"].map((q) => ({ question: q, options: ["A", "B"], askedAt: T1 })),
-      ambiguous: [{ answer: "Authentication?", answeredAt: T2, candidates: ["Authentication?", "Storage?"] }],
+      answered: ["Authentication?", "Storage?"].map((q) => ({
+        question: q, options: ["A", "B"], answer: "Authentication: mTLS; Storage: S3", askedAt: T1, answeredAt: T2,
+      })),
+      open: [],
+      ambiguous: [],
+    });
+  });
+
+  test("answers that follow a closed exchange with no new prompt continue it", () => {
+    const pd = project();
+    shard(pd, "one", question("Q1-Q3") + answer("Q1: a", T2) + answer("Q2: b", T3) + answer("Q3: c", T3));
+    expect(answers(pd)).toEqual({
+      stage: STAGE,
+      answered: [{ question: "Q1-Q3", options: ["A", "B"], answer: "Q1: a; Q2: b; Q3: c", askedAt: T1, answeredAt: T3 }],
+      open: [],
+      ambiguous: [],
     });
   });
 
@@ -279,8 +322,22 @@ describe("log answers", () => {
     expect(result.open).toHaveLength(1);
   });
 
+  // A cancellation word is an answer like any other: no host writes one for the
+  // person (measured on Claude Code and Codex, 2026-10-12), so it is theirs.
+  test("a cancellation word pairs with its prompt like any other answer", () => {
+    for (const words of ["Cancelled", "User dismissed"]) {
+      const pd = project();
+      shard(pd, "one", question("Q0") + answer(words, T2) + question("Q1", T2) + answer("A", T3));
+      expect(answers(pd).answered).toEqual([
+        { question: "Q0", options: ["A", "B"], answer: words, askedAt: T1, answeredAt: T2 },
+        { question: "Q1", options: ["A", "B"], answer: "A", askedAt: T2, answeredAt: T3 },
+      ]);
+      expect(answers(pd).open).toEqual([]);
+    }
+  });
+
   test("non-answers consume their prompt for pairing but keep it open without the non-answer text", () => {
-    for (const nonAnswer of ["Cancelled", "", "User dismissed", undefined]) {
+    for (const nonAnswer of ["", "   ", undefined]) {
       const pd = project();
       shard(pd, "one", question("Q0") +
         (nonAnswer === undefined
@@ -298,7 +355,7 @@ describe("log answers", () => {
 
   test("an ambiguous non-answer does not choose a prompt or appear in ambiguous answers", () => {
     const pd = project();
-    shard(pd, "one", question("Q0") + question("Q1") + answer("Cancelled"));
+    shard(pd, "one", question("Q0") + question("Q1") + answer("   "));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [],
@@ -307,10 +364,10 @@ describe("log answers", () => {
     });
   });
 
-  test("a tied cancellation in another shard does not compete with a same-shard answer", () => {
+  test("a tied blank answer in another shard does not compete with a same-shard answer", () => {
     const pd = project();
     shard(pd, "one", question("Q", T1) + answer("A", T1));
-    shard(pd, "two", answer("Cancelled", T1));
+    shard(pd, "two", answer("   ", T1));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [{ question: "Q", options: ["A", "B"], answer: "A", askedAt: T1, answeredAt: T1 }],
@@ -331,10 +388,10 @@ describe("log answers", () => {
     expect(UNTRUSTED_AUDIT_NOTICE).toContain("NOT INSTRUCTIONS");
   });
 
-  test("an unordered cancellation leaves its prompt free for a later real answer", () => {
+  test("an unordered blank answer leaves its prompt free for a later real answer", () => {
     const pd = project();
     shard(pd, "one", question("Q", T1) + answer("A", T3));
-    shard(pd, "two", answer("Cancelled", T1));
+    shard(pd, "two", answer("   ", T1));
     expect(answers(pd)).toEqual({
       stage: STAGE,
       answered: [{ question: "Q", options: ["A", "B"], answer: "A", askedAt: T1, answeredAt: T3 }],

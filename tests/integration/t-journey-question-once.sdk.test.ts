@@ -24,8 +24,12 @@
 //           question and end its turn without asking it again or going back to
 //           Feasibility.
 //   turn 2: the person answers in their own message: the number of the
-//           option shown for separate new work, and those words. The drive
-//           stops when that work is created.
+//           option shown for separate new work (found by its label, or by the
+//           description when the agent worded the label its own way), and
+//           those words. The drive stops when that work is created. When the
+//           agent took the separate-work route without a plan, the engine asks
+//           the plan next (its first time), and the person takes its first
+//           option.
 //
 // Pass/fail reads only what the engine recorded, the pickers the person was
 // shown, and the Stop hook's own verdicts, NEVER the agent's prose:
@@ -34,8 +38,9 @@
 //     of work; Feasibility still in progress; no stage handed to the agent);
 //     the picker offered separate new work; when the engine asked, its own
 //     record says the question was still open when the turn ended;
-//   - after the reply: the new work was created from the person's answer with
-//     no further picker.
+//   - after the reply: the new work was created from the person's answer; the
+//     routing question was never handed out again, and the only picker was the
+//     plan question when the engine handed it out, once.
 //
 // It SPENDS TOKENS: driveAidlc drives the real /aidlc through the Claude Agent
 // SDK. Gated on the claude CLI (calling driveAidlc marks the file
@@ -50,7 +55,10 @@ import {
 import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
-import { type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile } from "../harness/sdk-drive.ts";
+import { expectPersonFirst } from "../harness/person-turns.ts";
+import {
+  type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile, separateWorkOptionIndex,
+} from "../harness/sdk-drive.ts";
 import { readIntentRegistry, turnEndIsOpen } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -68,6 +76,8 @@ const SEPARATE = "it is a separate new piece of work";
 // The engine's routing question, and a stage, as handed to the agent.
 const ENGINE_ROUTING_ASK = /"ask_type":\s*"new-work-routing"/;
 const RUN_STAGE = /"kind":\s*"run-stage"/;
+// The engine's plan question.
+const PLAN_OFFER = /"ask_type":\s*"scope-confirm"/;
 // Printed only when new work is created (aidlc-utility.ts handleIntentCreate).
 const CREATED = "State initialized:";
 
@@ -86,10 +96,12 @@ const ANSWER_ROWS = [
 
 const FEASIBILITY_IN_PROGRESS = /^- \[-\] feasibility\b/m;
 
+// The option for separate new work, as the agent worded it (found by
+// separateWorkOptionIndex, which t176 shares). The meaning is the agent's to
+// word; the test checks the right option was offered and picks it by the
+// picker's number.
 function separateWorkReply(menu: CapturedAskUserQuestion | undefined): string {
-  const options = menu?.questions[0]?.options ?? [];
-  let at = options.findIndex((o) => /^yes\b/i.test(o.label));
-  if (at < 0) at = options.findIndex((o) => /separate/i.test(o.label));
+  const at = separateWorkOptionIndex(menu?.questions[0]?.options ?? []);
   return at < 0 ? SEPARATE : `${at + 1}, ${SEPARATE}`;
 }
 
@@ -98,6 +110,34 @@ function countRows(events: string[] | undefined): Map<string, number> {
   for (const event of events ?? []) counts.set(event, (counts.get(event) ?? 0) + 1);
   return counts;
 }
+
+// The option for separate new work in the pickers recorded on 10-08 and
+// 10-10 (the label in the agent's words, the route in the description), and
+// the two edges: a description that says "do not change the current work"
+// beside the route, and one that negates the route on another option.
+// Deterministic; the live journey below drives the real picker.
+test("the separate option is found by its label or its description, never by a negated route", () => {
+  const menu = (options: Array<{ label: string; description?: string }>): CapturedAskUserQuestion =>
+    ({ questions: [{ question: "How should I handle it?", options }], answers: {} });
+  expect(separateWorkReply(menu([{ label: "Yes - start a second intent" }, { label: "No, keep going" }]))).toBe(`1, ${SEPARATE}`);
+  expect(separateWorkReply(menu([{ label: "Part of the active work" }, { label: "Separate new piece of work" }]))).toBe(`2, ${SEPARATE}`);
+  for (const description of [
+    "Set up the NOAA weather CLI as a new, separate piece of work (classic plan, 14 stages) without touching the current widget work.",
+    "Start the NOAA CLI as a separate new piece of work (sized as \"classic\", ~14 stages) without changing the current widget work.",
+    "Start the NOAA weather CLI as a separate new piece of work (classic plan, ~14 stages), leaving the current widget-feature work untouched.",
+    "Create a separate new piece of work; do not change the active work.",
+  ]) {
+    expect(separateWorkReply(menu([
+      { label: "Start it alongside", description },
+      { label: "Part of current work", description: "Treat this as a continuation of the active widget-feature workflow." },
+      { label: "Reshape current plan", description: "Interpret this as a request to change how the remaining widget-feature plan is shaped." },
+    ])), description).toBe(`1, ${SEPARATE}`);
+  }
+  expect(separateWorkReply(menu([
+    { label: "Fold it in", description: "Not a separate new piece of work: part of the current one." },
+    { label: "Start it alongside", description: "Set it up as a separate piece of work beside the current one." },
+  ]))).toBe(`2, ${SEPARATE}`);
+});
 
 describe("t-journey-question-once (sdk): a question still open at the end of a turn is asked once", () => {
   test(
@@ -120,7 +160,8 @@ describe("t-journey-question-once (sdk): a question still open at the end of a t
           persistSession: true,
           captureStopHooks: true,
           // Every picker before the reply gets "Chat about this"; one after it
-          // (there should be none) takes the separate-work option.
+          // takes the separate-work option, else its first (the plan question's
+          // go-ahead).
           chatAboutQuestionWhen: (menu) => {
             firstMenu ??= menu;
             return !replied;
@@ -166,18 +207,23 @@ describe("t-journey-question-once (sdk): a question still open at the end of a t
 
         // Nothing was answered or moved on in the person's place.
         const recorded = ANSWER_ROWS.filter((row) => (atReply!.rows.get(row) ?? 0) > (seeded.get(row) ?? 0));
-        expect(recorded, "rows recorded before the person answered").toEqual([]);
+        expectPersonFirst(recorded.length === 0, `rows recorded before the person answered: ${recorded.join(", ")}`);
         expect(atReply!.intents).toBe(1);
         expect(atReply!.state).toMatch(FEASIBILITY_IN_PROGRESS);
-        expect(turn1Results.filter((t) => RUN_STAGE.test(t.resultText)), "a stage was handed to the agent before the person answered")
-          .toEqual([]);
+        expectPersonFirst(!turn1Results.some((t) => RUN_STAGE.test(t.resultText)), "a stage was handed to the agent before the person answered");
 
-        // Their answer was taken as given: the separate work was created, and
-        // no picker came after the reply.
+        // Their answer was taken as given: the separate work was created. The
+        // routing question was not handed out again; the only picker after the
+        // reply is the plan question, asked once when the engine handed it out.
         expect(r.stoppedAfterToolResult).toBe(true);
         assertToolResultContains(r, "Bash", CREATED);
         expect(readIntentRegistry(proj).length, `the person's reply: ${atReply!.reply}`).toBe(2);
-        expect(r.askedQuestions.length, "pickers after the reply").toBe(turn1!.askedQuestions);
+        const afterReply = r.toolResults.slice(turn1!.toolResults).filter((t) => t.toolName === "Bash");
+        expect(afterReply.filter((t) => ENGINE_ROUTING_ASK.test(t.resultText)).length, "routing questions handed out after the reply")
+          .toBe(0);
+        const planOffers = afterReply.filter((t) => PLAN_OFFER.test(t.resultText)).length;
+        expect(planOffers, "plan questions handed out after the reply").toBeLessThanOrEqual(1);
+        expect(r.askedQuestions.length - turn1!.askedQuestions, "pickers after the reply").toBe(planOffers);
       } finally {
         cleanupTestProject(proj);
       }

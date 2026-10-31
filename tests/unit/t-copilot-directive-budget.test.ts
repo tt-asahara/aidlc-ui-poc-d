@@ -1,4 +1,5 @@
 // covers: function:harnessDirectiveLimit, function:releasedHarnessData, function:directiveLimitFor, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: subcommand:aidlc-state:unit
 //
 // #1411: VS Code's Copilot `run_in_terminal` tool keeps a command result whole
 // only up to 20,000 characters (MAX_OUTPUT_LENGTH in microsoft/vscode
@@ -27,6 +28,23 @@
 // reads that project file, so after `aidlc update` it takes the budget from the
 // copy of the same harness in the runtime it ships beside itself. A Bun engine
 // reads all of its data from its own tree, so it needs nothing more.
+//
+// `unit start` asks which Unit the engine routes with a `next` of its own
+// (AIDLC_ROUTE_CHECK=1) and reads the answer off its pipe. That `next` skips
+// the rules delivery, so it prints the whole step: the conductor persona on the
+// workflow's opening stage, and a lead persona the agent's step lists as a file
+// once a team has grown it. No host shows that print, so the next cases pin
+// that a step the agent was handed whole starts its Unit, on Copilot and past
+// the common limit on Claude.
+//
+// Building the Units in parallel (swarm) hands a wave of them out on one step,
+// as many as the step can hold. The conductor persona goes ahead of that step
+// when it does not fit beside it, and the step lists the lead's persona as a
+// file, so neither takes room from the Units: on the opening stage the wave
+// holds both of the fixture's Units, and a step too long for even one is the
+// size error that says what to change. A wave picked up again with the
+// person's kept replies holds fewer Units, so the step that carries their
+// words still goes out.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -51,6 +69,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seedAnsweredUnitQuestions,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -81,6 +101,8 @@ type RuleContent = { path: string; text: string };
 type Printed = {
   kind: string;
   stage?: string;
+  unit?: string;
+  lead_persona?: string;
   part?: number;
   parts?: number;
   receipt?: string;
@@ -90,6 +112,9 @@ type Printed = {
   conductor_persona?: string;
   inline_context_paths?: string[];
   message?: string;
+  wave?: { entries: Array<{ unit: string }> };
+  kept_replies?: unknown;
+  questions_only?: boolean;
 };
 type Delivery = {
   stage: string;
@@ -157,7 +182,6 @@ function addKnowledge(proj: string, harnessDir: string, agent: string, count: nu
   }
 }
 
-// The same project with the Claude harness installed beside Copilot's.
 function withClaude(proj: string, root: string): void {
   cpSync(join(root, "claude", ".claude"), join(proj, ".claude"), { recursive: true });
 }
@@ -180,12 +204,10 @@ function projectEngine(proj: string, harnessDir: string): Engine {
   return (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args];
 }
 
-// A native install's `aidlc` command.
 function nativeEngine(executable: string): Engine {
   return (args) => [executable, "engine", "orchestrate", ...args];
 }
 
-// Another tree's Bun tools pointed at the project.
 function treeEngine(root: string, harnessDir: string, proj: string): Engine {
   return (args) => [
     process.execPath, join(root, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", proj,
@@ -379,9 +401,16 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const deliveries = await stockDeliveries();
     expectWholeDeliveries(deliveries);
     for (const { stage, results } of deliveries) {
-      // Shipped rules fit one load-steering part when they do not fit inline.
-      expect(results.length, `${stage}: ${results.map(({ directive }) => directive.kind).join(" -> ")}`)
-        .toBeLessThanOrEqual(2);
+      // Shipped rules fit one load-steering part when they do not fit inline;
+      // the first stage's conductor persona may go ahead on a part of its own
+      // (the lead's persona rides the run-stage beside it).
+      const route = `${stage}: ${results.map(({ directive }) => directive.kind).join(" -> ")}`;
+      const parts = results.filter(({ directive }) => directive.kind === "load-steering");
+      const rulesParts = parts.filter(({ directive }) => (directive.rules_content ?? []).length > 0);
+      expect(rulesParts.length, route).toBeLessThanOrEqual(1);
+      for (const { directive } of parts) {
+        if ((directive.rules_content ?? []).length === 0) expect(directive.conductor_persona ?? "", route).toContain("conductor");
+      }
     }
   });
 
@@ -452,7 +481,6 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const path = join(proj, ".aidlc", "tools", "data", "harness.json");
     writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
     const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
-    // Refused at once, before any rules part is sent.
     expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
     for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
     expect(final.kind).toBe("error");
@@ -555,9 +583,13 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
       expect(body, skill).toContain("conductor_persona");
       const proj = projectFor(COPILOT_ROOT, ".aidlc", "functional-design", false);
       const delivery = await deliverIn(proj, ".aidlc", "functional-design", projectEngine(proj, ".aidlc"), first);
-      expect(delivery.results.map(({ directive }) => directive.kind), skill).toEqual(["load-steering", "run-stage"]);
+      // The rules come in a part (and, for the stage runner, whose step always
+      // carries the conductor persona, that persona in one before it).
+      const kinds = delivery.results.map(({ directive }) => directive.kind);
+      expect(kinds.at(-1), skill).toBe("run-stage");
+      expect(kinds.slice(0, -1).length, skill).toBeGreaterThan(0);
+      expect(kinds.slice(0, -1).every((kind) => kind === "load-steering"), skill).toBe(true);
       expectWholeDeliveries([delivery]);
-      // A single-stage run stays single across its rules parts.
       const single = (delivery.final as Printed & { single?: boolean }).single === true;
       expect(single, skill).toBe(first.includes("--single"));
     }
@@ -572,14 +604,54 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     expectWholeDeliveries(deliveries);
   });
 
-  test("functional-design, where #1411 was reported, steers on Copilot and stays one message on Claude", async () => {
+  // functional-design, where #1411 was reported, now takes its rules in a part
+  // on Claude too (the lead's persona rides its step), so Requirements Analysis
+  // shows that Copilot's limit stays Copilot's.
+  test("functional-design steers on Copilot, and a step that steers on Copilot stays one message on Claude", async () => {
     const kinds = (delivery: Delivery | undefined) => delivery?.results.map(({ directive }) => directive.kind);
-    const copilot = (await stockDeliveries()).find(({ stage }) => stage === "functional-design");
-    expect(kinds(copilot)).toEqual(["load-steering", "run-stage"]);
+    const stock = await stockDeliveries();
+    expect(kinds(stock.find(({ stage }) => stage === "functional-design"))).toEqual(["load-steering", "run-stage"]);
+    expect(kinds(stock.find(({ stage }) => stage === "requirements-analysis"))).toEqual(["load-steering", "run-stage"]);
     expect(existsSync(join(CLAUDE_ROOT, ".claude"))).toBe(true);
-    const claude = await deliver(CLAUDE_ROOT, ".claude", "functional-design", false);
+    const claude = await deliver(CLAUDE_ROOT, ".claude", "requirements-analysis", false);
     expect(kinds(claude)).toEqual(["run-stage"]);
     expect(claude.final.rules_content?.length ?? 0).toBeGreaterThan(0);
+    expect(Buffer.byteLength(claude.results[0]?.stdout ?? "", "utf-8")).toBeGreaterThan(copilotBudget());
+  });
+
+  // Reverse Engineering's step names each link's exact command for every
+  // registered repo. A workspace of many repos still gets its step: the
+  // commands ride for as many whole repos as fit, in order, and a link left out
+  // gets its exact command from the next step or from its refusal (#2865).
+  test("Reverse Engineering for 60 registered repos fits, with whole per-repo link chains in order", async () => {
+    const proj = projectFor(COPILOT_ROOT, ".aidlc", "reverse-engineering", false);
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: enterprise"));
+    const repos = Array.from({ length: 60 }, (_, index) => `svc-${String(index + 1).padStart(2, "0")}`);
+    const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = repos;
+    // Named by the person, so Reverse Engineering starts without asking which to read.
+    rows[0].repos_named = true;
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of repos) mkdirSync(join(proj, repo, "src"), { recursive: true });
+
+    const delivery = await deliverIn(proj, ".aidlc", "reverse-engineering");
+    expect(delivery.final.kind, delivery.final.message).toBe("run-stage");
+    for (const { stdout } of delivery.results) {
+      expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(copilotBudget());
+    }
+    const pipeline = (delivery.final as { pipeline?: { links: string[]; record: Array<{ link: string; repo?: string }> } })
+      .pipeline;
+    const links = pipeline?.links ?? [];
+    expect(links).toEqual(["aidlc-developer-agent", "aidlc-architect-agent"]);
+    const record = pipeline?.record ?? [];
+    expect(record.length).toBeGreaterThan(0);
+    expect(record.length).toBeLessThan(repos.length * links.length);
+    expect(record.length % links.length).toBe(0);
+    expect(record.map(({ link, repo }) => `${repo}:${link}`)).toEqual(
+      repos.slice(0, record.length / links.length).flatMap((repo) => links.map((link) => `${repo}:${link}`)),
+    );
   });
 });
 
@@ -661,8 +733,8 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
       },
     ] as const;
     for (const { runtime, change } of cases) {
-      const proj = releasedProject("functional-design", change);
-      const { results, final } = await deliverIn(proj, ".aidlc", "functional-design", nativeEngine(nativeRelease(runtime)));
+      const proj = releasedProject("requirements-analysis", change);
+      const { results, final } = await deliverIn(proj, ".aidlc", "requirements-analysis", nativeEngine(nativeRelease(runtime)));
       expect(results.map(({ directive }) => directive.kind), runtime).toEqual(["run-stage"]);
       expect(final.rules_content?.length ?? 0, runtime).toBeGreaterThan(0);
       expect(Buffer.byteLength(results[0]?.stdout ?? "", "utf-8"), runtime).toBeGreaterThan(copilotBudget());
@@ -741,11 +813,18 @@ function copilotTool(proj: string, path: string[], args: string[], input?: strin
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-// The person's reply in chat, read by the human-turn hook.
 function reply(proj: string, prompt: string): void {
   const { status, out } = copilotTool(proj, ["tools", "aidlc.ts"], ["engine", "hook", "record-human-turn"], JSON.stringify({
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,
   }));
+  expect(status, out).toBe(0);
+}
+
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const { status, out } = copilotTool(proj, ["tools", "aidlc-log.ts"], [
+    "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice, "--project-dir", proj,
+  ]);
   expect(status, out).toBe(0);
 }
 
@@ -805,6 +884,7 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
       expect(asked.at(-1), JSON.stringify(asked.at(-1))).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
       expect(buildAllowed(proj)).toBe(false);
       reply(proj, "1");
+      agentRecords(proj, "Approve Plan");
       const approved = () => readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8");
       expect(approved()).toContain("[Answer]: A. Approve Plan");
       // Even the stock rules do not fit beside the build under the budget.
@@ -915,4 +995,170 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
       expect(buildAllowed(proj)).toBe(true);
     });
   }
+});
+
+// A feature at Construction with two Units, built one at a time (or, with
+// "swarm", stage by stage and in parallel), Functional Design for alpha next.
+// "opening": no stage before it has finished, so its step carries the conductor
+// persona; "after-inception": Units Generation is done, as in a run that got here.
+function unitProject(
+  root: string,
+  harnessDir: string,
+  shape: "opening" | "after-inception",
+  policy = "off",
+  execution: "serial" | "swarm" = "serial",
+): string {
+  const proj = createTestProject();
+  projects.push(proj);
+  cpSync(join(root, harnessDir), join(proj, harnessDir), { recursive: true });
+  cpSync(join(root, "aidlc"), join(proj, "aidlc"), { recursive: true });
+  const construction = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
+  writeFileSync(seededStateFile(proj), [
+    "# AI-DLC State Tracking",
+    "## Project Information",
+    "- **Project**: Unit route",
+    "- **Project Type**: Greenfield",
+    "- **Project Type Source**: you",
+    "- **Scope**: feature",
+    "- **State Version**: 8",
+    "## Runtime State",
+    "- **Revision Count**: 0",
+    "- **Skeleton Stance**: off",
+    `- **Construction Iteration**: ${execution === "swarm" ? "stage-major" : "unit-major"}`,
+    "- **Unit Ownership**: solo",
+    "- **Construction Checkpoints**: enabled",
+    `- **Construction Execution**: ${execution}`,
+    "- **Construction Autonomy Mode**: gated",
+    "- **Review Override**: none",
+    `- **Guard Policy**: ${policy}`,
+    "## Scope Configuration",
+    "- **Stages to Execute**: all",
+    "- **Stages to Skip**: none",
+    "- **Depth**: Standard",
+    "- **Test Strategy**: Standard",
+    "## Stage Progress",
+    ...(shape === "after-inception" ? ["### INCEPTION PHASE", "- [x] units-generation \u2014 EXECUTE"] : []),
+    "### CONSTRUCTION PHASE",
+    ...construction.map((stage) => `- [${stage === "functional-design" ? "-" : " "}] ${stage} \u2014 EXECUTE`),
+    "- [ ] build-and-test \u2014 EXECUTE",
+    "## Current Status",
+    "- **Lifecycle Phase**: CONSTRUCTION",
+    "- **Current Stage**: functional-design",
+    "- **Status**: Running",
+    "",
+  ].join("\n"), "utf-8");
+  seedBoltDag(proj, ["alpha", "beta"]);
+  return proj;
+}
+
+// A team's own practices added to the lead's persona: 150 lines, about 10 KB.
+function growPersona(proj: string, harnessDir: string, agent: string, lines: number): void {
+  appendFileSync(
+    join(proj, harnessDir, "agents", `${agent}.md`),
+    `\n## Team practices\n${
+      Array.from({ length: lines }, (_, index) => `- Practice ${index}: keep the design notes short and name the trade-off.\n`)
+        .join("")
+    }`,
+  );
+}
+
+// The agent's own steps to alpha's Functional Design, then `unit start` as the
+// stage says. The route check `unit start` runs prints more than `limit`.
+async function startAlpha(proj: string, harnessDir: string, limit: number): Promise<Delivery> {
+  const delivery = await deliverIn(proj, harnessDir, "functional-design");
+  expect(delivery.final, JSON.stringify(delivery.final).slice(0, 400))
+    .toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
+  const routed = await orchestrate(proj, projectEngine(proj, harnessDir), ["next"], { AIDLC_ROUTE_CHECK: "1" });
+  expect(Buffer.byteLength(routed, "utf-8")).toBeGreaterThan(limit);
+  const state: Engine = (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-state.ts"), ...args];
+  const started = await runEngine(proj, state, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]);
+  expect(started.code, `${started.stdout}${started.stderr}`).toBe(0);
+  expect(JSON.parse(started.stdout)).toMatchObject({ emitted: "UNIT_STARTED", stage: "functional-design", unit: "alpha" });
+  return delivery;
+}
+
+describe("t-copilot-directive-budget: a Unit whose step is longer than one command result still starts", () => {
+  for (const policy of ["off", "relaxed", "strict"]) {
+    test(`the workflow's opening stage, with the conductor persona, starts its Unit (Guard Policy ${policy})`, async () => {
+      const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", policy);
+      const delivery = await startAlpha(proj, ".aidlc", copilotBudget());
+      expectWholeDeliveries([delivery]);
+      expect(delivery.results[0]?.directive.conductor_persona ?? "").toContain("conductor");
+    });
+  }
+
+  const teams: Array<[string, (proj: string) => void]> = [
+    ["a grown lead persona", (proj) => growPersona(proj, ".aidlc", "aidlc-architect-agent", 150)],
+    ["130 knowledge files for the lead", (proj) => addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 130)],
+  ];
+  for (const [label, team] of teams) {
+    test(`after Inception, ${label}: the agent's step lists the persona and fits, and the Unit starts`, async () => {
+      const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception");
+      team(proj);
+      const delivery = await startAlpha(proj, ".aidlc", copilotBudget());
+      expectWholeDeliveries([delivery]);
+      expect(delivery.final.lead_persona).toBeUndefined();
+    });
+  }
+
+  test("on Claude, a lead persona grown past the common limit still starts its Unit", async () => {
+    const proj = unitProject(CLAUDE_ROOT, ".claude", "after-inception");
+    growPersona(proj, ".claude", "aidlc-architect-agent", 300);
+    await startAlpha(proj, ".claude", 28 * 1024);
+  });
+});
+
+describe("t-copilot-directive-budget: building the Units in parallel hands them out within the budget", () => {
+  test("the workflow's opening stage lists both Units in its wave, and every part fits", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
+    const delivery = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([delivery]);
+    expect(delivery.final.wave?.entries.map(({ unit }) => unit)).toEqual(["alpha", "beta"]);
+    // On a part of its own or on the step itself, whichever fits, and once.
+    const personas = delivery.results.flatMap(({ directive }) => directive.conductor_persona ?? []);
+    expect(personas.length).toBe(1);
+    expect(personas[0]).toContain("conductor");
+  });
+
+  test("a wave step too long for even one Unit is the size error that says what to change", async () => {
+    const own = 9_000;
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", "off", "swarm");
+    addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 110);
+    const path = join(proj, ".aidlc", "tools", "data", "harness.json");
+    writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
+    const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
+    expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
+    for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
+    expect(final.message).toContain(`GitHub Copilot shows at most ${own} bytes`);
+    expect(final.message).toContain("knowledge files");
+  });
+
+  test("a Unit's questions picked up with the person's kept replies still go out before its wave", async () => {
+    const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception", "off", "swarm");
+    const units = Array.from({ length: 12 }, (_, index) => `unit-${String(index).padStart(2, "0")}`);
+    seedBoltDag(proj, units);
+    seedAnsweredUnitQuestions(proj, "functional-design", units);
+    const first = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([first]);
+    const handedOut = first.final.wave?.entries.length ?? 0;
+    expect(handedOut).toBeGreaterThan(1);
+    expect(handedOut).toBeLessThan(units.length);
+    // The first Unit's question is still blank: the person answered it in a
+    // chat that ended before the answer was written.
+    const dir = join(seededRecordDir(proj), "construction", "unit-00", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "functional-design-questions.md"),
+      "# Functional Design questions\n\n## Question 1\nWho runs it?\n\nA) A shop owner\nB) A developer\nX) Other\n\n[Answer]:\n",
+    );
+    reply(proj, `A, the shop owner. ${"They run it monthly from the terminal and want totals by month, refunds apart. ".repeat(15)}`);
+    const resumed = await deliverIn(proj, ".aidlc", "functional-design");
+    expectWholeDeliveries([resumed]);
+    expect(JSON.stringify(resumed.final.kept_replies ?? null)).toContain("A, the shop owner.");
+    // The open answer is unit-00's question step's, asked before the wave builds it.
+    expect(resumed.final.unit).toBe("unit-00");
+    expect(resumed.final.questions_only).toBe(true);
+    expect(resumed.final.wave).toBeUndefined();
+  });
 });

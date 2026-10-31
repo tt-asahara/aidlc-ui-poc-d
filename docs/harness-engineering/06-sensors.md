@@ -31,8 +31,27 @@ before you author anything:
   omitted.
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
-  sensor once for every existing declared deliverable path. The dispatch stays
-  outside the transaction because the sensor dispatcher takes the audit lock.
+  sensor once for every existing declared deliverable path (`upstream-coverage` and `claim-sources`, which read
+  the whole stage's output, once per output folder). At Reverse Engineering,
+  whose files repeat in every repository's code knowledge base folder,
+  `required-sections` and `upstream-coverage` fire once for the stage over every
+  repository's files, and a failing file is named with its repository
+  (`service-007/dependencies.md`). A gate the engine
+  approves itself under Construction autonomy fires only blocking sensors, since
+  advisory evidence has no reader there. The dispatch stays outside the
+  transaction because the sensor dispatcher takes the audit lock.
+- **Advisory gate checks run once before the gate, too.** When the stage's
+  documents are written and handed on, the first hand-off of the attempt (the
+  review request, or the report that opens the gate when no review took them
+  first) fires the advisory gate checks on those documents. When one reports
+  findings, the hand-off records nothing and comes back to the agent as its
+  step, naming the findings and the same command; the agent fixes what is its
+  own and runs it again, and it goes on. So the review sees the tidied
+  documents, and the gate, which fires every check again, names only what is
+  left. Blocking checks run only at the gate. A review the person asks for, an
+  isolated `--single` run, Units built in a swarm worker's checkout and a gate
+  the engine approves itself skip this step (`completionChecksStep` in
+  `aidlc-state.ts`).
 - **Severity controls gate enforcement.** `advisory` outcomes are recorded and
   the gate still opens. A `blocking` binding requires a verified pass: findings,
   unavailable tools, script/dispatcher errors, malformed verdicts, and timeouts
@@ -44,7 +63,8 @@ before you author anything:
 
 Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
-**`SENSOR_PASSED`** when it clears, and **`SENSOR_FAILED`** when it finds a gap.
+**`SENSOR_PASSED`** when it clears, **`SENSOR_FAILED`** when it finds a gap, and
+**`SENSOR_COULD_NOT_RUN`** when its script crashed or could not start.
 A failed row links to a detail file under
 `<record>/.aidlc-engine/sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
@@ -61,9 +81,9 @@ Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 | Manifest | Dispatch | Checks |
 |----------|----------|--------|
 | `aidlc-claim-sources.md` | Gate | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
-| `aidlc-required-sections.md` | Gate | The output carries the required H2 headings — a generic content-shape check. Timestamp run records (`*-timestamp.md`) always pass |
-| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
-| `aidlc-traceability.md` | Write: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
+| `aidlc-required-sections.md` | Gate | The output carries the `##` headings of its template, when a team template applies; with no template nothing is required. A failure says in one sentence what is missing |
+| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it requires (`required: true`) or marks `cited: true`, by slug, wikilink, or the producing stage's directory path |
+| `aidlc-traceability.md` | Gate: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
 | `aidlc-linter.md` | Write: `.ts` / `.js` | Wraps your configured linter (ESLint by default) |
 | `aidlc-type-check.md` | Write: `.ts` / `.tsx` | Wraps your configured type-checker (`tsc` by default) |
 
@@ -87,15 +107,15 @@ the framework deliberately removed it. A stage decides what fires on its
 outputs by naming the sensor in its own frontmatter:
 
 ```yaml
-# core/aidlc-common/stages/construction/ci-pipeline.md
+# core/aidlc-common/stages/construction/ci-pipeline.md (frontmatter, other keys left out)
 ---
-slug: ci-pipeline
-phase: construction
+...
 sensors:
   - required-sections
   - upstream-coverage
   - linter
   - type-check
+...
 ---
 ```
 
@@ -112,13 +132,17 @@ compartment is described from the stage's side in
 [Anatomy of a Stage](01-anatomy-of-a-stage.md); here we are looking at it from
 the sensor's side.
 
-At workflow start the compile resolver walks `.claude/sensors/`, indexes every
-manifest by id, and for each stage looks up each declared import — throwing
+When the graph compiles, the resolver walks `.claude/sensors/`, indexes every
+manifest by id, and for each stage looks up each declared import, throwing
 loudly at compile time if an id has no manifest, rather than failing silently
-when the stage runs. The resolved per-stage view is baked onto the stage graph
-node, and the hook reads it from there at fire time. One consequence to keep in
-mind: editing a manifest mid-workflow does **not** change what fires for the
-in-flight run. The compile snapshot holds until the next workflow starts. The
+when the stage runs. Which sensors a stage imports is baked onto its graph
+node, and so is each manifest's `matches`, which the write hook uses to decide
+whether a sensor fires. The dispatcher reads the manifest again each time a
+sensor fires, so a changed `command` or `timeout_seconds` applies from the next
+fire, while a changed `matches` and a new import wait for the next compile.
+Recompile after any sensor edit for predictable behaviour. On a native install the six shipped sensors' workers are
+picked by id, so editing a shipped manifest's `command` runs nothing different;
+a different check needs its own id. The
 full resolver mechanics are in
 [How stages import sensors](../reference/07-sensor-system.md#how-stages-import-sensors).
 
@@ -171,6 +195,115 @@ manifests with `SENSOR_FILE_REGEX = /^aidlc-([a-z][a-z0-9-]*)\.md$/` and silentl
 skips any file without the prefix, so it is never discovered and never binds to a
 stage. Name your sensor `core/sensors/aidlc-<id>.md` and set `id: <id>`; the
 filename-to-id rule applies to the stem after the prefix.
+
+### A complete example
+
+A gate sensor that fails while a document still says TBD. The manifest,
+`aidlc-no-tbd.md` in the sensors folder:
+
+```markdown
+---
+id: no-tbd
+kind: deterministic
+command: bun .claude/tools/aidlc-sensor-no-tbd.ts
+default_severity: advisory
+description: The document has no TBD left in it
+category: document-shape
+fire_on: gate
+matches: "**/intents/**"
+input_schema:
+  output_path: string
+  stage_slug: string
+output_schema:
+  pass: boolean
+  findings: string[]
+  findings_count: number
+timeout_seconds: 60
+---
+
+# no-tbd
+
+Fails when a stage output still says TBD, listing each line that does.
+```
+
+and its worker, `aidlc-sensor-no-tbd.ts` in the tools folder. A worker exports
+`main(argv)` (the native engine imports the file and calls it; the last line
+runs it under Bun), reads the path after `--output-path`, and prints one JSON
+line with `pass`, its findings, and `findings_count`, the number the audit row
+records (without it the row says 0); it exits 0 whatever it finds:
+
+```ts
+// no-tbd sensor: print {"pass", "findings", "findings_count"} for the file after --output-path.
+import { readFileSync } from "node:fs";
+
+export function main(argv: string[]): void {
+  const file = argv[argv.indexOf("--output-path") + 1];
+  const lines = readFileSync(file, "utf-8").split("\n");
+  const findings = lines.flatMap((line, i) => (/\bTBD\b/.test(line) ? [`line ${i + 1}: ${line.trim()}`] : []));
+  console.log(JSON.stringify({ pass: findings.length === 0, findings, findings_count: findings.length }));
+}
+
+if (import.meta.main) main(process.argv.slice(2));
+```
+
+Add `no-tbd` to a stage's `sensors:` list and recompile. In an installed Claude
+Code tree (the two files in `.claude/sensors/` and `.claude/tools/`, bound to
+the glossary stage from [Adding a Stage](02-adding-a-stage.md)), the engine
+describes it:
+
+```text
+$ aidlc engine sensor describe no-tbd
+id: no-tbd
+kind: deterministic
+command: bun .claude/tools/aidlc-sensor-no-tbd.ts
+default_severity: advisory
+description: The document has no TBD left in it
+category: document-shape
+matches: **/intents/**
+timeout_seconds: 60
+path: .claude/sensors/aidlc-no-tbd.md
+```
+
+and fires it by hand against a file with a TBD line (`fire` prints one line):
+
+```text
+$ aidlc engine sensor fire no-tbd --stage glossary-capture --output-path aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md
+{"fire_id":"cd665332","sensor_id":"no-tbd","stage":"glossary-capture","output_path":"aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md","result":"failed","detail_path":"aidlc/spaces/default/intents/.aidlc-engine/sensors/glossary-capture/no-tbd-cd665332.md"}
+```
+
+The detail file lists the finding the worker printed (its JSON block shown
+here without the fence):
+
+```text
+## Findings
+
+{
+  "pass": false,
+  "findings": [
+    "line 6: - Reorder level: TBD"
+  ],
+  "findings_count": 1
+}
+```
+
+and the audit shard gets the failed row:
+
+```text
+## Sensor Failed
+...
+**Event**: SENSOR_FAILED
+**Fire id**: cd665332
+**Sensor ID**: no-tbd
+**Stage slug**: glossary-capture
+**Output path**: aidlc/spaces/default/intents/261013-lab/inception/glossary-capture/glossary.md
+**Detail path**: aidlc/spaces/default/intents/.aidlc-engine/sensors/glossary-capture/no-tbd-cd665332.md
+**Findings count**: 1
+```
+
+After the line is fixed, the next fire reports `"result":"passed"` and the
+earlier detail file is removed. A worker that exits non-zero is recorded as
+`"result":"could-not-run"` with a note such as `"note":"script-error: exit-1"`,
+and the gate says the check could not run.
 
 ---
 

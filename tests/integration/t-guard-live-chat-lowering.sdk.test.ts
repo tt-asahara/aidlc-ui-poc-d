@@ -3,8 +3,8 @@
 // subcommand:aidlc-utility:status, scope:enterprise
 //
 // Live customer journey: the person lowers production guards by typing a
-// switch, which the shipped UserPromptSubmit hook applies, or by asking in
-// plain words, which the agent carries out as the person's request.
+// switch or by asking in plain words. The shipped UserPromptSubmit hook records
+// the request, and the agent carries it out as the person's request.
 // SPENDS TOKENS. Requires AIDLC_CLAUDE_SDK_LIVE=1 and --production-guards.
 // Like t-guard-recovery-production, the fixture profile skips rather than
 // restoring disabled guards. The runner explains an explicitly selected skip:
@@ -108,10 +108,10 @@ describe.skipIf(
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(0);
       expect(guardEvents("GUARD_DISABLED")).toHaveLength(0);
 
-      // The hook applies a typed switch when the prompt arrives, so `next` only
-      // ends the turn for the agent to say the hook's line. Stop at that
+      // The hook records the line; `next` names the setter and the agent runs
+      // it, and the setter's own line says what changed. Stop at that
       // deterministic step, before any stage work.
-      const APPLIED = "The setting the person typed is already applied";
+      const APPLIED = "is relaxed for this piece of work, as you asked in the chat";
       const relaxed = await drive("/aidlc --guard-policy relaxed", 240_000, {
         toolName: "Bash",
         resultIncludes: APPLIED,

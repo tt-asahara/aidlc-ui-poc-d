@@ -26,8 +26,9 @@
 //     stage-level artifacts; that unit's receipt for a per-unit write), or a
 //     stale-receipt recovery request is pending for it.
 // Everything the freeze must release on releases it automatically because
-// the scan is shared with the engine: GATE_REJECTED, STAGE_JUMPED, and
-// WORKFLOW_STARTED reset the floor (so post-rejection revisions are never
+// the scan is shared with the engine: GATE_REJECTED, STAGE_JUMPED,
+// WORKFLOW_STARTED and the person's Fix findings pick at a blocking gate
+// sensor reset the floor (so post-rejection revisions and that fix are never
 // frozen), a below-cap adversarial NOT-READY remains nonterminal so its repair
 // loop can edit, and non-produces writes (diary, questions, contributions,
 // the reviewer's own review file under `.aidlc-engine/reviews/`) never match.
@@ -50,13 +51,9 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync } from "node:fs";
-import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
   enterHookWorkflow,
-  acquireAuditLock,
-  auditFilePath,
   type ClaudeCodeHookInput,
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
@@ -84,16 +81,19 @@ import {
   readStateFile,
   recordHookDrop,
   recoveryGuidance,
-  releaseAuditLock,
   resolveReviewClass,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   teamUnitGateStatus,
   type StageEntry,
   writeGuardStoodAside,
+  recordGuardBlockedRow,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
+  leadingDirectoryChange,
+  powerShellPathBoundWriter,
   shellCommandAltersExecutableResolution,
   shellCommandInvocationDetails,
   shellCommandInvocations,
@@ -173,10 +173,6 @@ export function judgeFreeze(
   return { block: false };
 }
 
-// The block reason handed back through the harness's PreToolUse error
-// channel. Self-explaining and redirecting: it names the invariant, restores
-// the quote-at-gate route for suggestions, and names the state-correct route
-// that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
   "Record the person's Request Changes decision, with what they said should " +
   "change (ask only if they have not said), before editing the document; that " +
@@ -199,6 +195,10 @@ export function reviewFreezeRecoveryGuidance(
   }
 }
 
+// The block reason handed back through the harness's PreToolUse error
+// channel. Self-explaining and redirecting: it names the invariant, restores
+// the quote-at-gate route for suggestions, and names the state-correct route
+// that legitimately reopens a real defect.
 export function blockReason(
   v: FreezeVerdict,
   guidance = REVIEW_FREEZE_FALLBACK_GUIDANCE,
@@ -233,7 +233,6 @@ export async function run(input: string): Promise<number> {
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
-    // Deterministic off-switch: enforcement disabled entirely.
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {
@@ -285,7 +284,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     const recordedRepos = new Set(intentRepos(projectDir));
     for (const stage of loadStageGraph()) {
       if (!stage.reviewer || !openSlugs.has(stage.slug)) continue;
-      // Cheap suffix pre-check via reviewedArtifactUnit happens inside
+      // Cheap suffix pre-check via reviewedArtifactUnit happens before
       // judgeFreeze; the receipt scan only runs for a stage that actually
       // matched a target (freshReviewReceipts walks the whole ledger).
       let receipts: FreshReviewReceipts | null = null;
@@ -347,37 +346,17 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     }
   }
 
-  // Audit the refusal so the run's record shows when the freeze bit.
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
-  // the block decision is already made, and a lock-starved fan-out must not
-  // stretch a fast refuse into a laggy one - a dropped advisory row is
-  // preferable to a slow block.
-  try {
-    if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
-          appendAuditEntryUnlocked(
-            "REVIEW_FREEZE_BLOCKED",
-            {
-              Tool: toolName,
-              Target: verdict.target ?? "",
-              Stage: verdict.stage ?? "",
-              ...(verdict.unit ? { Unit: verdict.unit } : {}),
-            },
-            projectDir,
-          );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEW_FREEZE_BLOCKED row dropped (block still enforced)");
-      }
-    }
-  } catch {
-    // Advisory emission only.
-  }
 
+  recordGuardBlockedRow(projectDir, {
+    eventType: "REVIEW_FREEZE_BLOCKED",
+    hook: HOOK_NAME,
+    reason: "review-receipt",
+    tool: toolName,
+    target: verdict.target ?? "",
+    stage: verdict.stage ?? "",
+    ...(verdict.unit ? { unit: verdict.unit } : {}),
+    session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+  });
   const stage = blockedStage;
   const receipts = blockedReceipts;
   if (stage === null || receipts === null) {
@@ -425,8 +404,10 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
       (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
       memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
+  // The sentence above already says to quote a suggestion at the gate, so the
+  // agent's own step to do that is never the guidance.
   const guidance =
-    evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
+    evaluated.remedies.find((remedy) => remedy.executableNow && remedy.op !== "present-findings-at-gate")?.action ??
     reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug, recoveryGuidance, {
       ...(verdict.unit ? { unit: verdict.unit } : {}),
       ...(teamGate ? { teamGate } : {}),

@@ -1,87 +1,23 @@
 // covers: subcommand:aidlc-utility:init, subcommand:aidlc-utility:status, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:set-status, subcommand:aidlc-utility:config-change, subcommand:aidlc-utility:doctor, subcommand:aidlc-utility:detect-scope, subcommand:aidlc-utility:resolve-env-scope
 //
-// CLI-contract port of tests/unit/t27-tool-utility.sh (TAP plan 81),
-// mechanism = cli. Equal-or-stronger migration: every .sh assertion that
-// shelled out to `bun aidlc-utility.ts <sub> ...` is preserved by SPAWNING
-// the real CLI via node:child_process spawnSync (BUN + the tool .ts path),
-// asserting on res.status / res.stdout / res.stderr exactly as the .sh
-// asserted on $? / stdout / stderr, plus on the aidlc-state.md and audit.md
-// the tool writes — the PROCESS boundary, not in-process handle* calls. An
-// in-process twin would lose every exit-code half the .sh relies on (the
-// tool's die() path is emitError -> process.exit(1); doctor's report ends in
-// process.exit(failed > 0 ? 1 : 0)). It would also lose the resolve-env-scope
-// "unset prints nothing, exits 0" arm and the doctor env-scope branches the
-// .sh observes through stdout.
+// CLI-contract test, mechanism = cli. Every assertion SPAWNS the real CLI via
+// node:child_process spawnSync (BUN + the tool .ts path), asserting on
+// res.status / res.stdout / res.stderr, plus on the aidlc-state.md and audit
+// shards the tool writes - the PROCESS boundary, not in-process handle* calls.
+// An in-process twin would lose every exit-code check (the tool's die() path is
+// emitError, which never returns and exits 1; doctor exits non-zero when a
+// check failed). It would also lose the resolve-env-scope "unset prints
+// nothing, exits 0" arm and the doctor env-scope branches observed through
+// stdout.
 //
 // SUBCOMMAND UNITS (the covers: header is the COLON form, credited verbatim):
 //   init, status, scope-change, set-status, config-change, doctor, detect-scope,
-//   resolve-env-scope. All eight are fired here. (enable-test-run was dropped per
-//   #369 when the test-run mechanism was removed. help / version are exercised by
-//   the .sh too but t27's covers: line (per the port spec) credits these eight;
-//   help is still asserted below as the .sh did, so parity is preserved even
-//   though help is not a separately-credited unit.)
+//   resolve-env-scope. All eight are fired here.
 //
-// PARITY NOTES (every .sh `ok` line maps to expect()s below; several STRONGER):
-//   - .sh T1-T4   help contains AI-DLC / --status / enterprise / all 8 scopes
-//       -> Test 1-4: r.stdout substring + per-scope loop (same observable).
-//   - .sh T5      status sans state "No active"                  -> Test 5.
-//   - .sh T6-T8   status shows IDEATION / Feasibility / feature  -> Test 6-8.
-//   - .sh T9      status md5 unchanged                            -> Test 9:
-//       byte-for-byte readFileSync before/after equality (STRONGER than md5).
-//   - .sh T10-T12 doctor mentions aidlc-statusline / write-audit-log / settings
-//       -> Test 10-12 (same observable; absorbs the non-zero exit like || true).
-//   - .sh T13     doctor appends to audit.md (size grows)         -> Test 13:
-//       byte-length grows (same) + HEALTH_CHECKED count === 1 (STRONGER).
-//   - .sh T14     init creates state.md / audit.md / knowledge/   -> Test 14.
-//   - .sh T15     init "Workspace scaffolded"                     -> Test 15.
-//   - .sh init-rejection trio  rc==1 / "already exists" / "--force" -> Test R.
-//   - .sh T16-T18 scope-change poc->mvp Scope/Stages/Depth        -> Test 16-18
-//       (STRONGER: SCOPE_CHANGED New Scope field asserted exact in Test 16).
-//   - .sh T19+T20 same-scope no-op (md5 unchanged) + "already"    -> Test 19/20
-//       (STRONGER byte-equality).
-//   - .sh T21     unknown scope "Unknown scope"                   -> Test 21
-//       (STRONGER: rc==1 also pinned).
-//   - .sh T22     SCOPE_CHANGED audit event                       -> Test 22:
-//       event count === 1 against seeded baseline (STRONGER than presence).
-//   - .sh T25-T28 set-status Lifecycle/Current/Agent/[-]          -> Test 25-28
-//       (STRONGER: exact field values + JSON ack).
-//   - .sh T29/T30 set-status unknown stage / no state            -> Test 29/30
-//       (STRONGER: rc==1 also pinned).
-//   - .sh T31     set-status cross-phase CONSTRUCTION             -> Test 31.
-//   - .sh T32     set-status --agent override                    -> Test 32.
-//   - .sh T33     init bootstrap workspace-scaffold checkbox      -> Test 33.
-//   - .sh T34-T36 (enable-test-run field / idempotent / no state) were DROPPED
-//       per #369 when the test-run mechanism was removed.
-//   - .sh T37     help --depth                                    -> Test 37.
-//   - .sh T38-T43 config-change depth: set / no-op / unknown / event / no-state
-//       -> Test 38-43 (STRONGER byte-equality + event-count===1).
-//   - .sh T44     scope-change --depth override                  -> Test 44.
-//   - .sh T45     init --depth override                          -> Test 45.
-//   - .sh T46/T47 help --test-strategy / workshop                -> Test 46/47.
-//   - .sh T48-T54 config-change strategy: set / no-op / unknown / event /
-//       no-state / init-override -> Test 48-54.
-//   - .sh T55     both flags atomic: Depth + Strategy + exactly-one each event
-//       -> Test 55 (4 expect()s: 2 fields + 2 event counts === 1).
-//   - .sh T56     depth no-op emits only TEST_STRATEGY_CHANGED    -> Test 56:
-//       "Depth is already Standard" + DEPTH_CHANGED count === 0 (STRONGER).
-//   - .sh T57     invalid strategy validates before write        -> Test 57:
-//       "Unknown test strategy" + byte-equality (validate-before-write).
-//   - .sh T58     no flags "requires"                             -> Test 58
-//       (STRONGER: rc==1 pinned).
-//   - .sh T59-T61 doctor env-scope unset / valid / invalid        -> Test 59-61.
-//   - .sh T62-T64 resolve-env-scope unset/valid/invalid (rc + out) -> Test 62-64.
-//   - .sh T65     detect-scope SCOPE_DETECTED                     -> Test 65:
-//       event count === 1 (STRONGER) + JSON ack emitted.
-//   - .sh T66     detect-scope invalid scope rc==1               -> Test 66.
-//   - .sh T67     status "Awaiting your approval" for [?]         -> Test 67.
-//   - .sh T68     status "Revising" + "revision 1 of 3" for [R]   -> Test 68.
-//   - .sh T69     init emits WORKFLOW_STARTED as first event      -> Test 69.
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file
-// + seed_audit_file + cleanup_test_project per case): each case uses a FRESH
-// temp project dir (createTestProject, which toPortablePath-converts on Windows
-// so the audit.md/state.md the tool writes via forward-slash helpers round-trip
-// when read back). State-seeding cases copy state-mid-ideation.md; audit-seeding
+// FIXTURE DISCIPLINE: each case uses a FRESH temp project dir
+// (createTestProject, which toPortablePath-converts on Windows so the
+// audit.md/state.md the tool writes via forward-slash helpers round-trip when
+// read back). State-seeding cases copy state-mid-ideation.md; audit-seeding
 // cases copy audit-sample.md (whose seed contains NONE of the events asserted
 // here, so post-fire counts are unambiguous). All temp dirs cleaned in afterAll.
 // NOTHING is written under tests/fixtures/**.
@@ -121,7 +57,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const STATE_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
@@ -137,11 +73,10 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
   stdout: string;
 }
 
-/** Spawn `bun aidlc-utility.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function util(args: string[], p?: string, env?: Record<string, string>): CliResult {
   const finalArgs = p ? [TOOL, ...args, "--project-dir", p] : [TOOL, ...args];
   const childEnv = stripScope(env);
@@ -151,8 +86,8 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
   const res = spawnSync(BUN, finalArgs, {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
-    // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
-    // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
+    // stripScope: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
+    // developer's shell default cannot shadow the tests.
     env: childEnv,
   });
   const stdout = res.stdout ?? "";
@@ -173,7 +108,6 @@ function state(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-/** Build an env with AWS_AIDLC_DEFAULT_SCOPE removed, optionally layering overrides. */
 function stripScope(overrides?: Record<string, string>): Record<string, string> {
   const base: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -183,11 +117,10 @@ function stripScope(overrides?: Record<string, string>): Record<string, string> 
   return { ...base, ...(overrides ?? {}) };
 }
 
-// P4: intent-create writes state into the created intent's per-intent record dir
-// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
+// intent-create writes state into the created intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<date>-<slug>/), not the flat aidlc-docs/. Resolve
 // the record dir from the active-space + active-intent cursors, falling back to
-// the flat layout for a not-yet-created / seeded-flat project (the many state-seeding
-// cases below never call init, so they stay flat).
+// the flat layout when no cursor names a record with a state file.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -265,7 +198,6 @@ function auditFieldIn(content: string, ev: string, key: string): string {
   return "";
 }
 
-/** Fresh bare temp project (create_test_project). */
 function bareProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -273,7 +205,7 @@ function bareProj(): string {
 }
 
 /**
- * Fresh project with the shipped .claude/ copied in (settings.json + all 10
+ * Fresh project with the shipped .claude/ copied in (settings.json + all
  * hooks + tools). Doctor's hook-presence check derives its EXPECTED roster from
  * settings.json's wired hooks and probes them against .claude/hooks/, so a full
  * install is the fixture that exercises the all-present happy path. `mutate` can
@@ -286,7 +218,14 @@ function installedProj(mutate?: (claudeDir: string) => void): string {
   return p;
 }
 
-/** Fresh empty mktemp dir with NO aidlc-docs/ (mirrors the .sh's `mktemp -d`). */
+/** The person turned AI-DLC's status line on: it lives in their own settings.local.json (#1407). */
+function withStatusLineOn(claudeDir: string): void {
+  const shipped = JSON.parse(readFileSync(join(claudeDir, "tools", "data", "harness.json"), "utf-8")) as {
+    statusLine?: unknown;
+  };
+  writeFileSync(join(claudeDir, "settings.local.json"), `${JSON.stringify({ statusLine: shipped.statusLine }, null, 2)}\n`);
+}
+
 function emptyDir(): string {
   const base = process.env.TMPDIR || tmpdir();
   const p = toPortablePath(mkdtempSync(join(base, "aidlc-test-")));
@@ -294,21 +233,19 @@ function emptyDir(): string {
   return p;
 }
 
-/** Project seeded with state-mid-ideation.md (create_test_project + seed_state_file). */
 function stateProj(): string {
   const p = bareProj();
   seedStateFile(p, STATE_FIXTURE);
   return p;
 }
 
-/** Project seeded with state + audit (the common scope/config-change combo). */
 function stateAuditProj(): string {
   const p = stateProj();
   seedAuditFile(p);
   return p;
 }
 
-/** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's `^**Event**: <ev>` grep, as exact count. */
+/** Count audit blocks with `**Event**: <ev>`. */
 function auditEventCount(file: string, ev: string): number {
   if (!existsSync(file)) return 0;
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
@@ -343,7 +280,7 @@ function auditField(file: string, ev: string, key: string): string {
   return "";
 }
 
-/** Read a `- **Field**: value` line from the state file (mirrors assert_grep 'Field.*value'). */
+/** Read a `- **Field**: value` line from the state file. */
 function stateField(p: string, field: string): string {
   const content = readFileSync(statePath(p), "utf-8");
   const m = content.match(new RegExp(`^- \\*\\*${field}\\*\\*:\\s*(.*)$`, "m"));
@@ -351,8 +288,7 @@ function stateField(p: string, field: string): string {
 }
 
 // ============================================================
-// help (the .sh's T1-4, T37, T46-47 — not a separately-credited
-// subcommand unit, but preserved for parity)
+// help (not a separately-credited subcommand unit)
 // ============================================================
 
 describe("t27 aidlc-utility help (migrated from t27-tool-utility.sh, plan 81)", () => {
@@ -400,6 +336,48 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain("No active");
   });
 
+  // A teammate's clone: the records are here, the per-user cursor is not.
+  // Status names each piece of work and where it stands, never "no workflow".
+  function cloneWithRecords(withArchived = false): string {
+    const p = bareProj();
+    const intents = join(p, "aidlc", "spaces", "default", "intents");
+    const finished = readdirSync(intents).find((name) => name.startsWith("fixture-"))!;
+    seedStateFile(p, "state-completed.md");
+    const other = "261016-other-work";
+    mkdirSync(join(intents, other), { recursive: true });
+    cpSync(STATE_FIXTURE, join(intents, other, "aidlc-state.md"));
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+    registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "other-work", dirName: other, status: "in-flight" });
+    if (withArchived) {
+      const old = "261001-old-work";
+      mkdirSync(join(intents, old), { recursive: true });
+      cpSync(STATE_FIXTURE, join(intents, old, "aidlc-state.md"));
+      registry.push({ uuid: "00000000-0000-7000-8000-000000000003", slug: "old-work", dirName: old, status: "archived" });
+    }
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    rmSync(join(intents, "active-intent"), { force: true });
+    expect(finished).toBeDefined();
+    return p;
+  }
+
+  test("5b: status with work here and none selected names each piece and where it stands", () => {
+    const r = util(["status"], cloneWithRecords());
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("No active");
+    expect(r.stdout).toContain("No work is selected in this conversation. Work in this project:");
+    expect(r.stdout).toMatch(/ {2}fixture \(record fixture-[0-9a-f]+\): finished\n/);
+    expect(r.stdout).toContain("  other-work (record 261016-other-work): at Feasibility");
+    expect(r.stdout).toContain("To carry on with one, or go back to one of its stages: /aidlc intent <record>");
+    expect(r.stdout).toContain('To start new work: /aidlc "build the auth service"');
+  });
+
+  test("5c: archived work is counted, not listed", () => {
+    const r = util(["status"], cloneWithRecords(true));
+    expect(r.stdout).toContain("other-work");
+    expect(r.stdout).not.toContain("old-work");
+    expect(r.stdout).toContain("(1 archived; /aidlc intent list --all shows it)");
+  });
+
   test("6: status shows IDEATION phase", () => {
     const r = util(["status"], stateProj());
     expect(r.stdout).toContain("IDEATION");
@@ -420,7 +398,7 @@ describe("t27 aidlc-utility status", () => {
     const before = readFileSync(statePath(p), "utf-8");
     util(["status"], p);
     const after = readFileSync(statePath(p), "utf-8");
-    expect(after).toBe(before); // STRONGER than md5 — byte-for-byte
+    expect(after).toBe(before);
   });
 
   test("67: status shows Awaiting your approval for [?] stage", () => {
@@ -484,7 +462,7 @@ describe("t27 aidlc-utility status", () => {
     state(["checkbox", "code-generation=skipped"], p);
     const r = util(["status"], p);
     expect(r.stdout).toContain("approved - ready to advance");
-    expect(r.stdout).toContain(" - 1 skipped");
+    expect(r.stdout).toContain(", skipped: Code Generation");
     expect(r.stdout).not.toContain("\u2014");
     expect(r.stdout).not.toContain("\u2192");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -510,18 +488,20 @@ describe("t27 aidlc-utility status", () => {
 
 describe("t27 aidlc-utility doctor", () => {
   test("10-12: doctor mentions aidlc-statusline, write-audit-log, settings", () => {
-    // Hook rows now derive from settings.json's wired hooks (the contract), so
-    // the project needs a real .claude/ for those labels to render.
-    const p = installedProj();
+    // Hook rows derive from settings.json's wired hooks (the contract), so
+    // the project needs a real .claude/ for those labels to render. AI-DLC's
+    // status line is wired only once the person turns it on, in their own
+    // settings.local.json (#1407), and doctor checks it from there.
+    const p = installedProj(withStatusLineOn);
     const r = util(["doctor", "--verbose"], p);
     expect(r.stdout).toContain("aidlc-statusline");
     expect(r.stdout).toContain("write-audit-log");
     expect(r.stdout).toContain("settings");
   });
 
-  // INITIALIZED-project contract: when audit.md already exists, doctor appends
-  // HEALTH_CHECKED to it (size grows, exactly one row). This is the
-  // audit.md-exists arm of the cold-safe gate (#4) — seeding audit.md FIRST is
+  // INITIALIZED-project contract: when the audit shard already exists, doctor
+  // appends HEALTH_CHECKED to it (size grows, exactly one row). This is the
+  // audit-exists arm of the cold-safe gate (#4) - seeding the shard FIRST is
   // what makes the emit fire.
   test("13: doctor appends to the audit shard when it exists (size grows, exactly one HEALTH_CHECKED)", () => {
     // Seed state + audit so the intent record RESOLVES (the active-intent cursor
@@ -532,32 +512,29 @@ describe("t27 aidlc-utility doctor", () => {
     util(["doctor"], p);
     const after = statSync(auditPath(p)).size;
     expect(after).toBeGreaterThan(before);
-    // STRONGER: the .sh only checked growth; pin the canonical event count.
     expect(auditEventCount(auditPath(p), "HEALTH_CHECKED")).toBe(1);
   });
 
-  // COLD-SAFE contract (#4): on a project with NO audit.md, --doctor is
-  // read-only — it prints the health report (exit code aside) but creates
-  // neither aidlc-docs/audit.md nor any audit side effect. bareProj() makes
-  // aidlc-docs/ but NOT audit.md, so this is the pristine arm. The README
-  // onboarding runs --doctor before --init, so doctor must scaffold nothing.
+  // COLD-SAFE contract (#4): on a project with NO audit shard, --doctor is
+  // read-only - it prints the health report (exit code aside) but creates no
+  // audit side effect. bareProj() makes the workspace shell but NOT an audit
+  // shard, so this is the pristine arm. The README onboarding runs doctor
+  // before any intent is created, so doctor must scaffold nothing.
   test("13b: doctor on a project without audit.md creates nothing (cold-safe / read-only)", () => {
     const p = bareProj();
-    expect(existsSync(auditPath(p))).toBe(false); // precondition: no audit yet
+    expect(existsSync(auditPath(p))).toBe(false);
     const r = util(["doctor"], p);
-    // The health report still printed (the diagnostic is always emitted).
     expect(r.stdout).toContain("AI-DLC doctor");
-    // The cold-safe invariant: doctor created no audit.md as a side effect.
     expect(existsSync(auditPath(p))).toBe(false);
   });
 
-  // FINDING #3: doctor's expected hook roster is the set of hooks settings.json
-  // wires (its hooks event blocks + the statusLine command), so all 10 framework
-  // hooks are checked — including the three the old hardcoded 7-element list
-  // silently skipped (runtime-compile, sensor-fire, and the flow-altering stop
-  // hook). Each prints a "<hook>.ts present" line. A full install wires all 10.
+  // Doctor's expected hook roster is the set of hooks settings.json wires (its
+  // hooks event blocks + the statusLine command). Each prints a "<hook>.ts
+  // present" line.
   test("12b: doctor checks all 10 settings.json-wired hooks, including the 3 the old list skipped", () => {
-    const p = installedProj();
+    // The statusline is the person's choice (#1407): wired by their own
+    // settings.local.json once they turn it on, and checked from there.
+    const p = installedProj(withStatusLineOn);
     const r = util(["doctor", "--verbose"], p);
     for (const hook of [
       "aidlc-write-audit-log",
@@ -567,38 +544,40 @@ describe("t27 aidlc-utility doctor", () => {
       "aidlc-session-start",
       "aidlc-session-end",
       "aidlc-statusline",
-      "aidlc-rebuild-stage-graph", // previously missing
-      "aidlc-run-sensors", // previously missing
-      "aidlc-continue-workflow", // previously missing (the flow-altering Stop hook)
+      "aidlc-rebuild-stage-graph",
+      "aidlc-run-sensors",
+      "aidlc-continue-workflow", // the flow-altering Stop hook
     ]) {
-      // A wired-and-present hook renders an "ok <hook>.ts present" row.
       expect(r.stdout).toContain(`${hook}.ts present`);
     }
+    // Off, the status line is simply not wired: no row for it, and never
+    // reported as shipped-but-unwired enforcement.
+    const off = util(["doctor", "--verbose"], installedProj());
+    expect(off.stdout).toContain("aidlc-write-audit-log.ts present");
+    expect(off.stdout).not.toContain("aidlc-statusline.ts present");
+    expect(off.stdout).not.toContain("aidlc-statusline.ts shipped but not wired");
   });
 
-  // FINDING #1 (review): the hook check must FLAG a wired-but-missing hook, not
-  // silently drop it. The expected roster comes from settings.json (the
-  // contract) while presence is probed against .claude/hooks/, so the two
-  // genuinely diverge: deleting aidlc-continue-workflow.ts from a project whose settings.json
-  // still wires it produces a loud "fail aidlc-continue-workflow.ts present" row. (The
-  // pre-redesign derive-from-the-hooks-dir approach could not catch this — a
-  // missing hook simply wasn't enumerated, so it was never reported.)
+  // The hook check must FLAG a wired-but-missing hook, not silently drop it. The
+  // expected roster comes from settings.json (the contract) while presence is
+  // probed against .claude/hooks/, so the two genuinely diverge: deleting
+  // aidlc-continue-workflow.ts from a project whose settings.json still wires it
+  // produces a loud "fail aidlc-continue-workflow.ts present" row. (The
+  // derive-from-the-hooks-dir approach cannot catch this - a missing hook simply
+  // isn't enumerated, so it is never reported.)
   test("12c: doctor flags a settings.json-wired hook that is missing on disk", () => {
     const p = installedProj((claudeDir) => {
       rmSync(join(claudeDir, "hooks", "aidlc-continue-workflow.ts"));
     });
     const r = util(["doctor", "--verbose"], p);
-    // The missing hook is named with the fail verdict, not silently absent.
     expect(r.stdout).toContain("fail  aidlc-continue-workflow.ts present");
     // And doctor exits non-zero (a failed check), so CI/scripts see the breakage.
     expect(r.status).not.toBe(0);
-    // Sibling hooks that ARE present still pass — only the deleted one fails.
     expect(r.stdout).toContain("ok    aidlc-write-audit-log.ts present");
   });
 
-  // FINDING #1 corollary: when settings.json is absent the hook CONTRACT cannot
-  // be verified, so doctor says so loudly rather than silently checking zero
-  // hooks (the old empty-roster catch failed silent). bareProj() has no
+  // When settings.json is absent the hook CONTRACT cannot be verified, so doctor
+  // says so loudly rather than silently checking zero hooks. bareProj() has no
   // .claude/settings.json.
   test("12d: doctor reports the hook contract unverifiable when settings.json is absent", () => {
     const p = bareProj();
@@ -607,10 +586,13 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.status).not.toBe(0);
   });
 
-  test("59: doctor reports AWS_AIDLC_DEFAULT_SCOPE unset", () => {
+  // In a terminal doctor cannot see the value Claude Code passes from .claude/settings.json, so "unset" would be false
+  // there; with nothing to check, it says nothing.
+  test("59: doctor says nothing about AWS_AIDLC_DEFAULT_SCOPE when no default is set where it can see one", () => {
     const p = bareProj();
     const r = util(["doctor", "--verbose"], p); // env stripped of the var by util()
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
+    expect(r.stdout).toContain("Plugin selection"); // the verbose list ran past where the row was
+    expect(r.stdout).not.toContain("AWS_AIDLC_DEFAULT_SCOPE");
   });
 
   test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {
@@ -634,10 +616,10 @@ describe("t27 aidlc-utility init", () => {
   test("14: init creates state, audit, codekb, and knowledge directories", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
-    // P4: creation writes a per-intent record (state + audit shards), not the flat
+    // Creation writes a per-intent record (state + audit shards), not the flat
     // aidlc-docs/ trio. (Domain knowledge is SPACE-level, asserted below.)
     expect(existsSync(statePath(p))).toBe(true);
-    // Audit is now a SHARD DIR (<record>/audit/<host>-<pid>.md), not a single file.
+    // Audit is a SHARD DIR (<record>/audit/<host>-<clone>.md), not a single file.
     const auditDir = join(recordDirOf(p), "audit");
     expect(existsSync(auditDir)).toBe(true);
     expect(readdirSync(auditDir).filter((f) => f.endsWith(".md")).length).toBeGreaterThanOrEqual(1);
@@ -652,15 +634,14 @@ describe("t27 aidlc-utility init", () => {
   test("15: init output contains creation + state-init summary", () => {
     const p = emptyDir();
     const r = util(["intent-create", "--scope", "poc"], p);
-    // P4: init is a back-compat alias for intent-create; the stdout now reports the
-    // created intent + state init, not the old "Workspace scaffolded" scaffold line.
+    // init is a back-compat alias for intent-create; the stdout reports the
+    // created intent + state init.
     expect(r.stdout).toContain("Intent created:");
     expect(r.stdout).toContain("State initialized:");
   });
 
-  // P4 retires the --init re-init guard: init/intent-create creates a per-intent
-  // record, so a SECOND init is not an error - it simply creates a second intent
-  // in the workspace. There is no "already exists" / --force path anymore.
+  // init/intent-create creates a per-intent record, so a SECOND init is not an
+  // error - it simply creates a second intent in the workspace.
   test("second init creates a second intent (no re-init guard): exit 0, no 'already exists'", () => {
     const p = emptyDir();
     const first = util(["intent-create", "--scope", "poc"], p);
@@ -669,7 +650,6 @@ describe("t27 aidlc-utility init", () => {
     expect(second.status).toBe(0);
     expect(second.out).not.toContain("already exists");
     expect(second.out).not.toContain("--force");
-    // Two intent record dirs now exist under the default space.
     const intentsDir = join(p, "aidlc", "spaces", "default", "intents");
     const records = readdirSync(intentsDir).filter((d) =>
       existsSync(join(intentsDir, d, "aidlc-state.md")),
@@ -681,6 +661,14 @@ describe("t27 aidlc-utility init", () => {
     const p = emptyDir();
     util(["intent-create", "--scope", "poc"], p);
     expect(readFileSync(statePath(p), "utf-8")).toContain("workspace-scaffold");
+  });
+
+  test("33b: a new record's Construction phase has no never-filled per-unit line", () => {
+    const p = emptyDir();
+    util(["intent-create", "--scope", "feature"], p);
+    const state = readFileSync(statePath(p), "utf-8");
+    expect(state).toContain("### CONSTRUCTION PHASE\n- [ ] functional-design");
+    expect(state).not.toMatch(/^Per unit:/m);
   });
 
   test("45: init with --depth overrides bugfix default (Standard)", () => {
@@ -698,7 +686,7 @@ describe("t27 aidlc-utility init", () => {
   test("69: init emits WORKFLOW_STARTED as the first audit event", () => {
     const p = bareProj();
     util(["intent-create", "--scope", "bugfix"], p);
-    // P4: audit is sharded under the created record's audit/ dir; read via readAudit.
+    // Audit is sharded under the created record's audit/ dir; read via readAudit.
     // First **Event**: line after the `# AI-DLC Audit Log` header.
     const firstEvent = readAudit(p)
       .split("\n")
@@ -713,7 +701,6 @@ describe("t27 aidlc-utility init", () => {
 // ============================================================
 
 describe("t27 aidlc-utility scope-change", () => {
-  /** Seed state, flip Scope to poc (the .sh's sed_i), seed audit. */
   function pocStateAuditProj(minimalDepth = false): string {
     const p = stateAuditProj();
     sedReplaceInFile(statePath(p), "**Scope**: feature", "**Scope**: poc");
@@ -725,11 +712,18 @@ describe("t27 aidlc-utility scope-change", () => {
 
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
+    // poc's own stages, as creation writes them on a new project: switching
+    // back gives the same plan, so the reply offers it.
+    const poc = (require("../../dist/claude/.claude/tools/data/scope-grid.json") as Record<string, { stages: Record<string, string> }>).poc.stages;
+    writeFileSync(statePath(p), readFileSync(statePath(p), "utf-8").replace(
+      /^(- \[.\] )([a-z0-9-]+) \u2014 (?:EXECUTE|SKIP)$/gm,
+      (_line, box: string, slug: string) =>
+        `${box}${slug} \u2014 ${poc[slug] === "EXECUTE" && slug !== "reverse-engineering" ? "EXECUTE" : "SKIP"}`,
+    ));
     const result = util(["scope-change", "--scope", "mvp"], p);
     expect(result.stdout).toContain("Switched to mvp (the set of stages this work runs): ");
     expect(result.stdout).toContain("You can switch back to poc any time.");
     expect(stateField(p, "Scope")).toBe("mvp");
-    // STRONGER: the SCOPE_CHANGED audit row records New Scope = mvp.
     expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
   });
 
@@ -737,6 +731,12 @@ describe("t27 aidlc-utility scope-change", () => {
     const p = pocStateAuditProj();
     util(["scope-change", "--scope", "mvp"], p);
     expect(readFileSync(statePath(p), "utf-8")).toContain("Stages to Execute");
+  });
+
+  test("17b: a record made with a per-unit line keeps it through a scope change", () => {
+    const p = pocStateAuditProj();
+    util(["scope-change", "--scope", "mvp"], p);
+    expect(readFileSync(statePath(p), "utf-8")).toContain("### CONSTRUCTION PHASE\nPer unit: todo-core\n- [ ] functional-design");
   });
 
   test("18: scope-change poc->mvp updates Depth to Standard for mvp", () => {
@@ -749,7 +749,7 @@ describe("t27 aidlc-utility scope-change", () => {
     const p = stateAuditProj(); // still feature scope
     const before = readFileSync(statePath(p), "utf-8");
     util(["scope-change", "--scope", "feature"], p);
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before); // byte-equality
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
   test("20: scope-change same scope prints already message", () => {
@@ -762,7 +762,7 @@ describe("t27 aidlc-utility scope-change", () => {
     const p = stateAuditProj();
     const r = util(["scope-change", "--scope", "nonexistent"], p);
     expect(r.out).toContain("Unknown scope");
-    expect(r.status).toBe(1); // STRONGER: the .sh only grepped the message
+    expect(r.status).toBe(1);
   });
 
   test("22: scope-change appends exactly one SCOPE_CHANGED audit event", () => {
@@ -786,7 +786,6 @@ describe("t27 aidlc-utility scope-change", () => {
       const after = /^\*\*New(?: Value)?\*\*: (.*)$/m.exec(row)?.[1];
       expect(after, row).not.toBe(before);
     }
-    // The state still says which scope each kept value now comes from.
     expect(stateField(p, "Guard Policy")).toBe("off (from scope feature)");
   });
 
@@ -832,6 +831,8 @@ describe("t27 aidlc-utility scope-change", () => {
       );
       sedReplaceInFile(statePath(p), "- [x] market-research", `- ${marker} market-research`);
       sedReplaceInFile(statePath(p), "- [-] feasibility", "- [ ] feasibility");
+      // A new project's plan, as creation writes it, runs no Reverse Engineering.
+      sedReplaceInFile(statePath(p), "- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP");
       sedReplaceInFile(statePath(p), "**Current Stage**: feasibility", "**Current Stage**: market-research");
       return p;
     };
@@ -898,7 +899,6 @@ describe("t27 aidlc-utility scope-change", () => {
       "Skipped Market Research (it was waiting for your approval): mvp does not run it. " +
         "You can still run it on its own any time.",
     );
-    // A value that really changes is said.
     const toPoc = util(["scope-change", "--scope", "poc"], stateAuditProj()).stdout;
     expect(toPoc).toContain("Depth changed: Standard -> Minimal");
     expect(toPoc).not.toContain("is already");
@@ -946,7 +946,7 @@ describe("t27 aidlc-utility set-status", () => {
 
   test("28: set-status marks checkbox [-]", () => {
     const p = stateProj();
-    // Reset feasibility to [ ] first so we verify [-] gets set (the .sh's sed_i).
+    // Reset feasibility to [ ] first so we verify [-] gets set.
     sedReplaceInFile(statePath(p), "[-] feasibility", "[ ] feasibility");
     util(["set-status", "--stage", "feasibility"], p);
     expect(readFileSync(statePath(p), "utf-8")).toContain("[-] feasibility");
@@ -956,14 +956,14 @@ describe("t27 aidlc-utility set-status", () => {
     const p = stateProj();
     const r = util(["set-status", "--stage", "nonexistent"], p);
     expect(r.out).toContain("Unknown stage");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("30: set-status errors without state file (exit 1)", () => {
-    const p = bareProj(); // no state.md seeded
+    const p = bareProj();
     const r = util(["set-status", "--stage", "feasibility"], p);
     expect(r.out).toContain("No state file");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("31: set-status cross-phase sets CONSTRUCTION for code-generation", () => {
@@ -995,7 +995,7 @@ describe("t27 aidlc-utility config-change", () => {
     const p = stateAuditProj(); // fixture Depth: Standard
     const before = readFileSync(statePath(p), "utf-8");
     util(["config-change", "--depth", "standard"], p);
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before); // byte-equality
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
   test("40: config-change same depth prints already message", () => {
@@ -1008,7 +1008,7 @@ describe("t27 aidlc-utility config-change", () => {
     const p = stateAuditProj();
     const r = util(["config-change", "--depth", "extreme"], p);
     expect(r.out).toContain("Unknown depth");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("42: config-change appends DEPTH_CHANGED audit event", () => {
@@ -1021,7 +1021,7 @@ describe("t27 aidlc-utility config-change", () => {
     const p = bareProj();
     const r = util(["config-change", "--depth", "minimal"], p);
     expect(r.out).toContain("No state file");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("48: config-change updates Test Strategy to Minimal", () => {
@@ -1033,11 +1033,10 @@ describe("t27 aidlc-utility config-change", () => {
 
   test("49: config-change same strategy does not modify state", () => {
     const p = stateAuditProj();
-    // First set it to Standard explicitly (mirrors the .sh setup).
     util(["config-change", "--test-strategy", "standard"], p);
     const before = readFileSync(statePath(p), "utf-8");
     util(["config-change", "--test-strategy", "standard"], p);
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before); // byte-equality
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
   test("50: config-change same strategy prints already message", () => {
@@ -1051,7 +1050,7 @@ describe("t27 aidlc-utility config-change", () => {
     const p = stateAuditProj();
     const r = util(["config-change", "--test-strategy", "extreme"], p);
     expect(r.out).toContain("Unknown test strategy");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("52: config-change appends TEST_STRATEGY_CHANGED audit event", () => {
@@ -1064,7 +1063,7 @@ describe("t27 aidlc-utility config-change", () => {
     const p = bareProj();
     const r = util(["config-change", "--test-strategy", "minimal"], p);
     expect(r.out).toContain("No state file");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 
   test("55: config-change with both flags updates both fields + exactly one event each", () => {
@@ -1081,7 +1080,6 @@ describe("t27 aidlc-utility config-change", () => {
     const r = util(["config-change", "--depth", "standard", "--test-strategy", "minimal"], p);
     expect(r.stdout).toContain("Depth is already Standard");
     expect(auditEventCount(auditPath(p), "DEPTH_CHANGED")).toBe(0);
-    // STRONGER: confirm the strategy half still fired.
     expect(auditEventCount(auditPath(p), "TEST_STRATEGY_CHANGED")).toBe(1);
   });
 
@@ -1090,15 +1088,15 @@ describe("t27 aidlc-utility config-change", () => {
     const before = readFileSync(statePath(p), "utf-8");
     const r = util(["config-change", "--depth", "minimal", "--test-strategy", "extreme"], p);
     expect(r.out).toContain("Unknown test strategy");
-    expect(readFileSync(statePath(p), "utf-8")).toBe(before); // no partial write
-    expect(r.status).toBe(1); // STRONGER
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+    expect(r.status).toBe(1);
   });
 
   test("58: config-change with no flags prints usage error (exit 1)", () => {
     const p = stateProj();
     const r = util(["config-change"], p);
     expect(r.out).toContain("requires");
-    expect(r.status).toBe(1); // STRONGER
+    expect(r.status).toBe(1);
   });
 });
 
@@ -1114,12 +1112,10 @@ describe("t27 aidlc-utility detect-scope", () => {
       ["detect-scope", "--scope", "feature", "--input", "build a todo app", "--source", "freeform"],
       p,
     );
-    // P4: after init creates the per-intent record, detect-scope's audit lands in
-    // the created record's shard dir - read via readAudit (which also falls back to
-    // flat audit.md for a not-yet-created project).
+    // After intent-create creates the per-intent record, detect-scope's audit
+    // lands in the created record's shard dir - read via readAudit.
     const audit = readAudit(p);
     expect(auditEventCountIn(audit, "SCOPE_DETECTED")).toBe(1);
-    // STRONGER: the .sh only grepped the event; assert the JSON ack + field.
     expect(r.stdout).toContain('"emitted":"SCOPE_DETECTED"');
     expect(auditFieldIn(audit, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1140,7 +1136,6 @@ describe("t27 aidlc-utility resolve-env-scope", () => {
   test("62: resolve-env-scope with unset env prints nothing and exits 0", () => {
     const r = util(["resolve-env-scope"]); // util() strips AWS_AIDLC_DEFAULT_SCOPE
     expect(r.status).toBe(0);
-    // .sh asserted $OUT (combined 2>&1) is empty.
     expect(r.out).toBe("");
   });
 

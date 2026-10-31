@@ -67,9 +67,10 @@ outputs: application code + code-generation-plan.md, code-generation-questions.m
 
 - Application code goes to workspace root, NEVER to the record dir. The developer's one change there is ticking each step's box in the plan as it finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
+- Files already in the project that this work did not create (a README, LICENSE, docs, configs) are the person's, on a new project too: leave them as they are and build the code around them; this work's own notes on what it built with and how to run it go in `code-summary.md`, and its test command is already in `unit-test-instructions.md`. Change one of them only when the person asks for it or the work cannot be built without it (on brownfield, the code the work changes), and name the change in the plan
 - Add data-testid attributes to interactive UI elements for test automation
 - Work in this order: plan (Step 2), Step 3 (the person's Plan Approval; with plan approval off, only its one-line notice), generation (Step 4), the Step 5 files, then the review (when `directive.protocol_modules` lists `reviewer`) and the completion handoff (Step 6). The review checks the finished work: never dispatch the reviewer before the Step 5 files exist. When the directive already carries `plan_approval.status: "approved"` (a resumed or continued build), the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. Never rewrite an approved plan or its test instructions; change them only when the person asks
-- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted, including shell-, scaffolding-, and generator-written files. Zero-Unit work writes no `source-manifest.json`
+- For a Unit (`directive.unit` present), write `source-manifest.json` in Step 5, before the review, listing every application-source path this unit created, modified, or deleted in this stage, including shell-, scaffolding-, and generator-written files; a unit reopened by a rejection keeps the paths its earlier attempts listed. Zero-Unit work writes no `source-manifest.json`
 - Measurable quality targets from NFR Requirements, NFR Design, and the Testing
   Contract coverage floor are inputs, not suggestions. NEVER relax, lower, or
   disable a defined target, including threshold settings in test or build
@@ -135,7 +136,7 @@ Plan should cover (as applicable to the unit):
 - **Comprehensive strategy**: Unit + integration + E2E test files per component (10-15 tests each)
 
 Apply the active scope's floor additively:
-- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and CI execution before merge.
+- `mvp`, `enterprise`, `feature`, `infra`: the selected strategy plus 80% line coverage and, when the plan runs CI Pipeline, CI execution before merge.
 - `bugfix`, `security-patch`: the selected strategy plus a targeted regression for the bug/vulnerability at the narrowest level that reproduces it, even when that adds one integration/E2E test beyond Minimal's unit-test default; the existing suite remains green.
 - `poc`, `refactor`, `workshop`: the selected strategy still applies; the scope adds no extra new-test floor, and the existing suite remains green.
 
@@ -191,6 +192,25 @@ Every run command in this file MUST be scoped to this unit only, using exact
 test file paths or an exact unit filter. A bare project-wide command like
 `npm test` is not acceptable. Build and Test executes every unit's commands,
 so an unscoped command would rerun the whole suite once per unit.
+Built side by side, this Unit has its own copy of the project with none of
+the other Units of its batch in it: plan code and tests that pass with this
+Unit's code, the Units it depends on, and the project as it stands.
+
+A coverage floor set for the whole project (the Testing Contract's line
+floor, a team rule, or a threshold in the project's coverage configuration
+that applies to all measured source) is measured by Build and Test on the
+full test suite of the assembled project. A Unit-scoped run does not judge
+it: on one Unit's tests a runner's coverage threshold can fail on source that
+other Units' tests cover, with every selected test passing. Never change that
+threshold to make a Unit's run pass (setting it up when this work bootstraps
+the runner is part of the floor); under Expected coverage targets, name the
+floor and say Build and Test checks it on the full suite. When this file's
+command exits non-zero only on that floor's threshold with every selected
+test passing, record that with this Unit's test results; it is not a failed
+test. Put any run that floor's threshold can fail in a command of its own,
+with no step after it that the threshold exit would stop: Build and Test does
+not exempt a command whose exit stopped a later step. A coverage target set
+for this Unit or one of its paths still gets its own Unit-scoped check.
 
 Start the plan with a short `## Summary` section of three lines. The engine
 shows them to the person when it asks for approval:
@@ -222,14 +242,21 @@ When both files from Step 2 are written, run `next`:
   --details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`).
   For a question about several Units, add `--units "<unit>,<unit>"` to record a
   choice for some of them, then record the rest. The person's words are kept
-  with the record, and a change request uses them as what to change; add
-  `--reason` only to say more. When they approved and asked for a change ("approve,
+  with the record. When they asked for changes, pass what to change after the
+  choice (`--details 'Request Changes: <what they asked>'`, single-quoted); when
+  their reply only picked Request Changes, ask what should change before you
+  record it. When they approved and asked for a change ("approve,
   but add a test for the empty cart"), make that change in the plan first (once
   they have replied, its plan and test instructions are open to you; code
   waits), then record "Approve Plan": the approval covers the plan as it stands
   then. When they also asked to stop for now, add `--park`. A question gets an
   answer, and their next reply decides; ask only when their intent is genuinely
   unclear. Then run `next`.
+  When the person says they answered in the file, in whatever words they use
+  ("done", "I put my answer in the file", "my answer is in the questions file"),
+  their answer is on the `[Answer]:` line of `questions_path`: read it and record
+  the choice they made, exactly as you would a reply typed in chat; never ask
+  them to type it again in chat.
 - **Edit mode.** For "I'll edit the files", `next` returns the question with
   `plan_approval.editing: true`. Tell the person they can change `plan_path` and
   `instructions_path`; then end the turn and wait for them to say done. While
@@ -240,8 +267,8 @@ When both files from Step 2 are written, run `next`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
     When it also carries `plan_approval.skipped: true`, plan approval is off
     for this piece of work: say `plan_approval.notice` as written (it names the
-    plan file and asks whether they want to look at it first), then continue
-    with Step 4 without waiting; a yes is their request to review the plan.
+    plan file and says they can ask to go over it at any time), then continue
+    with Step 4 without waiting.
   - `revise`: revise the plan and test instructions from
     `plan_approval.feedback` (the person's words, from their Request Changes
     or from the gate they rejected); when it is absent, ask "What should
@@ -249,7 +276,10 @@ When both files from Step 2 are written, run `next`:
     its own step, then run `next`.
   - `repair`: fix exactly what `plan_approval.note` names (for example re-render
     a Testing Contract block an edit broke), then run `next`; the engine asks the
-    person once to build the edited plan.
+    person once to build the edited plan. A Testing Contract left out of date by
+    a scope or setting change the person asked for is not a repair: the engine
+    renders that block again when they approve, their approval stands, and it
+    says so in one line for you to pass on.
   - `plan`: write or finish the Step 2 files, fixing what `plan_approval.note`
     names when present, then run `next`.
 
@@ -263,11 +293,18 @@ After approval:
   person again: `next` shows the question, its `plan_approval.note` saying what
   changed. Under `relaxed` or `off`, the build continues with the edited files
   and one `change_notices` line saying what changed; the earlier answer stays
-  the record of what was approved.
-- When the person asks to go back to the plan they approved ("go back to the
-  approved plan"), run `{{INVOKE}} engine testing-posture restore --unit
-  <directive.unit>` (`--stage-level` for zero-Unit work), say the line it
-  prints, then run `next`.
+  the record of what was approved. Before the build the line offers to go back
+  to the plan they approved; once the build has started it says the build is
+  going ahead and offers to build the approved plan instead, because the code
+  on disk came from the plan being replaced. Either way their yes, in any
+  wording and from any chat, is read by you: `next` names the restore to run,
+  and the build it issues after it is the approved plan's.
+- The line saying what changed asks whether to go back to the plan the person
+  approved (under `strict` it offers that beside the plan question). When they
+  say yes, or ask for it in their own words, run `{{INVOKE}} engine
+  testing-posture restore --unit <directive.unit>` (`--stage-level` for
+  zero-Unit work), say the line it prints, then run `next`. Never run it
+  without their word: it refuses then.
 - Other code moving after approval (a `git pull`, another Unit landing) never
   asks again, on any Guard Policy: the build continues and a `change_notices`
   line names the files. Say it once.
@@ -284,12 +321,12 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off --message <id>`, with `<id>` the message they asked in,
 and say in one line that it is off. When they only ask about it ("skip plan
 approval?"), answer in one line, offer to turn it off for this piece of work, and
 show the plan question again; their yes is the ask. Never suggest turning it off
 otherwise.
-Turning it back on (`config set plan-approval on`) is fine whenever they ask.
+Turning it back on (`config set plan-approval on --message <id>`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -301,8 +338,8 @@ Turning it back on (`config set plan-approval on`) is fine whenever they ask.
 
 If `next` returns an error saying the workspace source cannot be bound, show it
 to the person. The fix is its first remedy: repair the source boundary it names
-(`{{INVOKE}} doctor` names the path; run it yourself), then run `next`. Only when the person themselves types `Override Plan Approval:
-<reason>` in chat (never suggest it), record the break glass: this is the one
+(`{{INVOKE}} doctor` names the path; run it yourself), then run `next`. Only when the person asks you to build it
+anyway, in their reply to that error (never suggest it), record the break glass: this is the one
 case where you write the approval record yourself. Print the tags (use
 `--stage-level` instead of `--unit` for zero-Unit work):
 
@@ -313,7 +350,7 @@ bun {{HARNESS_DIR}}/tools/aidlc-testing-posture.ts fingerprint --unit "<directiv
 Write both tag lines under a `## Plan Approval` heading in
 `<code-generation-record>/code-generation-questions.md`, followed by
 `[Answer]: Approve Plan`. With your file-editing tool (never a shell command),
-write their reason exactly as they typed it, after `Override Plan Approval:`, as
+write their reason, in their own words, as
 the only content of `<code-generation-record>/override-reason.txt`. Then record
 the override; the reason travels in that file, never on the command line:
 
@@ -321,10 +358,11 @@ the override; the reason travels in that file, never on the command line:
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details "Approve Plan" --override-file "<code-generation-record>/override-reason.txt" --unit "<directive.unit>"
 ```
 
-Then run `next`.
+Tell the person in one line, in your own words, that their approval to build it with no check of the project's
+files is recorded, then run `next`.
 
-> **Build-and-Test loop-back:** The construction protocol module
-> (`aidlc-common/protocols/stage-protocol-construction.md`) defines this replay.
+> **Build-and-Test loop-back:** The loop-back protocol module
+> (`aidlc-common/protocols/stage-protocol-loopback.md`) defines this replay.
 > A backward jump opens a new stage attempt, so the prior approval no longer
 > applies. Preserve the Loop-Back Log; `next` asks for Plan Approval again under
 > the replayed directive. The earlier "Retry with fix" choice authorizes the jump,
@@ -351,7 +389,7 @@ choices and a blank `[Answer]:`. Record the prompt, then present exactly the two
 those labels into any file:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation --checkpoint plan-approval --session "<Runtime Session from SessionStart context>" --questions-file "<code-generation-record>/code-generation-questions.md" --decision "Approve this exact Code Generation plan?" --options "Approve Plan,Request Changes" --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --decision "Approve this exact Code Generation plan?" --options "Approve Plan,Request Changes" --unit "<directive.unit>"
 ```
 
 Map the selected label back to `Approve Plan` or `Request Changes`, write it
@@ -359,7 +397,7 @@ after `[Answer]:`, and record it (again `--stage-level` for zero-Unit work). On
 `Request Changes`, revise, blank the answer, and repeat from the fingerprint:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --session "<same Runtime Session>" --questions-file "<code-generation-record>/code-generation-questions.md" --details '<exact choice>' --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --questions-file "<code-generation-record>/code-generation-questions.md" --details '<exact choice>' --unit "<directive.unit>"
 ```
 
 ### Step 4: PART 2 — Generation
@@ -386,7 +424,7 @@ Include in the delegation prompt:
   different, or stale hash. Do not write either marker yourself and do not repeat either marker
   for contextual dependencies.
 - Design artifacts for the CURRENT UNIT ONLY (not all units)
-- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, app design summary) — the subagent can Read specific files if it needs full content
+- A 1-2 line summary of each inception-phase artifact with its file path (requirements summary, stories summary, domain design summary) — the subagent can Read specific files if it needs full content
 - The current plan and unit-test-instructions.md are already in that output:
   the plan with a terminal `## Review` appendix removed (when a review recorded under the
   earlier protocol left one), task markers reset to `[ ]`, and spacing
@@ -404,7 +442,10 @@ Include in the delegation prompt:
   ticks or, with none ticked, the ones whose named files changed since the build
   started), any file a done step names that is not in the project (the step may
   say not to add it: redo the step only if it should have made that file), and
-  the step to continue at
+  the step to continue at. When neither says what is done (no tick, and no step
+  naming a file the engine can check), that section says the build wrote code
+  and the plan marks none of its steps: check each step against the project,
+  tick the box of each one that is done, and carry on from the first that is not
 - Project workspace details (languages, frameworks, conventions from aidlc-state.md)
 - Instructions to execute each plan step sequentially and mark checkboxes as
   completed, starting where that progress section says when the output has one.
@@ -431,6 +472,11 @@ documenting:
 - Files created/modified
 - Key implementation decisions
 - Test coverage summary
+- Tests written but not executed in this stage, each with the reason (for
+  example: integration suite not run, it needs a container runtime that is not
+  available here). A test left to CI is not executed when the plan skips CI
+  Pipeline or the repository has no CI configuration: record it here, never as
+  run
 - Any deviations from the plan
 
 For a Unit (`directive.unit` present), create
@@ -452,12 +498,25 @@ with this strict schema:
 
 List every application-source path this unit created, modified, or deleted,
 including files written by shell commands, scaffolding, or generators. Use a
-trailing `/` directory claim for generated trees. In the main workspace,
+trailing `/` directory claim for generated trees. The engine measures changed
+source from where this attempt's source baseline was taken. A rejection at the
+gate (Request Changes) keeps that baseline, so when the unit is reopened that
+way, keep every path an earlier attempt listed and add the paths this attempt
+writes; a manifest that lists only the corrective change leaves the unit's
+earlier files outside every unit. A jump back into the stage, such as a Build
+and Test loop-back, takes a new baseline, so list what the unit changes from
+there. In the main workspace,
 multi-repo entries name their recorded `repo`; inside the worktree hosting the Bolt, paths are
 relative to its single selected repo and MUST omit `repo`. The engine refuses
 to record the unit review without this manifest. Under Guard Policy strict,
 unclaimed changed paths block stage completion; under relaxed or off they are
 kept, and the person is told once which files changed outside the units.
+
+When you keep the code in a checkout the review does not otherwise see (a
+worktree in the harness folder, or one outside the project), record it before
+the review with `{{INVOKE}} engine intent add-checkout <its path>`; a Unit names
+a checkout outside the project in its manifest by the name that command prints
+(`<label>@checkout/<path>`).
 
 A zero-Unit directive (`directive.unit` absent) writes no
 `source-manifest.json` and creates no Unit directory for one: the engine reads
@@ -467,10 +526,17 @@ source instead. Its Step 5 files are
 `<record>/construction/code-generation/traceability.json`.
 
 Create
-`<code-generation-record>/traceability.json`.
-Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain). Every `OK` target
-must be one existing workspace-relative implementation or test file:
+`<code-generation-record>/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage code-generation --output-path <that path> --write-upstream`:
+it lists every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
+`NFR` IDs when incremental scope skipped the design chain), each with a `GAP`
+row; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
+and needs no row of its own. Set each row's `status` and `target`: every `OK` target
+must be one existing workspace-relative implementation or test file. When the
+person asks to leave planned work out of this build (for example "skip the
+remaining stories"), do it: list each item they left out as `Deferred` (not
+built in this Unit), with their words as its `target`, and carry on; the
+approved plan stays as it is, and the approval says what was left out:
 
 ```json
 {
@@ -508,7 +574,7 @@ Present completion message and approval gate:
 # :computer: Code Generation Complete — {unit-name}
 ```
 
-Summary of code produced (files, tests, key decisions), then:
+Summary of code produced (files, tests, key decisions, and any tests written but not executed, with the reason), then:
 
 ```
 **Review:** `<code-generation-record>/`
@@ -529,9 +595,7 @@ the record dir); the planning, plan-approval, and summary artefacts
 
 Imports: `required-sections`, `traceability`.
 
-`required-sections` checks each planning and summary artefact for at least two
-H2 headings, and `traceability` verifies the per-Unit coverage table and every
-`OK` target.
+`traceability` verifies the per-Unit coverage table and every `OK` target.
 
 `linter` and `type-check` are not imported here: they ran on every file write
 and nothing read their results; Build and Test runs the project's build and
@@ -547,6 +611,6 @@ file is subject to the `required-sections` floor.
 
 When `directive.protocol_modules` lists `learnings`, follow
 `stage-protocol-learnings.md`: keep the diary at `directive.memory_path` while
-working and run the ritual before the approval gate, applying its bootstrap,
-`single: true`, per-unit, and gate-revision exemptions. When the module is absent,
-skip both the diary and the ritual.
+working, and take the learnings step before the approval gate; that module says
+when it asks the person anything. When the module is absent, skip both the diary
+and the step.

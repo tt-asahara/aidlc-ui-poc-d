@@ -26,7 +26,10 @@
 //     ticks; a resume never clears ticks;
 //   - an approved plan edited before the build (the fence lowered): the build
 //     that started on the edited plan picks up where it got to;
-//   - a swarm batch keeps its own continuation rule: no progress section.
+//   - a swarm batch keeps its own continuation rule: no progress section;
+//   - a revision picked up later, in any chat, is handed the person's answer to
+//     "What should change?" beside the bare Request Changes the rejection
+//     recorded.
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -60,6 +63,8 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { publishPlanApprovalAsk, routeCodeGenerationPlanApproval } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import {
+  auditBlockField,
+  readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
   writeActiveDirectiveMarker,
@@ -193,10 +198,10 @@ function next(proj: string): Emitted {
   return result.directive as unknown as Emitted;
 }
 
-function reply(proj: string, prompt: string): string {
+function reply(proj: string, prompt: string, session = SESSION): string {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,
-    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
     env: env(proj),
     encoding: "utf-8",
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -389,6 +394,40 @@ describe("an interrupted build picks up at the first unticked step", () => {
     expect(next(proj).narration ?? "").not.toContain(PICK_UP);
   });
 
+  test("code written and no step ticked: the build says so and asks for the finished steps to be ticked", () => {
+    // From a live run: the plan was approved, the code and tests were written,
+    // and no step was ticked. The engine checks only files a step names in a
+    // code span that reads as a path, so a plan whose steps name none left
+    // nothing to count: `next` re-emitted the same start line as if the build
+    // had not run, and nothing named a step to take.
+    const proj = project();
+    const steps = Array.from({ length: 9 }, (_, index) => `Step ${index + 1}: wire up storage part ${index + 1}`);
+    startedBuildOf(proj, steps);
+    mkdirSync(join(proj, "src", "storage"), { recursive: true });
+    for (const part of [1, 2, 3]) {
+      writeFileSync(join(proj, "src", "storage", `part${part}.ts`), `export const part${part} = ${part};\n`, "utf-8");
+    }
+    const resumed = next(proj);
+    expect(resumed.kind).toBe("run-stage");
+    expect(resumed.narration).toBe(`Picking up ${UNIT}'s code: the plan marks none of its 9 steps done, checking what is built.`);
+    // The same again: the line does not go back to the starting line.
+    expect(next(proj).narration).toBe(resumed.narration);
+    const section = brief(proj);
+    expect(section).toContain("## Progress before the interruption");
+    expect(section).toContain(
+      "This plan's build already wrote code, and the plan file ticks none of its 9 steps " +
+        "(the approved plan below shows none ticked, because ticks are not part of the approval). " +
+        "Check each step against the files in the project, tick the box of each one that is done, " +
+        "and carry on from the first that is not.",
+    );
+    // Nothing claims a step is done, so no step's files are reported missing.
+    expect(section).not.toContain("not in the project");
+    expect(section).not.toContain("Continue at step");
+    // Once the worker ticks what it finished, the ordinary pick-up takes over.
+    tickOnly(proj, 1, 2, 3);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 4 of 9 (1-3 done).`);
+  });
+
   test("with Plan Approval off, an interrupted build picks up the same way", () => {
     // express and poc build without asking: the engine records the build as
     // started without approval, and a resume still counts its ticks.
@@ -456,6 +495,53 @@ function freshRunThenResume(proj: string): void {
 }
 
 describe("a fresh start for the steps", () => {
+  // Live on Claude Code: the person picked Request Changes, the rejection was
+  // recorded with that pick, and their answer to "What should change?" came
+  // after it; a new chat then revised from the bare pick.
+  test("a revision picked up later gets what the person said after Request Changes", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    reply(proj, "Request Changes");
+    const pick = auditBlockField(readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN")!.block, "Message Id");
+    expect(pick).not.toBeNull();
+    // What `report --result rejected` writes for that pick.
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "Request Changes",
+      "Message Id": pick!,
+    }, proj);
+    reply(proj, "log every part");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+    // A new chat after the terminal closed: its own words stay its own.
+    reply(proj, "where were we?", "01995000-7a11-7000-8000-00000000beef");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+  });
+
+  // The store drops a day-old message once a decision has used it, as the
+  // rejection used the pick; their answer after it is kept.
+  test("a revision picked up the next day still gets their answer, after the pick's own record is gone", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    reply(proj, "Request Changes");
+    const pick = auditBlockField(readAuditShardEvents(proj).findLast((row) => row.event === "HUMAN_TURN")!.block, "Message Id");
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "Request Changes",
+      "Message Id": pick!,
+    }, proj);
+    reply(proj, "log every part");
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "messages", `${pick}.json`));
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "Request Changes\nlog every part" });
+  });
+
+  test("a rejection that names no message of theirs is revised from its own feedback alone", () => {
+    const proj = project();
+    interrupted(proj, 1, 2, 3, 4);
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    reply(proj, "and keep it short");
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
+  });
+
   test("Request Changes at the completion gate: the revised, re-approved plan starts fresh", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);
@@ -514,6 +600,95 @@ describe("a fresh start for the steps", () => {
     expect(build.plan_approval?.status).toBe("approved");
     expect(build.narration ?? "").not.toContain(PICK_UP);
     expect(brief(proj)).not.toContain("## Progress");
+  });
+});
+
+// A Unit whose whole approved plan is built and ticked owes its review, also
+// after a rejection reopened it: this attempt's plan approval and its ticks
+// are the evidence the files are this attempt's, so `next` names the review
+// instead of handing the stage body back to recheck finished files (#2487).
+describe("a built plan owes its review, also after a reopen", () => {
+  // The settled-Unit step reads Unit receipts, which Construction Checkpoints
+  // require; the run that found this had them on.
+  function unitMajorProject(): string {
+    const proj = project();
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(
+      "- **Skeleton Stance**: off\n",
+      "- **Skeleton Stance**: off\n- **Construction Checkpoints**: enabled\n" +
+        "- **Construction Iteration**: stage-major\n- **Construction Execution**: serial\n- **Unit Ownership**: solo\n",
+    ), "utf-8");
+    // A message through the person's hook first, as in a real chat: a stage
+    // event in a record no hook has written to stops `next` (hooks-off check).
+    reply(proj, "carry on");
+    const baseline = writeBaselineSourceSnapshot(proj, "code-generation", workspaceSourceListing(proj)!);
+    appendAuditEntry("STAGE_STARTED", { Stage: "code-generation", "Source Baseline": baseline }, proj);
+    return proj;
+  }
+  /** Build and tick every step, then write Step 5's handoff (with its source manifest unless told not to). */
+  function finishBuild(proj: string, manifest = true): void {
+    const steps = planSteps(readFileSync(planPath(proj), "utf-8")).length;
+    tick(proj, UNIT, ...Array.from({ length: steps }, (_, index) => index + 1));
+    const dir = codeGenerationRecordDir(proj, UNIT);
+    writeFileSync(join(dir, "code-summary.md"), "# Code Summary\n\nNine parts.\n", "utf-8");
+    writeFileSync(join(dir, "traceability.json"), `${JSON.stringify({ upstream_ids: [], coverage: [] })}\n`, "utf-8");
+    if (!manifest) return;
+    writeFileSync(join(dir, "source-manifest.json"), `${JSON.stringify({
+      stage: "code-generation", unit: UNIT, version: 1, writes: [{ path: "src/" }],
+    })}\n`, "utf-8");
+  }
+  /** Request Changes at the completion gate, revise and re-approve the plan, and start its build. */
+  function reopenAndRebuild(proj: string): void {
+    appendAuditEntry("GATE_REJECTED", {
+      Stage: "code-generation", Unit: UNIT, "User Input": "Request Changes", Feedback: "log every part",
+    }, proj);
+    expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "log every part" });
+    revisePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+    dispatch(proj, brief(proj));
+  }
+  function revisePlan(proj: string): void {
+    writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
+      .replace("- [ ] Step 9:", "- [ ] Step 10: log every part in `src/part10.ts`\n- [ ] Step 9:"), "utf-8");
+  }
+  const REVIEW_STEP = `Unit "${UNIT}"'s Code Generation work is written, but its review was never asked for`;
+
+  test("first attempt: next names the review step", () => {
+    const proj = unitMajorProject();
+    interrupted(proj);
+    finishBuild(proj);
+    const step = next(proj) as Emitted & { message?: string };
+    expect(step.kind).toBe("print");
+    expect(step.message ?? "").toContain(REVIEW_STEP);
+  });
+
+  test("reopened by Request Changes, rebuilt in full: next names the review step, not the stage again", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj);
+    const step = next(proj) as Emitted & { message?: string };
+    expect(step.narration ?? "").not.toContain(PICK_UP);
+    expect(step.kind).toBe("print");
+    expect(step.message ?? "").toContain(REVIEW_STEP);
+  });
+
+  test("reopened, a ticked step's file missing: the stage comes back to redo it", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj);
+    rmSync(join(proj, "src", "part9.ts"));
+    expect(next(proj).kind).toBe("run-stage");
+  });
+
+  test("reopened and rebuilt, but Step 5 wrote no source manifest yet: the stage comes back to finish it", () => {
+    const proj = unitMajorProject();
+    interrupted(proj, 1, 2, 3, 4);
+    reopenAndRebuild(proj);
+    finishBuild(proj, false);
+    expect(next(proj).kind).toBe("run-stage");
   });
 });
 
@@ -581,8 +756,10 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(ask.kind).toBe("ask");
     writeActiveDirectiveMarker(pd, { kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: group, state_sha256: state() });
     publishPlanApprovalAsk(pd, ask as Parameters<typeof publishPlanApprovalAsk>[1]);
-    // "Approve all" is the question's own choice: the hook records it as typed.
+    // The person approves every Unit's plan; the agent records the choice it read.
     reply(pd, "approve all");
+    const recorded = answer(pd, "Approve all");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
     for (const unit of group) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     writeActiveDirectiveMarker(pd, { ...swarm, state_sha256: state() });
     const first = brief(pd, "alpha");
@@ -775,6 +952,24 @@ describe("the pick-up says only what is certain", () => {
     // Ticks, once there are any, are the record again.
     tickOnly(proj, 1, 2);
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
+  });
+
+  // A late step can name a file an early step touched (package.json, a README):
+  // that file changing says nothing about the steps between. Only the unbroken
+  // run of steps from step 1 whose files all changed is known to be done, and
+  // the build picks up at the first step that breaks it.
+  test("nothing ticked, a late step's files changed too: the pick-up stops at the first step whose files did not", () => {
+    const proj = project();
+    interrupted(proj);
+    for (const number of [1, 2, 8]) {
+      writeFileSync(join(proj, "src", `part${number}.ts`), `export const part${number} = ${number};\n`, "utf-8");
+    }
+    const resumed = brief(proj);
+    expect(resumed).toContain(
+      "The plan file ticks none of its 9 steps, but the files steps 1-2 name changed since the build started:",
+    );
+    expect(resumed).toContain(`\nContinue at step 3 of 9: "${STEPS[2]}".`);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 wrote their files).`);
   });
 
   test("the line is about the build being issued, whatever directive is on disk", () => {

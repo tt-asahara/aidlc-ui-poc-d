@@ -129,7 +129,7 @@ describe("t311 committed reviewed-source evidence", () => {
     writeFileSync(committedPath, "tampered committed evidence\n");
     expect(rewrite).toThrow(/address collision or corruption/);
 
-    writeFileSync(committedPath, original); // restore; now tamper only the local copy
+    writeFileSync(committedPath, original);
     writeFileSync(localPath, "tampered local snapshot\n");
     expect(rewrite).toThrow(/address collision or corruption/);
 
@@ -150,7 +150,6 @@ describe("t311 committed reviewed-source evidence", () => {
     // current path still binds its manifest bytes.
     expect(parseUnitSourceListing(`manifest\t${sha}\t-\n`)?.listing.size).toBe(0);
 
-    // Escaped paths (tab in the filename) survive the TSV round-trip.
     const weird = serializeSourceListing(new Map([[sourcePathKey("", "has\ttab.ts"), `100644 ${oid}`]]));
     const reparsed = parseUnitSourceListing(`manifest\t${sha}\t-\n${weird}`);
     expect(reparsed?.listing.get("\0has\ttab.ts")).toBe(`100644 ${oid}`);
@@ -187,7 +186,14 @@ describe("t311 committed reviewed-source evidence", () => {
     expect(reason("a\\b.ts")).toContain("POSIX '/' separators");
     expect(reason("/absolute.ts")).toContain("must be relative");
     expect(reason("C:/windows.ts")).toContain("must be relative");
-    expect(reason("*.ts")).toContain("glob");
+    // A Next.js or SvelteKit route folder is a literal path: brackets and
+    // braces are plain characters in a file name on every platform.
+    expect(normalizeManifestSourcePath("src/app/items/[itemId]/")).toEqual({ path: "src/app/items/[itemId]/", prefix: true });
+    expect(normalizeManifestSourcePath("src/app/[...slug]/page.tsx")).toEqual({ path: "src/app/[...slug]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/app/[[...slug]]/page.tsx")).toEqual({ path: "src/app/[[...slug]]/page.tsx", prefix: false });
+    expect(normalizeManifestSourcePath("src/{a}/b.ts")).toEqual({ path: "src/{a}/b.ts", prefix: false });
+    expect(reason("*.ts")).toContain("literally");
+    expect(reason("src/a?.ts")).toContain("literally");
     expect(reason("src/../escape.ts")).toContain("'..' segments");
     expect(reason(".")).toContain("below the repository root");
     expect(reason("./")).toContain("below the repository root");

@@ -97,11 +97,19 @@ function currentStage(state: string): string {
 
 type AnswerMode = { mode: string | null; ask: boolean; reused_from: string | null; notice: string };
 
+// The mode the engine resolved for the stage, after checking the step hands the
+// agent only the note made from it: its branch (ask, or reuse) and its notice.
 function runStageAnswerMode(proj: string): AnswerMode {
   const next = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: cliEnv() });
   expect(next.status, next.out).toBe(0);
   expect(next.directive?.kind, next.out).toBe("run-stage");
-  return next.directive!.answer_mode as AnswerMode;
+  const step = next.directive as Record<string, unknown>;
+  expect("answer_mode" in step, next.out).toBe(false);
+  const mode = resolveStageAnswerMode(proj) as AnswerMode;
+  const note = String(step.answer_mode_note ?? "");
+  expect(note, next.out).toContain(mode.notice);
+  expect(note.includes("ask the person once how they want to answer them"), note).toBe(mode.ask);
+  return mode;
 }
 
 function askModeQuestion(proj: string, stage: string, reply: string, extra: string[] = []): void {
@@ -177,7 +185,6 @@ describe("answer mode across a piece of work", () => {
       reused_from: first,
       notice: "Answering the way you chose earlier: I'll edit the file. Say if you'd rather be guided through them here or chat.",
     });
-    // The person sees no stage name, flag or command in the line.
     expect(reused.notice).not.toContain(first);
     expect(reused.notice).not.toContain("/aidlc");
     // Reuse records the mode on the stage row, never as a question: nothing is
@@ -185,13 +192,11 @@ describe("answer mode across a piece of work", () => {
     expect(modeQuestionCount(proj)).toBe(1);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(false);
 
-    // A later stage's own content question still opens and closes as before.
     const content = run(LOG, ["decision", "--stage", second, "--decision", "Q1-Q3", "--options", "A,B,C"], proj);
     expect(content.status, content.stderr).toBe(0);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(true);
     expect(run(LOG, ["answer", "--stage", second, "--details", "A, C, B"], proj).status).toBe(0);
     expect(hasPendingDecision(proj, second, "STAGE_STARTED")).toBe(false);
-    // ...and a content answer never re-reads as a mode choice.
     expect(runStageAnswerMode(proj)).toMatchObject({ mode: "file", reused_from: first });
   });
 
@@ -247,6 +252,53 @@ describe("answer mode across a piece of work", () => {
     const second = currentStage(state);
     expect(run(LOG, ["decision", "--stage", second, "--decision", "How would you like the API to fail?", "--options", "Errors,Codes"], proj).status).toBe(0);
     expect(run(LOG, ["answer", "--stage", second, "--details", "Codes"], proj).status).toBe(0);
+  });
+
+  // The engine's own command records the mode question with its kind, so the
+  // question is known by that field whatever the agent's wording or options.
+  test("a mode question recorded with --question-kind answer-mode is the mode question, worded and offered any way", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const asked = run(LOG, [
+      "decision", "--stage", first, "--decision", "Shall we go through these together?", "--question-kind", "answer-mode",
+    ], proj);
+    expect(asked.status, asked.stderr).toBe(0);
+    const row = readAuditShardEvents(proj).filter((entry) => entry.event === "DECISION_RECORDED").at(-1)!;
+    expect(auditBlockField(row.block, "Question Kind")).toBe("answer-mode");
+    const answered = run(LOG, ["answer", "--stage", first, "--details", "Guide me"], proj);
+    expect(answered.status, answered.stderr).toBe(0);
+    advance(proj, state);
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: false, mode: "guide", reused_from: first });
+  });
+
+  test("a content question that starts with the mode question's words is answered like any other", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const asked = run(LOG, [
+      "decision", "--stage", first, "--decision", "How would you like to answer support tickets?", "--options", "Email,Chat form",
+    ], proj);
+    expect(asked.status, asked.stderr).toBe(0);
+    const answered = run(LOG, ["answer", "--stage", first, "--details", "Email"], proj);
+    expect(answered.status, answered.stdout + answered.stderr).toBe(0);
+    const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1)!;
+    expect(auditBlockField(row.block, "Details")).toBe("Email");
+    advance(proj, state);
+    expect(runStageAnswerMode(proj)).toMatchObject({ ask: true, mode: null });
+  });
+
+  test("--question-kind takes only its own kinds, and says so", () => {
+    const { proj, state } = project();
+    const first = currentStage(state);
+    const refused = run(LOG, [
+      "decision", "--stage", first, "--decision", "Which database?", "--options", "Postgres,SQLite", "--question-kind", "database",
+    ], proj);
+    expect(refused.status).not.toBe(0);
+    const line = `${refused.stdout}\n${refused.stderr}`.split("\n").find((entry) => entry.startsWith("{"));
+    const message = String((JSON.parse(line ?? "{}") as { error?: string }).error ?? "");
+    expect(message).toContain('--question-kind "database"');
+    expect(message).toContain('"answer-mode"');
+    expect(message).toContain('"learnings-note"');
+    expect(readAuditShardEvents(proj).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
   });
 
   test("an isolated --single answer never sets the main workflow's mode", () => {

@@ -1,4 +1,4 @@
-// covers: function:ANSWER_SOURCE_ON_INSTRUCTION, cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: function:ANSWER_SOURCE_ON_INSTRUCTION, cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:proveMessage, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -63,13 +63,17 @@ import {
 } from "../harness/fixtures.ts";
 import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
+  auditBlockField,
   checkSummaryConfirmationEvidence,
   findStageBySlug,
+  hooksHealthDir,
+  personsWordsText,
   readAllAuditShards,
   readAuditShardEvents,
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage, saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -93,9 +97,14 @@ function guarded(
   host: NodeJS.ProcessEnv = {},
 ): { rc: number; out: string } {
   const env = { ...process.env };
-  // The host the agent's shell is in is the case's own, never the runner's.
+  // The host the agent's shell is in is the case's own, never the runner's,
+  // and so is the chat it names.
   delete env.VSCODE_IPC_HOOK;
   delete env.VSCODE_PID;
+  delete env.TERM_PROGRAM;
+  for (const hostChat of ["CLAUDE_PID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "KIRO_SESSION_ID"]) {
+    delete env[hostChat];
+  }
   Object.assign(env, host);
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
@@ -152,6 +161,17 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
 // active-intent shard the gate later reads, in real ledger order.
 function recordHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
+}
+
+// Record a typed reply as the hook does: the message record with the person's
+// words, and the HUMAN_TURN row naming it. Returns the message id.
+function recordTypedReply(proj: string, words: string): string {
+  const stored = saveMessage(proj, {
+    session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+    words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+  });
+  appendAuditEntry("HUMAN_TURN", { "Message Id": stored.id }, proj);
+  return stored.id;
 }
 
 // Leave a hook heartbeat where hook liveness reads it, as the post-shell hook
@@ -286,6 +306,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // about how AI-DLC works.
   test("A2: Claude's refusal gives its own step, the Kiro IDE tree's gives the person's own tool's step, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
+    // Claude Code's own step needs the settings file an install has; without
+    // one the step is its repair (t-hooks-off-step).
+    mkdirSync(join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".claude", "settings.json"), "{}\n");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
     const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
@@ -296,6 +320,30 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     );
     expect(claude.out).not.toContain("reply again");
     expect(claude.out).not.toContain("Reload Window");
+    // No hook has run in this record: the Kiro IDE tree's refusal carries the
+    // step the agent shows, for the Kiro tool its command runs in (#2167,
+    // measured on Kiro IDE 1.2.37, where an agent given both lines showed the wrong one).
+    const neverIn = (host: NodeJS.ProcessEnv): string => {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
+      expect(r.rc).not.toBe(0);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain("do not ask them to answer again");
+      return refusal;
+    };
+    const neverInIde = neverIn({ TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test" });
+    expect(neverInIde).toContain('Show the person this line: "In Kiro IDE, trust this folder:');
+    expect(neverInIde).toContain("Then run Developer: Reload Window");
+    expect(neverInIde).not.toContain("Kiro CLI");
+    const neverElsewhere = neverIn({});
+    expect(neverElsewhere).toContain('Show the person this line: "In Kiro CLI, quit Kiro');
+    expect(neverElsewhere).not.toContain("Reload Window");
+    // Kiro CLI started from VS Code's terminal carries VS Code's VSCODE_ variables: not Kiro IDE.
+    expect(neverIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(neverElsewhere);
+    // A hook has run here, so the replies below were missed, not unrecordable.
+    // Its heartbeat is old by the clock: a fresh one would mean the person has
+    // not answered yet (the agent asked in this same turn), not a missed reply.
+    mkdirSync(hooksHealthDir(proj), { recursive: true });
+    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date(Date.now() - 10 * 60 * 1000).toISOString());
     const refusalIn = (host: NodeJS.ProcessEnv): string => {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE, host);
       expect(r.rc).not.toBe(0);
@@ -310,7 +358,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     };
     const ideStep =
       'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."';
-    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }]) {
+    // The agent's own commands in Kiro IDE carry TERM_PROGRAM=kiro and neither VSCODE_ variable: only Kiro IDE's
+    // hooks get those (measured live on Kiro IDE 1.2.37, #2167), and this refusal comes from the agent's command.
+    const agentShell = { TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test", VSCODE_GIT_ASKPASS_NODE: "C:\\Kiro\\Kiro.exe" };
+    for (const host of [{ VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" }, { VSCODE_PID: "4242" }, agentShell, { TERM_PROGRAM: "Kiro" }]) {
       const inIde = refusalIn(host);
       expect(inIde).toContain(ideStep);
       expect(inIde).not.toContain("Kiro CLI");
@@ -318,6 +369,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     }
     // Kiro CLI v3 and an ACP client on this tree set neither.
     const elsewhere = refusalIn({});
+    // Another editor's terminal is not Kiro IDE.
+    expect(refusalIn({ TERM_PROGRAM: "vscode" })).toBe(elsewhere);
+    // Kiro CLI started from VS Code's terminal: VS Code's own VSCODE_ variables do not make it Kiro IDE.
+    expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_PID: "4242" })).toBe(elsewhere);
+    expect(refusalIn({ TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" })).toBe(elsewhere);
     expect(elsewhere).toContain(
       'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again." In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.',
     );
@@ -360,8 +416,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("A4: with fresh hook activity the refusal gives no hooks-off step", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", first]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -388,12 +444,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // The refusal gives the person's step in fixed words, and the agent never
   // offers to turn a check off for them. In Kiro CLI, with its hooks running, a
   // reply goes unrecorded when it was typed to another agent (a live run), so
-  // the step is to pick aidlc and give it once more.
+  // the step is to pick aidlc and give it once more, or, when Kiro says the
+  // agent needs upgrading for its 3.0 engine, to start again on v2.
   test("A5: a reply that was not recorded gets only the person's step, never hooks or a check to turn off", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", first]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -412,20 +469,32 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(refusal).toContain("Never offer to turn a check off for them.");
       expect(refusal).not.toMatch(/hook/i);
       expect(refusal).not.toContain("AIDLC_SKIP");
+      // On Kiro CLI's 3.0 engine with the agent not upgraded, picking aidlc
+      // again never brings the shipped hooks back, even after an earlier v2
+      // session left a heartbeat (AIDA #2042 F1): Kiro's own upgrade line
+      // tells the agent to give the v2 restart instead.
+      if (state === KIRO_CLI_STATE) {
+        expect(refusal).toContain('If Kiro\'s own line under your replies says `agent "aidlc" needs upgrading');
+        expect(refusal).toContain(
+          '"Your answer didn\'t reach AI-DLC. Quit Kiro and start it again in this folder with: ' +
+            'kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more."',
+        );
+      }
     }
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
-  // The realistic flow: the human types (HUMAN_TURN), then the agent opens the
-  // gate and approves it. A HUMAN_TURN exists after the last resolution (none
-  // yet) -> approve COMMITS, exactly one GATE_APPROVED.
+  // The realistic flow: the agent opens the gate and shows it, the person
+  // replies (HUMAN_TURN), the agent approves. A HUMAN_TURN exists after the
+  // last resolution (none yet) and after the gate was shown -> approve COMMITS,
+  // exactly one GATE_APPROVED.
   test("B: approve COMMITS when a HUMAN_TURN was recorded this turn", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordHumanTurn(proj); // the human typed a prompt
-    guarded(proj, ["gate-start", slug]); // agent opens the gate (same turn)
+    guarded(proj, ["gate-start", slug]); // agent opens and shows the gate
+    recordHumanTurn(proj); // the human replied
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(r.rc, r.out).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
@@ -433,13 +502,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
-  // The picker returns the "(Recommended)" decorator added to the choice label.
-  // Matching may remove it, but the approval receipt must retain the human's reply.
+  // The picker returns the "(Recommended)" decorator added to the choice label;
+  // the receipt keeps the agent's report as it passed it.
   test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
     const r = guarded(proj, [
       "approve",
       slug,
@@ -450,17 +519,20 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve\n");
+    ).toContain("**User Input**: Approve (Recommended)\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
   // The agent reports the approval it read from the person's reply; the
-  // receipt names Accept as-is only once the gate offers it.
+  // receipt records it as passed, whatever the revision count.
   test.each([2, 3])(
-    "decorated Accept as-is respects the revision limit at count %i",
+    "decorated Accept as-is is recorded as the agent passed it at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
+      // This stage's earlier change requests, as the reject path records them.
+      for (let i = 0; i < revisionCount; i++) {
+        appendAuditEntry("GATE_REJECTED", { Stage: slug, Feedback: `change ${i + 1}` }, proj);
+      }
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
@@ -469,13 +541,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(report.out).toContain('"kind":"done"');
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+        .toContain("**User Input**: Accept as-is (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
   test.each(["(Recommended)", "Approve (Recommended) extra"])(
-    "the agent's reported approval records as Approve, whatever it passes: %s",
+    "the agent's reported approval records as it passes it: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -485,7 +557,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(direct.rc, direct.out).toBe(0);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain("**User Input**: Approve\n");
+        .toContain(`**User Input**: ${reply}\n`);
     },
   );
 
@@ -520,16 +592,99 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
     appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "an earlier answer" }, proj);
-    const claude = guarded(proj, ["park"]);
+    const claude = guarded(proj, ["park", "--person-asked"]);
     expect(claude.rc).not.toBe(0);
     expect(claude.out).toContain("no reply from the person is on record");
     expect(claude.out).not.toContain("unattended autonomous run");
-    expect(guarded(proj, ["park"], true, KIRO_CLI_STATE).rc).not.toBe(0);
+    expect(guarded(proj, ["park", "--person-asked"], true, KIRO_CLI_STATE).rc).not.toBe(0);
     expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
-    const kiro = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    // The agent's own park there is not theirs either: the run goes on.
+    const own = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    expect(own.rc).not.toBe(0);
+    expect(own.out).toContain("Construction Autonomy Mode is autonomous, as the person chose");
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    const kiro = guarded(proj, ["park", "--person-asked"], false, KIRO_CLI_STATE);
     expect(kiro.rc, kiro.out).toBe(0);
     expect(kiro.out).toContain("this host can miss one");
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // Live on Claude Code with the hooks switched off in a new chat after the
+  // person chose "Continue automatically" in an earlier one: their "let's stop
+  // here for today" was refused in the engine's words and the build went on.
+  // A chat none of whose messages reached the record could not have had its
+  // stop recorded, so the stop is theirs with the note, and their choice stays.
+  // A chat the hooks did record keeps the guard, and so does a chat the engine
+  // cannot name (Cursor, opencode or Copilot with every hook off).
+  describe("a stop in a chat whose messages never reached the record", () => {
+    const CHAT = "01995000-7a11-7000-8000-00000000e877";
+    const GRANT_CHAT = "01995000-7a11-7000-8000-00000000e878";
+    const NO_HOST_CHAT = { CLAUDE_PID: "", CLAUDE_CODE_SESSION_ID: "", CODEX_THREAD_ID: "", KIRO_SESSION_ID: "" };
+    const claudeChat = { ...NO_HOST_CHAT, CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: CHAT };
+    const codexChat = { ...NO_HOST_CHAT, CODEX_THREAD_ID: CHAT };
+    const CODEX_STATE = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-state.ts");
+
+    // "Continue automatically", granted with the message of `session` (none: a
+    // row from before rows named their chat).
+    function grantedFrom(session: string | null): string {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+        "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+      ), "utf-8");
+      appendAuditEntry("HUMAN_TURN", session === null ? {} : { Session: session }, proj);
+      appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+      return sf;
+    }
+
+    test.each([
+      ["Claude Code", STATE, claudeChat],
+      ["Codex", CODEX_STATE, codexChat],
+    ])("on %s the stop parks as theirs and Continue automatically stays", (_host, tool, host) => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, tool, host);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(park.out).not.toContain("this host can miss one");
+      const state = readFileSync(sf, "utf-8");
+      expect(state).toContain("- **Parked By**: person");
+      expect(state).toContain("- **Construction Autonomy Mode**: autonomous");
+    });
+
+    // Cursor's chat whose prompt hook never runs while its session-start hook
+    // does: the engine names the chat from the session-start hook's own map.
+    test("a chat named by the session-start hook's map parks as theirs too", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      writeSessionPidEntry(proj, process.pid, CHAT);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, NO_HOST_CHAT);
+      expect(park.rc, park.out).toBe(0);
+      expect(park.out).toContain("none of this chat's messages reached the record");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
+    test("the engine's park returns the paused step", () => {
+      const sf = grantedFrom(GRANT_CHAT);
+      const env: NodeJS.ProcessEnv = { ...process.env, ...claudeChat, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete env.AIDLC_UNATTENDED;
+      const r = spawnSync(BUN, [ORCHESTRATE, "park", "--person-asked", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      expect(JSON.parse(r.stdout).kind, r.stdout).toBe("parked");
+      expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+    });
+
+    test.each([
+      ["the grant came from this chat", CHAT, claudeChat],
+      ["a row names no chat", null, claudeChat],
+      ["the engine cannot name the chat", GRANT_CHAT, NO_HOST_CHAT],
+    ])("the guard holds when %s", (_case, session, host) => {
+      const sf = grantedFrom(session);
+      const park = guarded(proj, ["park", "--person-asked"], false, STATE, host);
+      expect(park.rc).not.toBe(0);
+      expect(park.out).toContain("no reply from the person is on record");
+      expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    });
   });
 
   // An unattended run never parks itself, whatever the ledger holds, and an
@@ -540,7 +695,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
     // Empty ledger: no reply on record, so the run keeps moving.
-    const empty = guarded(proj, ["park"]);
+    const empty = guarded(proj, ["park", "--person-asked"]);
     expect(empty.rc, empty.out).not.toBe(0);
     expect(empty.out).toContain("no reply from the person is on record");
     // It names the step that lets a stop through when the person's word is
@@ -549,11 +704,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     // A reply on record, but the driver declared the run unattended.
     recordHumanTurn(proj);
     for (const tool of [STATE, KIRO_CLI_STATE]) {
-      expect(guarded(proj, ["park"], true, tool).rc).not.toBe(0);
+      expect(guarded(proj, ["park", "--person-asked"], true, tool).rc).not.toBe(0);
     }
     expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
     // The same reply in an attended session is the person's stop.
-    const attended = guarded(proj, ["park"]);
+    const attended = guarded(proj, ["park", "--person-asked"]);
     expect(attended.rc, attended.out).toBe(0);
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
   });
@@ -563,7 +718,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     writeFileSync(sf, readFileSync(sf, "utf-8").replace(
       "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
     ), "utf-8");
-    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    expect(guarded(proj, ["park", "--person-asked"]).rc).not.toBe(0);
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_UNATTENDED;
@@ -573,7 +728,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env,
     });
     expect(gated.status, `${gated.stdout}${gated.stderr}`).toBe(0);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
   });
@@ -588,7 +743,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     ), "utf-8");
     recordHumanTurn(proj);
     // 1. `state park`.
-    const park = guarded(proj, ["park"], true);
+    const park = guarded(proj, ["park", "--person-asked"], true);
     expect(park.rc).not.toBe(0);
     expect(park.out).toContain("AIDLC_UNATTENDED=1 is set");
     // 2. `orchestrate report --park` at a gate the person answered.
@@ -702,8 +857,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("C: a single HUMAN_TURN approves ONE gate; a second gate this turn REFUSES", () => {
     const slug1 = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
 
     // First gate this turn: commits.
     const r1 = guarded(proj, ["approve", slug1, "--user-input", "Approve"]);
@@ -729,8 +884,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("C2: a fresh HUMAN_TURN after the first commit approves the second gate", () => {
     const slug1 = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug1, "--user-input", "Approve"]).rc).toBe(0);
 
     const slug2 = field(proj, "Current Stage");
@@ -947,8 +1102,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   test("E: a HUMAN_TURN already spent on a prior gate is STALE -> REFUSE", () => {
     const slug1 = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug1}=in-progress`]);
-    recordHumanTurn(proj);
     guarded(proj, ["gate-start", slug1]);
+    recordHumanTurn(proj);
     expect(guarded(proj, ["approve", slug1, "--user-input", "Approve"]).rc).toBe(0); // spends the turn
 
     // New gate, NO fresh HUMAN_TURN - the prior GATE_APPROVED is after the only turn.
@@ -1000,33 +1155,6 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "utf-8",
     );
     expect(humanActedSinceGate(proj)).toBe(true);
-  });
-
-  // --- hasOpenGate (the preToolUse floors' gate-open predicate) ---------------
-  //
-  // The per-harness preToolUse floors must refuse ONLY while a stage actually
-  // sits at [?]: after a legitimate approval the last resolution follows the
-  // turn's HUMAN_TURN, and without this predicate the floor would block the
-  // mandated same-turn continuation into the next stage.
-  describe("hasOpenGate (state-file [?] predicate for the preToolUse floors)", () => {
-    test("false with no state / no [?]; true once a stage awaits approval", async () => {
-      const { hasOpenGate } = await import(
-        "../../dist/claude/.claude/tools/aidlc-lib.ts"
-      );
-      expect(hasOpenGate(null)).toBe(false);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(before)).toBe(false); // fixture has no [?] stage
-      const slug = field(proj, "Current Stage");
-      guarded(proj, ["checkbox", `${slug}=in-progress`]);
-      guarded(proj, ["gate-start", slug]);
-      const open = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(open)).toBe(true);
-      // Approving closes it again: the floor stops firing post-approval.
-      recordHumanTurn(proj);
-      expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
-      const after = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(after)).toBe(false);
-    });
   });
 
   // --- handleAnswer twin (interview path) ------------------------------------
@@ -1181,7 +1309,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
-    test("summary confirmation needs a fresh turn after another answer", () => {
+    // An answer spends no reply: the one the follow-up stood on backs the summary too.
+    test("summary confirmation stands on the reply another answer used", () => {
       const slug = field(proj, "Current Stage");
       const questions = summaryQuestions(proj);
       expect(
@@ -1220,9 +1349,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--details",
         "Looks correct",
       ]);
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no human reply has arrived since their last answer");
-      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+      expect(result.rc, result.out).toBe(0);
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(1);
     });
 
     test("per-unit evidence requires a unit-scoped receipt", () => {
@@ -1348,9 +1476,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
     // From a live Kiro IDE run: the person answered five practice questions in
     // one reply, the first answer recorded, and the rest were refused. One reply
-    // answers every question open when it arrived, each as its own answer; a
-    // question asked after it waits for the next reply.
-    test("one reply answers every question open when it arrived; a question asked after it waits", () => {
+    // answers every question the agent reads it for, each as its own answer,
+    // also one the agent logged after it arrived.
+    test("one reply answers every question the agent reads it for, also one logged after it", () => {
       const slug = field(proj, "Current Stage");
       for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
         expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
@@ -1363,9 +1491,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
       const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
-      expect(late.rc).not.toBe(0);
-      expect(late.out).toContain("no new human reply has arrived for the question");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      expect(late.rc, late.out).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(4);
     });
 
     // From block-sweep probes: the person answered three questions in one
@@ -1381,7 +1508,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       }
     }
 
-    test("one question box reply backs one answer per pick, though the batch was logged after it; one more waits", () => {
+    test("one question box reply backs one answer per pick, though the batch was logged after it", () => {
       const slug = field(proj, "Current Stage");
       boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
@@ -1390,10 +1517,97 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         expect(r.rc, r.out).toBe(0);
       }
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
-      // The box carried three picks: a fourth answer has no pick behind it.
+      // No count of picks against answers: which question a reply answers is
+      // the agent's reading, and the record shows the turn each answer stood on.
       const fourth = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q4: anything"]);
-      expect(fourth.rc).not.toBe(0);
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      expect(fourth.rc, fourth.out).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(4);
+    });
+
+    // #2012 F2 (AIDA back-audit): a menu of several questions answered once must
+    // not come back. `log answers` reads an exchange: the questions logged since
+    // the previous answers, closed by the answers logged after them, in the
+    // engine's own row order and with no reading of words. Both menu shapes the
+    // protocol allows land here: N questions then one combined answer, and one
+    // batch question then one answer per pick.
+    function logAnswers(slug: string): { answered: Array<{ question: string; answer: string; answeredAt: string }>; open: Array<{ question: string }>; ambiguous: unknown[] } {
+      const r = guardedLog(proj, ["answers", "--stage", slug]);
+      expect(r.rc, r.out).toBe(0);
+      return JSON.parse(r.out);
+    }
+
+    // The reply came before the questions were logged, so each question is logged
+    // naming the message that answered it (the protocol's rule for a late log),
+    // and the one answer inherits it.
+    test("one combined answer closes every question the menu logged before it, each logged with the message that answered (#2012 F2)", () => {
+      const slug = field(proj, "Current Stage");
+      const id = recordTypedReply(proj, "Q1: In the API handler; Q2: A toast; Q3: Yes");
+      for (const question of ["Where does the check live?", "Which notice?", "Rename to Untitled?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B", "--message", id]).rc).toBe(0);
+      }
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: In the API handler; Q2: A toast; Q3: Yes"]);
+      expect(r.rc, r.out).toBe(0);
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => pair.question))
+        .toEqual(["Where does the check live?", "Which notice?", "Rename to Untitled?"]);
+      expect(answers.answered.every((pair) => pair.answer === "Q1: In the API handler; Q2: A toast; Q3: Yes")).toBe(true);
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("one batch question answered pick by pick is one answered question, not two orphans (#2012 F2)", () => {
+      const slug = field(proj, "Current Stage");
+      boxReply(["In the API handler", "A toast", "Yes, to Untitled"]);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q3", "--options", "A,B"]).rc).toBe(0);
+      for (const reply of ["Q1: In the API handler", "Q2: A toast", "Q3: Yes, to Untitled"]) {
+        expect(guardedLog(proj, ["answer", "--stage", slug, "--details", reply]).rc).toBe(0);
+      }
+      const answers = logAnswers(slug);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.answered[0].question).toBe("Q1-Q3");
+      expect(answers.answered[0].answer).toBe("Q1: In the API handler; Q2: A toast; Q3: Yes, to Untitled");
+      expect(answers.open).toEqual([]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("two exchanges in a row pair separately, and a question logged after the reply waits", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Q3", Options: "A, B" });
+      const answers = logAnswers(slug);
+      expect(answers.answered.map((pair) => [pair.question, pair.answer])).toEqual([["Q1", "a"], ["Q2", "b"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Q3"]);
+      expect(answers.ambiguous).toEqual([]);
+    });
+
+    test("an orphan answer stays ambiguous, scopes pair apart, and a cancelled box leaves its question open", () => {
+      const slug = field(proj, "Current Stage");
+      const row = (event: string, fields: Record<string, string>) => appendAuditEntry(event, { Stage: slug, ...fields }, proj);
+      row("QUESTION_ANSWERED", { Details: "nothing was asked" });
+      row("DECISION_RECORDED", { Decision: "Q1", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "a" });
+      row("DECISION_RECORDED", { Decision: "U1?", Options: "A, B", Unit: "u1" });
+      row("DECISION_RECORDED", { Decision: "Q2", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "u", Unit: "u1" });
+      row("QUESTION_ANSWERED", { Details: "b" });
+      row("DECISION_RECORDED", { Decision: "Qx", Options: "A, B" });
+      // An answer with no words in it answers nothing; "Cancelled" is an answer like any other.
+      row("DECISION_RECORDED", { Decision: "Qy", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "Cancelled" });
+      row("DECISION_RECORDED", { Decision: "Qz", Options: "A, B" });
+      row("QUESTION_ANSWERED", { Details: "   " });
+      const answers = logAnswers(slug);
+      // Scopes pair independently; their order in `answered` is not promised.
+      expect(answers.answered.map((pair) => [pair.question, pair.answer]).sort())
+        .toEqual([["Q1", "a"], ["Q2", "b"], ["Qx", "Cancelled"], ["Qy", "Cancelled"], ["U1?", "u"]]);
+      expect(answers.open.map((question) => question.question)).toEqual(["Qz"]);
+      expect(answers.ambiguous).toHaveLength(1);
+      expect((answers.ambiguous[0] as { answer: string; candidates: string[] }).answer).toBe("nothing was asked");
+      expect((answers.ambiguous[0] as { candidates: string[] }).candidates).toEqual([]);
     });
 
     test("a question box reply backs its answers when each question is logged after it, one at a time", () => {
@@ -1429,33 +1643,35 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("a question logged after an answered reply keeps the no-reply refusal", () => {
+    // Which question a reply answers is the agent's reading: an answer spends
+    // no reply, so the reply that answered the first question can back the
+    // second, and the row shows which reply it stood on.
+    test("a question logged after an answered reply records on that same reply", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
       expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
-      // A new question is shown; its reply never reached the hooks, so no turn follows it.
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
-      expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.rc, r.out).toBe(0);
       expect(r.out).not.toContain("already recorded as an answer");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
     });
 
     // From a live Windows run: the person answered a four-question menu, and only
     // then did the agent log the menu's questions, with all four answers in one
-    // entry. The one reply is recorded once and nothing is left open, so they are
-    // never asked again.
-    test("a menu answered before its questions were logged, with one combined answer, is recorded once", () => {
+    // entry. The reply that came before the question was logged answers it: the
+    // one reply is recorded once, the row names its message, and nothing is
+    // left open, so they are never asked again.
+    test("a menu answered before its questions were logged, with one combined answer, is recorded once on that reply", () => {
       const slug = field(proj, "Current Stage");
-      recordHumanTurn(proj);
+      const id = recordTypedReply(proj, "A for all four");
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q4", "--options", "A,B,C"]).rc).toBe(0);
-      const r = guardedLog(proj, [
-        "answer", "--stage", slug, "--details",
-        "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook",
-      ]);
+      const details = "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook";
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", details]);
       expect(r.rc, r.out).toBe(0);
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1)!;
+      expect(auditBlockField(row.block, "Message Id")).toBe(id);
       const answers = JSON.parse(guardedLog(proj, ["answers", "--stage", slug]).out);
       expect(answers.answered).toHaveLength(1);
       expect(answers.open).toEqual([]);
@@ -1465,56 +1681,72 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
       expect(protocol).toContain(
         "Log every question a menu shows before you show the menu, and put all of one reply's answers in a " +
-          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
+          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'` when it answered both, `--details 'Q2: <choice>'` when it " +
+          "answered Q2 alone: only the questions the reply really answered go in it, never a slot filled with words " +
+          "that answered something else), even when the reply came before the log.",
       );
       expect(protocol).toContain(
-        "If they already replied, log the question now, then put all of that reply's answers in a single " +
-          "`log answer`: a second `log answer` for one reply is refused.",
+        "If they already replied, log the question now, then put all of that reply's answers in a single `log " +
+          "answer`: their reply answers it, so they are not asked again.",
       );
     });
 
     // "Choose the recommended answers", said before the questions came: the
-    // agent's choice is recorded as the agent's, with the words that handed it
-    // over, never as the person's own answer.
-    test("an answer the person left to the agent is recorded as the agent's, in their words", () => {
+    // agent's choice is recorded as the agent's, naming the message that handed
+    // it over and keeping its whole words, never as the person's own answer.
+    test("an answer the person left to the agent is recorded as the agent's, naming their message", () => {
       const slug = field(proj, "Current Stage");
-      recordHumanTurn(proj);
+      const words = "first answer, and choose the recommended answers for the rest";
+      const id = recordTypedReply(proj, words);
+      Bun.sleepSync(1100);
       expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q5", "--options", "A,B"]).rc).toBe(0);
-      // Without their words it is still theirs to answer.
-      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: A"]).rc).not.toBe(0);
       const r = guardedLog(proj, [
-        "answer", "--stage", slug, "--details", "Q1: A; Q2: B", "--on-instruction", "choose the  recommended answers",
+        "answer", "--stage", slug, "--details", "Q1: A; Q2: B", "--on-instruction", "--message", id,
       ]);
       expect(r.rc, r.out).toBe(0);
       const audit = readAllAuditShards(proj);
-      expect(audit).toContain("**Answer Source**: chosen by the agent as the person asked");
-      expect(audit).toContain("**Instruction**: choose the recommended answers");
+      expect(audit).toContain("**Answer Source**: chosen by the agent, reading their message");
+      expect(audit).toContain(`**Message Id**: ${id}`);
+      expect(audit).toContain(`**Person Reply**: ${words}`);
+      expect(audit).not.toContain("**Instruction**:");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
     });
 
-    test("with nothing the person said, blank words, a checkpoint, or an unattended run, it stays theirs", () => {
+    test("with nothing the person said, a checkpoint, or an unattended run, it stays theirs", () => {
       const slug = field(proj, "Current Stage");
-      const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"]);
+      const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction"]);
       expect(unsaid.rc).not.toBe(0);
       expect(unsaid.out).toContain("Nothing the person said in this piece of work is on record");
       recordHumanTurn(proj);
-      const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
-      expect(blank.out).toContain("--on-instruction needs the person's own words");
       const checkpoint = guardedLog(proj, [
         "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct",
-        "--on-instruction", "up to you",
+        "--on-instruction",
       ]);
       expect(checkpoint.out).toContain("--checkpoint summary-confirmation is theirs to answer");
-      const unattended = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"], true);
+      const unattended = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction"], true);
       expect(unattended.out).toContain("--on-instruction needs a person in the session");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+    // Words after the flag are the agent's own, blank ones too: with no message
+    // named, the answer records with no claim that the person left it.
+    test("blank words with the flag and no message named: the agent's own answer, with no claim", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
+      expect(blank.rc, blank.out).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).not.toContain("**Answer Source**:");
+      expect(audit).not.toContain("**Conductor Summary**:");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    test("an unattended answer after a decision used the reply keeps the AIDLC_UNATTENDED explanation", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
       expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      appendAuditEntry("GATE_REJECTED", { Stage: slug }, proj);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Unset AIDLC_UNATTENDED");
@@ -1554,7 +1786,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain("**User Input**: Approve\n");
+      ).toContain("**User Input**: Approve (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 
@@ -1818,11 +2050,332 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   });
 });
 
+// Audit-loop-report C3 variant B: the agent logs a question AFTER the person
+// already replied, and the reply reads as spent for the answers that follow
+// (`usedOnlyByAnswers` wants every DECISION_RECORDED provably before the latest
+// turn), so the agent is told to wait for a reply that already arrived and asks
+// the person to type it again. Under "LLM maps, tool proves" the agent names the
+// message that answered (`--message '<id>'`); the engine proves the record exists,
+// is this chat's and is not spent by an approval, and reads no words.
+describe("t188: a late-logged question takes the reply that answered it", () => {
+  const CHAT = "01995000-7a11-7000-8000-0000000000e1";
+  const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000e2";
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  // The person typed `words` (`secondsAgo` earlier): the hook's record and the turn row naming it.
+  function reply(words: string, session: string = CHAT, secondsAgo = 0): string {
+    const stored = saveMessage(proj, {
+      session, at: new Date(Date.now() - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: words, picker: null,
+      words, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    appendAuditEntry("HUMAN_TURN", { Session: session, "Message Id": stored.id }, proj);
+    return stored.id;
+  }
+  function log(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
+    const merged: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", ...env };
+    delete merged.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete merged.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: merged,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+  const inChat = { AIDLC_SESSION_OVERRIDE: CHAT, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  function rows(event: string) {
+    return readAuditShardEvents(proj).filter((row) => row.event === event);
+  }
+  function fieldOf(row: { block: string }, name: string): string | null {
+    return row.block.match(new RegExp(`^\\*\\*${name}\\*\\*: (.*)$`, "m"))?.[1] ?? null;
+  }
+
+  test("two answers naming the message that arrived before the question was logged are both recorded", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("Q1: in the API handler. Q2: a toast.");
+    expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"], inChat).rc).toBe(0);
+    const first = log(["answer", "--stage", slug, "--details", "Q1: in the API handler", "--message", id], inChat);
+    expect(first.rc, first.out).toBe(0);
+    const second = log(["answer", "--stage", slug, "--details", "Q2: a toast", "--message", id], inChat);
+    expect(second.rc, second.out).toBe(0);
+    const answered = rows("QUESTION_ANSWERED");
+    expect(answered).toHaveLength(2);
+    expect(answered.map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+    expect(fieldOf(answered[1], "Person Reply")).toBe("Q1: in the API handler. Q2: a toast.");
+  });
+
+  test("a question logged with the message hands it to its answers", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("yes to both");
+    const logged = log(["decision", "--stage", slug, "--decision", "Both?", "--options", "A,B", "--message", id], inChat);
+    expect(logged.rc, logged.out).toBe(0);
+    expect(fieldOf(rows("DECISION_RECORDED").at(-1)!, "Message Id")).toBe(id);
+    for (const details of ["first: yes", "second: yes"]) {
+      const r = log(["answer", "--stage", slug, "--details", details], inChat);
+      expect(r.rc, r.out).toBe(0);
+    }
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+    const pairs = JSON.parse(log(["answers", "--stage", slug], inChat).out) as { answered: Array<{ messageId?: string }> };
+    expect(pairs.answered.map((pair) => pair.messageId)).toEqual([id]);
+  });
+
+  test("a message spent by an approval or an unknown id is refused to the agent, naming the step; another chat's is recorded", () => {
+    const slug = field(proj, "Current Stage");
+    // Typed a minute ago; the approval it gave is on record after it, so it is spent.
+    const spent = reply("approve", CHAT, 60);
+    appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "After the approval?", "--options", "A,B"], inChat).rc).toBe(0);
+    const stale = log(["answer", "--stage", slug, "--details", "A", "--message", spent], inChat);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`message ${spent}`);
+    expect(stale.out).toContain("approval");
+    const unknown = log(["answer", "--stage", slug, "--details", "A", "--message", "0badc0de"], inChat);
+    expect(unknown.rc).not.toBe(0);
+    expect(unknown.out).toContain("no message record");
+    expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+    // The person's reply in another chat of this work is theirs too.
+    const elsewhere = reply("A", OTHER_CHAT);
+    const other = log(["answer", "--stage", slug, "--details", "A", "--message", elsewhere], inChat);
+    expect(other.rc, other.out).toBe(0);
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([elsewhere]);
+  });
+
+  test("with no chat the engine can name, the message named is recorded, whichever chats have spoken", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("A then B");
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
+    const one = log(["answer", "--stage", slug, "--details", "A", "--message", id]);
+    expect(one.rc, one.out).toBe(0);
+    reply("something else", OTHER_CHAT);
+    const two = log(["answer", "--stage", slug, "--details", "B", "--message", id]);
+    expect(two.rc, two.out).toBe(0);
+    expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, id]);
+  });
+
+  test("the message that arrived before the question was logged answers it, and the person is not asked again", () => {
+    const slug = field(proj, "Current Stage");
+    const id = reply("Q1: here. Q2: there.");
+    expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"], inChat).rc).toBe(0);
+    const recorded = log(["answer", "--stage", slug, "--details", "Q1: here"], inChat);
+    expect(recorded.rc, recorded.out).toBe(0);
+    expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Message Id")).toBe(id);
+    expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Person Reply")).toBe("Q1: here. Q2: there.");
+  });
+
+  // AIDA 5450894846 on #2150: the sessionless hint listed other chats' messages; a
+  // command or a wordless message was offered and accepted as a reply; a routing
+  // answer did not spend the messages before it. The proof and the hint now follow
+  // the presence check's own rules.
+  test("with no chat the engine can name and two chats since the last decision, the answer keeps neither chat's words", () => {
+    const slug = field(proj, "Current Stage");
+    reply("A from one chat");
+    reply("A from another", OTHER_CHAT);
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"]).rc).toBe(0);
+    const recorded = log(["answer", "--stage", slug, "--details", "A"]);
+    expect(recorded.rc, recorded.out).toBe(0);
+    expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Person Reply")).toBeNull();
+    expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Message Id")).toBeNull();
+  });
+
+  test("a message with no words, or a turn that was only a command, is neither offered nor accepted as the reply", () => {
+    const slug = field(proj, "Current Stage");
+    const command = saveMessage(proj, {
+      session: CHAT, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "/aidlc --status", picker: null,
+      words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    }).id;
+    appendAuditEntry("HUMAN_TURN", { Session: CHAT, Reply: "command", "Message Id": command }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);
+    const named = log(["answer", "--stage", slug, "--details", "A", "--message", command], inChat);
+    expect(named.rc).not.toBe(0);
+    expect(named.out).toContain("no words");
+    const plain = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(plain.rc).not.toBe(0);
+    expect(plain.out).not.toContain(`--message ${command}`);
+    expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+  });
+
+  test("a routing answer spends the messages before it, like an approval", () => {
+    const slug = field(proj, "Current Stage");
+    const earlier = reply("add a flag", CHAT, 60);
+    appendAuditEntry("REQUEST_ROUTED", { Stage: slug, Route: "active-work" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "After routing?", "--options", "A,B"], inChat).rc).toBe(0);
+    const stale = log(["answer", "--stage", slug, "--details", "A", "--message", earlier], inChat);
+    expect(stale.rc).not.toBe(0);
+    expect(stale.out).toContain(`message ${earlier}`);
+    expect(stale.out).toContain("spent");
+  });
+
+  test("with no message before the question, or only a spent one, the no-reply refusal stands and names no id", () => {
+    const slug = field(proj, "Current Stage");
+    expect(log(["decision", "--stage", slug, "--decision", "Q?", "--options", "A,B"], inChat).rc).toBe(0);
+    const nothing = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(nothing.rc).not.toBe(0);
+    expect(nothing.out).toContain("Wait for the human to type an answer");
+    expect(nothing.out).not.toContain("--message");
+    // A message the person sent before the last approval is spent, so it is not offered either.
+    reply("approve", CHAT, 60);
+    appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(log(["decision", "--stage", slug, "--decision", "And now?", "--options", "A,B"], inChat).rc).toBe(0);
+    const spent = log(["answer", "--stage", slug, "--details", "A"], inChat);
+    expect(spent.rc).not.toBe(0);
+    expect(spent.out).toContain("Wait for the human to type an answer");
+    expect(spent.out).not.toContain("--message");
+  });
+
+  // In a live run the agent recorded "Nothing to add" on a learnings question
+  // it logged nine minutes after the person's last message, with their words
+  // beside it; the same move at the next stage was refused, so the outcome hung
+  // on whether an earlier answer had already used the turn. Which question a
+  // reply answers is the agent's reading: any reply no decision has used yet
+  // backs an answer, the same way every time. The row names it, except for a
+  // question logged after another answer already named it: that link is the
+  // agent's to make (--message), never the engine's guess.
+  describe("an answer takes any reply no decision has used yet, logged before or after it", () => {
+    test("a plain answer on a reply older than its question records on it, and the next question records too", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("done. Moving forward - don't ask me any questions.", CHAT, 30);
+      expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
+      const recorded = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(recorded.rc, recorded.out).toBe(0);
+      expect(log(["decision", "--stage", slug, "--decision", "And for the next stage?"], inChat).rc).toBe(0);
+      const again = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(again.rc, again.out).toBe(0);
+      expect(rows("QUESTION_ANSWERED").map((row) => fieldOf(row, "Message Id"))).toEqual([id, null]);
+    });
+
+    test("a reply after the question records as before", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Anything to add for next time?"], inChat).rc).toBe(0);
+      reply("Nothing to add, thanks");
+      const recorded = log(["answer", "--stage", slug, "--details", "Nothing to add"], inChat);
+      expect(recorded.rc, recorded.out).toBe(0);
+      const answered = rows("QUESTION_ANSWERED");
+      expect(answered).toHaveLength(1);
+      expect(fieldOf(answered[0], "Answer Source")).toBeNull();
+    });
+
+    test("the message named, or the choice the person left to the agent, records on a reply older than the question", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("Q1: in the API handler. Use the recommended answers for the rest.", CHAT, 30);
+      expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2"], inChat).rc).toBe(0);
+      const named = log(["answer", "--stage", slug, "--details", "Q1: in the API handler", "--message", id], inChat);
+      expect(named.rc, named.out).toBe(0);
+      const left = log(["answer", "--stage", slug, "--details", "Q2: a toast", "--on-instruction", "--message", id], inChat);
+      expect(left.rc, left.out).toBe(0);
+      const answered = rows("QUESTION_ANSWERED");
+      expect(answered).toHaveLength(2);
+      expect(fieldOf(answered[0], "Message Id")).toBe(id);
+      expect(fieldOf(answered[1], "Answer Source")).toBe("chosen by the agent, reading their message");
+      expect(fieldOf(answered[1], "Message Id")).toBe(id);
+    });
+
+    test("a question box reply answers the questions it showed, though the agent logs them after it", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q1?", Reply: "In the API handler" }, proj);
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q2?", Reply: "A toast" }, proj);
+      expect(log(["decision", "--stage", slug, "--decision", "Q1 and Q2", "--options", "A,B"]).rc).toBe(0);
+      expect(log(["answer", "--stage", slug, "--details", "In the API handler"]).rc).toBe(0);
+      expect(log(["answer", "--stage", slug, "--details", "A toast"]).rc).toBe(0);
+      // An answer spends no reply: a third question the agent reads the same
+      // turn for records on it too.
+      expect(log(["decision", "--stage", slug, "--decision", "Q3?", "--options", "A,B"]).rc).toBe(0);
+      const third = log(["answer", "--stage", slug, "--details", "A"]);
+      expect(third.rc, third.out).toBe(0);
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(3);
+    });
+  });
+
+  // A live Copilot CLI run: the person saw Q1 only and replied in their own
+  // words; the agent logged Q2 after that reply and recorded "Q1: A; Q2: A" on
+  // their message. What the agent tells them about it is its own words: the
+  // engine hands back no line to read out.
+  describe("an answer taken from a reply older than its question carries no line to read out", () => {
+    function output(r: { out: string }): { say?: string; agent_note?: string } {
+      const line = r.out.split("\n").find((text) => text.startsWith('{"emitted"'));
+      expect(line, r.out).toBeDefined();
+      return JSON.parse(line!);
+    }
+
+    test("a reply to Q1 that also answered a Q2 logged after it names Q2 and what was recorded, not Q1", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Q1: Behavior when no name is supplied", "--options", "A,B,C,D,X"], inChat).rc).toBe(0);
+      const id = reply("Keep it small: the greeting uses the name given on the command line, and nothing else changes");
+      expect(log(["decision", "--stage", slug, "--decision", "Q2: Name handling scope", "--options", "A,B,C,D,X"], inChat).rc).toBe(0);
+      const r = log(["answer", "--stage", slug, "--details", "Q1: A; Q2: A", "--message", id], inChat);
+      expect(r.rc, r.out).toBe(0);
+      const out = output(r);
+      expect(out.say).toBeUndefined();
+      expect(out.agent_note).toBeUndefined();
+      const again = log(["answer", "--stage", slug, "--details", "Q2: A", "--message", id], inChat);
+      expect(again.rc, again.out).toBe(0);
+      expect(output(again).say).toBeUndefined();
+    });
+
+    test("questions logged naming the message hand that message to the plain answer that inherits it", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("keep the error text as it is, and no new flags");
+      for (const question of ["Q3: Error output", "Q4: New flags"]) {
+        expect(log(["decision", "--stage", slug, "--decision", question, "--options", "A,B", "--message", id], inChat).rc).toBe(0);
+      }
+      const r = log(["answer", "--stage", slug, "--details", "Q3: A, unchanged; Q4: A, none"], inChat);
+      expect(r.rc, r.out).toBe(0);
+      const out = output(r);
+      expect(out.say).toBeUndefined();
+      expect(out.agent_note).toBeUndefined();
+      expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Message Id")).toBe(id);
+    });
+
+    test("no line when the reply came after its question, a question box picked it, or the choice was left to the agent", () => {
+      const slug = field(proj, "Current Stage");
+      expect(log(["decision", "--stage", slug, "--decision", "Q1: shown first", "--options", "A,B"], inChat).rc).toBe(0);
+      reply("A please");
+      const plain = log(["answer", "--stage", slug, "--details", "Q1: A"], inChat);
+      expect(plain.rc, plain.out).toBe(0);
+      expect(output(plain).say).toBeUndefined();
+      expect(log(["decision", "--stage", slug, "--decision", "Q2: shown first", "--options", "A,B"], inChat).rc).toBe(0);
+      const after = reply("B for that one");
+      const named = log(["answer", "--stage", slug, "--details", "Q2: B", "--message", after], inChat);
+      expect(named.rc, named.out).toBe(0);
+      expect(output(named).say).toBeUndefined();
+      // A box shows its question, though the agent logs it after the pick.
+      reply("In the API handler");
+      appendAuditEntry("QUESTION_REPLIED", { Question: "Q3?", Reply: "In the API handler" }, proj);
+      expect(log(["decision", "--stage", slug, "--decision", "Q3: where", "--options", "A,B"], inChat).rc).toBe(0);
+      const picked = log(["answer", "--stage", slug, "--details", "Q3: In the API handler"], inChat);
+      expect(picked.rc, picked.out).toBe(0);
+      expect(output(picked).say).toBeUndefined();
+      const handedOver = reply("use the recommended answers for the rest");
+      expect(log(["decision", "--stage", slug, "--decision", "Q4: logged after", "--options", "A,B"], inChat).rc).toBe(0);
+      const left = log(["answer", "--stage", slug, "--details", "Q4: A", "--on-instruction", "--message", handedOver], inChat);
+      expect(left.rc, left.out).toBe(0);
+      expect(fieldOf(rows("QUESTION_ANSWERED").at(-1)!, "Answer Source")).toBe("chosen by the agent, reading their message");
+      expect(output(left).say).toBeUndefined();
+    });
+
+    test("an answer with no words records nothing, so no line says it", () => {
+      const slug = field(proj, "Current Stage");
+      const id = reply("whatever you think");
+      expect(log(["decision", "--stage", slug, "--decision", "Q5: logged after", "--options", "A,B"], inChat).rc).toBe(0);
+      const blank = log(["answer", "--stage", slug, "--details", "   ", "--message", id], inChat);
+      expect(blank.rc).not.toBe(0);
+      expect(blank.out).toContain("no words in it");
+      expect(blank.out).not.toContain('"say"');
+      expect(rows("QUESTION_ANSWERED")).toHaveLength(0);
+    });
+  });
+});
+
 // One message can approve and ask for more ("approve, and turn plan approval
-// off"), or say stop while the run approves on its own. The approval given in
-// that message, and the run's own approvals, leave the rest of it standing;
-// any other decision after it uses it up, and an approval or an answer still
-// needs a reply of its own.
+// off"), or say stop while the run approves on its own. The agent names that
+// message (--message <id>) for what it asks beside the approval: the approval
+// given in it, and the run's own approvals, leave the rest of it standing; any
+// other decision after it, or a grant of autonomy, uses it up, and an approval
+// or an answer still needs a reply of its own. Rows in the same second as the
+// message are not after it, so a decision meant to come after it waits a second.
 describe("t188: what the person's message asks for outlives the approval given in it", () => {
   beforeEach(() => {
     resetAidlcEnv();
@@ -1831,6 +2384,32 @@ describe("t188: what the person's message asks for outlives the approval given i
   });
 
   afterEach(() => cleanupTestProject(proj));
+
+  const tick = () => Bun.sleepSync(1100);
+
+  // What the question box carried back for the person's latest turn, as the message record keeps it.
+  function boxReplies(): Array<string | null> {
+    return readMessage(proj, latestMessageId())?.picker?.map(({ reply }) => reply && personsWordsText(reply)) ?? [];
+  }
+
+  // The id of the message the hook kept for the person's latest turn.
+  function latestMessageId(): string {
+    const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    const id = turn?.block.match(/^\*\*Message Id\*\*: (\S+)$/m)?.[1];
+    expect(id).toBeDefined();
+    return id as string;
+  }
+
+  // A turn that was only a command to AIDLC: the message the hook kept, with no
+  // words of theirs, and the turn row marking it.
+  function recordCommandTurn(): string {
+    const stored = saveMessage(proj, {
+      session: null, at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), source: "prompt", text: "/aidlc --status",
+      picker: null, words: null, settings: [], route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    appendAuditEntry("HUMAN_TURN", { Reply: "command", "Message Id": stored.id }, proj);
+    return stored.id;
+  }
 
   function setter(args: string[]): { rc: number; out: string } {
     const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" };
@@ -1853,11 +2432,12 @@ describe("t188: what the person's message asks for outlives the approval given i
 
   const planApproval = () => /- \*\*Plan Approval\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
 
-  function autonomy(mode: "autonomous" | "gated"): { rc: number; out: string } {
+  function autonomy(mode: "autonomous" | "gated", message?: string): { rc: number; out: string } {
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_UNATTENDED;
-    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", mode, "--project-dir", proj], {
+    const named = message === undefined ? [] : ["--message", message];
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", mode, ...named, "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env,
@@ -1870,98 +2450,119 @@ describe("t188: what the person's message asks for outlives the approval given i
 
   test("approve, and run Construction on its own: both halves of the one message are carried out", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
+    const id = recordTypedReply(proj, "approve, and run Construction on its own from here");
+    tick();
     const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(approved.rc, approved.out).toBe(0);
-    const grant = autonomy("autonomous");
+    const grant = autonomy("autonomous", id);
     expect(grant.rc, grant.out).toBe(0);
     expect(autonomyMode()).toBe("autonomous");
   });
 
   test("approve the plan, and run Construction on its own: the plan answer leaves the grant standing", () => {
-    recordHumanTurn(proj);
+    const id = recordTypedReply(proj, "approve the plan, and run Construction on its own from here");
+    tick();
     appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine" }, proj);
-    const grant = autonomy("autonomous");
+    const grant = autonomy("autonomous", id);
     expect(grant.rc, grant.out).toBe(0);
     expect(autonomyMode()).toBe("autonomous");
   });
 
-  test("the grant after an approval from an earlier message, or a second grant, waits for the person to say it again", () => {
+  test("the message that answered a question still asks for the grant; a second grant waits for the person to say it again", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
+    recordTypedReply(proj, "approve");
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
     const next = field(proj, "Current Stage");
     expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
-    recordHumanTurn(proj);
+    const id = recordTypedReply(proj, "A, and run Construction on its own from here");
+    tick();
     expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
-    const refused = autonomy("autonomous");
-    expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("no reply from the person is on record");
-    expect(autonomyMode()).not.toBe("autonomous");
-    // The step the refusal names: they choose it, and the grant runs once.
-    recordHumanTurn(proj);
-    expect(autonomy("autonomous").rc).toBe(0);
+    // The answer they gave in that message is not a second decision: the rest
+    // of the message, read by the agent as the grant, still stands, once.
+    const granted = autonomy("autonomous", id);
+    expect(granted.rc, granted.out).toBe(0);
+    expect(autonomyMode()).toBe("autonomous");
     expect(autonomy("gated").rc).toBe(0);
-    expect(autonomy("autonomous").rc).not.toBe(0);
+    tick();
+    const again = autonomy("autonomous", id);
+    expect(again.rc).not.toBe(0);
+    expect(again.out).toContain(`message ${id} arrived before the last approval or decision`);
     expect(autonomyMode()).toBe("gated");
   });
 
-  test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
+  // A setting is the exception (Arden's rule for every setting): a message that
+  // already gave an approval does not also stand for one later, so the setting
+  // goes first, then the approval, which the message still backs, or follows
+  // it while that reply is in hand (t-setting-rides-approval).
+  test("approve, and turn plan approval off: the setting first, then the approval, both carried out", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
-    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
-    expect(approved.rc, approved.out).toBe(0);
-    const off = setter(["config-change", "--plan-approval", "off"]);
+    const id = recordTypedReply(proj, "approve, and turn plan approval off");
+    tick();
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
     expect(off.rc, off.out).toBe(0);
     expect(off.out).toContain("Each code plan is now built without asking you first.");
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
     expect(planApproval()).toBe("off");
   });
 
-  test("approve the plan, and turn plan approval off: one plan answer for several Units counts once", () => {
-    recordHumanTurn(proj);
+  test("approve, and turn plan approval off: the approval first, then the setter on that message, both carried out", () => {
+    const slug = openGate();
+    const id = recordTypedReply(proj, "approve, and turn plan approval off");
+    tick();
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("approve the plan, and turn plan approval off: after the plan answers for several Units, the setter is refused", () => {
+    const id = recordTypedReply(proj, "approve the plans, and turn plan approval off");
+    tick();
     for (const unit of ["core", "extra"]) {
       appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit }, proj);
     }
-    const off = setter(["config-change", "--plan-approval", "off"]);
-    expect(off.rc, off.out).toBe(0);
-    expect(planApproval()).toBe("off");
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
   });
 
-  test("the same request after an approval from an earlier message waits for the person to say it again", () => {
+  test("the message that answered a question still asks for the switch: the answer recorded from it is not a second decision", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
+    recordTypedReply(proj, "approve");
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
-    // Their next message answered a question: it is spent, and the approval was not from it.
     const next = field(proj, "Current Stage");
     expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
-    recordHumanTurn(proj);
+    const id = recordTypedReply(proj, "A, and turn plan approval off");
+    tick();
     expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
-    const refused = setter(["config-change", "--plan-approval", "off"]);
-    expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("No reply from the person has arrived since the last decision");
-    expect(planApproval()).not.toBe("off");
-    // The step the refusal names: they ask, and the setter runs.
-    recordHumanTurn(proj);
-    const off = setter(["config-change", "--plan-approval", "off"]);
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
     expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
   });
 
   test("an approval after a message that was only a command to AIDLC came from the reply before it, so the command carries nothing more", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
-    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    recordTypedReply(proj, "approve");
+    const command = recordCommandTurn();
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
-    const refused = setter(["config-change", "--plan-approval", "off"]);
+    const refused = setter(["config-change", "--plan-approval", "off", "--message", command]);
     expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain(`message ${command} carried no words of the person's own`);
     expect(planApproval()).not.toBe("off");
   });
 
   test("the approval itself still needs a reply of its own: one message never approves two gates", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
-    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const id = recordTypedReply(proj, "approve");
+    tick();
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve", "--message", id]).rc).toBe(0);
     const second = openGate();
     expect(second).not.toBe(slug);
+    const named = guarded(proj, ["approve", second, "--user-input", "Approve", "--message", id]);
+    expect(named.rc).not.toBe(0);
+    expect(named.out).toContain(`message ${id} arrived before the last approval or decision`);
     expect(guarded(proj, ["approve", second, "--user-input", "Approve"]).rc).not.toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
@@ -1972,7 +2573,7 @@ describe("t188: what the person's message asks for outlives the approval given i
     const stage = field(proj, "Current Stage");
     appendAuditEntry("GATE_APPROVED", { Stage: stage, Unit: "core", Checkpoint: "Construction Unit Approval", Autonomous: "true" }, proj);
     appendAuditEntry("GATE_APPROVED", { Stage: stage }, proj);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
     const next = spawnSync(BUN, [ORCHESTRATE, "next", "--project-dir", proj], {
@@ -1982,21 +2583,150 @@ describe("t188: what the person's message asks for outlives the approval given i
     expect(JSON.parse(next.stdout).kind, `${next.stdout}${next.stderr}`).toBe("parked");
   });
 
-  test("a stop the autonomy grant or an answer used up waits for the person to say it again", () => {
+  test("a stop the autonomy grant used up waits for the person to say it again; an answer after their message leaves the stop standing", () => {
     setAutonomous(proj);
     recordHumanTurn(proj);
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
     appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage"), Autonomous: "true" }, proj);
-    const granted = guarded(proj, ["park"]);
+    const granted = guarded(proj, ["park", "--person-asked"]);
     expect(granted.rc).not.toBe(0);
     expect(granted.out).toContain("no reply from the person is on record");
+    // The step it names: when the person asks to stop, park then. An answer
+    // recorded after their message is the run's own, as its approvals are.
     recordHumanTurn(proj);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "chosen by the agent" }, proj);
-    expect(guarded(proj, ["park"]).rc).not.toBe(0);
-    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
-    // The step it names: when the person asks to stop, park then.
-    recordHumanTurn(proj);
-    const parked = guarded(proj, ["park"]);
+    const parked = guarded(proj, ["park", "--person-asked"]);
     expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // Who stopped the work is the agent's reading of the person's words; a reply
+  // on record proves only that they spoke. The reply here approved the code
+  // plan, the agent then asked its own question and parked on its own (a live
+  // Kiro CLI run, 2026-10-11): that park is not theirs.
+  test("the agent's own park after a reply that asked for something else is not the person's stop", () => {
+    setAutonomous(proj);
+    const sf = seededStateFile(proj);
+    const stage = field(proj, "Current Stage");
+    recordHumanTurn(proj);
+    appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: stage, Details: "Approve Plan", Checkpoint: "plan-approval" }, proj);
+    appendAuditEntry("DECISION_RECORDED", { Stage: stage, Decision: "Commit the tree first?", Options: "Yes,No" }, proj);
+    const own = guarded(proj, ["park"]);
+    expect(own.rc, own.out).not.toBe(0);
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // The agent read them asking to stop: the same reply then stands behind it.
+    const theirs = guarded(proj, ["park", "--person-asked"]);
+    expect(theirs.rc, theirs.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // The answer goes to the agent, never to the person as a refusal: an agent
+  // that forgot the flag at their real stop sets it right in one call.
+  test("the agent's own park while the run goes on by itself answers the agent with its next step", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const park = (args: string[]) => spawnSync(BUN, [ORCHESTRATE, "park", ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+    });
+    const own = JSON.parse(park([]).stdout);
+    expect(own.kind, JSON.stringify(own)).toBe("print");
+    expect(own.message).toContain("park --person-asked");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
+    const theirs = JSON.parse(park(["--person-asked"]).stdout);
+    expect(theirs.kind, JSON.stringify(theirs)).toBe("parked");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  test("a gated park the agent chose is a pause, not the person's stop", () => {
+    const sf = seededStateFile(proj);
+    recordHumanTurn(proj);
+    const own = guarded(proj, ["park"]);
+    expect(own.rc, own.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
+    expect(readFileSync(sf, "utf-8")).not.toContain("Parked By");
+  });
+
+  // The person picks in the question box the agent showed, as the human-turn
+  // hook records it on Claude Code (PostToolUse of AskUserQuestion): one entry
+  // per question the box asked.
+  function pickInBox(questions: Array<{ question: string; options: string[]; choice: string }>): void {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8", cwd: proj, env,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: "t188-box", cwd: proj,
+        tool_input: { questions: questions.map(({ question, options }) => ({ question, options: options.map((label) => ({ label })) })) },
+        tool_response: { answers: Object.fromEntries(questions.map(({ question, choice }) => [question, choice])) },
+      }),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+  }
+
+  const OFFER = "Build each code plan without asking first?";
+  const OFFERED = ["Turn plan approval off", "Keep asking"];
+
+  test("the option the agent offered, picked in its question box, is the request in that message: the answer recorded from it leaves the setter standing", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    pickInBox([{ question: OFFER, options: OFFERED, choice: OFFERED[0] }]);
+    // The pick is their words: the record keeps it where a typed turn's words are kept.
+    expect(boxReplies()).toEqual([OFFERED[0]]);
+    const id = latestMessageId();
+    tick();
+    const answered = guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]);
+    expect(answered.rc, answered.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking you first.");
+    expect(planApproval()).toBe("off");
+  });
+
+  test("the same request typed as the answer to the agent's question stands the same way", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    const id = recordTypedReply(proj, "yes please");
+    tick();
+    expect(guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]).rc).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("a pick another decision used up, or an answer logged after a command-only turn, still waits for the person", () => {
+    const stage = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", stage, "--decision", OFFER, "--options", OFFERED.join(",")]).rc).toBe(0);
+    pickInBox([{ question: OFFER, options: OFFERED, choice: OFFERED[0] }]);
+    const id = latestMessageId();
+    tick();
+    expect(guardedLog(proj, ["answer", "--stage", stage, "--details", OFFERED[0]]).rc).toBe(0);
+    // The answer is no decision; a rejection and then an approval recorded after
+    // the pick are two, and the second uses the message up.
+    appendAuditEntry("GATE_REJECTED", { Stage: stage }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: stage, "User Input": "Approve" }, proj);
+    const spent = setter(["config-change", "--plan-approval", "off", "--message", id]);
+    expect(spent.rc).not.toBe(0);
+    expect(spent.out).toContain(`message ${id} arrived before the last approval or decision`);
+    expect(planApproval()).not.toBe("off");
+    // A turn that was only a command to AIDLC carries no request behind an answer logged after it.
+    const command = recordCommandTurn();
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: stage, Details: OFFERED[1] }, proj);
+    const nothing = setter(["config-change", "--plan-approval", "off", "--message", command]);
+    expect(nothing.rc).not.toBe(0);
+    expect(nothing.out).toContain(`message ${command} carried no words of the person's own`);
+    expect(planApproval()).not.toBe("off");
+  });
+
+  test("a question box with several questions keeps every pick as the turn's words, in the order shown", () => {
+    pickInBox([
+      { question: "Which name?", options: ["A", "B"], choice: "A" },
+      { question: "Which colour?", options: ["Red", "Blue"], choice: "Blue" },
+    ]);
+    expect(boxReplies()).toEqual(["A", "Blue"]);
   });
 });

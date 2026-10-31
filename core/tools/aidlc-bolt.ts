@@ -19,13 +19,13 @@
 //   complete --merge  — merge state + audit + runtime-graph fragment
 //                       back to main on success
 //   abort  --discard  — explicit user-driven abort; optional discard tear-down
-// The fail subcommand is unchanged in behaviour: code-gen returned an error,
+// The fail subcommand means code-gen returned an error;
 // halt-and-ask preserves the worktree by default. abort is the user's
 // explicit "I want this gone" verb.
 //
 // Runtime-graph fragment-fork / fragment-merge complete the fork/merge
-// triad alongside state and audit. The fragment file lives at
-// <wt>/aidlc-docs/runtime-graph.json (gitignored, mirrors main). No new
+// triad alongside state and audit. The fragment file lives at the path
+// worktreeRuntimeGraphPath resolves (gitignored, mirrors main). No new
 // audit events for the fragment lifecycle — it rides on the existing
 // STATE_FORKED + AUDIT_FORKED (fork) and STATE_MERGED + AUDIT_MERGED
 // (merge) boundaries.
@@ -43,18 +43,20 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import {
+  asksForHelp,
+  boltAbortedFields,
   boltSlugForUnit,
   BOLT_INTENT_ID8_REGEX,
   emitError,
   errorMessage,
   claimAttemptFields,
+  findStageBySlug,
   getField,
   holdsAuditLock,
-  commandTurnHint,
   humanPresenceGuardDisabled,
   keepActiveDirectiveOverAutonomyWrite,
-  personSpokeSinceGate,
   readAuditShardEvents,
   recordHookDrop,
   unattendedHumanPresenceHint,
@@ -77,12 +79,13 @@ import {
   withAuditLock,
   worktreeStateFilePath,
   writeStateFile,
-  VERIFICATION_COMMAND_RECOVERY,
+  verificationCommandRecovery,
   type BoltIdentity,
   legacyParkedRefPrefix,
+  printUsageAndExit,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
-import { compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
@@ -90,8 +93,13 @@ import {
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
+  type ApprovalFindingDispositions,
   type ConstructionCheckpointKind,
+  type RejectedFindingDispositions,
 } from "./aidlc-construction-checkpoints.ts";
+import {
+  approvalDispositionField, rejectedFindingDispositionField, REVIEW_FINDING_DISPOSITIONS_FIELD,
+} from "./aidlc-review-brief.ts";
 import {
   askSwarmCheckpoint,
   approveSwarmCheckpoint,
@@ -243,6 +251,18 @@ function parseFlags(args: string[]): Record<string, string> {
     i++;
   }
   return flags;
+}
+
+// Every value of a flag given once per item, in order; parseFlags, which runs
+// first and checks each flag has a value, keeps only the last.
+function flagValues(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!args[i].startsWith("--")) continue;
+    if (args[i] === `--${name}`) values.push(args[i + 1]);
+    i++;
+  }
+  return values;
 }
 
 function latestWorktreeCreationFields(
@@ -412,6 +432,7 @@ function worktreeBaseFields(
 // Usage: aidlc-bolt start --name <bolt-names> --batch <n>
 //                         [--walking-skeleton true|false]
 //                         [--worktree --slug <kebab-slug>] [--repo <name>]
+//                         [--intent <intent>] [--space <space>]
 //
 // --name accepts a single bolt name or comma-separated list for a parallel batch.
 //
@@ -623,13 +644,12 @@ function handleStart(args: string[]): void {
 
 // --- Subcommand: complete ---
 // Usage: aidlc-bolt complete --name <bolt-names> --batch <n>
-//                            [--merge --slug <kebab-slug>]
+//                            [--merge --slug <kebab-slug>] [--repo <name>]
+//                            [--intent <intent>] [--space <space>]
 //
 // --merge: after BOLT_COMPLETED, delegates to `aidlc-state.ts merge` and
-// `aidlc-audit.ts audit-merge` to
-// consolidate state + audit back to main. Runs BEFORE SKILL.md Step 6.5's
-// git-merge dispatch so AIDLC metadata consolidates first. Single-bolt
-// only — csv batch with --merge is rejected.
+// `aidlc-audit.ts audit-merge` to consolidate state + audit back to main.
+// Single-bolt only -- csv batch with --merge is rejected.
 function handleComplete(args: string[]): void {
   const { booleans, rest } = splitBooleanFlags(args);
   const flags = parseFlags(rest);
@@ -675,13 +695,13 @@ function handleComplete(args: string[]): void {
       walkingSkeletonMain: true,
     });
     // HOLD-MERGE invariant enforcement.
-    // SKILL.md U5's multi-failure halt-and-ask sequence sets `Merge-Held: true`
-    // on each successful Bolt's per-Bolt forked state file before rendering
-    // any failed-sibling AUQ. This refusal pins that invariant in tooling so
-    // an orchestrator that forgets the prose contract cannot land a merge
-    // mid-AUQ-sequence. Refusal is non-zero exit + stderr; the orchestrator
-    // must call `aidlc-bolt release-merge --slug <slug>` once the AUQ
-    // sequence resolves before retrying complete --merge.
+    // `hold-merge` sets `Merge-Held: true` on each successful Bolt's per-Bolt
+    // forked state file while a failed sibling's halt-and-ask (AUQ) sequence is
+    // open. This refusal pins that invariant in tooling so an orchestrator that
+    // forgets the hold cannot land a merge mid-AUQ-sequence. Refusal is non-zero
+    // exit + a JSON envelope on stdout; the orchestrator must call `aidlc-bolt
+    // release-merge --slug <slug>` once the AUQ sequence resolves before retrying
+    // complete --merge.
     if (isMergeHeld(pd, flags.slug, flags.intent, flags.space)) {
       failJson(
         "complete-merge",
@@ -760,9 +780,9 @@ function handleComplete(args: string[]): void {
 
   // Fragment-merge primitive. Removes the worktree's runtime-graph.json
   // fragment. Idempotent — fragment-absent is a clean no-op. The post-Bash
-  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in
-  // the last 3 audit blocks (per aidlc-rebuild-stage-graph.ts:87), and rebuilds
-  // main runtime-graph with instances[] populated for this slug.
+  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in the
+  // last 3 audit blocks (per aidlc-rebuild-stage-graph.ts transitionRegex),
+  // and rebuilds main runtime-graph with instances[] populated for this slug.
   const fragmentMergeResult = spawnSibling(pd, "aidlc-runtime.ts", [
     "fragment-merge",
     "--slug",
@@ -841,9 +861,10 @@ function handleFail(args: string[]): void {
 
 // --- Subcommand: abort ---
 // Usage: aidlc-bolt abort --name <bolt-name> --slug <kebab-slug> --reason <text>
-//                         [--discard]
+//                         [--discard] [--repo <name>]
+//                         [--intent <intent>] [--space <space>]
 //
-// Explicit user-driven abort (Issue 75 US-1 line 51). Emits BOLT_FAILED with
+// Explicit user-driven abort (Issue 75 US-1). Emits BOLT_FAILED with
 // `Reason: aborted` for sub-classification — keeps the audit count stable
 // vs adding a new BOLT_ABORTED event type. Distinct from `fail` (which is
 // emitted by the orchestrator when code-gen returns failure).
@@ -873,10 +894,9 @@ function handleAbort(args: string[]): void {
   // (Reason: aborted) before discard and discard then timed out / errored,
   // the audit would claim the Bolt was aborted-and-cleaned-up while the
   // worktree directory still existed on disk and the slug remained in main's
-  // Bolt Refs (cleared by aidlc-worktree discard's WORKTREE_DISCARDED path).
-  // Caught by post-ship 4-agent review (adversarial agent BLOCKER finding).
-  // Default path (no --discard) preserves the worktree per US-1 AC line 51,
-  // so emit-before-noop is safe and the ordering only matters for --discard.
+  // Bolt Refs (cleared by `aidlc-state.ts merge`). Default path (no --discard)
+  // preserves the worktree per US-1 AC, so emit-before-noop is safe and the
+  // ordering only matters for --discard.
   if (useDiscard) {
     const identity = resolveBoltIdentity(pd, flags.slug, selection);
     const result = spawnSibling(pd, "aidlc-worktree.ts", [
@@ -917,17 +937,9 @@ function handleAbort(args: string[]): void {
 
   // Audit emission AFTER discard side-effect lands successfully (or no
   // side-effect requested). On audit emit failure here, the worktree is
-  // already gone (if --discard) but the audit row is missing — this is
-  // recoverable drift that doctor reconciles via the worktree's local
-  // audit if it survived, or by orphan-worktree detection if not.
+  // already gone (if --discard) but the audit row is missing.
   try {
-    emitAudit(pd, "BOLT_FAILED", {
-      "Failed Bolt": flags.name,
-      "Bolt slug": flags.slug,
-      "Error summary": `aborted: ${flags.reason}`,
-      Reason: "aborted",
-      ...claimAttemptFields(pd, flags.slug),
-    }, flags.intent, flags.space);
+    emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, flags.name, flags.slug, flags.reason), flags.intent, flags.space);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -987,6 +999,7 @@ function handleAbort(args: string[]): void {
 // --- Subcommand: hold-merge / release-merge ---
 // Usage: aidlc-bolt hold-merge --slug <slug>
 //        aidlc-bolt release-merge --slug <slug>
+//        (both also take [--intent <intent>] [--space <space>])
 //
 // HOLD-MERGE invariant tooling. Sets / clears the `Merge-Held` field in
 // the per-Bolt forked state file in the selected intent's worktree record.
@@ -1002,14 +1015,6 @@ function handleAbort(args: string[]): void {
 // user-visible event. The audit row that matters for doctor is the
 // BOLT_FAILED that opens the multi-failure sequence and the BOLT_COMPLETED
 // that closes each survivor's merge once the hold lifts.
-//
-// Future doctor extension: orphan Merge-Held detection. Walk per-Bolt
-// forked state for `Merge-Held: true`, cross-check parent batch's
-// BOLT_FAILED resolution status, flag if all siblings resolved (succeeded
-// retry / skipped / aborted) but `release-merge` never ran. Needs a
-// workshop-resume false-positive guard — `merge_held: true` is legitimate
-// mid-resume. Reads forked-state files and builds a parent-batch
-// resolution graph.
 function handleHoldMerge(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
@@ -1029,21 +1034,25 @@ function handleReleaseMerge(args: string[]): void {
 // Resolve the per-Bolt forked state file path for `slug`. Returns null when
 // the worktree directory or state file is absent (a missing forked state
 // file is treated as "not held" — the caller proceeds without refusal).
-function forkedStateFilePath(
+function forkedState(
   pd: string,
   slug: string,
   intent?: string,
   space?: string,
-): string | null {
+): { worktree: string; statePath: string } | null {
   const selection = resolveWorkflowSelection(pd, { intent, space });
   const identity = resolveBoltIdentity(pd, slug, selection);
   const wtPath = identity.dir;
   // Pin the worktree mirror to the SAME record the state fork wrote (null ->
-  // flat legacy mirror, today's behaviour).
+  // bare space record prefix).
   const recordPrefix = relativeRecordDir(pd, intent, space);
   const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
-  return wtStatePath;
+  return { worktree: wtPath, statePath: wtStatePath };
+}
+
+function forkedStateFilePath(pd: string, slug: string, intent?: string, space?: string): string | null {
+  return forkedState(pd, slug, intent, space)?.statePath ?? null;
 }
 
 function isMergeHeld(pd: string, slug: string, intent?: string, space?: string): boolean {
@@ -1055,20 +1064,26 @@ function isMergeHeld(pd: string, slug: string, intent?: string, space?: string):
 }
 
 function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, space?: string): void {
-  const path = forkedStateFilePath(pd, slug, intent, space);
-  if (!path) {
+  const forked = forkedState(pd, slug, intent, space);
+  if (!forked) {
     error(
       `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`
     );
   }
-  const content = readFileSync(path, "utf-8");
-  const updated = setOrInsertField(
-    content,
-    "## Project Information",
-    "Merge-Held",
-    held ? "true" : "false",
-  );
-  writeFileSync(path, updated, "utf-8");
+  const content = readFileSync(forked.statePath, "utf-8");
+  const value = held ? "true" : "false";
+  // Nothing to change (a release on a Bolt that was never held): the forked
+  // state and the worker's issued step stay exactly as they are.
+  if ((getField(content, "Merge-Held") ?? "false") === value) return;
+  const updated = setOrInsertField(content, "## Project Information", "Merge-Held", value);
+  writeFileSync(forked.statePath, updated, "utf-8");
+  // The hold is coordination state, not a new step: the worker's issued
+  // directive stays current, so its approval checks keep passing after finalize.
+  try {
+    keepActiveDirectiveOverAutonomyWrite(forked.worktree, content, updated);
+  } catch (e) {
+    recordHookDrop(forked.worktree, "active-directive", errorMessage(e));
+  }
 }
 
 // --- Subcommand: dispatch-event ---
@@ -1090,21 +1105,26 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                   --pin-id <uuid>]
 //                                  --reason <enum> --defaults <text>
 //
-// Wires the three MERGE_DISPATCH_* events by emitting via
-// `appendAuditEntry` per event variant. Orchestrator (SKILL.md per-Bolt
-// loop) brackets each aidlc-pipeline-deploy-agent dispatch: pre-call INVOKED,
-// post-call RETURNED on successful parse, FALLBACK on timeout/malformed-YAML.
+// Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
+// event variant. The conductor's Unit merge-back (per
+// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
+// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
+// FALLBACK on timeout/malformed-YAML.
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).
 //
-// t48 emitter-pairing requires LITERAL `appendAuditEntry("EVENT_NAME")` per
-// case branch — Map indirection on the --event flag breaks the grep at
-// tests/feature/t48-audit-event-emitters.sh:46-57. Three cases, three literal
-// emit calls.
+// t48 emitter-pairing requires a literal event name in each case branch's
+// emitAudit call -- Map indirection on the --event flag breaks the call-site
+// scan in tests/integration/t48-audit-event-emitters.test.ts. Three cases,
+// three literal emit calls; DISPATCH_EVENTS names the same three for the
+// messages and usage.
+const DISPATCH_EVENTS: readonly string[] = ["MERGE_DISPATCH_INVOKED", "MERGE_DISPATCH_RETURNED", "MERGE_DISPATCH_FALLBACK"];
+const MERGE_STRATEGIES: readonly string[] = ["squash", "merge", "rebase"];
+
 function handleDispatchEvent(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.event) error("Missing --event <MERGE_DISPATCH_INVOKED|MERGE_DISPATCH_RETURNED|MERGE_DISPATCH_FALLBACK>");
+  if (!flags.event) error(`Missing --event <${DISPATCH_EVENTS.join("|")}>`);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
 
   const pd = resolveProjectDir(projectDir);
@@ -1133,7 +1153,7 @@ function handleDispatchEvent(args: string[]): void {
   }
 
   // Per-variant flag validation + literal emit. Fields populate per the
-  // schema at audit-format.md:147-149.
+  // MERGE_DISPATCH_* schema rows in audit-format.md.
   switch (flags.event) {
     case "MERGE_DISPATCH_INVOKED": {
       if (!flags["practices-excerpt"]) {
@@ -1153,9 +1173,9 @@ function handleDispatchEvent(args: string[]): void {
       return;
     }
     case "MERGE_DISPATCH_RETURNED": {
-      if (!flags.strategy) error("MERGE_DISPATCH_RETURNED requires --strategy <squash|merge|rebase>");
-      if (!["squash", "merge", "rebase"].includes(flags.strategy)) {
-        error(`Invalid --strategy: ${flags.strategy}. Must be squash, merge, or rebase.`);
+      if (!flags.strategy) error(`MERGE_DISPATCH_RETURNED requires --strategy <${MERGE_STRATEGIES.join("|")}>`);
+      if (!MERGE_STRATEGIES.includes(flags.strategy)) {
+        error(`Invalid --strategy: ${flags.strategy}. Must be one of: ${MERGE_STRATEGIES.join(", ")}.`);
       }
       if (!flags.target) error("MERGE_DISPATCH_RETURNED requires --target <branch>");
       if (!flags.confidence) error("MERGE_DISPATCH_RETURNED requires --confidence <0-1>");
@@ -1199,21 +1219,23 @@ function handleDispatchEvent(args: string[]): void {
     }
     default:
       error(
-        `Invalid --event: ${flags.event}. Must be MERGE_DISPATCH_INVOKED, MERGE_DISPATCH_RETURNED, or MERGE_DISPATCH_FALLBACK.`
+        `Invalid --event: ${flags.event}. Must be one of: ${DISPATCH_EVENTS.join(", ")}.`
       );
   }
 }
 
 // --- Subcommand: set-autonomy ---
+const AUTONOMY_MODES: readonly string[] = ["autonomous", "gated"];
+
 // Usage: aidlc-bolt set-autonomy --mode autonomous|gated
 //
 // Emits AUTONOMY_MODE_SET AND updates the Construction Autonomy Mode field
 // in aidlc-state.md atomically (audit-first).
 function handleSetAutonomy(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.mode) error("Missing --mode <autonomous|gated>");
-  if (!["autonomous", "gated"].includes(flags.mode)) {
-    error(`Invalid --mode: ${flags.mode}. Must be 'autonomous' or 'gated'.`);
+  if (!flags.mode) error(`Missing --mode <${AUTONOMY_MODES.join("|")}>`);
+  if (!AUTONOMY_MODES.includes(flags.mode)) {
+    error(`Invalid --mode: ${flags.mode}. Must be ${AUTONOMY_MODES.map((mode) => `'${mode}'`).join(" or ")}.`);
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -1229,22 +1251,26 @@ function handleSetAutonomy(args: string[]): void {
       );
     }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the
-    // human's ladder-prompt grant and consumes that turn through the emitted
-    // AUTONOMY_MODE_SET row. De-escalation restores gates without presence.
-    // The approval given in the same message ("approve the plan, and run on
-    // its own from here") leaves the rest of it standing, as for the switches.
-    if (
-      flags.mode === "autonomous" &&
-      !humanPresenceGuardDisabled() &&
-      !personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })
-    ) {
-      error(
-        "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
-          "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
-          "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
-          "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
-          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
-      );
+    // person's grant: the agent names the message they chose it in (--message),
+    // proved, and the AUTONOMY_MODE_SET row uses it up. De-escalation restores
+    // gates without presence. The approval given in the same message ("approve
+    // the plan, and run on its own from here") leaves the rest of it standing,
+    // as for the switches.
+    let grantedBy: string | undefined;
+    if (flags.mode === "autonomous" && !humanPresenceGuardDisabled()) {
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "request", { request: true });
+        if ("refusal" in proof) error(proof.refusal);
+        grantedBy = proof.message.id;
+      } else {
+        error(
+          "Refusing to switch Construction to autonomous: it waives every later gate, so it is granted only by the " +
+            "person's answer to the ladder prompt, named with --message <id>. " +
+            requestMessageStep(pd, "Run it with --message <id> after they choose it.") +
+            " Do not log the ladder choice via aidlc-log answer; the choice is recorded by set-autonomy itself." +
+            unattendedHumanPresenceHint(pd),
+        );
+      }
     }
 
     // Validate state-file shape before the audit-first mutation.
@@ -1274,6 +1300,7 @@ function handleSetAutonomy(args: string[]): void {
     try {
       emitAudit(pd, "AUTONOMY_MODE_SET", {
         Mode: flags.mode,
+        ...(grantedBy !== undefined ? { "Message Id": grantedBy } : {}),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
@@ -1317,23 +1344,79 @@ function checkpointSession(pd: string, flagged: string | undefined, required: bo
   return session;
 }
 
-function handleCheckpoint(args: string[]): void {
+// What checkpoint and swarm-checkpoint accept, for their messages and usage;
+// each action is a case of its handler's switch.
+const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skeleton"];
+const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
+const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
+const FINDING_FLAGS_USAGE = "--fix-finding <review-artifact>#R-NN (approve), --reject-finding and --reopen-finding " +
+  "<review-artifact>#R-NN=<the person's reason> (reject), once per finding";
+const CHECKPOINT_FLAGS: readonly string[] = [
+  "unit", "kind", "action", "session", "user-input", "reason", "message", "timeout-ms", "over-unfinished-review",
+  "fix-finding", "reject-finding", "reopen-finding",
+];
+const SWARM_CHECKPOINT_FLAGS: readonly string[] = [
+  "batch", "units", "action", "session", "user-input", "reason", "message", "fix-finding", "reject-finding", "reopen-finding",
+];
+
+// A flag a checkpoint does not take is refused before anything is recorded:
+// dropped, a misspelled --fix-finding would record the finding as Accepted
+// risk, and the corrected retry still takes the person's reply.
+function refuseUnknownFlags(command: string, flags: Record<string, string>, accepted: readonly string[]): void {
+  const unknown = Object.keys(flags).find((name) => !accepted.includes(name));
+  if (unknown !== undefined) {
+    error(`${command} does not accept "--${unknown}". It accepts ${accepted.map((name) => `--${name}`).join(", ")}.`);
+  }
+}
+
+// A checkpoint's approval records the open review findings of the stages and
+// Units it covers, through the review ledger's writer: `Fix requested` for each
+// one the person asked to have fixed (--fix-finding), as at a stage's gate.
+function checkpointFindingDispositions(pd: string, args: string[]): ApprovalFindingDispositions {
+  const fix = flagValues(args, "fix-finding");
+  return (stages, units, decider): Record<string, string> => {
+    const field = approvalDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), units, decider, fix,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
+// A checkpoint's Request Changes records the findings the person rejected
+// (--reject-finding) or said are not fixed (--reopen-finding), as at a stage's gate.
+function checkpointRejectedFindings(pd: string, args: string[]): RejectedFindingDispositions {
+  const rejected = flagValues(args, "reject-finding");
+  const reopened = flagValues(args, "reopen-finding");
+  return (stages, units): Record<string, string> => {
+    const field = rejectedFindingDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), rejected, units, reopened,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
+async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
   const overUnfinishedReview = args.includes("--over-unfinished-review");
-  const flags = parseFlags(args.filter((arg) => arg !== "--over-unfinished-review"));
+  const flagArgs = args.filter((arg) => arg !== "--over-unfinished-review");
+  const flags = parseFlags(flagArgs);
   if (overUnfinishedReview && flags.action !== "verify") {
     error("checkpoint --over-unfinished-review goes with --action verify.");
   }
-  if (flags["check-cmd"] !== undefined) {
-    error("checkpoint no longer accepts --check-cmd. " + VERIFICATION_COMMAND_RECOVERY + " Run checkpoint --action verify without --check-cmd.");
+  if (flags["timeout-ms"] !== undefined && flags.action !== "verify") {
+    error("checkpoint --timeout-ms goes with --action verify.");
   }
+  if (flags["check-cmd"] !== undefined) {
+    error("checkpoint no longer accepts --check-cmd. " + verificationCommandRecovery() + " Run checkpoint --action verify without --check-cmd.");
+  }
+  refuseUnknownFlags("checkpoint", flags, CHECKPOINT_FLAGS);
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";
-  if (kind !== "unit" && kind !== "skeleton") {
-    error("checkpoint --kind must be unit or skeleton");
+  const checkpointKind = CHECKPOINT_KINDS.find((known) => known === kind);
+  if (checkpointKind === undefined) {
+    error(`checkpoint --kind must be ${CHECKPOINT_KINDS.join(" or ")}`);
   }
-  const checkpointKind: ConstructionCheckpointKind = kind;
   const pd = resolveProjectDir(projectDir);
   let result: ReturnType<typeof resolveConstructionCheckpoint>;
   switch (flags.action ?? "status") {
@@ -1344,22 +1427,27 @@ function handleCheckpoint(args: string[]): void {
       result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
-      result = verifyConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, { overUnfinishedReview },
+      result = await verifyConstructionCheckpoint(
+        pd, flags.unit, checkpointKind, {
+          overUnfinishedReview, message: flags.message,
+          timeoutMs: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"]),
+        },
       );
       break;
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd, flagArgs), flags.message,
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
+        flags.message, checkpointRejectedFindings(pd, flagArgs),
       );
       break;
     default:
-      error("checkpoint --action must be status, ask, verify, approve or reject");
+      error(`checkpoint --action must be one of: ${CHECKPOINT_ACTIONS.join(", ")}`);
   }
   console.log(JSON.stringify(result));
   if (flags.action === "verify" && !result.verified) process.exitCode = 1;
@@ -1367,6 +1455,7 @@ function handleCheckpoint(args: string[]): void {
 
 function handleSwarmCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
+  refuseUnknownFlags("swarm-checkpoint", flags, SWARM_CHECKPOINT_FLAGS);
   const batch = Number(flags.batch);
   if (!Number.isSafeInteger(batch) || batch < 1) error("swarm-checkpoint requires --batch <positive integer>");
   const units = (flags.units ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
@@ -1383,20 +1472,94 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd, args), flags.message,
       );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
+      result = rejectSwarmCheckpoint(
+        pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true), flags.message,
+        checkpointRejectedFindings(pd, args),
+      );
       break;
     default:
-      error("swarm-checkpoint --action must be status, ask, approve or reject");
+      error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
   }
   console.log(JSON.stringify(result));
 }
 
+// --- Usage ---
+
+// What `--help` prints (#2449), from the same value lists the subcommands
+// check, so the usage cannot drift from what they accept.
+function boltUsage(subcommand: string | undefined): string {
+  const invoke = (verb: string) => aidlcDispatcherInvocation(`bolt ${verb}`);
+  const selector = "--intent <intent>, --space <space>";
+  const pin = "--pinned-oid <40-hex> --attempt-generation <n> --pin-id <uuid> (all three or none)";
+  const mergeHold = (verb: string, effect: string) => [
+    `${invoke(verb)} --slug <kebab-slug>`,
+    `  ${effect} Options: ${selector}`,
+  ];
+  const usage: Record<string, string[]> = {
+    start: [
+      `${invoke("start")} --name <bolt-name or csv> --batch <n>`,
+      "  Records that a Bolt, or a parallel batch named as a comma-separated list, started. Required: --name, --batch.",
+      "  --worktree --slug <kebab-slug>: one Bolt only; forks its state and audit into its worktree.",
+      `  Options: --walking-skeleton true|false, --repo <name>, ${selector}`,
+    ],
+    complete: [
+      `${invoke("complete")} --name <bolt-name or csv> --batch <n>`,
+      "  Records that a Bolt, or a parallel batch, completed. Required: --name, --batch.",
+      "  --merge --slug <kebab-slug>: one Bolt only; merges its state and audit back first.",
+      `  Options: --repo <name>, ${selector}`,
+    ],
+    fail: [
+      `${invoke("fail")} --name <failed-bolt> --error <summary>`,
+      "  Records that a Bolt failed. Required: --name, --error.",
+      "  Options: --slug <kebab-slug>, --succeeded-siblings <csv>",
+    ],
+    abort: [
+      `${invoke("abort")} --name <bolt-name> --slug <kebab-slug> --reason <text>`,
+      "  Records that the person stopped a Bolt. Required: --name, --slug, --reason.",
+      "  --discard: parks the attempt in Git, then removes its worktree.",
+      `  Options: --repo <name>, ${selector}`,
+    ],
+    "set-autonomy": [
+      `${invoke("set-autonomy")} --mode ${AUTONOMY_MODES.join("|")}`,
+      "  Sets the Construction autonomy mode. Required: --mode.",
+    ],
+    checkpoint: [
+      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
+      "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
+      `  ${FINDING_FLAGS_USAGE}`,
+    ],
+    "swarm-checkpoint": [
+      `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
+      "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
+      `  ${FINDING_FLAGS_USAGE}`,
+    ],
+    "dispatch-event": [
+      `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,
+      "  Records one step of a merge dispatch. Required: --event, --slug, and per event:",
+      "  MERGE_DISPATCH_INVOKED: --practices-excerpt <text>",
+      `  MERGE_DISPATCH_RETURNED: --strategy ${MERGE_STRATEGIES.join("|")} --target <branch> --confidence <0-1> --notes <text>`,
+      "  MERGE_DISPATCH_FALLBACK: --reason <text> --defaults <text>",
+      `  Options: ${pin}`,
+    ],
+    "hold-merge": mergeHold("hold-merge", "Holds the Bolt's merge until release-merge."),
+    "release-merge": mergeHold("release-merge", "Releases a held merge."),
+  };
+  if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+  return Object.values(usage).map((lines) => lines.join("\n")).join("\n\n");
+}
+
 let projectDir: string | undefined;
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
 
   const filteredArgs: string[] = [];
@@ -1410,6 +1573,8 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(boltUsage(undefined));
+  if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(boltUsage(subcommand));
 
   try {
     switch (subcommand) {
@@ -1429,7 +1594,7 @@ export function main(argv: string[]): void {
         handleSetAutonomy(filteredArgs.slice(1));
         break;
       case "checkpoint":
-        handleCheckpoint(filteredArgs.slice(1));
+        await handleCheckpoint(filteredArgs.slice(1));
         break;
       case "swarm-checkpoint":
         handleSwarmCheckpoint(filteredArgs.slice(1));
@@ -1507,5 +1672,5 @@ function failJson(
 }
 
 if (import.meta.main) {
-  main(process.argv.slice(2));
+  await main(process.argv.slice(2));
 }

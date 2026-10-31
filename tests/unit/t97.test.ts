@@ -1,66 +1,53 @@
 // covers: function:parseMemoryEntries, function:parseMemoryHeadings, subcommand:aidlc-learnings:surface, subcommand:aidlc-learnings:persist
 //
-// t97 — aidlc-learnings.ts primitives (v0.5.0 milestone 12). Migrated from
-// tests/unit/t97-learnings-primitives.sh (TAP plan 32). MIXED file (like
-// t66/t18): the six parseMemoryEntries / parseMemoryHeadings cases are PURE
-// FUNCTION units — they import the parsers from aidlc-lib.ts and run
-// IN-PROCESS (minMechanism: none, zero subprocess). The surface / persist
-// cases exercise the CLI PROCESS boundary (exit code + stdout JSON + stderr
-// text + on-disk side effects: RULE_LEARNED audit rows, learnings files,
-// sensor manifests, stage-frontmatter edits), so they SPAWN the real CLI via
-// node:child_process spawnSync(BUN,[TOOL,sub,...args]) at EQUAL fidelity to
-// the .sh's `bun "$LEARNINGS_TS" <sub> ...; EC=$?` pattern. Spawning credits
-// the `aidlc-learnings surface` + `aidlc-learnings persist` subcommand units
-// (minMechanism: cli) that a .none import-twin could not.
+// t97 - aidlc-learnings.ts primitives. MIXED file: the six
+// parseMemoryEntries / parseMemoryHeadings cases are PURE FUNCTION units -
+// they import the parsers from aidlc-lib.ts and run IN-PROCESS
+// (minMechanism: none, zero subprocess). The surface / persist cases exercise
+// the CLI PROCESS boundary (exit code + stdout JSON + stderr text + on-disk
+// side effects: RULE_LEARNED audit rows, practice files, sensor manifests,
+// stage-frontmatter edits), so they SPAWN the real CLI via node:child_process
+// spawnSync(BUN,[TOOL,sub,...args]). Spawning credits the `aidlc-learnings
+// surface` + `aidlc-learnings persist` subcommand units (minMechanism: cli)
+// that an import-twin could not.
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-lib.ts
-//     :982  parseMemoryHeadings(raw) -> { interpretations, deviations,
+//     parseMemoryHeadings(raw) -> { interpretations, deviations,
 //             tradeoffs, open_questions, total }
-//     :1060 parseMemoryEntries(raw)  -> Array<{ heading, ts, summary,
+//     parseMemoryEntries(raw) -> Array<{ heading, ts, unit?, summary,
 //             context, raw }>  (ONE entry per counted line; the invariant
 //             parseMemoryEntries(raw).length === parseMemoryHeadings(raw).total
 //             holds for ANY input — no multi-line merge)
 //   dist/claude/.claude/tools/aidlc-learnings.ts
-//     surface --slug <s> [--project-dir <p>]  -> JSON candidates + parked;
+//     surface --slug <s> [--correction <c>]... [--project-dir <p>] -> JSON: one
+//             question per correction, the diary counted and never offered;
 //             exit 1 on missing --slug / missing state / slug-not-Active.
 //     persist --slug <s> --selections-json <p> [--project-dir <p>] -> writes
-//             learnings file + RULE_LEARNED audit row (cid-marker idempotency,
+//       practice file + RULE_LEARNED audit row (cid-marker idempotency,
 //             team/project scope routing, two-write sensor bind, framework-tier
 //             rejection, decide-inside-lock recovery); exit 1 on
 //             missing --selections-json / framework-distribution sensor path.
 //     exit 2 on unknown subcommand / missing subcommand.
 //
 // IDEMPOTENCY DISCIPLINE (this tool WRITES audit rows): persist appends
-// RULE_LEARNED rows and learnings-file lines keyed by a
-// `cid:<intent-slug>:<slug>:<hash>` marker (#735 + PR #747 review: the
-// intent-slug component prevents an unrelated intent's identically-numbered
-// candidate from colliding on the same workspace-level file; the hash
-// component is a content-addressed dedup key, not the positional candidate
-// id — see t306's own coverage of that finding. These fixtures explicitly
-// pin intent: null in the selections file rather than resolving no active
-// intent — persist never re-resolves the live cursor itself — so "unscoped"
-// is the expected sentinel value throughout).
-// The .sh proves persist-twice produces NO duplicate audit row and NO
-// duplicate file line (tests 23/25), and a belt-and-braces recovery (test 24:
-// audit row present, file line deleted -> re-write only). Those assertions are
-// preserved EXACTLY — spawn twice into a FRESH project per case and grep the
-// real audit.md / learnings file so audit state never bleeds across cases.
+// RULE_LEARNED rows and practice-file lines keyed by a
+// `cid:<intent-slug>:<slug>:<hash>` marker (#735: the intent-slug component
+// prevents an unrelated intent's identically-numbered candidate from
+// colliding on the same workspace-level file; the hash component is a
+// content-addressed dedup key, not the positional candidate id - see t306's
+// own coverage. These fixtures explicitly pin intent: null in the selections
+// file rather than resolving no active intent - persist never re-resolves the
+// live cursor itself - so "unscoped" is the expected sentinel value
+// throughout). Persist-twice produces NO duplicate audit row and NO duplicate
+// file line (tests 23/25), and recovery (test 24: audit row present, file
+// line deleted -> re-write only). Spawn twice into a FRESH project per case
+// and inspect the real audit shards / practice file so audit state never
+// bleeds across cases.
 //
 // FIXTURE DISCIPLINE: every persist/surface case scaffolds its own project
-// under mkdtempSync(tmpdir()) via the local mkproj() helper (the TS analogue
-// of the .sh's mkproj) and removes it after. NOTHING is written under
-// tests/fixtures/**.
-//
-// Old TAP -> new test parity (1:1, 32 assertions, no guarantee dropped):
-//   .sh 1-6   parseMemoryEntries (6)  -> in-process function assertions
-//   .sh 7-11  subcommand surface (5)  -> spawnSync exit/stdout assertions
-//   .sh 12-17 surface (6)             -> spawnSync stdout-JSON assertions
-//   .sh 18-26 persist (9, 13 facts)   -> spawnSync + on-disk grep assertions
-//             (.sh 22 free-text is BLOCK-SCOPED: the field assertions match
-//             the .sh's awk block extraction — fields must be co-located in
-//             the one RULE_LEARNED block, not merely present somewhere in
-//             audit.md — via extractAuditBlock(), equal-or-stronger isolation)
+// under mkdtempSync(tmpdir()) via the local mkproj() helper and removes it
+// after. NOTHING is written under tests/fixtures/**.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -82,14 +69,16 @@ import { join } from "node:path";
 import {
   parseMemoryEntries,
   parseMemoryHeadings,
+  parseStageFrontmatter,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { writeLearningsSelections } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// P6: a confirmed learning IS a practice (vision §6) — persist appends it
-// under the routed heading in the relocated method files {project,team}.md
+// A confirmed learning IS a practice (vision section 6) - persist appends it
+// under the routed heading in the method files {project,team}.md
 // (aidlc/spaces/<space>/memory/ via memoryDirFor), not a `*-learnings.md` log.
 function projectPractices(pd: string): string {
   return join(memoryDirFor(pd), "project.md");
@@ -98,7 +87,7 @@ function teamPractices(pd: string): string {
   return join(memoryDirFor(pd), "team.md");
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(
   import.meta.dir,
   "..",
@@ -110,15 +99,10 @@ const TOOL = join(
 );
 
 // =====================================================================
-// GROUP 1 — parseMemoryEntries / parseMemoryHeadings (.sh tests 1-6)
-//
-// PURE FUNCTION, IN-PROCESS. The .sh shelled out to a `pm()` bun harness that
-// imported both parsers and printed a derived string; here we import the
-// parsers and assert on their return values directly — equal-or-stronger
-// fidelity (no string round-trip to lose).
+// GROUP 1 - parseMemoryEntries / parseMemoryHeadings
+// (PURE FUNCTION, IN-PROCESS)
 // =====================================================================
 describe("t97 parseMemoryEntries (in-process function unit)", () => {
-  // .sh 1 — single canonical entry per heading -> {heading, ts, summary, context}
   test("single canonical entry -> {heading, ts, summary, context} parsed", () => {
     const raw =
       "## Interpretations\n" +
@@ -130,7 +114,6 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
     );
   });
 
-  // .sh 2 — wrapped two-line entry -> TWO degenerate entries AND length===total
   test("wrapped two-line entry -> TWO entries AND length===total (no merge)", () => {
     const raw =
       "## Deviations\n" +
@@ -140,7 +123,6 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
     expect(parseMemoryEntries(raw).length).toBe(2);
   });
 
-  // .sh 3 — code-fenced fake `## Deviations` must NOT parse as heading/entry
   test("code-fenced fake ## Deviations is skipped; length===total", () => {
     const raw =
       "## Interpretations\n" +
@@ -154,7 +136,6 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
     expect(e.length === parseMemoryHeadings(raw).total).toBe(true);
   });
 
-  // .sh 4 — blank lines under a heading are not entries
   test("blank lines under a heading are skipped; length===total", () => {
     const raw =
       "## Tradeoffs\n\n\n- 2026-05-28T11:00:00Z — only real one; ctx\n\n";
@@ -163,7 +144,6 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
     expect(e.length === parseMemoryHeadings(raw).total).toBe(true);
   });
 
-  // .sh 5 — missing-heading tolerance — no throw, returns whatever exists
   test("missing headings tolerated — never throws", () => {
     const raw = "## Interpretations\n- 2026-05-28T12:00:00Z — lone entry; ctx\n";
     let result: string;
@@ -175,7 +155,6 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
     expect(result).toBe("no-throw:1");
   });
 
-  // .sh 6 — entry with no `;` separator -> tail becomes summary, context empty
   test("entry with no ; -> tail->summary, context empty", () => {
     const raw =
       "## Deviations\n- 2026-05-28T13:00:00Z — summary with no semicolon separator\n";
@@ -188,10 +167,10 @@ describe("t97 parseMemoryEntries (in-process function unit)", () => {
 // =====================================================================
 // CLI groups (surface / persist) — per-case fresh project harness.
 //
-// mkproj() is the TS analogue of the .sh's mkproj: scaffold a minimal project
-// tree (active stage = user-stories, phase = inception, one runtime-graph row,
-// one authored stage .md). Returns the project dir. Each case gets its own
-// dir under a per-file TMP root so audit + learnings writes never bleed.
+// mkproj() scaffolds a minimal project tree (active stage = user-stories,
+// phase = inception, one runtime-graph row, one authored stage .md). Returns
+// the project dir. Each case gets its own dir under a per-file TMP root so
+// audit + learnings writes never bleed.
 // =====================================================================
 let tmpRoot = "";
 beforeEach(() => {
@@ -202,12 +181,11 @@ afterEach(() => {
   tmpRoot = "";
 });
 
-// P9: with no intent cursor seeded, the tool resolves the BARE space record
-// root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
-// runtime-graph, audit, and the per-stage memory all live under it (the flat
-// aidlc-docs/ root is retired — there is no fallback). mkproj seeds that tree;
-// the runtime-graph memory_path is the record-relative path the tool resolves
-// via join(projectDir, memRel).
+// With no intent cursor seeded, the tool resolves the BARE space record root
+// (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
+// runtime-graph, audit, and the per-stage memory all live under it; there is
+// no fallback. mkproj seeds that tree; the runtime-graph memory_path is the
+// project-relative path the tool resolves via join(projectDir, memRel).
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(pd: string): string {
   return join(pd, RECORD_REL);
@@ -262,8 +240,6 @@ outputs: bar
   return pd;
 }
 
-// Spawn the real CLI. Mirrors the .sh's `bun "$LEARNINGS_TS" <sub> ...` — env
-// (incl. an optional AIDLC_STAGES_DIR seam) is layered onto process.env.
 function runCli(
   args: string[],
   opts: { env?: Record<string, string>; cwd?: string } = {},
@@ -293,9 +269,9 @@ function grepCountText(text: string, needle: RegExp | string): number {
       : new RegExp(needle.source, needle.flags.includes("g") ? needle.flags : `${needle.flags}g`);
   return text.split("\n").filter((l) => re.test(l)).length;
 }
-// P9: the tool writes per-clone audit SHARDS under the record's audit/ dir, not
-// a flat aidlc-docs/audit.md. Read the merged trail (single clone here, so it
-// resolves to the one shard the tool wrote); count rows against the merged text.
+// The tool writes per-clone audit SHARDS under the record's audit/ dir. Read
+// the merged trail (single clone here, so it resolves to the one shard the
+// tool wrote); count rows against the merged text.
 function readAudit(pd: string): string {
   return readAllAuditShards(pd);
 }
@@ -303,8 +279,7 @@ function grepCountAudit(pd: string, needle: RegExp | string): number {
   return grepCountText(readAudit(pd), needle);
 }
 
-// Block-scoped extractor — the TS analogue of the .sh's awk:
-//   awk '/Event.*: RULE_LEARNED/{p=1} p; /^---$/{if(p)exit}'
+// Block-scoped extractor.
 // Starts capturing at the first line matching the start regex (`Event.*:
 // <EVENT>`), keeps capturing each subsequent line, and STOPS at the next
 // line that is exactly `---`. Returns the captured block (start line through
@@ -327,10 +302,9 @@ function extractAuditBlock(content: string, startRe: RegExp): string {
 }
 
 // =====================================================================
-// GROUP 2 — subcommand surface (.sh tests 7-11)
+// GROUP 2 - subcommand surface
 // =====================================================================
 describe("t97 subcommand surface (cli)", () => {
-  // .sh 7 — --help lists surface + persist
   test("--help lists surface", () => {
     expect(runCli(["--help"]).out).toContain("surface");
   });
@@ -338,24 +312,20 @@ describe("t97 subcommand surface (cli)", () => {
     expect(runCli(["--help"]).out).toContain("persist");
   });
 
-  // .sh 8 — unknown subcommand -> exit 2
   test("unknown subcommand -> exit 2", () => {
     expect(runCli(["bogus", "--slug", "x"]).rc).toBe(2);
   });
 
-  // .sh 9 — surface missing --slug -> exit 1
   test("surface missing --slug -> exit 1", () => {
     const pd = mkproj("p9");
     expect(runCli(["surface", "--project-dir", pd]).rc).toBe(1);
   });
 
-  // .sh 10 — persist missing --selections-json -> exit 1
   test("persist missing --selections-json -> exit 1", () => {
     const pd = mkproj("p9");
     expect(runCli(["persist", "--slug", "user-stories", "--project-dir", pd]).rc).toBe(1);
   });
 
-  // .sh 11 — --project-dir <missing> on surface -> exit 1 (no state file)
   test("surface with missing project dir -> exit 1", () => {
     expect(
       runCli([
@@ -370,10 +340,9 @@ describe("t97 subcommand surface (cli)", () => {
 });
 
 // =====================================================================
-// GROUP 3 — surface (.sh tests 12-17)
+// GROUP 3 - surface
 // =====================================================================
 describe("t97 surface (cli)", () => {
-  // .sh 12 — empty memory.md -> candidates: []
   test("empty memory.md -> zero candidates", () => {
     const pd = mkproj("p12");
     writeFileSync(memoryFile(pd), "", "utf-8");
@@ -383,8 +352,7 @@ describe("t97 surface (cli)", () => {
     expect(j.candidates.length).toBe(0);
   });
 
-  // .sh 13 — I/D/T -> one candidate each, correct source_heading, no suggested_kind
-  test("I/D/T -> one candidate each with correct source_heading", () => {
+  test("I/D/T diary entries are counted and never offered", () => {
     const pd = mkproj("p13");
     writeFileSync(
       memoryFile(pd),
@@ -403,14 +371,12 @@ describe("t97 surface (cli)", () => {
     );
     const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
     const j = JSON.parse(res.stdout);
-    expect(j.candidates.map((c: { source_heading: string }) => c.source_heading).join(",")).toBe(
-      "Interpretations,Deviations,Tradeoffs",
-    );
-    // .sh 13b — surface emits no suggested_kind/suggested_section
+    expect(j.memory_entries_total).toBe(3);
+    expect(j.candidates).toEqual([]);
+    expect(j.questions).toEqual([]);
     expect(res.out).not.toContain("suggested_kind");
   });
 
-  // .sh 14 — Open questions -> parked, NOT candidates
   test("Open questions -> parked_open_questions, never candidates", () => {
     const pd = mkproj("p14");
     writeFileSync(
@@ -431,8 +397,7 @@ describe("t97 surface (cli)", () => {
     expect(`${j.candidates.length}:${j.parked_open_questions.length}`).toBe("0:1");
   });
 
-  // .sh 15 — mixed headings -> correct partition (2 candidates + 1 parked)
-  test("mixed headings -> correct partition (2 candidates, 1 parked)", () => {
+  test("mixed headings -> all counted, the open question parked, nothing offered", () => {
     const pd = mkproj("p15");
     writeFileSync(
       memoryFile(pd),
@@ -451,35 +416,64 @@ describe("t97 surface (cli)", () => {
     );
     const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
     const j = JSON.parse(res.stdout);
-    expect(`${j.candidates.length}:${j.parked_open_questions.length}`).toBe("2:1");
+    expect(`${j.memory_entries_total}:${j.candidates.length}:${j.parked_open_questions.length}`).toBe("3:0:1");
   });
 
-  // .sh 16 (test-run mode -> surface skipped) was dropped per #369 when the
-  // test-run mechanism was removed; surface now always proceeds.
-
-  // .sh 17 — slug-not-Active -> exit 1
   test("slug not Active stage -> exit 1", () => {
     const pd = mkproj("p17");
     expect(runCli(["surface", "--slug", "some-other-stage", "--project-dir", pd]).rc).toBe(1);
   });
+
+  // The agent asks what surface prints, so the box the person sees and the
+  // question the record names are the same: live runs folded questions of
+  // the agent's own together and recorded a pick the person never made.
+  test("nothing corrected -> no question", () => {
+    const pd = mkproj("p40");
+    writeFileSync(memoryFile(pd), "", "utf-8");
+    const j = JSON.parse(runCli(["surface", "--slug", "user-stories", "--project-dir", pd]).stdout);
+    expect(j.questions).toEqual([]);
+  });
+
+  test("a correction -> its one question, whatever the diary holds", () => {
+    const pd = mkproj("p41");
+    writeFileSync(
+      memoryFile(pd),
+      `## Interpretations
+- 2026-05-28T14:00:00Z - Single-package React/Vite SPA, no backend; ctx i
+
+## Open questions
+- 2026-05-28T15:00:00Z - q?
+`,
+      "utf-8",
+    );
+    const j = JSON.parse(runCli([
+      "surface", "--slug", "user-stories", "--correction", "keep each story to one screen", "--project-dir", pd,
+    ]).stdout);
+    expect(j.questions).toEqual([
+      {
+        question: "You asked me to keep each story to one screen. Keep that for next time?",
+        multi_select: false,
+        options: ["Yes, for this project", "Yes, for the team", "No"],
+        question_kind: "learnings-note",
+      },
+    ]);
+  });
 });
 
 // =====================================================================
-// GROUP 4 — persist (.sh tests 18-26)
+// GROUP 4 - persist
 //
 // WRITES audit rows + rule files. Fresh project per case (mkproj under the
 // per-test tmpRoot) so audit/learnings state never bleeds. Idempotency
 // assertions (23/24/25) spawn the CLI twice and grep the real on-disk bytes.
 // =====================================================================
 describe("t97 persist (cli, idempotency-sensitive)", () => {
+  // The picks' file goes where `learnings surface` names it for their space,
+  // intent, and stage: the only place persist reads it (#1592).
   function writeSel(pd: string, body: string): string {
-    const p = join(pd, "sel.json");
-    writeFileSync(p, body, "utf-8");
-    return p;
+    return writeLearningsSelections(pd, JSON.parse(body));
   }
 
-  // .sh 18 — learning (project scope) -> RULE_LEARNED + cid marker + practice
-  //          line under the routed heading (ensure-exists) (3 facts).
   test("project learning -> cid marker, practice under routed heading, RULE_LEARNED audit row", () => {
     const pd = mkproj("p18");
     const sel = writeSel(
@@ -500,12 +494,10 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(res.rc).toBe(0);
     const plf = projectPractices(pd);
     expect(readFile(plf)).toMatch(/cid:unscoped:user-stories:[0-9a-f]{8}/);
-    // ensure-exists created the routed heading; the practice landed under it.
     expect(/^## Corrections/m.test(readFile(plf))).toBe(true);
     expect(/Event.*: RULE_LEARNED/.test(readAudit(pd))).toBe(true);
   });
 
-  // .sh 19 — learning (team scope) -> write a practice to team.md
   test("team learning -> write a practice to team.md", () => {
     const pd = mkproj("p19");
     const sel = writeSel(
@@ -520,8 +512,6 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     );
   });
 
-  // .sh 20 — sensor -> SENSOR_PROPOSED + project-tier manifest w/ matches AND id
-  //          appended to origin_stage sensors: frontmatter (two-write, 2 facts).
   test("sensor -> project-tier manifest with matches glob + id appended to frontmatter (two-write)", () => {
     const pd = mkproj("p20");
     const sel = writeSel(
@@ -544,12 +534,16 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(/acceptance-format$/m.test(stageMd)).toBe(true);
   });
 
-  // .sh 21 — framework-tier sensor manifest path -> exit 1
   test("framework-distribution sensor manifest path -> exit 1", () => {
     const pd = mkproj("p21");
     mkdirSync(join(pd, "dist", "claude", ".claude", "sensors"), { recursive: true });
+    // The picks' file sits where surface names it for the project persist runs
+    // against, so the refusal below is the framework-tier one this case names.
+    const frameworkProject = join(pd, "dist", "claude");
+    mkdirSync(join(frameworkProject, "aidlc", "spaces", "default", "intents"), { recursive: true });
+    writeFileSync(join(frameworkProject, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
     const sel = writeSel(
-      pd,
+      frameworkProject,
       `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c9", "type": "sensor", "origin_stage": "user-stories",
     "manifest_fields": { "id": "bad", "kind": "deterministic", "command": "x", "default_severity": "advisory", "description": "d", "matches": "**/*" } } ] }
@@ -563,12 +557,11 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
         "--selections-json",
         sel,
         "--project-dir",
-        join(pd, "dist", "claude"),
-      ]).rc,
-    ).toBe(1);
+        frameworkProject,
+      ]),
+    ).toMatchObject({ rc: 1, stderr: expect.stringContaining("under the framework distribution") });
   });
 
-  // .sh 22 — free-text -> Source: user_addition + Candidate-ID: free_text_<seq> (2 facts).
   test("free-text -> Source: user_addition + Candidate-ID free_text_1", () => {
     const pd = mkproj("p22");
     const sel = writeSel(
@@ -578,25 +571,68 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    // The .sh extracted the RULE_LEARNED block via awk
-    //   (awk '/Event.*: RULE_LEARNED/{p=1} p; /^---$/{if(p)exit}')
-    // and asserted both field lines WITHIN that block. We mirror that exactly:
-    // capture the block (the `**Event**: RULE_LEARNED` line through the next
+    // Capture the block (the `**Event**: RULE_LEARNED` line through the next
     // `---`) and assert the fields are co-located inside it. This is stronger
-    // isolation than a whole-file substring — a Source/Candidate-ID landing in
-    // some OTHER audit block (e.g. a SENSOR_PROPOSED row, or a future second
-    // RULE_LEARNED) would no longer falsely satisfy the assertion.
+    // isolation than a whole-file substring, which a Source/Candidate-ID landing
+    // in some OTHER audit block (e.g. a SENSOR_PROPOSED row, or a future second
+    // RULE_LEARNED) would falsely satisfy.
     const audit = readAudit(pd);
     const ftBlock = extractAuditBlock(audit, /Event.*: RULE_LEARNED/);
-    // Sanity: the block must actually exist (start line found + terminated).
     expect(ftBlock).toContain("RULE_LEARNED");
     expect(ftBlock.endsWith("---")).toBe(true);
     expect(ftBlock).toContain("Source**: user_addition");
     expect(ftBlock).toContain("Candidate-ID**: free_text_1");
   });
 
-  // .sh 23 — idempotent re-run -> no re-emit, no duplicate line. SPAWN TWICE,
-  //          grep the real audit + learnings file: exactly one row + one line.
+  // "Keep none of these" picked, and the agent listed the candidate anyway with
+  // `keep: false` (a live Kiro run did): the note the person declined is not
+  // written to their memory and the record does not say a rule was learned.
+  test("a candidate marked keep:false is never written and never recorded", () => {
+    const pd = mkproj("p18-keep-false");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "source_heading": "Interpretations", "heading": "Interpretations", "text": "Declined by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(existsSync(projectPractices(pd)) ? readFile(projectPractices(pd)) : "").not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("a bare keep:false entry, with no heading or text, keeps nothing", () => {
+    const pd = mkproj("p18-keep-false-bare");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [ { "id": "c1", "keep": false } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(0);
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(0);
+  });
+
+  test("beside a kept candidate, only the kept note is written", () => {
+    const pd = mkproj("p18-keep-mixed");
+    const sel = writeSel(
+      pd,
+      `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
+  { "id": "c1", "keep": false, "heading": "Corrections", "text": "Declined by the person" },
+  { "candidate_id": "c2", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Kept by the person" } ] }
+`,
+    );
+    const res = runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
+    expect(res.rc, res.out).toBe(0);
+    expect(JSON.parse(res.stdout).rule_learned).toBe(1);
+    const practices = readFile(projectPractices(pd));
+    expect(practices).toContain("Kept by the person");
+    expect(practices).not.toContain("Declined by the person");
+    expect(grepCountAudit(pd, /Event.*: RULE_LEARNED/)).toBe(1);
+  });
+
   test("idempotent re-run -> exactly one audit row + one file line", () => {
     const pd = mkproj("p23");
     const sel = writeSel(
@@ -615,8 +651,8 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(`${rows}:${lines}`).toBe("1:1");
   });
 
-  // .sh 24 — belt-and-braces recovery -> audit row present, file line deleted ->
-  //          re-write only, exit 0 (decide-inside-lock).
+  // Recovery -> audit row present, file line deleted -> re-write only, exit 0
+  // (decide-inside-lock).
   test("recovery -> re-write only (audit row not duplicated), exit 0", () => {
     const pd = mkproj("p24");
     const sel = writeSel(
@@ -626,7 +662,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    // Delete the file line, KEEP the audit row (mirrors the .sh's grep -v ... mv).
+    // Delete the file line, KEEP the audit row.
     const plf = projectPractices(pd);
     const markerRe = /cid:unscoped:user-stories:[0-9a-f]{8}/;
     const kept = readFile(plf)
@@ -648,8 +684,6 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(`${res.rc}:${rows}:${lines}`).toBe("0:1:1");
   });
 
-  // .sh 25 — false-negative guard -> cid-keyed (not date-keyed) idempotency, no
-  //          second copy on re-run.
   test("false-negative guard -> no second copy on re-run (cid-keyed, not date-keyed)", () => {
     const pd = mkproj("p25");
     const sel = writeSel(
@@ -667,6 +701,141 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(lines).toBe(1);
   });
 
-  // .sh 26 (test-run -> persist writes nothing) was dropped per #369 when the
-  // test-run mechanism was removed; persist now always proceeds.
+});
+
+// =====================================================================
+// GROUP 5 - a sensor bind keeps the stage file's header whole
+//
+// The bind edits the installed stage file the stage graph compiles from, so
+// each case checks the whole file byte for byte (only the new id is added, in
+// the file's own line ending) and reads it back with parseStageFrontmatter,
+// the compile's own reader. CRLF is what a Windows team clone checks out.
+// =====================================================================
+describe("t97 persist sensor bind keeps the stage header whole (cli)", () => {
+  const LF = "\n";
+  const CRLF = "\r\n";
+  const ID = "acceptance-format";
+
+  // A stage file whose header carries `sensors` lines where given, then
+  // `scopes:` and the `tail` keys as its last header lines.
+  function stageLines(sensors: string[], tail: string[]): string[] {
+    return [
+      "---",
+      "slug: user-stories",
+      "phase: inception",
+      "execution: ALWAYS",
+      "lead_agent: aidlc-product-agent",
+      "support_agents: []",
+      ...sensors,
+      "scopes:",
+      "  - feature",
+      ...tail,
+      "---",
+      "",
+      "# User Stories",
+      "",
+      "## Steps",
+      "1. do the thing",
+      "",
+    ];
+  }
+
+  // Persist one sensor selection for user-stories against a stage file holding
+  // `before`; returns the exit code and the stage file afterwards.
+  function bindOn(name: string, before: string): { rc: number; after: string } {
+    const pd = mkproj(name);
+    const stagesRoot = join(pd, ".claude", "skills", "aidlc", "stages");
+    const stageFile = join(stagesRoot, "inception", "user-stories.md");
+    writeFileSync(stageFile, before, "utf-8");
+    const sel = writeLearningsSelections(pd, {
+      stage_slug: "user-stories",
+      space: "default",
+      intent: null,
+      selections: [
+        {
+          candidate_id: "c5",
+          type: "sensor",
+          origin_stage: "user-stories",
+          manifest_fields: {
+            id: ID,
+            kind: "deterministic",
+            command: `bun .claude/tools/aidlc-sensor.ts fire ${ID}`,
+            default_severity: "advisory",
+            description: "Checks AC format",
+            matches: "**/user-stories/**",
+          },
+        },
+      ],
+    });
+    const res = runCli(
+      ["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd],
+      { env: { AIDLC_STAGES_DIR: stagesRoot } },
+    );
+    return { rc: res.rc, after: readFile(stageFile) };
+  }
+
+  function sensorsRead(text: string): unknown {
+    return parseStageFrontmatter(text).sensors;
+  }
+
+  test("no sensors: key, LF -> sensors: becomes the last header key, every other line unchanged", () => {
+    const { rc, after } = bindOn("b1", stageLines([], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", `  - ${ID}`]).join(LF));
+    expect(sensorsRead(after)).toEqual([ID]);
+    expect(parseStageFrontmatter(after).outputs).toBe("bar");
+  });
+
+  test("no sensors: key, CRLF -> the new lines end in CRLF too", () => {
+    const { rc, after } = bindOn("b2", stageLines([], ["outputs: bar"]).join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", `  - ${ID}`]).join(CRLF));
+    expect(/(^|[^\r])\n/.test(after)).toBe(false);
+    expect(sensorsRead(after)).toEqual([ID]);
+  });
+
+  test("block of two ids, CRLF -> the id follows the last one and all three read back", () => {
+    const before = stageLines(["sensors:", "  - required-sections", "  - upstream-coverage"], ["outputs: bar"]);
+    const { rc, after } = bindOn("b3", before.join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(
+      stageLines(["sensors:", "  - required-sections", "  - upstream-coverage", `  - ${ID}`], ["outputs: bar"]).join(CRLF),
+    );
+    expect(sensorsRead(after)).toEqual(["required-sections", "upstream-coverage", ID]);
+  });
+
+  test("block, LF, not the last key -> the id follows the last one", () => {
+    const { rc, after } = bindOn("b4", stageLines(["sensors:", "  - required-sections"], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines(["sensors:", "  - required-sections", `  - ${ID}`], ["outputs: bar"]).join(LF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
+
+  test("id already bound second, CRLF -> the stage file is unchanged", () => {
+    const before = stageLines(["sensors:", "  - required-sections", `  - ${ID}`], ["outputs: bar"]).join(CRLF);
+    const { rc, after } = bindOn("b5", before);
+    expect(rc).toBe(0);
+    expect(after).toBe(before);
+  });
+
+  test("block as the last key -> no blank line before the closing ---", () => {
+    const { rc, after } = bindOn("b6", stageLines([], ["outputs: bar", "sensors:", "  - required-sections"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([], ["outputs: bar", "sensors:", "  - required-sections", `  - ${ID}`]).join(LF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
+
+  test("flow sensors: [] -> the id goes inside the brackets", () => {
+    const { rc, after } = bindOn("b7", stageLines(["sensors: []"], ["outputs: bar"]).join(LF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([`sensors: [${ID}]`], ["outputs: bar"]).join(LF));
+    expect(sensorsRead(after)).toEqual([ID]);
+  });
+
+  test("flow sensors: [required-sections], CRLF -> the id follows inside the brackets", () => {
+    const { rc, after } = bindOn("b8", stageLines(["sensors: [required-sections]"], ["outputs: bar"]).join(CRLF));
+    expect(rc).toBe(0);
+    expect(after).toBe(stageLines([`sensors: [required-sections, ${ID}]`], ["outputs: bar"]).join(CRLF));
+    expect(sensorsRead(after)).toEqual(["required-sections", ID]);
+  });
 });

@@ -12,7 +12,7 @@
 // the PROCESS boundary plus those file effects, so it stays a spawn — an
 // in-process handlePracticesPromote() twin would lose the exit-code half the
 // .sh relies on (the fail() path is error() -> process.exit(1),
-// aidlc-state.ts:1140) AND the JSON-ack-to-stdout half (Case A test 2).
+// aidlc-state.ts) AND the JSON-ack-to-stdout half (Case A test 2).
 //
 // SUBCOMMAND UNIT: this .cli file credits the single subcommand unit the .sh
 // exercises — `aidlc-state practices-promote` (covers KEY
@@ -104,7 +104,7 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// --- make_fixture (t75:42-130): a clean project with .claude/rules/ live
+// --- make_fixture (t75): a clean project with .claude/rules/ live
 // targets + the two practices-discovery drafts. Byte-for-byte from the .sh
 // heredocs. ---
 
@@ -257,7 +257,7 @@ interface CliResult {
 }
 
 /**
- * run_promote (t75:132-140): bun STATE_TS practices-promote --project-dir <p>
+ * run_promote (t75): bun STATE_TS practices-promote --project-dir <p>
  * --team-practices <draft> --discovered-rules <draft> --affirming-user test-user,
  * with 2>&1. Mirrors the .sh helper exactly (drafts addressed by their
  * canonical paths under the fixture).
@@ -352,14 +352,14 @@ function auditTimestamp(file: string, ev: string): string {
 }
 
 /** Today in UTC, YYYY-MM-DD. Mirrors the .sh's `date -u +%Y-%m-%d`; the tool
- *  stamps rules via isoTimestamp().slice(0,10) (aidlc-state.ts:1127), the same
+ *  stamps rules via isoTimestamp().slice(0,10) (aidlc-state.ts), the same
  *  UTC calendar day, so the literal-date assertions stay deterministic. */
 function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 // ============================================================
-// Case A — happy path (t75:142-176, .sh tests 1-15)
+// Case A - happy path (t75, .sh tests 1-15)
 // ============================================================
 
 describe("t75 practices-promote — happy path (migrated from t75-practices-promote.sh, plan 24)", () => {
@@ -423,7 +423,7 @@ describe("t75 practices-promote — happy path (migrated from t75-practices-prom
 });
 
 // ============================================================
-// Case B — missing draft fails closed (t75:178-199, .sh tests 16-19)
+// Case B - missing draft fails closed (t75, .sh tests 16-19)
 // ============================================================
 
 describe("t75 practices-promote — missing draft fails closed", () => {
@@ -440,7 +440,7 @@ describe("t75 practices-promote — missing draft fails closed", () => {
     expect(r.out).toContain("team-practices draft not found");
 
     // .sh test 18: audit records PRACTICES_OVERRIDE. The tool always emits on
-    // the fail() path before exiting (aidlc-state.ts:1131-1142), so we assert
+    // the fail() path before exiting (aidlc-state.ts), so we assert
     // presence directly (STRONGER than the .sh's conditional `[ -f $AUDIT ]`).
     const audit = auditPath(fx.proj);
     expect(auditEventCount(audit, "PRACTICES_OVERRIDE")).toBeGreaterThanOrEqual(1);
@@ -479,7 +479,7 @@ describe("t75 practices-promote — ensemble evidence fails closed", () => {
 
 // ============================================================
 // Case C — missing target fails closed before any write, atomicity
-// (t75:201-214, .sh tests 20-21)
+// (t75, .sh tests 20-21)
 // ============================================================
 
 describe("t75 practices-promote — missing target fails closed (atomicity)", () => {
@@ -497,7 +497,7 @@ describe("t75 practices-promote — missing target fails closed (atomicity)", ()
 
     // .sh test 21: team.md must NOT be written when project.md was
     // missing — atomicity rule (read both targets, fail closed before any
-    // write, aidlc-state.ts:1163-1165).
+    // write, aidlc-state.ts).
     expect(readFileSync(fx.teamMd, "utf-8")).not.toContain(
       "NEW_WAY_OF_WORKING_TEXT",
     );
@@ -505,14 +505,14 @@ describe("t75 practices-promote — missing target fails closed (atomicity)", ()
 });
 
 // ============================================================
-// Case D — partial draft leaves other sections alone (t75:216-237, .sh 22-23)
+// Case D - partial draft leaves other sections alone (t75, .sh 22-23)
 // ============================================================
 
 describe("t75 practices-promote — partial draft", () => {
   test("D: only-some-sections draft replaces those, leaves the rest untouched", () => {
     const fx = makeFixture();
     // Rewrite team-practices.md with only Way of Working + Testing Posture
-    // (t75:219-229).
+    // (t75).
     writeFileSync(
       fx.teamPracticesPath,
       `# Team Practices Draft
@@ -616,7 +616,7 @@ describe("t75 practices-promote: the promoted Testing Posture is readable", () =
 });
 
 // ============================================================
-// Case E — idempotency of both promotion targets (t75:239-252, .sh test 24)
+// Case E - idempotency of both promotion targets (t75, .sh test 24)
 // ============================================================
 
 describe("t75 practices-promote — idempotency on both memory targets", () => {
@@ -635,6 +635,126 @@ describe("t75 practices-promote — idempotency on both memory targets", () => {
     // .sh test 24 plus a stronger project-rule retry guard.
     expect(teamSecond).toBe(teamFirst);
     expect(projectSecond).toBe(projectFirst);
+  });
+
+  test("re-affirming unchanged rules on a later date preserves both categories and their original dates", () => {
+    const fx = makeFixture();
+    expect(runPromote(fx).status).toBe(0);
+    const original = readFileSync(fx.projectMd, "utf-8").replace(
+      /\(affirmed \d{4}-\d{2}-\d{2}\)/g,
+      "(affirmed 2000-01-01)",
+    );
+    writeFileSync(fx.projectMd, original, "utf-8");
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      emitted: "PRACTICES_AFFIRMED",
+      mandated_appended: 0,
+      forbidden_appended: 0,
+    });
+    expect(readFileSync(fx.projectMd, "utf-8")).toBe(original);
+    expect(auditEventCount(auditPath(fx.proj), "PRACTICES_AFFIRMED")).toBe(2);
+  });
+
+  test("only matching-category rules deduplicate, including rules without a date", () => {
+    const fx = makeFixture();
+    writeFileSync(
+      fx.projectMd,
+      "# Project-Level Rules\n\n## Decided\n\nALWAYS run project checks\n\n" +
+        "## Mandated\n\nALWAYS keep review records\n\n" +
+        "## Forbidden\n\nALWAYS run project checks (affirmed 2000-01-01)\n",
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\nALWAYS keep review records\n" +
+        "ALWAYS run project checks\nALWAYS run project checks\n\n" +
+        "## Forbidden\n\nALWAYS run project checks\nNEVER skip CI gates\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mandated_appended: 1,
+      forbidden_appended: 1,
+    });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    const mandated = extractMarkdownSection(project, "## Mandated");
+    const forbidden = extractMarkdownSection(project, "## Forbidden");
+    expect(mandated).toContain("ALWAYS keep review records\n");
+    expect(mandated).not.toContain("ALWAYS keep review records (affirmed");
+    expect(mandated.match(/ALWAYS run project checks/g)).toHaveLength(1);
+    expect(mandated).toContain(`ALWAYS run project checks (affirmed ${todayUtc()})`);
+    expect(forbidden).toContain("ALWAYS run project checks (affirmed 2000-01-01)");
+    expect(forbidden.match(/ALWAYS run project checks/g)).toHaveLength(1);
+    expect(forbidden).toContain(`NEVER skip CI gates (affirmed ${todayUtc()})`);
+  });
+
+  test("previously stamped drafts match existing rules without rewriting old duplicates or stacking dates", () => {
+    const fx = makeFixture();
+    const existingMandated = "ALWAYS keep review records (affirmed 2000-01-01)";
+    const existingForbidden = "NEVER skip CI gates (affirmed 2000-01-01) (affirmed 2000-01-02)";
+    writeFileSync(
+      fx.projectMd,
+      `# Project-Level Rules\n\n## Mandated\n\n${existingMandated}\n${existingMandated}\n\n` +
+        `## Forbidden\n\n${existingForbidden}\n`,
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\n" +
+        "ALWAYS keep review records (affirmed 2000-01-02) (affirmed 2000-01-03)\n\n" +
+        "## Forbidden\n\nNEVER skip CI gates\n" +
+        "NEVER bypass review (affirmed 2000-01-01) (affirmed 2000-01-02)\n" +
+        "NEVER bypass review\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      mandated_appended: 0,
+      forbidden_appended: 1,
+    });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    expect(project.split("\n").filter((line) => line === existingMandated)).toHaveLength(2);
+    expect(project).toContain(existingForbidden);
+    expect(project.match(/NEVER skip CI gates/g)).toHaveLength(1);
+    expect(project.match(/NEVER bypass review/g)).toHaveLength(1);
+    expect(project).toContain(`NEVER bypass review (affirmed ${todayUtc()})`);
+    expect(project).not.toContain("NEVER bypass review (affirmed 2000-01-01)");
+  });
+
+  test("different wording and non-terminal affirmation text remain distinct rules", () => {
+    const fx = makeFixture();
+    writeFileSync(
+      fx.projectMd,
+      "# Project-Level Rules\n\n## Mandated\n\n" +
+        "ALWAYS run project checks (affirmed 2000-01-01)\n\n## Forbidden\n",
+      "utf-8",
+    );
+    writeFileSync(
+      fx.discoveredRulesPath,
+      "# Discovered Rules\n\n## Mandated\n\nALWAYS run project checks.\n" +
+        "ALWAYS run project checks (affirmed 2000-01-01) before deployment\n" +
+        "ALWAYS run project checks (affirmed yesterday)\n\n## Forbidden\n",
+      "utf-8",
+    );
+
+    const result = runPromote(fx);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ mandated_appended: 3, forbidden_appended: 0 });
+    const project = readFileSync(fx.projectMd, "utf-8");
+    expect(project).toContain("ALWAYS run project checks (affirmed 2000-01-01)\n");
+    expect(project).toContain(`ALWAYS run project checks. (affirmed ${todayUtc()})`);
+    expect(project).toContain(`ALWAYS run project checks (affirmed 2000-01-01) before deployment (affirmed ${todayUtc()})`);
+    expect(project).toContain(`ALWAYS run project checks (affirmed yesterday) (affirmed ${todayUtc()})`);
   });
 });
 

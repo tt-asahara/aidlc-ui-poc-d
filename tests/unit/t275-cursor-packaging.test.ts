@@ -23,6 +23,10 @@
 //   (6) Outside a git repository, where Cursor may skip project hooks
 //       (issue #976), config, the copy installer, and the doctor all name
 //       `git init`; inside one, subfolders included, they stay quiet.
+//   (7) The copy installer ships only in the copy runtime, where the guide
+//       runs it: native setup writes no AI-DLC file at the project root,
+//       keeps a project's own install.ts, and a refresh removes the root
+//       install.ts an earlier native setup left.
 //
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
@@ -104,7 +108,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
@@ -149,8 +152,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       .toMatch(/^---\ndescription: AI-DLC onboarding for Cursor\nalwaysApply: true\n---/);
     const standing = readFileSync(join(ENGINE, "rules", "aidlc.mdc"), "utf-8");
     expect(standing).toMatch(/^alwaysApply: true$/m);
+    // The rules read the engine's git-ignored copy of the active space's memory.
     for (const f of ["org.md", "team.md", "project.md"]) {
-      expect(standing).toContain(`aidlc/spaces/default/memory/${f}`);
+      expect(standing).toContain(`aidlc/active-memory/${f}`);
     }
     expect(standing).not.toContain("memory/phases/");
 
@@ -162,7 +166,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(rule, phase).toMatch(/^description: .+ phase practices$/mi);
       expect(rule, phase).toMatch(/^alwaysApply: false$/m);
       expect(rule, phase).toContain(
-        `aidlc/spaces/default/memory/phases/${phase}.md`,
+        `aidlc/active-memory/phases/${phase}.md`,
       );
       expect(rule, phase).not.toContain("memory/org.md");
     }
@@ -207,7 +211,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         if (m) targets.add(m[1]);
       }
     }
-    // Every wired target has a real arm in the adapter switch.
     const adapter = readFileSync(join(ENGINE, "hooks", "aidlc-cursor-adapter.ts"), "utf-8");
     for (const target of targets) {
       expect(adapter, `adapter handles "${target}"`).toContain(`case "${target}":`);
@@ -583,9 +586,14 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         }, null, 2)}\n`,
       );
 
+      // The native tree ships no installer, so the copy installer runs
+      // beside a copy of it and copies its native wiring.
+      const nativeDist = join(root, "cursor-release");
+      cpSync(CURSOR_RELEASE_ROOT, nativeDist, { recursive: true });
+      cpSync(CURSOR_INSTALLER_SOURCE, join(nativeDist, "install.ts"));
       const install = spawnSync(
         "bun",
-        [join(CURSOR_RELEASE_ROOT, "install.ts"), project],
+        [join(nativeDist, "install.ts"), project],
         {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
@@ -678,7 +686,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
-      // The step it names: with the file moved aside, the installer runs.
       renameSync(join(project, ".cursor", "rules", "aidlc.mdc"), join(project, "my-aidlc.mdc"));
       const again = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -738,7 +745,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(switchSpace.status, switchSpace.stderr).toBe(0);
 
-      // Simulate an install made by the reviewed pre-receipt installer.
+      // Simulate an install made by the pre-receipt installer.
       rmSync(join(project, ".cursor", "aidlc-install.json"), { force: true });
       const managed = join(project, ".cursor", "hooks", "aidlc-cursor-adapter.ts");
       const projectMemory = join(
@@ -763,9 +770,13 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(readFileSync(join(project, "aidlc", "active-space"), "utf-8").trim()).toBe(
         "team-b",
       );
+      // The rules name the copy, whatever the active space; the copy holds that
+      // space's files (the switch wrote it), so the installer rewrites nothing.
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc.mdc"), "utf-8"),
-      ).toContain("aidlc/spaces/team-b/memory/");
+      ).toContain("aidlc/active-memory/org.md");
+      expect(readFileSync(join(project, "aidlc", "active-memory", "org.md"), "utf-8"))
+        .toStartWith("<!-- AI-DLC keeps this copy in step with aidlc/spaces/team-b/memory/org.md.");
       expect(
         readFileSync(join(project, ".cursor", "rules", "aidlc-onboarding.mdc"), "utf-8"),
       ).toContain("aidlc/spaces/<space>/memory/");
@@ -775,20 +786,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           "utf-8",
         );
         expect(installedRule, phase).toContain(
-          `aidlc/spaces/team-b/memory/phases/${phase}.md`,
+          `aidlc/active-memory/phases/${phase}.md`,
         );
-        expect(installedRule, phase).not.toContain("aidlc/spaces/default/memory/");
+        expect(installedRule, phase).not.toContain("aidlc/spaces/");
       }
       for (const agent of readdirSync(join(project, ".cursor", "agents"))) {
         if (!agent.endsWith("-agent.md")) continue;
         const shipped = readFileSync(join(ENGINE, "agents", agent), "utf-8");
         const installed = readFileSync(join(project, ".cursor", "agents", agent), "utf-8");
-        if (shipped.includes("aidlc/spaces/default/memory/")) {
-          expect(installed, agent).toContain("aidlc/spaces/team-b/memory/");
-          expect(installed, agent).not.toContain("aidlc/spaces/default/memory/");
-        } else {
-          expect(installed, agent).toBe(shipped);
-        }
+        expect(installed, agent).toBe(shipped);
       }
       expect(readFileSync(projectMemory, "utf-8")).toBe("# Project-owned method\n");
       expect(existsSync(join(project, ".cursor", "aidlc-install.json"))).toBe(true);
@@ -989,8 +995,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(reinstall.status, reinstall.stderr).toBe(0);
       for (const file of [phaseRule, agent]) {
         const restored = readFileSync(file, "utf-8");
-        expect(restored, file).toContain("aidlc/spaces/team-b/memory/");
+        expect(restored, file).toContain("aidlc/active-memory/");
         expect(restored, file).not.toContain("aidlc/spaces/default/memory/");
+        expect(restored, file).not.toContain("aidlc/spaces/team-b/memory/");
       }
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1018,7 +1025,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
       expect(existsSync(join(fileProject, ".cursor", "tools"))).toBe(false);
-      // The step it names: with a regular file in place of the link, it runs.
       unlinkSync(join(fileProject, "AGENTS.md"));
       writeFileSync(join(fileProject, "AGENTS.md"), "# Outside\n");
       const replaced = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
@@ -1209,10 +1215,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(
         readFileSync(stagePath, "utf-8").match(new RegExp(`^  - ${artifact}$`, "gm")),
       ).toHaveLength(1);
-      const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8")) as {
-        "functional-design"?: { produces?: string[] };
-      };
-      expect(sidecar["functional-design"]?.produces ?? []).not.toContain(artifact);
+      // The only record went back to core, so the sidecar is removed rather
+      // than left as `{}`, which compose and plugin sync refuse.
+      expect(existsSync(sidecarPath)).toBe(false);
 
       const pluginScopeSource = join(
         REPO_ROOT,
@@ -1297,4 +1302,76 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Two configs, two installs, and two doctors need a bounded Windows startup allowance.
+
+  const rootIntegrationPaths = (tree: string): string[] =>
+    (JSON.parse(
+      readFileSync(join(tree, ".cursor", "tools", "data", "aidlc-projection.json"), "utf-8"),
+    ) as { rootIntegrations: Array<{ path: string }> }).rootIntegrations.map((item) => item.path);
+  const nativeConfig = (project: string, from: string) =>
+    spawnSync("bun", [INIT, "config", "--project-dir", project, "--from", from, "--harness", "cursor", "--mcp", "none"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+    });
+
+  test("22: native setup leaves no AI-DLC file at the project root and keeps the project's own install.ts", () => {
+    expect(existsSync(join(CURSOR_ROOT, "install.ts"))).toBe(true);
+    expect(rootIntegrationPaths(CURSOR_ROOT)).toContain("install.ts");
+    expect(existsSync(join(CURSOR_RELEASE_ROOT, "install.ts"))).toBe(false);
+    expect(rootIntegrationPaths(CURSOR_RELEASE_ROOT)).not.toContain("install.ts");
+
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-own-installer-"));
+    const project = join(root, "project");
+    try {
+      mkdirSync(project);
+      expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      const own = "// the project's own setup script\nconsole.log(\"setting up\");\n";
+      writeFileSync(join(project, "install.ts"), own);
+      writeFileSync(join(project, "package.json"), "{}\n");
+      const config = nativeConfig(project, CURSOR_RELEASE_ROOT);
+      expect(config.status, config.stdout + config.stderr).toBe(0);
+      expect(readFileSync(join(project, "install.ts"), "utf-8")).toBe(own);
+      expect(readdirSync(project).sort()).toEqual(
+        [".cursor", ".git", ".gitignore", "AGENTS.md", "aidlc", "install.ts", "package.json"],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("23: a refresh removes the root install.ts an earlier native setup left, and says so", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-retired-installer-"));
+    const project = join(root, "project");
+    try {
+      // An earlier release's native tree: this one with the root installer and
+      // its root integration, as the copy runtime still carries them.
+      const earlier = join(root, "earlier", "cursor");
+      cpSync(CURSOR_RELEASE_ROOT, earlier, { recursive: true });
+      cpSync(join(CURSOR_ROOT, "install.ts"), join(earlier, "install.ts"));
+      const descriptorPath = join(earlier, ".cursor", "tools", "data", "aidlc-projection.json");
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+        rootIntegrations: Array<{ path: string }>;
+      };
+      if (!descriptor.rootIntegrations.some((item) => item.path === "install.ts")) {
+        const copied = JSON.parse(
+          readFileSync(join(ENGINE, "tools", "data", "aidlc-projection.json"), "utf-8"),
+        ) as { rootIntegrations: Array<{ path: string }> };
+        descriptor.rootIntegrations.push(copied.rootIntegrations.find((item) => item.path === "install.ts")!);
+        writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+      }
+
+      mkdirSync(project);
+      expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      const first = nativeConfig(project, earlier);
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      expect(existsSync(join(project, "install.ts"))).toBe(true);
+
+      const refresh = nativeConfig(project, CURSOR_RELEASE_ROOT);
+      expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+      expect(existsSync(join(project, "install.ts"))).toBe(false);
+      expect(refresh.stdout).toMatch(/Removed 1 file that is no longer part of AI-DLC [^\n:]+:\r?\n {2}install\.ts\r?\n/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

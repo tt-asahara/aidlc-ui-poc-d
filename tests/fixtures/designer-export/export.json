@@ -951,6 +951,9 @@
         "requirements",
         "requirements-analysis-questions"
       ],
+      "optional_produces": [
+        "traceability"
+      ],
       "consumes": [
         {
           "artifact": "intent-statement",
@@ -980,6 +983,10 @@
           "required": false
         }
       ],
+      "cites": [
+        "intent-statement",
+        "scope-document"
+      ],
       "requires_stage": [
         "approval-handoff",
         "reverse-engineering"
@@ -1007,7 +1014,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "RE artifacts (if brownfield), authoritative project description (project-description utility)",
-      "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "requirements.md, requirements-analysis-questions.md, traceability.json (Step 10: an `ids` list with one entry per FR and NFR ID, spelled exactly as requirements.md spells it, each with `kind` functional or non-functional and, for a sub-requirement, `of` its requirement) (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1145,7 +1152,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1354,7 +1361,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1457,7 +1464,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1725,6 +1732,10 @@
           "required": false
         },
         {
+          "artifact": "stories",
+          "required": false
+        },
+        {
           "artifact": "requirements",
           "required": true
         },
@@ -1761,7 +1772,7 @@
       "reviewer_max_iterations": 2,
       "review_class": "adversarial",
       "summary_confirmation": "required",
-      "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
+      "inputs": "unit-of-work.md, unit-of-work-story-map.md, user-stories stories.md (if produced), requirements.md, domain-design components.md, contract-design contract-summary.md (if produced)",
       "outputs": "entities.md, rules.md, functional-spec.md, traceability.json, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all). entities.md and rules.md each carry a fenced ```yaml source-of-truth block; functional-spec.md is the source of truth for workflows and state machines and carries derived ER-diagram and rules-summary views.",
       "rules_in_context": [
         {
@@ -1817,7 +1828,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1967,7 +1978,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2130,7 +2141,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2299,7 +2310,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2421,7 +2432,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2442,12 +2453,14 @@
       "mode": "inline",
       "produces": [
         "build-instructions",
-        "integration-test-instructions",
-        "performance-test-instructions",
-        "security-test-instructions",
         "build-and-test-summary",
         "build-test-results",
         "cross-unit-traceability"
+      ],
+      "optional_produces": [
+        "integration-test-instructions",
+        "performance-test-instructions",
+        "security-test-instructions"
       ],
       "consumes": [
         {
@@ -2484,7 +2497,7 @@
         "express"
       ],
       "inputs": "ALL code generation outputs across all units",
-      "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
+      "outputs": "build-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md, CONDITIONAL: integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists) (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

@@ -41,6 +41,7 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import {
   _installedSourcesForTests,
+  _requiresEdgeHoldsForTests,
   _switchRefreshStepsForTests,
 } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -81,6 +82,8 @@ import {
   acquireRelease,
   digest,
   readReleaseManifest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../../core/tools/aidlc-release.ts";
 import {
@@ -103,6 +106,7 @@ import {
   serveReleaseFixture,
   writeReleaseFixture,
 } from "../harness/release-fixture.ts";
+import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -126,6 +130,7 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
+const CURSOR_COPY = join(REPO_ROOT, "dist", "cursor");
 const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
 const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
@@ -800,6 +805,44 @@ describe("t243 archive and transaction safety", () => {
       expect(() => readTarGz(path)).toThrow();
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("release fixtures isolate versions and outputs while observing changed source files", () => {
+    const source = temp("aidlc-release-fixture-source-");
+    mkdirSync(join(source, "scripts"));
+    for (const installer of ["install.sh", "install.ps1"]) {
+      cpSync(join(REPO_ROOT, "scripts", installer), join(source, "scripts", installer));
+    }
+    const stampPath = ".claude/tools/data/aidlc-stamp.json";
+    const probePath = ".claude/tools/aidlc-version.ts";
+    const sourceStamps: string[] = [];
+    for (const tree of ["dist", "dist-release"]) {
+      const root = join(source, tree, "claude");
+      cpSync(join(REPO_ROOT, tree, "claude"), root, { recursive: true });
+      sourceStamps.push(readFileSync(join(root, stampPath), "utf8"));
+    }
+    const first = temp("aidlc-release-fixture-version-first-");
+    writeReleaseFixture({ root: first, repoRoot: source, version: AIDLC_VERSION, distributions: ["claude"] });
+    const original = readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION)));
+    const changed = "export const AIDLC_VERSION = 'fixture source changed';\n";
+    for (const tree of ["dist", "dist-release"]) {
+      writeFileSync(join(source, tree, "claude", probePath), changed);
+    }
+    const second = temp("aidlc-release-fixture-version-second-");
+    writeReleaseFixture({ root: second, repoRoot: source, version: NEXT_VERSION, distributions: ["claude"] });
+    for (const asset of [releaseRuntimeAsset(NEXT_VERSION), releaseCopyRuntimeAsset(NEXT_VERSION)]) {
+      const entries = readTarGz(join(second, asset));
+      const stamp = entries.find((entry) => entry.path === `runtime/claude/${stampPath}`)!;
+      expect(JSON.parse(stamp.data.toString()).frameworkVersion).toBe(NEXT_VERSION);
+      expect(entries.find((entry) => entry.path === `runtime/claude/${probePath}`)?.data.toString()).toBe(changed);
+    }
+    expect(readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION))).equals(original)).toBe(true);
+    writeFileSync(join(second, releaseRuntimeAsset(NEXT_VERSION)), "damaged fixture");
+    expect(readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION))).equals(original)).toBe(true);
+    for (const [index, tree] of ["dist", "dist-release"].entries()) {
+      expect(readFileSync(join(source, tree, "claude", stampPath), "utf8")).toBe(sourceStamps[index]);
+      expect(readFileSync(join(source, tree, "claude", probePath), "utf8")).toBe(changed);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t243 project initialization", () => {
@@ -976,7 +1019,7 @@ describe("t243 project initialization", () => {
     expect(layout()).toBe("kas");
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"))["chat.agentEngine"])
       .toBe("v3");
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "agents", "aidlc-developer-agent.json"))).toBe(false);
@@ -996,13 +1039,103 @@ describe("t243 project initialization", () => {
     expect(stamp()).toBe("kiro");
     expect(layout()).toBe("agent-v1");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(true);
-    expect(existsSync(join(project, ".kiro", "agents", "aidlc.md"))).toBe(false);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-aidlc.md"))).toBe(false);
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(false);
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
     expect(readFileSync(ownAgent, "utf-8")).toBe("{\"name\":\"my-agent\"}\n");
     expect(readFileSync(ownHook, "utf-8")).toBe("{}\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch and a refresh keep a dropped plugin's own registration and never name it as a hook AI-DLC does not own", () => {
+    const project = temp("aidlc-t243-kiro-switch-plugin-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    // Dropped as the plugin docs say: one copy of its Kiro IDE projection's .kiro folder.
+    const projection = join(temp("aidlc-t243-plugin-"), "kiro-ide");
+    const built = run(join(REPO_ROOT, "scripts", "package.ts"), ["plugin", "build", "test-pro", "kiro-ide", projection], REPO_ROOT);
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    cpSync(join(projection, ".kiro"), join(project, ".kiro"), { recursive: true });
+    const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+    const plugin = join(project, ".kiro", "aidlc-plugins", "aidlc-test-pro", ".kiro-plugin", "plugin.json");
+    const written = readFileSync(registration, "utf-8");
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ];
+
+    const preview = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+    expect(preview.stdout).toContain("(switches .kiro in place from kiro to kiro-ide)");
+    expect(preview.stdout).not.toContain("AI-DLC does not own");
+    // Edited, it is no longer the registration the plugin's build wrote.
+    writeFileSync(registration, written.replace("SessionStart", "PreToolUse"));
+    const edited = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(edited.stdout).toContain(
+      "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+    );
+    // A Windows team clone checks the file out with CRLF line endings.
+    writeFileSync(registration, written.replaceAll("\n", "\r\n"));
+    const crlf = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(crlf.status, crlf.stdout + crlf.stderr).toBe(0);
+    expect(crlf.stdout).not.toContain("AI-DLC does not own");
+    writeFileSync(registration, written);
+
+    const switched = run(INIT, switchArgs, project);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+    expect(switched.stdout).not.toContain("AI-DLC does not own");
+    expect(readFileSync(registration, "utf-8")).toBe(written);
+    expect(existsSync(plugin)).toBe(true);
+    const refreshed = run(INIT, switchArgs, project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(registration, "utf-8")).toBe(written);
+    expect(existsSync(plugin)).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const earlier of EARLIER_KIRO_IDE_DROPS) {
+    test(`a Kiro switch and a refresh keep a plugin dropped from ${earlier.build} and never name its registration as a hook AI-DLC does not own`, () => {
+      const project = temp("aidlc-t243-kiro-switch-earlier-plugin-");
+      mkdirSync(join(project, ".git"));
+      const initialized = run(INIT, [
+        "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+      ], project);
+      expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+      const files = earlier.drop(project);
+      const [registration] = files;
+      const written = files.map((file) => readFileSync(file));
+      const switchArgs = [
+        "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+      ];
+
+      const preview = run(INIT, [...switchArgs, "--dry-run"], project);
+      expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+      expect(preview.stdout).not.toContain("AI-DLC does not own");
+      // Edited, it is no longer the registration the plugin's build wrote.
+      writeFileSync(registration, written[0].toString("utf-8").replace("SessionStart", "PreToolUse"));
+      const edited = run(INIT, [...switchArgs, "--dry-run"], project);
+      expect(edited.stdout).toContain(
+        "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/aidlc-test-pro-compose.json\")",
+      );
+      // A Windows team clone checks the file out with CRLF line endings.
+      writeFileSync(registration, written[0].toString("utf-8").replaceAll("\n", "\r\n"));
+      const crlf = run(INIT, [...switchArgs, "--dry-run"], project);
+      expect(crlf.status, crlf.stdout + crlf.stderr).toBe(0);
+      expect(crlf.stdout).not.toContain("AI-DLC does not own");
+      writeFileSync(registration, written[0]);
+
+      const switched = run(INIT, switchArgs, project);
+      expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+      expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+      expect(switched.stdout).not.toContain("AI-DLC does not own");
+      expect(files.map((file) => readFileSync(file))).toEqual(written);
+      const refreshed = run(INIT, switchArgs, project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(files.map((file) => readFileSync(file))).toEqual(written);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   test("a Kiro switch that would let Kiro run unowned hook files applies only the approved set", () => {
     const project = temp("aidlc-t243-kiro-switch-hooks-");
@@ -2761,7 +2894,12 @@ describe("t243 project initialization", () => {
     const copyRuntime = temp("aidlc-t243-vscode-copy-runtime-");
     cpSync(COPILOT_RELEASE, copyRuntime, { recursive: true });
     rmSync(join(copyRuntime, ".vscode"), { recursive: true, force: true });
-    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+    // The last start has a legacy byte in a comment: the file is left alone
+    // either way, so its encoding stops nothing.
+    const legacyComment = Buffer.concat([
+      Buffer.from("{\n  // caf"), Buffer.from([0xe9]), Buffer.from("\n  \"editor.tabSize\": 2\n}\n"),
+    ]);
+    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n', legacyComment]) {
       const project = temp("aidlc-t243-vscode-copy-");
       mkdirSync(join(project, ".git"));
       if (start !== null) {
@@ -2771,7 +2909,7 @@ describe("t243 project initialization", () => {
       const configured = configCopilot(project, copyRuntime);
       expect(configured.status, configured.stdout + configured.stderr).toBe(0);
       if (start === null) expect(existsSync(join(project, VSCODE_SETTINGS))).toBe(false);
-      else expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(start);
+      else expect(readFileSync(join(project, VSCODE_SETTINGS))).toEqual(Buffer.from(start));
     }
     // A project that AI-DLC already gave the value keeps it and its record.
     const owned = temp("aidlc-t243-vscode-copy-owned-");
@@ -3009,12 +3147,14 @@ describe("t243 project initialization", () => {
     mkdirSync(join(project, ".git"));
     const config = join(project, "install.ts");
     writeFileSync(config, "// the project's own install script\n");
+    // The copy runtime is the tree that still writes a whole file (its
+    // installer); native setup leaves it out.
     const initialized = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
-      CURSOR_RELEASE,
+      CURSOR_COPY,
       "--harness",
       "cursor",
       "--force",
@@ -3074,6 +3214,53 @@ describe("t243 project initialization", () => {
       if (prior === undefined) delete process.env.KIRO_PROJECT_DIR;
       else process.env.KIRO_PROJECT_DIR = prior;
     }
+  });
+
+  test("refresh replays a recorded requires_stage edge only where it still holds", () => {
+    const harness = join(temp("aidlc-t243-edge-"), ".claude");
+    const stage = (phase: string, slug: string) => {
+      mkdirSync(join(harness, "aidlc-common", "stages", phase), { recursive: true });
+      writeFileSync(join(harness, "aidlc-common", "stages", phase, `${slug}.md`), `---\nslug: ${slug}\n---\n`);
+    };
+    stage("inception", "requirements-analysis");
+    stage("construction", "nfr-requirements");
+    stage("construction", "build-and-test");
+    mkdirSync(join(harness, "tools", "data"), { recursive: true });
+    const graphPath = join(harness, "tools", "data", "stage-graph.json");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+    ]));
+    // Earlier phase, and lower number in the same phase: hold.
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(true);
+    // Later in the same phase, a removed dependency, a self-edge: dropped.
+    expect(_requiresEdgeHoldsForTests(harness, "nfr-requirements", "build-and-test")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "gone-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "build-and-test")).toBe(false);
+    // A pinned row keeps its number when its stage moves phase directory, so
+    // the full number decides: 4.7 in inception still compiles after 3.6.
+    stage("inception", "feedback-optimization");
+    // A plugin stage carried over from the project has no row in the staged
+    // graph: it seeds past its phase max, after every pinned stage there.
+    stage("construction", "plugin-construction-stage");
+    stage("inception", "plugin-inception-stage");
+    writeFileSync(graphPath, JSON.stringify([
+      { slug: "requirements-analysis", number: "2.3" },
+      { slug: "nfr-requirements", number: "3.2" },
+      { slug: "build-and-test", number: "3.6" },
+      { slug: "feedback-optimization", number: "4.7" },
+    ]));
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "feedback-optimization")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-construction-stage")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "plugin-inception-stage")).toBe(true);
+    expect(_requiresEdgeHoldsForTests(harness, "plugin-construction-stage", "build-and-test")).toBe(true);
+    // Without a readable graph a same-phase edge cannot be verified, a
+    // cross-phase one still can.
+    writeFileSync(graphPath, "not json");
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "nfr-requirements")).toBe(false);
+    expect(_requiresEdgeHoldsForTests(harness, "build-and-test", "requirements-analysis")).toBe(true);
   });
 
   test("fresh init, dry-run, refresh preservation, conflict, and force use one projection", () => {
@@ -3191,7 +3378,6 @@ describe("t243 project initialization", () => {
     expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     }));
@@ -3446,7 +3632,12 @@ describe("t243 project initialization", () => {
       const git = (...args: string[]) => {
         const result = spawnSync("git", [
           "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
-          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+          // No automatic maintenance: a commit otherwise hands work to a
+          // background git that outlives it, and this case reads what a refresh
+          // leaves behind right after one.
+          "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+          ...args,
         ], { encoding: "utf-8" });
         expect(result.status, result.stderr).toBe(0);
       };
@@ -3499,16 +3690,10 @@ describe("t243 project initialization", () => {
       expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
       expect(kept.stdout).not.toContain("no longer part of");
 
-      // The tracked-files check never runs the repository's fsmonitor program.
+      // One file on its own reads as one file, with the way back for that one.
       const solo = ".claude/hooks/aidlc-retired-hook.ts";
       retire([solo]);
-      const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
-      const ran = `${monitor}.ran`;
-      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
-      git("config", "core.fsmonitor", monitor);
       const monitored = refresh(project);
-      git("config", "--unset", "core.fsmonitor");
-      expect(existsSync(ran)).toBe(false);
       expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
@@ -4236,9 +4421,74 @@ describe("t243 project initialization", () => {
     expect(readFileSync(file, "utf-8")).toBe(shipped);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The command a conflict names is the one of the harness being set up, not
-  // the first install a project shows: a first Codex install names Codex's own.
-  test("a first install's conflict names the command of the harness being set up", () => {
+  // No config section takes --force, so a section's conflict names config
+  // itself, from the source the section used, then the section once more; on
+  // a copied tool with --from and natively from the installed release, the
+  // command it names and then the section both go through. A mirror URL can
+  // carry its credential, so the line asks for it back and never prints it.
+  test("a section's conflict names the config command that takes --force, and it and the section go through", () => {
+    const machine = temp("aidlc-t243-section-conflict-machine-");
+    const launcher = join(temp("aidlc-t243-section-conflict-launcher-"), INSTALLED_EXECUTABLE);
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    const MIRROR = "https://user:tok@mirror.example/releases";
+    // A copy of Bun under the name aidlc stands in for the compiled executable.
+    const channels = [
+      { name: "copied", tool: BUN, from: ["--from", CLAUDE_RELEASE], named: ["bun", ".claude/tools/aidlc.ts", "config", "--from", CLAUDE_RELEASE, "--force"] },
+      { name: "native", tool: launcher, from: [], named: ["aidlc", "config", "--force"] },
+      { name: "mirror", tool: launcher, from: ["--download", "--release-base-url", MIRROR], named: ["aidlc", "config", "--download", "--force"] },
+    ];
+    for (const channel of channels) {
+      const project = temp(`aidlc-t243-section-conflict-${channel.name}-`);
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      const config = (args: string[]) =>
+        spawnSync(channel.tool, [INIT, "config", ...args], {
+          cwd: project,
+          env: { ...process.env, ...env },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+      const installed = config(["--project-dir", project, ...channel.from, "--harness", "claude", "--mcp", "none", "--yes"]);
+      expect(installed.status, `${channel.name}: ${installed.stdout}${installed.stderr}`).toBe(0);
+      const file = join(project, ".claude", "agents", "aidlc-developer-agent.md");
+      const shipped = readFileSync(file, "utf-8");
+      writeFileSync(file, `${shipped}\nmy own notes\n`);
+      const section = ["project", ...channel.from, "--mcp", "defaults", "--yes"];
+      const refused = config(section);
+      expect(refused.status, `${channel.name}: ${refused.stdout}${refused.stderr}`).toBe(4);
+      const out = refused.stdout.replace(/\s+/g, " ");
+      expect(out, channel.name).not.toContain("run it again with --force");
+      // A dry run repeats this conflict while it stands, so the line names none.
+      expect(out, channel.name).not.toContain("--dry-run");
+      const json = config([...section, "--json"]);
+      expect(json.status, channel.name).toBe(4);
+      expect(refused.stdout + refused.stderr + json.stdout + json.stderr, channel.name).not.toContain("tok@");
+      const mirror = channel.from.includes("--release-base-url");
+      const asked = mirror ? " with the same --release-base-url" : "";
+      const named = new RegExp(`to take the shipped version over it, run \`([^\`]+)\`${asked}, then the same command again\\.`).exec(out)?.[1];
+      expect(printedWords(named ?? ""), `${channel.name}: ${out}`).toEqual(channel.named);
+      const forced = config([
+        ...printedWords(named ?? "").slice(channel.named.indexOf("config") + 1),
+        ...(mirror ? ["--release-base-url", MIRROR] : []),
+      ]);
+      expect(forced.status, `${channel.name}: ${forced.stdout}${forced.stderr}`).toBe(0);
+      expect(readFileSync(file, "utf-8"), channel.name).toBe(shipped);
+      const again = config(section);
+      expect(again.status, `${channel.name}: ${again.stdout}${again.stderr}`).toBe(0);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A first install's conflict names no other harness's tool: a first Codex
+  // install never points at .claude.
+  test("a first install's conflict names no other harness's command", () => {
     for (const [harness, release, agent] of [
       ["codex", CODEX_RELEASE, join(".codex", "agents", "aidlc-developer-agent.toml")],
       ["claude", CLAUDE_RELEASE, join(".claude", "agents", "aidlc-developer-agent.md")],
@@ -4254,8 +4504,8 @@ describe("t243 project initialization", () => {
       const out = refused.stdout.replace(/\s+/g, " ");
       // The conflict line names the path with forward slashes on every OS.
       expect(out).toContain(`${agent.replaceAll("\\", "/")} (locally modified or unowned)`);
-      const dir = harness === "codex" ? ".codex" : ".claude";
-      expect(out, harness).toContain(`\`bun ${dir}/tools/aidlc.ts config --dry-run --verbose\` lists every change first`);
+      expect(out, harness).toContain("to take the shipped version over it, run it again with --force.");
+      expect(out, harness).not.toContain("--dry-run");
       if (harness === "codex") expect(out).not.toContain(".claude/tools/aidlc.ts");
       expect(readFileSync(join(project, agent), "utf-8")).toBe("my own agent\n");
     }
@@ -4286,8 +4536,10 @@ describe("t243 project initialization", () => {
     expect(merged.startsWith(original)).toBe(true);
     expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
 
-    // Quiet output is one message, and the finding is part of it.
-    const quietProject = temp("aidlc-t243-hidden-records-quiet-");
+    // Quiet output is one message, and the finding is part of it. The folder's
+    // name is short: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const quietProject = temp("aidlc-t243-quiet-");
     expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
     writeFileSync(join(quietProject, ".gitignore"), original);
     for (const flags of [["--dry-run", "--quiet"], ["--quiet"]]) {
@@ -4481,11 +4733,69 @@ describe("t243 project initialization", () => {
       ], project);
       expect(refused.status, refused.stdout + refused.stderr).toBe(4);
       expect(refused.stdout).toContain(
-        "gitignore is not valid UTF-8; convert its encoding before config",
+        ".gitignore is not valid UTF-8; convert its encoding before config",
       );
       expect(readFileSync(path)).toEqual(original);
       expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
       expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Session start leaves a root file that is not valid UTF-8 alone; config did
+  // not, and wrote the team's AGENTS.md back with each such byte replaced.
+  test("an AGENTS.md that is not valid UTF-8 refuses without changing its bytes even with --force", () => {
+    const project = temp("aidlc-t243-agents-encoding-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const original = Buffer.concat([
+      Buffer.from("# Caf"),
+      Buffer.from([0xe9]),
+      Buffer.from("\n\nWe use AI-DLC.\n"),
+    ]);
+    writeFileSync(path, original);
+    for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        KIRO_RELEASES[0],
+        "--harness",
+        "kiro",
+        ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        "AGENTS.md is not valid UTF-8; convert its encoding before config",
+      );
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A file config would leave as it is needs no conversion: an AGENTS.md that
+  // already holds AI-DLC's current block, with a legacy byte in the team's own
+  // text, is kept byte for byte and config carries on.
+  test("an AGENTS.md that is not valid UTF-8 but already holds the current block is kept and config carries on", () => {
+    const project = temp("aidlc-t243-agents-encoding-kept-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    writeFileSync(path, "# Cafe\n\nWe use AI-DLC.\n");
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--json"];
+    const first = run(INIT, args, project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const installed = readFileSync(path);
+    const at = installed.indexOf("Cafe") + 3;
+    const legacy = Buffer.concat([installed.subarray(0, at), Buffer.from([0xe9]), installed.subarray(at + 1)]);
+    writeFileSync(path, legacy);
+    type ConfigPlan = { data: { actions: Array<{ path: string; action: string; detail?: string }> } };
+    for (const extra of [[], ["--dry-run", "--verbose"]]) {
+      const refreshed = run(INIT, [...args, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      const plan = JSON.parse(refreshed.stdout) as ConfigPlan;
+      expect(plan.data.actions.find((action) => action.path === "AGENTS.md")?.action).toBe("preserve");
+      expect(readFileSync(path)).toEqual(legacy);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -4536,13 +4846,15 @@ describe("t243 project initialization", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("modified unmarked AGENTS.md still refuses as ambiguous even with --force", () => {
+  // An unmarked file that is not exactly a release's is the team's text, whatever
+  // it says about AI-DLC: config keeps it and adds the marked block after it.
+  test("a modified unmarked AGENTS.md is kept as the team's text and gets the marked block after it", () => {
     const project = temp("aidlc-t243-agents-ambiguous-");
     mkdirSync(join(project, ".git"));
     const path = join(project, "AGENTS.md");
     const original = `${readFileSync(join(KIRO_RELEASES[0], "AGENTS.md"), "utf-8")}\n# Local AI-DLC instructions\n`;
     writeFileSync(path, original);
-    const refused = run(INIT, [
+    const configured = run(INIT, [
       "config",
       "--project-dir",
       project,
@@ -4552,11 +4864,32 @@ describe("t243 project initialization", () => {
       "kiro",
       "--force",
     ], project);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(path, "utf-8")).toBe(original);
-    expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
-    expect(readdirSync(join(project, ".git"))).toEqual([]);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(original)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    expect(merged.match(/<!-- END AI-DLC:agents -->/g)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's own AGENTS.md names AI-DLC in their words (the path a team
+  // meets before its first config, or after removing the block): their text is
+  // theirs, the block goes after it, and a second config changes nothing.
+  test("a team's AGENTS.md that mentions AI-DLC in its own words is kept, and the block is added after it", () => {
+    const project = temp("aidlc-t243-agents-mentions-aidlc-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const theirs = "# Team notes\n\nWe run specs through AI-DLC; the aidlc folder holds the records.\n";
+    writeFileSync(path, theirs);
+    const args = ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro"];
+    const configured = run(INIT, args, project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(configured.stdout + configured.stderr).not.toContain("ambiguous");
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(theirs)).toBe(true);
+    expect(merged.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
+    const again = run(INIT, args, project);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(merged);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--force does not replace a pre-existing user-owned JSON entry", () => {
@@ -4819,16 +5152,19 @@ describe("t243 project initialization", () => {
       .replace("<!-- BEGIN AI-DLC:agents -->\n", "")
       .replace("<!-- END AI-DLC:agents -->\n", "") + "\nTeam note: aidlc conventions apply here.\n";
     writeFileSync(modifiedPath, modified);
-    const refused = run(INIT, [
+    // With the markers gone and a team note added, the text is the team's: it
+    // stays, and the marked block is added after it.
+    const merged = run(INIT, [
       "config",
       "--project-dir",
       modifiedProject,
       "--from",
       KIRO_RELEASES[0],
     ], modifiedProject);
-    expect(refused.status).toBe(4);
-    expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(readFileSync(modifiedPath, "utf-8")).toBe(modified);
+    expect(merged.status, merged.stdout + merged.stderr).toBe(0);
+    const text = readFileSync(modifiedPath, "utf-8");
+    expect(text.startsWith(modified)).toBe(true);
+    expect(text.match(/<!-- BEGIN AI-DLC:agents -->/g)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("two managed AGENTS blocks from different versions are a conflict", () => {
@@ -5213,6 +5549,238 @@ describe("t243 project initialization", () => {
     expect(readFileSync(stagePath, "utf-8")).toContain("  - artifact: test-pro-refresh-input\n    required: false\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("refresh hands a core-adopted or refused requires_stage edge back out of plugin provenance", () => {
+    const project = temp("aidlc-t240-edge-refresh-");
+    mkdirSync(join(project, ".git"));
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+
+    // Three recorded edges on build-and-test (3.6): nfr-requirements (3.2),
+    // which the newer runtime declares itself; nfr-design (3.3), which stays
+    // test-pro's; and syn-gone-stage, which the newer runtime does not ship and
+    // is a second plugin's only record.
+    const rel = join(".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const stagePath = join(project, rel);
+    const edgesOf = (raw: string) => raw.match(/^requires_stage:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    writeFileSync(stagePath, readFileSync(stagePath, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n  - nfr-design\n  - syn-gone-stage\n",
+    ));
+    const sidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json");
+    writeFileSync(sidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["nfr-requirements", "nfr-design"] },
+    }, null, 2)}\n`);
+    const emptiedSidecarPath = join(project, ".claude", "tools", "data", "plugin-contrib-syn-edge-only.json");
+    writeFileSync(emptiedSidecarPath, `${JSON.stringify({
+      "build-and-test": { requires_stage: ["syn-gone-stage"] },
+    }, null, 2)}\n`);
+
+    const newer = temp("aidlc-t240-edge-newer-projection-");
+    cpSync(CLAUDE_RELEASE, newer, { recursive: true });
+    const newerStage = join(newer, rel);
+    writeFileSync(newerStage, readFileSync(newerStage, "utf-8").replace(
+      /^(requires_stage:\n(?: {2}- .+\n)*)/m,
+      "$1  - nfr-requirements\n",
+    ));
+    const refreshed = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const edges = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edges.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edges).toContain("- nfr-design\n");
+    expect(edges).not.toContain("syn-gone-stage");
+    // Only the edge the plugin still owns stays recorded: a later disable
+    // must not strip core's nfr-requirements edge.
+    const sidecar = JSON.parse(readFileSync(sidecarPath, "utf-8"));
+    expect(sidecar["build-and-test"]?.requires_stage).toEqual(["nfr-design"]);
+    // A sidecar left with no record is removed, not installed as `{}`.
+    expect(existsSync(emptiedSidecarPath)).toBe(false);
+    const graph = JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string; requires_stage?: string[] }>;
+    expect(graph.find((row) => row.slug === "build-and-test")?.requires_stage)
+      .toEqual(expect.arrayContaining(["nfr-requirements", "nfr-design"]));
+
+    const refreshedAgain = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      newer,
+    ], project);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    const edgesAgain = edgesOf(readFileSync(stagePath, "utf-8"));
+    expect(edgesAgain.match(/- nfr-requirements\n/g)?.length).toBe(1);
+    expect(edgesAgain).toContain("- nfr-design\n");
+  }, 60_000);
+
+  test("refresh keeps a composed persona's own bytes, before and after its plugin is disabled", () => {
+    const project = temp("aidlc-t240-persona-refresh-");
+    mkdirSync(join(project, ".git"));
+    const refresh = () => run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    const first = run(INIT, [
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      CLAUDE_RELEASE,
+      "--harness",
+      "claude",
+    ], project);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const personaPath = join(project, ".claude", "agents", "aidlc-quality-agent.md");
+    const installed = readFileSync(personaPath, "utf-8");
+
+    // Compose two persona fragments with the bundled compose hook.
+    const plugin = temp("aidlc-t240-persona-plugin-");
+    const built = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    cpSync(join(built, ".claude-plugin"), join(plugin, ".claude-plugin"), { recursive: true });
+    cpSync(join(built, "hooks"), join(plugin, "hooks"), { recursive: true });
+    const manifestPath = join(plugin, ".claude-plugin", "plugin.json");
+    writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf-8")), name: "aidlc-syn-persona" }));
+    mkdirSync(join(plugin, "scopes"), { recursive: true });
+    writeFileSync(join(plugin, "scopes", "syn-persona.md"), [
+      "---", "name: syn-persona", "plugin: syn-persona", "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-persona", "",
+    ].join("\n"));
+    mkdirSync(join(plugin, "contributions", "agents"), { recursive: true });
+    writeFileSync(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), [
+      "---", "target: aidlc-quality-agent", "plugin: syn-persona",
+      "fragments:", "  - anchor: after-preflight", "    order: 100", "  - anchor: after-preflight", "    order: 110",
+      "  - anchor: in:Collaboration", "    order: 100",
+      "---", "", "## fragment: after-preflight", "", "**Synthetic anchor:** read the snapshot first.", "",
+      "## fragment: after-preflight", "", "**Synthetic second anchor:** name the snapshot.", "",
+      "## fragment: in:Collaboration", "", "- **Works with (syn)**: a synthetic helper", "",
+    ].join("\n"));
+    const compose = spawnSync(BUN, [join(plugin, "hooks", "compose.ts")], {
+      cwd: project,
+      encoding: "utf-8",
+      timeout: 60_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compose.status, compose.stderr).toBe(0);
+    const composed = readFileSync(personaPath, "utf-8");
+    expect(composed.indexOf("**Synthetic anchor:**")).toBeLessThan(composed.indexOf("**Synthetic second anchor:**"));
+
+    // A same-release refresh recognises the composed persona and re-applies
+    // its fragments exactly as compose placed them, same-anchor order included.
+    const refreshed = refresh();
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(composed);
+
+    // Disabling the plugin restores the persona's own bytes, so the next
+    // refresh still recognises it.
+    const disable = run(join(project, ".claude", "tools", "aidlc-utility.ts"), ["select-plugins", "aidlc"], project, {
+      CLAUDE_PROJECT_DIR: project,
+      AIDLC_HARNESS_DIR: ".claude",
+    });
+    expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+    expect(readFileSync(personaPath, "utf-8")).toBe(installed);
+    const afterDisable = refresh();
+    expect(afterDisable.status, afterDisable.stdout + afterDisable.stderr).toBe(0);
+  }, 60_000);
+
+  // The persona's native twin (the file the harness's own dispatch reads) takes
+  // the same fragments, and a refresh replays them there too.
+  for (const twinCase of [
+    { harness: "codex", leaf: ".codex", release: CODEX_RELEASE, manifest: ".codex-plugin", twin: ".codex/agents/aidlc-quality-agent.toml" },
+    { harness: "opencode", leaf: ".aidlc", release: OPENCODE_RELEASE, manifest: ".opencode-plugin", twin: ".opencode/agents/aidlc-quality-agent.md" },
+    { harness: "copilot", leaf: ".aidlc", release: COPILOT_RELEASE, manifest: ".plugin", twin: ".github/agents/aidlc-quality-agent.md" },
+  ] as const) {
+    test(`refresh replays persona fragments into the ${twinCase.harness} native twin and keeps its own bytes`, () => {
+      const project = temp(`aidlc-t240-twin-refresh-${twinCase.harness}-`);
+      mkdirSync(join(project, ".git"));
+      const refresh = () => run(INIT, ["config", "--project-dir", project, "--from", twinCase.release], project);
+      const first = run(INIT, [
+        "config", "--project-dir", project, "--from", twinCase.release, "--harness", twinCase.harness,
+      ], project);
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      const personaPath = join(project, twinCase.leaf, "agents", "aidlc-quality-agent.md");
+      const twinPath = join(project, twinCase.twin);
+      const installedPersona = readFileSync(personaPath, "utf-8");
+      const installedTwin = readFileSync(twinPath, "utf-8");
+
+      const plugin = temp(`aidlc-t240-twin-plugin-${twinCase.harness}-`);
+      const built = join(REPO_ROOT, "dist", "plugins", "test-pro", twinCase.harness);
+      cpSync(join(built, twinCase.manifest), join(plugin, twinCase.manifest), { recursive: true });
+      cpSync(join(built, "hooks"), join(plugin, "hooks"), { recursive: true });
+      const manifestPath = join(plugin, twinCase.manifest, "plugin.json");
+      writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf-8")), name: "aidlc-syn-twin" }));
+      mkdirSync(join(plugin, "scopes"), { recursive: true });
+      writeFileSync(join(plugin, "scopes", "syn-twin.md"), [
+        "---", "name: syn-twin", "plugin: syn-twin", "depth: Standard", "keywords:", "  - synthetic",
+        "description: synthetic scope carrying the plugin identity", "skeleton: off", "---", "", "# syn-twin", "",
+      ].join("\n"));
+      mkdirSync(join(plugin, "contributions", "agents"), { recursive: true });
+      writeFileSync(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), [
+        "---", "target: aidlc-quality-agent", "plugin: syn-twin",
+        "fragments:", "  - anchor: after-preflight", "    order: 100", "  - anchor: end-of-body", "    order: 100",
+        "---", "", "## fragment: after-preflight", "", "**Synthetic twin anchor:** read the \"\"\"snapshot\"\"\" at C:\\snapshots first.", "",
+        "## fragment: end-of-body", "", "Synthetic twin closing note.", "",
+      ].join("\n"));
+      const compose = spawnSync(BUN, [join(plugin, "hooks", "compose.ts")], {
+        cwd: project,
+        encoding: "utf-8",
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          CLAUDE_PLUGIN_ROOT: plugin,
+          PLUGIN_ROOT: plugin,
+          CLAUDE_PROJECT_DIR: project,
+          AIDLC_PROJECT_DIR: project,
+          AIDLC_HARNESS_DIR: twinCase.leaf,
+          AIDLC_HARNESS_NAME: twinCase.harness,
+        },
+      });
+      expect(compose.status, compose.stderr).toBe(0);
+      const composedTwin = readFileSync(twinPath, "utf-8");
+      const twinInstructions = twinPath.endsWith(".toml")
+        ? String((Bun.TOML.parse(composedTwin) as { developer_instructions?: unknown }).developer_instructions)
+        : composedTwin;
+      // The fragment reads back exactly as authored, quotes and backslash included.
+      expect(twinInstructions).toContain("**Synthetic twin anchor:** read the \"\"\"snapshot\"\"\" at C:\\snapshots first.");
+      expect(twinInstructions).toContain("Synthetic twin closing note.");
+      const toolEnv = {
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_PROJECT_DIR: project,
+        AIDLC_HARNESS_DIR: twinCase.leaf,
+        AIDLC_HARNESS_NAME: twinCase.harness,
+      };
+      // Doctor finds every recorded fragment in the persona and in its twin.
+      const doctor = run(join(project, twinCase.leaf, "tools", "aidlc-utility.ts"), ["doctor", "--verbose"], project, toolEnv);
+      const surfaceRow = `${doctor.stdout}${doctor.stderr}`.split("\n").find((line) => line.includes("Composed plugin surface"));
+      expect(surfaceRow, doctor.stdout + doctor.stderr).toContain("all enabled plugin stages and recorded contributions are present");
+
+      // A same-release refresh recognises the composed twin and replays its
+      // fragments exactly as compose placed them.
+      const refreshed = refresh();
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(twinPath, "utf-8")).toBe(composedTwin);
+
+      // Disabling the plugin restores both files to their installed bytes, so
+      // the next refresh still recognises them.
+      const disable = run(join(project, twinCase.leaf, "tools", "aidlc-utility.ts"), ["select-plugins", "aidlc"], project, toolEnv);
+      expect(disable.status, disable.stdout + disable.stderr).toBe(0);
+      expect(readFileSync(personaPath, "utf-8")).toBe(installedPersona);
+      expect(readFileSync(twinPath, "utf-8")).toBe(installedTwin);
+      const afterDisable = refresh();
+      expect(afterDisable.status, afterDisable.stdout + afterDisable.stderr).toBe(0);
+    }, 90_000);
+  }
+
   test("refresh planning never mutates generated runners on dry-run or conflict", () => {
     const project = temp("aidlc-t240-refresh-isolation-");
     mkdirSync(join(project, ".git"));
@@ -5393,6 +5961,202 @@ describe("t243 release lifecycle", () => {
       status: "usage",
       message: "unknown argument: --harness",
     }));
+  });
+
+  test("Unix installer refuses root unless opted in, and never under sudo or a non-root home", () => {
+    if (process.platform === "win32") return;
+    // CI does not run as root, so an `id` shim first on PATH reports uid 0.
+    // An invalid --version makes every run stop right after the root check:
+    // reaching the usage error (exit 2) proves the root check let it through.
+    const shims = temp("aidlc-t243-installer-root-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const userHome = temp("aidlc-t243-installer-root-user-home-");
+    const run = (args: string[], env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      if (!("SUDO_USER" in env)) delete childEnv.SUDO_USER;
+      if (!("AIDLC_ALLOW_ROOT" in env)) delete childEnv.AIDLC_ALLOW_ROOT;
+      if (!("AIDLC_BIN_DIR" in env)) delete childEnv.AIDLC_BIN_DIR;
+      if (!("AIDLC_INSTALL_ROOT" in env)) delete childEnv.AIDLC_INSTALL_ROOT;
+      delete childEnv.XDG_DATA_HOME;
+      return spawnSync("sh", [INSTALLER, ...args, "--version", "not-a-version", "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    const parsed = (result: ReturnType<typeof run>) => JSON.parse(result.stdout ?? "") as {
+      code: number;
+      status: string;
+      message: string;
+    };
+
+    // "/" is owned by root on every Unix runner, so it stands in for root's own home.
+    const refused = run([], { HOME: "/" });
+    expect(refused.status).toBe(4);
+    expect(parsed(refused).message).toContain("refusing a root install");
+    expect(parsed(refused).message).toContain("--allow-root");
+
+    for (const [args, env] of [
+      [["--allow-root"], { HOME: "/" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "1" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "true" }],
+    ] as const) {
+      const allowed = run([...args], { ...env });
+      expect(allowed.status).toBe(2);
+      expect(parsed(allowed).status).toBe("usage");
+      expect(parsed(allowed).message).toContain("invalid --version");
+    }
+
+    const underSudo = run(["--allow-root"], { HOME: "/", SUDO_USER: "alice" });
+    expect(underSudo.status).toBe(4);
+    expect(parsed(underSudo).message).toContain("under sudo");
+
+    const userOwnedHome = run(["--allow-root"], { HOME: userHome });
+    expect(userOwnedHome.status).toBe(4);
+    expect(parsed(userOwnedHome).message).toContain("not owned by root");
+
+    // An unset HOME is refused rather than guessed.
+    const unsetHome = run(["--allow-root"], { HOME: "" });
+    expect(unsetHome.status).toBe(4);
+    expect(parsed(unsetHome).message).toContain("HOME unset");
+
+    // A symlinked home is judged by the directory it points at.
+    const linkedHome = join(temp("aidlc-t243-installer-root-linked-home-"), "home");
+    symlinkSync("/", linkedHome);
+    const linkedRootHome = run(["--allow-root"], { HOME: linkedHome });
+    expect(linkedRootHome.status).toBe(2);
+    expect(parsed(linkedRootHome).message).toContain("invalid --version");
+    const linkedUserHome = join(temp("aidlc-t243-installer-root-linked-user-"), "home");
+    symlinkSync(userHome, linkedUserHome);
+    const linkedToUser = run(["--allow-root"], { HOME: linkedUserHome });
+    expect(linkedToUser.status).toBe(4);
+    expect(parsed(linkedToUser).message).toContain("not owned by root");
+
+    // A root install stays per-user: destinations outside root's home are
+    // refused. /usr is root-owned on every Unix runner and stands in for a home.
+    // These runs use a missing --from directory instead of a bad --version:
+    // the destination check comes after version validation, and reaching the
+    // offline-source error (exit 2) proves the destinations were accepted.
+    const missingRelease = join(temp("aidlc-t243-installer-root-dest-"), "missing");
+    const runFrom = (env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      for (const name of ["SUDO_USER", "AIDLC_ALLOW_ROOT", "AIDLC_BIN_DIR", "AIDLC_INSTALL_ROOT", "XDG_DATA_HOME"]) {
+        if (!(name in env)) delete childEnv[name];
+      }
+      return spawnSync("sh", [INSTALLER, "--allow-root", "--from", missingRelease, "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    for (const [variable, value] of [
+      ["AIDLC_BIN_DIR", "/opt/aidlc-bin"],
+      ["AIDLC_INSTALL_ROOT", "/opt/aidlc"],
+      ["AIDLC_BIN_DIR", "/usr/../opt/aidlc-bin"],
+    ] as const) {
+      const outside = runFrom({ HOME: "/usr", [variable]: value });
+      expect(outside.status, `${variable}=${value}`).toBe(4);
+      expect(parsed(outside).message).toContain(`${variable} outside root's home`);
+    }
+    const inside = runFrom({
+      HOME: "/usr",
+      AIDLC_BIN_DIR: "/usr/local/aidlc-bin",
+      AIDLC_INSTALL_ROOT: "/usr/local/aidlc",
+    });
+    expect(inside.status).toBe(2);
+    expect(parsed(inside).message).toContain("offline source is not a directory");
+  });
+
+  test("Unix installer warns, then installs, a root release that cannot uninstall itself as root", async () => {
+    if (process.platform === "win32") return;
+    const shims = temp("aidlc-t243-installer-root-release-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const release = fixtureReleaseBytes();
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    const sentinel = join(temp("aidlc-t243-installer-root-release-sentinel-"), "invoked");
+    // A stand-in binary: reaching it proves the installer accepted the release.
+    writeFileSync(
+      binaryPath,
+      ["#!/bin/sh", 'printf "invoked\\n" >"$AIDLC_BINARY_SENTINEL"', "exit 99", ""].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const writeRelease = (capabilities: string[] | undefined) => {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        assets: Array<{ name: string; sha256: string; bytes: number }>;
+        capabilities?: string[];
+      };
+      if (capabilities === undefined) delete manifest.capabilities;
+      else manifest.capabilities = capabilities;
+      const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+      if (!binaryAsset) throw new Error("fixture release has no binary asset");
+      binaryAsset.sha256 = digest(binaryPath);
+      binaryAsset.bytes = statSync(binaryPath).size;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        join(release, "checksums.txt"),
+        `${["version.json", ...manifest.assets.map((asset) => asset.name)]
+          .map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+      );
+    };
+    const home = temp("aidlc-t243-installer-root-release-home-");
+    const machine = join(home, "machine");
+    let rootHome = home;
+    while (statSync(rootHome).uid !== 0) {
+      const parent = dirname(rootHome);
+      if (parent === rootHome) throw new Error("root-install fixture has no root-owned ancestor");
+      rootHome = parent;
+    }
+    const install = async () => {
+      rmSync(sentinel, { force: true });
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: `${shims}${delimiter}${process.env.PATH ?? ""}`,
+        // Model a root-owned home containing these disposable destinations.
+        // Using "/" depends on shell handling of an empty trimmed prefix.
+        HOME: rootHome,
+        AIDLC_BINARY_SENTINEL: sentinel,
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      delete childEnv.SUDO_USER;
+      const child = Bun.spawn(
+        ["sh", INSTALLER, "--from", release, "--offline", "--json", "--allow-root"],
+        { cwd: REPO_ROOT, env: childEnv, stdout: "pipe", stderr: "pipe" },
+      );
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { status, output: `${stdout}${stderr}` };
+    };
+
+    // The person chose the release: it proceeds to the release binary, with
+    // the way to remove it later.
+    writeRelease(undefined);
+    const legacy = await install();
+    expect(existsSync(sentinel), legacy.output).toBe(true);
+    expect(legacy.output).toContain("cannot uninstall itself as root");
+    expect(legacy.output).toContain("run aidlc update, then aidlc uninstall --allow-root");
+
+    writeRelease(["root-lifecycle"]);
+    const capable = await install();
+    expect(existsSync(sentinel), capable.output).toBe(true);
+    expect(capable.output).not.toContain("cannot uninstall itself as root");
   });
 
   test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {
@@ -7850,8 +8614,9 @@ describe("t243 projection channel", () => {
   }
 
   test("native release onboarding retains its runtime contract", () => {
+    // Every harness, including the two whose onboarding file is the root
+    // document itself (Claude Code, Copilot): a native install never names bun.
     for (const harness of HARNESS_MATRIX) {
-      if (harness.capabilities.onboarding.harnessDist === harness.capabilities.onboarding.dist) continue;
       const onboarding = readFileSync(
         join(REPO_ROOT, "dist-release", harness.name, harness.capabilities.onboarding.harnessDist),
         "utf-8",
@@ -7874,6 +8639,8 @@ describe("t243 projection channel", () => {
           "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
           "sha256:051866aa49f8ed915ab5ae30707422068df814ca5be806a1fe28784c543a4aab",
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
+          "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
+          "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
         ],
       },
       codex: {
@@ -7884,6 +8651,8 @@ describe("t243 projection channel", () => {
           "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -7917,6 +8686,8 @@ describe("t243 projection channel", () => {
           "sha256:2f413414992c405c11a8bccb230574c2f58cec8fd2906cd37b7cd62bb33a97d8",
           "sha256:f08d78b3e456c3a7cd7c998196c9bf6d59d24900e2ccf78cf30a1b189e766c2c",
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
+          "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -7946,6 +8717,9 @@ describe("t243 projection channel", () => {
           "sha256:88d6960720e5cd14f848a5e93ba9a503322518fe180c4bf55bcc3a6b8c151394",
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
+          "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
+          "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -7973,6 +8747,8 @@ describe("t243 projection channel", () => {
           "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
           "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
+          "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
+          "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -7993,6 +8769,8 @@ describe("t243 projection channel", () => {
           "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
+          "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -8016,6 +8794,8 @@ describe("t243 projection channel", () => {
           "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
           "sha256:d23129d2d4de49fdd943b9966c2995cc5064b365a2741c8b4a8f50c0facf2c1a",
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
+          "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
+          "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -8034,6 +8814,16 @@ describe("t243 projection channel", () => {
           "sha256:00efc5b85d53364a162f5f0eb604842f96fa94fdcb1e23ee6c286b707b93f336",
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
           "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
+          "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
+          "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
+          "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
+          "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
+          "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
+          "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
+          "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
+          "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          "sha256:a885fe6b7137ba16e0c24ce168b30ef5c780fe9991fc2d6bdff10cc15ad83c05",
         ],
       },
     };
@@ -8165,15 +8955,25 @@ describe("t243 projection channel", () => {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
       }
-      expect(readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8"))
-        .toContain(
-          "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
-        );
+      const kiroOnboarding = readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+      expect(kiroOnboarding).toContain(
+        "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      );
+      // aidlc not found has two causes, and the agent gives both fixes: a tool
+      // opened before the install keeps its old PATH (restart it), while an
+      // install that left PATH alone needs the bin folder added, which a
+      // restart never does (#2396).
+      expect(kiroOnboarding).toContain(
+        "if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough)",
+      );
+      expect(kiroOnboarding).toContain(
+        "otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
+      );
     }
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
     expect(existsSync(join(KIRO_IDE_RELEASE, ".vscode"))).toBe(false);
-    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc.md"), "utf-8");
+    const ideConductor = readFileSync(join(KIRO_IDE_RELEASE, ".kiro", "agents", "aidlc-aidlc.md"), "utf-8");
     expect(ideConductor).toContain(`        - "${trustedCommand("*")}"`);
     // A settings change and the per-harness hook entry still show an approval
     // card: ask outranks the broad allow, so the model cannot switch a

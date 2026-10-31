@@ -5,7 +5,7 @@
 // covers: function:workspaceSourceExclusionPathspecs
 // covers: function:workspaceSourcePathIsExcluded
 //
-// Mechanism: cli (spawned dist tools) + real git. P7 — multi-repo construction:
+// Mechanism: cli (spawned dist tools) + real git. Multi-repo construction:
 // `aidlc-worktree create/merge` thread `--repo <name>` so `git worktree add` and
 // the sibling-worktree guard anchor to the TARGET sibling repo, not the (non-git)
 // workspace root. Decouples "the repo to operate on" from "the single projectDir".
@@ -61,6 +61,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -273,7 +278,6 @@ function freshWorkspace(): string {
   return proj;
 }
 
-/** Create a sibling code repo `<proj>/<name>/` with its own git on `main` + one commit. */
 function makeSiblingRepo(proj: string, name: string): string {
   const dir = join(proj, name);
   mkdirSync(dir, { recursive: true });
@@ -315,6 +319,7 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     state,
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+      .replace(/^- \[ \] units-generation /m, "- [x] units-generation ")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
       .replace(/^- \*\*Construction Checkpoints\*\*:.*$/m, "- **Construction Checkpoints**: disabled")
@@ -719,7 +724,6 @@ function compositionScenario(
 const worktreeDir = (proj: string, slug: string): string =>
   worktreePath(proj, fixtureIntentId8(proj), slug);
 
-/** Inspect the selected fixture intent's branch in the specified repository. */
 function hasBoltBranch(proj: string, repoName: string, slug: string, intent?: string): boolean {
   const branch = boltName(fixtureIntentId8(proj, intent), slug);
   return git(join(proj, repoName), "rev-parse", "--verify", `refs/heads/${branch}`).status === 0;
@@ -758,7 +762,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(readAllAuditShards(proj)).toContain("**Repo**: repo-a");
     });
     test("the bolt branch lives in repo-a's ref namespace, NOT repo-b's", () => {
-      // Only true if `git worktree add` ran with cwd = repo-a (the P7 re-anchor),
+      // Only true if `git worktree add` ran with cwd = repo-a,
       // not the workspace root or repo-b.
       expect(hasBoltBranch(proj, "repo-a", "alpha")).toBe(true);
       expect(hasBoltBranch(proj, "repo-b", "alpha")).toBe(false);
@@ -1218,7 +1222,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
     test("selector-free purge removes parked refs after the restore checkout is removed", () => {
       expect(purged.status, purged.out).toBe(0);
-      // R4(d): a snapshot retains the original branch tip as well as its raw head and discriminator.
+      // A snapshot retains the original branch tip as well as its raw head and discriminator.
       expect(JSON.parse(purged.stdout)).toEqual({ purged: 3, slug: "discard-repo", stamps: [stamp], skipped_unparseable: [] });
       expect(remainingRefs.status, remainingRefs.out).toBe(0);
       expect(remainingRefs.out).toBe("");
@@ -1428,7 +1432,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       "--intent",
       firstIntent,
     );
-    // R4(e): restore the real checkout after the cleanup-only selector check; foreign-dir refusal needs a live owner.
+    // Restore the real checkout after the cleanup-only selector check; foreign-dir refusal needs a live owner.
     const firstWorktree = worktreePath(movedProj, fixtureIntentId8(movedProj, firstIntent), "moved-cursor");
     expect(git(join(movedProj, "repo-a"), "worktree", "prune").status).toBe(0);
     expect(git(join(movedProj, "repo-a"), "worktree", "add", firstWorktree,
@@ -1707,7 +1711,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(firstIntent).not.toBe(secondIntent);
       expect(movedWrong.status).not.toBe(0);
       expect(movedWrong.out).toContain("does not match creating repository");
-      // R4(e): a foreign same-slug checkout must be refused, not reported as already discarded.
+      // A foreign same-slug checkout must be refused, not reported as already discarded.
       expect(foreignIntent.status, foreignIntent.out).not.toBe(0);
       expect(foreignIntent.out).toContain(`no Bolt moved-cursor belongs to intent aidlc/spaces/default/intents/${secondIntent}`);
       expect(foreignIntent.out).toContain(`this checkout holds ${boltName(fixtureIntentId8(movedProj, firstIntent), "moved-cursor")}`);
@@ -2135,7 +2139,7 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 
   // ===========================================================================
   // Legacy single-repo: the workspace root IS the git repo, no repos recorded.
-  // --repo is unnecessary; git runs in the projectDir cwd (today's behaviour).
+  // --repo is unnecessary; git runs in the projectDir cwd.
   // ===========================================================================
   describe("legacy single-repo (projectDir is the git repo)", () => {
     const proj = freshWorkspace();
@@ -2153,7 +2157,6 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
     });
     test("create WITHOUT --repo works (cwd = projectDir, back-compat)", () => {
       expect(created.status).toBe(0);
-      // The bolt branch lives in the workspace-root repo.
       expect(git(proj, "rev-parse", "--verify", `refs/heads/${boltName(fixtureIntentId8(proj), "legacy")}`).status).toBe(0);
       expect(existsSync(worktreeDir(proj, "legacy"))).toBe(true);
     });
@@ -2228,13 +2231,13 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
   });
 
   // ===========================================================================
-  // M1 — the SWARM PREPARE path resolves the target sibling repo. `prepare` is
+  // The SWARM PREPARE path resolves the target sibling repo. `prepare` is
   // the conductor-facing seam the engine's invoke-swarm directive feeds: it forks
   // a worktree per unit via `aidlc-worktree create`, so the per-unit bolt branch
   // is derived from the selected intent plus Unit slug (prepare forwards `--slug <unit>` +
   // `--repo <resolved>` to create). On a multi-repo intent, prepare WITHOUT --repo
   // dead-ends (resolveConstructionRepo throws "spans 2 repos") — proving --repo is
-  // what resolves the dead-end M1 fixes the engine side of.
+  // what resolves the dead-end.
   // ===========================================================================
   describe("M1 multi-repo: swarm prepare --repo forks the batch inside the target sibling repo", () => {
     const proj = freshWorkspace();

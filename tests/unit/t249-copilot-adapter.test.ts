@@ -4,7 +4,8 @@
 // covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
-// (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
+// (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
+// and 1.0.96 and a question box off 1.0.103, sanitized for publication) into
 // the generated Copilot adapter inside a scratch project carrying an active
 // workflow state, then asserts the observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
@@ -35,6 +36,8 @@
 //                    rules in the host's input shape and wait for an approved
 //                    plan; the brief a subagent receives is never the
 //                    person's turn (#1411).
+//   stop note      -> a Stop block's reason that Copilot sends back as the
+//                    chat's next prompt is the host's turn, never the person's.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -63,12 +66,13 @@ import { fileURLToPath } from "node:url";
 import {
   acquireAuditLock,
   auditBlockField,
+  auditLockDir,
   engineDir,
   humanTurnMarkerPath,
   humanTurnState,
   markSubagentInflight,
   normalizeDriveLetter,
-  personsGateFeedback,
+  personsGateReply,
   readAuditShardEvents,
   readSessionIntentUuid,
   subagentInflightMarkerPath,
@@ -94,8 +98,10 @@ import {
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
+  WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import { writeActiveDirectiveMarker } from "../../core/tools/aidlc-lib.ts";
+import { saveRestartRequest } from "../../core/tools/aidlc-question-store.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -321,12 +327,18 @@ function withCwd(payload: Record<string, unknown>, dir: string): Record<string, 
   return { ...payload, cwd: dir };
 }
 
+// The Stop hook's block is for a run nobody attends (and autonomous
+// Construction), so its cases read it there; an attended, gated run ends its
+// turn ("1b").
+const STOP_NOBODY = (target: string): NodeJS.ProcessEnv =>
+  target === "continue-workflow" ? { AIDLC_UNATTENDED: "1" } : {};
+
 function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
-): { stdout: string; stderr: string; code: number } {
+): { stdout: string; stderr: string; code: number; pid: number } {
   if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
     const record = payload as { session_id?: unknown; sessionId?: unknown };
     const session = record.session_id ?? record.sessionId;
@@ -345,12 +357,13 @@ function runAdapter(
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
+        ...STOP_NOBODY(target),
         ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1, pid: r.pid ?? -1 };
 }
 
 async function runAdapterAsync(projectDir: string, target: string, payload: unknown) {
@@ -364,7 +377,7 @@ async function runAdapterAsync(projectDir: string, target: string, payload: unkn
     stdin: Buffer.from(JSON.stringify(payload)),
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+    env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, ...STOP_NOBODY(target) },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
@@ -680,6 +693,31 @@ function keptWords(dir: string): string {
     : "";
 }
 
+// The text of every message record the human-turn hook kept.
+function messageRecordTexts(dir: string): string[] {
+  const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+  return existsSync(messages)
+    ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+    : [];
+}
+
+// The record of the last Stop note the adapter sent to a chat.
+function stopNotePath(dir: string, session: string): string {
+  return join(dir, "aidlc", ".aidlc-sessions", `${session}.copilot-stop-note`);
+}
+
+// A Stop that blocks in this chat; its reason is what Copilot sends back. The
+// cap is raised so the same step blocks more than once, as under autonomy.
+function blockedStop(dir: string, session: string): string {
+  const r = runAdapter(
+    dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session }, { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "8" },
+  );
+  expect(r.code, r.stderr).toBe(0);
+  const parsed = JSON.parse(r.stdout) as { decision?: string; reason?: string };
+  expect(parsed.decision).toBe("block");
+  return String(parsed.reason);
+}
+
 // Copilot's directive budget sends a stage's rules ahead of its run-stage: follow
 // the parts through tracked continues, as the conductor does.
 function followToRunStage(
@@ -760,6 +798,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parsed.hookSpecificOutput?.reason).toBe(parsed.reason);
   });
 
+  // In an attended run the stop with pending work says nothing in either shape.
+  test("1b: in an attended run stop with pending work is a silent allow", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir), { AIDLC_UNATTENDED: "0" });
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("");
+  });
+
   test("2: stop without workflow state is a silent allow", () => {
     const dir = scratchProject(false);
     const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir));
@@ -799,12 +845,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("4: guard-tool-call block converts to the permissionDecision deny JSON", () => {
     const dir = scratchProject(true);
-    // A direct lifecycle call on aidlc-state.ts is exactly what the
-    // state-transition guard refuses (exit 2 + reason on stderr in core).
+    // A tool call that invokes a hook is what the state-transition guard's
+    // runtime-integrity check refuses (exit 2 + reason on stderr in core).
     const payload = withCwd(
       {
         ...FIXTURES.preToolUse_bash,
-        tool_input: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+        tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
       },
       dir,
     );
@@ -830,6 +876,16 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(r.stdout).toContain("numbered prose");
   });
 
+  // Copilot CLI 1.0.103 hands the PascalCase hooks AI-DLC registers its own
+  // question box under the Claude Code name (the recorded payload).
+  test("4a2: Copilot CLI's own question box, as its hooks name it, is denied while workflow state is active", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_askUserQuestion, dir));
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"permissionDecision":"deny"');
+    expect(r.stdout).toContain("numbered prose");
+  });
+
   test("4b: VS Code vscode/askQuestions camel payload is denied with active state", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "guard-tool-call", {
@@ -850,6 +906,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       tool_name: "ask_user",
       tool_input: { question: "Continue?" },
     });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("4c2: Copilot CLI's own question box fails open without workflow state", () => {
+    const dir = scratchProject(false);
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_askUserQuestion, dir));
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("");
   });
@@ -1145,14 +1208,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("14: documented VS Code tool names normalize to the core contract", () => {
     const dir = scratchProject(true);
-    // VS Code's documented shell tool name with a blocked lifecycle command:
+    // VS Code's documented shell tool name with a refused command:
     // the alias table must canonicalize runTerminalCommand -> Bash.
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "11111111-2222-4333-8444-555555555555",
       cwd: dir,
       toolName: "runTerminalCommand",
-      toolInput: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+      toolInput: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
     });
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
@@ -1495,6 +1558,100 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(blocked.stdout).toContain("aidlc-delegated-agent");
   });
 
+  // Live-captured Copilot CLI 1.0.96 order (#2582): the parent's Agent
+  // dispatch; SubagentStart (camelCase) naming only the parent chat; the brief
+  // as the first prompt of the subagent's OWN session; the subagent's calls
+  // under that session; SubagentStop from the parent naming it as agent_id.
+  // Before, the subagent's calls read as the conductor's and the entry stayed.
+  test("20d: a CLI subagent's own session is bound at its brief, its calls are its own, and its stop clears it", () => {
+    const dir = rulesProject();
+    const parent = "f42699f7-43ca-4eaf-9fb0-37e967d1663f";
+    const child = "92069f34-cb0d-4a69-96f4-abe6fd27fba1";
+    const agent = "aidlc-architecture-reviewer-agent";
+    const pre = launch(dir, LAUNCHERS[1], agent, "Review the code generation plan for this Unit.", parent);
+    expect(pre.code, pre.stderr).toBe(0);
+    const brief = String(hostRewrite(pre.stdout)?.prompt ?? "Review the code generation plan for this Unit.");
+    runAdapter(dir, "subagent-start", {
+      sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent, agentDisplayName: agent, agentDescription: "Reviewer.",
+    });
+    runAdapter(dir, "record-human-turn", { hook_event_name: "UserPromptSubmit", session_id: child, cwd: dir, prompt: brief });
+    const ledger = () => JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ name: string; childSessionId?: string }>;
+    expect(ledger()).toMatchObject([{ name: agent, childSessionId: child }]);
+    expect(readAudit(dir)).not.toContain(brief.slice(0, 40));
+
+    const report = (session: string) => runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse", session_id: session, cwd: dir, tool_name: "Bash",
+      tool_input: { command: "aidlc engine orchestrate report --stage code-generation --result approved", description: "x" },
+    });
+    expect(report(child).stdout).toContain(`Delegated agent \\"${agent}\\"`);
+    expect(report(parent).stdout).not.toContain("Delegated agent");
+
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir, agent_id: child, agent_type: agent, agent_name: agent, stop_reason: "end_turn",
+    });
+    expect(ledger()).toEqual([]);
+    expect(report(child).stdout).not.toContain("Delegated agent");
+  });
+
+  test("20e: a CLI SubagentStop clears its chat's entry even when the brief never bound a session", () => {
+    const dir = scratchProject(true);
+    const parent = "f42699f7-43ca-4eaf-9fb0-37e967d1663f";
+    for (const agent of ["aidlc-developer-agent", "aidlc-quality-agent"]) {
+      runAdapter(dir, "subagent-start", { sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent });
+    }
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir,
+      agent_id: "92069f34-cb0d-4a69-96f4-abe6fd27fba1", agent_type: "aidlc-developer-agent", agent_name: "aidlc-developer-agent", stop_reason: "end_turn",
+    });
+    const left = JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ name: string }>;
+    expect(left.map((entry) => entry.name)).toEqual(["aidlc-quality-agent"]);
+  });
+
+  // Live-captured Copilot CLI 1.0.98 order: SubagentStart and every subagent
+  // event now carry agent_id, agent_type and parent_agent_id, the subagent's
+  // calls under its own session (= agent_id). Its calls name it themselves and
+  // its stop clears its entry by id.
+  test("20f: a CLI subagent whose events name it (agent_id, agent_type) is attributed and cleared", () => {
+    const dir = scratchProject(true);
+    const parent = "af25255d-230f-496a-8443-25ae723908c0";
+    const child = "fc992767-91f3-4b68-8b8e-502f9dba4f2f";
+    const agent = "aidlc-quality-agent";
+    runAdapter(dir, "subagent-start", {
+      sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent, agentDisplayName: agent, agentDescription: "Quality.",
+      agent_id: child, agent_type: agent, parent_agent_id: parent,
+    });
+    const report = (session: string, identity: Record<string, string>) => runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse", session_id: session, cwd: dir, ...identity, tool_name: "Bash",
+      tool_input: { command: "aidlc engine orchestrate report --stage code-generation --result approved", description: "x" },
+    });
+    expect(report(child, { agent_id: child, agent_type: agent, parent_agent_id: parent }).stdout).toContain(`Delegated agent \\"${agent}\\"`);
+    expect(report(parent, {}).stdout).not.toContain("Delegated agent");
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir, agent_id: child, agent_type: agent, parent_agent_id: parent,
+      agent_name: agent, agent_display_name: agent, stop_reason: "end_turn",
+    });
+    expect(JSON.parse(readFileSync(ledgerPath(dir), "utf-8"))).toEqual([]);
+  });
+
+  // A chat that ends mid-delegation sends no SubagentStop. When that chat
+  // starts or resumes, the entries left under it go, so a resumed conductor is
+  // not read as a subagent that no longer runs. Another chat's running
+  // subagent keeps its entry.
+  test("20g: a chat that starts again drops only its own leftover subagent entries", () => {
+    const dir = scratchProject(true);
+    const chatA = "af25255d-230f-496a-8443-25ae723908c0";
+    const chatB = "44444444-5555-4666-8777-888888888888";
+    runAdapter(dir, "subagent-start", {
+      sessionId: chatA, timestamp: Date.now(), cwd: dir, agentName: "aidlc-quality-agent",
+      agent_id: "fc992767-91f3-4b68-8b8e-502f9dba4f2f", agent_type: "aidlc-quality-agent", parent_agent_id: chatA,
+    });
+    runAdapter(dir, "subagent-start", { sessionId: chatA, timestamp: Date.now(), cwd: dir, agentName: "aidlc-developer-agent" });
+    runAdapter(dir, "subagent-start", { sessionId: chatB, timestamp: Date.now(), cwd: dir, agentName: "aidlc-product-agent" });
+    runAdapter(dir, "session-start", { hook_event_name: "SessionStart", session_id: chatA, cwd: dir, source: "resume" });
+    const left = JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ hostSessionId: string; name: string }>;
+    expect(left.map((entry) => [entry.hostSessionId, entry.name])).toEqual([[chatB, "aidlc-product-agent"]]);
+  });
+
   test("15: fresh-session source 'new' maps to startup (SESSION_STARTED lands)", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
@@ -1562,7 +1719,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(readAudit(dir)).toBe("");
   });
 
-  test("12b: a typed summary-confirmation off applies as the person's choice and a command repeat is a no-op", () => {
+  test("12b: a typed summary-confirmation off is recorded, the setter applies it as the person's choice, and a repeat is a no-op", () => {
     const dir = scratchProject(true);
     const ceremonyRows = () =>
       readAuditShardEvents(dir).filter((entry) => entry.event === "CEREMONY_SET");
@@ -1573,15 +1730,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       prompt: "/aidlc config set summary-confirmation off",
     });
     expect(typed.code, typed.stderr).toBe(0);
-    const state = readFileSync(seededStateFile(dir), "utf-8");
-    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-    const audit = ceremonyRows();
-    expect(audit).toHaveLength(1);
-    expect(auditBlockField(audit[0].block, "New")).toBe("off");
-    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
-
-    // An agent-run repeat neither writes nor relabels the person's off.
-    const repeated = spawnSync(
+    // The hook records their line and applies nothing; the agent runs the setter.
+    expect(readFileSync(seededStateFile(dir), "utf-8")).not.toContain("- **Summary Confirmation**: off (set by you)");
+    expect(ceremonyRows()).toHaveLength(0);
+    const setterRun = () => spawnSync(
       "bun",
       [join(dir, ".aidlc", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
       {
@@ -1596,6 +1748,17 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       },
     );
+    const applied = setterRun();
+    expect(applied.status, applied.stderr).toBe(0);
+    const state = readFileSync(seededStateFile(dir), "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const audit = ceremonyRows();
+    expect(audit).toHaveLength(1);
+    expect(auditBlockField(audit[0].block, "New")).toBe("off");
+    expect(auditBlockField(audit[0].block, "Source")).toBe("you");
+
+    // An agent-run repeat neither writes nor relabels the person's off.
+    const repeated = setterRun();
     expect(repeated.status, repeated.stderr).toBe(0);
     expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
@@ -1674,7 +1837,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     // record step for that line and says not to ask again; running that step
     // lets the next Stop end the turn, so the person sees the question once.
     const asked = skill.match(
-      /If you had just asked the person a question in your own words and are waiting for their answer, record it with `([^`]+) --stage <stage> --decision "<the question>" --options "<the choices>"`, adding [^\n]*? and end your turn without asking it again or saying anything else\./,
+      /If you had just asked the person a question in your own words and are waiting for their answer, record it with `([^`]+) --stage <stage> --decision '<the question>' --options '<the choices>'`, adding [^\n]*? and end your turn without asking it again or saying anything else\./,
     );
     if (!asked) throw new Error("the Copilot skill names no record step for the one-line Stop note");
     expect(asked[1]).toEndWith("engine log decision");
@@ -2663,7 +2826,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "## Project Information", "- **Project**: unit-major walk", "- **Project Type**: Greenfield",
       "- **Scope**: feature", "- **State Version**: 8", "- **Skeleton Stance**: on", "",
       "## Runtime State", "- **Revision Count**: 0", "- **Construction Iteration**: unit-major",
-      "- **Summary Confirmation**: off (set by you)", "",
+      "- **Unit Ownership**: solo", "- **Summary Confirmation**: off (set by you)", "",
       "## Scope Configuration", "- **Stages to Execute**: all", "- **Stages to Skip**: none",
       "- **Depth**: Standard", "- **Test Strategy**: Standard", "",
       "## Stage Progress", "", "### CONSTRUCTION PHASE", row("-", "functional-design"),
@@ -2719,7 +2882,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       "## Project Information", "- **Project**: unit-major walk", "- **Project Type**: Greenfield",
       "- **Scope**: feature", "- **State Version**: 8", "- **Skeleton Stance**: on", "",
       "## Runtime State", "- **Revision Count**: 0", "- **Construction Iteration**: unit-major",
-      "- **Summary Confirmation**: off (set by you)", "",
+      "- **Unit Ownership**: solo", "- **Summary Confirmation**: off (set by you)", "",
       "## Scope Configuration", "- **Stages to Execute**: all", "- **Stages to Skip**: none",
       "- **Depth**: Standard", "- **Test Strategy**: Standard", "",
       "## Stage Progress", "", "### CONSTRUCTION PHASE", row("-", "functional-design"),
@@ -3052,12 +3215,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(dir).resume).toBeUndefined();
   });
 
-  test("23b: session-menu Resume reports are plain reports and return per-choice prints", () => {
+  test("23b: typed re-entry reports are plain reports and return per-choice prints", () => {
     const cases = [
-      ["1", "Re-run `next`"],
-      ["2", "--direction redo"],
-      ["3", "next --stage"],
-      ["4", "--new-intent"],
+      ["resume", "Re-run `next`"],
+      ["redo", "--direction redo"],
+      ["jump", "--choice jump --target <stage>"],
+      ["fresh", "--new-intent"],
     ] as const;
     for (const [choice, expected] of cases) {
       const dir = orchestrationProject();
@@ -3067,7 +3230,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         dir,
         session,
         "source",
-        ["report", "--result", "resumed", "--user-input", choice],
+        ["report", "--result", "resumed", "--choice", choice],
         `resume-report-choice-${choice}`,
       );
       expect(reported.directive.kind).toBe("print");
@@ -3109,6 +3272,98 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(followToRunStage(dir, session, resumed.directive, `legacy-${status}-resume`))
         .toMatchObject({ stage: "requirements-analysis" });
     }
+  });
+
+  // The claim's hints are the flags the engine's own reading takes: a `--resume`
+  // among the person's words behind `--` asks for nothing.
+  test("23c-words: a --resume among the person's words leaves the waiting Resume question as it is", () => {
+    const dir = orchestrationProject();
+    const session = "words-resume-waiting";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "issued";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      value.resume = {
+        status: "waiting",
+        issuing_stage: "requirements-analysis",
+        issuing_state_sha256: value.state_sha256,
+        issuing_session: session,
+        issuing_intent_uuid: value.intent_uuid,
+      };
+    });
+    const spec = commandSpec(dir, "direct", ["next", "--", "fix", "the", "--resume", "bug"]);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "words-resume"));
+    expect(marker(dir).resume).toMatchObject({ status: "waiting" });
+  });
+
+  // The attempt id rides right after the verb, where the engine reads it: behind
+  // the person's words it would be two of their words and the attempt is lost.
+  test("23c-attempt: the attempt id goes in front of the person's words, marked or not, and the attempt is claimed", () => {
+    for (const words of [["--", "fix", "the", "bug"], ["fix", "the", "bug"]]) {
+      const dir = orchestrationProject();
+      const session = `words-attempt-${words.length}`;
+      const attempt = `words-attempt-${words.length}`;
+      const spec = commandSpec(dir, "direct", ["next", ...words]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, spec.text).toBe(
+        `bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id ${attempt} ${words.map((word) => JSON.stringify(word)).join(" ")}`,
+      );
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      expect(executed.stdout, rewritten).not.toContain("stale or superseded");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
+      expect(marker(dir), rewritten).toMatchObject({ active_attempt: { id: attempt } });
+    }
+  });
+
+  // The person's words behind `--` may name the engine's own option; the claim
+  // reads it as theirs, as the engine does, and still gives the command its id.
+  test("23c-option-word: an attempt option among the words behind -- is theirs, not one the agent already set", () => {
+    const dir = orchestrationProject();
+    const spec = commandSpec(dir, "direct", ["next", "--", "add", "an", "--aidlc-attempt-id", "option"]);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "words-option", spec.text, "words-option"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      'bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id words-option "--" "add" "an" "--aidlc-attempt-id" "option"',
+    );
+  });
+
+  // A folder named in front of the verb is the launcher's, and the attempt id
+  // still goes right after the verb.
+  test("23c-lead: with the folder named in front of next, the attempt id goes right after next", () => {
+    const dir = orchestrationProject();
+    const text = `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next fix the bug`;
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "lead-folder", text, "lead-folder"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next --aidlc-attempt-id lead-folder fix the bug`,
+    );
+  });
+
+  // The claim checks a folder on the line wherever it sits: among the person's
+  // words, and where the dispatcher takes it as the folder to run the work in.
+  test("23c-dispatcher-folder: a folder after a flag that takes no value and a word, or after the dispatcher's own flag, is still checked", () => {
+    const dir = orchestrationProject();
+    const other = scratchProject(true);
+    // After a flag that takes no value the word is theirs, and the folder among their words.
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
+    expect(pre.stdout).toContain("targets a different physical project");
+    // Its own flag in front of the words: the dispatcher takes every folder on the line.
+    const global = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder-global", `aidlc next --json fix bug --project-dir ${JSON.stringify(other)}`, "dispatcher-folder-global"));
+    expect(global.stdout).toContain("targets a different physical project");
+  });
+
+  // A folder left off the end is the agent's slip only where the engine would
+  // read the option; among the person's words the token is theirs.
+  test("23c-folder-word: `--project-dir` at the end of the person's words is not a missing folder", () => {
+    const dir = orchestrationProject();
+    const slip = "`--project-dir` needs this project's folder after it";
+    const words = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-word", "aidlc next add a flag named --project-dir", "folder-word"));
+    expect(words.stdout).not.toContain(slip);
+    const missing = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-slip", "aidlc next --project-dir", "folder-slip"));
+    expect(missing.stdout).toContain(slip);
   });
 
   // A `next` that reaches the engine outside the chat's own answer (a
@@ -3201,6 +3456,34 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(activeRecovery).stop_count).toBe(2);
   });
 
+  // #2400: a turn whose only engine calls are `aidlc log` recording the
+  // stage's work advances no Copilot sequence; the engine mark the logger
+  // leaves is what says the turn was not chat, so the Stop is nudged.
+  test("24a: a recorded stage answer is engagement, so the Stop after it is not conversational", () => {
+    const dir = orchestrationProject();
+    const session = "stage-work-log-owner";
+    const { directive } = driveToRunStage(dir, session);
+    const stage = String(directive.stage);
+    const log = (args: string[]) => {
+      const command = `bun .aidlc/tools/aidlc.ts engine log ${args.map((arg) => JSON.stringify(arg)).join(" ")}`;
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, `log-${args[0]}`)).code).toBe(0);
+      const executed = runShell(dir, command);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, command, `log-${args[0]}`, true, executed.stdout));
+      return executed;
+    };
+    const asked = log(["decision", "--stage", stage, "--decision", "Which team owns it?", "--options", "Team A,Team B"]);
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "Team A" }).code).toBe(0);
+    const engineSequence = marker(dir).engine_sequence;
+    Bun.sleepSync(20);
+    const answered = log(["answer", "--stage", stage, "--details", "Team A"]);
+    expect(answered.status, answered.stderr).toBe(0);
+    expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(marker(dir).engine_sequence).toBe(engineSequence);
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect((JSON.parse(stopped.stdout || "{}") as { decision?: string }).decision).toBe("block");
+  });
+
   test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
     for (const shape of ["missing", "malformed", "v1"] as const) {
       const dir = orchestrationProject();
@@ -3271,9 +3554,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(pre.stdout, spec.text).toBe("");
         const executed = runShell(dir, spec.text);
         expect(executed.status, executed.stderr).toBe(0);
+        // A value this engine's own table does not hold is a reading step, which
+        // is a print the agent acts on; it carries no workflow work either way,
+        // which is what this case guards (t-three-ways-to-read-a-line).
         expect(JSON.parse(executed.stdout.trim()), spec.text).toMatchObject({
-          kind: (args[1] === "team-board" && args.length > 2) || (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ||
-            args.includes("extreme") || args.includes("loud") ? "error" : "print",
+          kind: (args[1] === "team-board" && args.length > 2) ||
+            (args[1] === "--config" && (args.includes("bogus") || args.includes("extra"))) ? "error" : "print",
         });
         const post = runAdapter(dir, "post-tool", commandPayload(dir, session, spec.text, attempt, true, executed.stdout));
         expect(post.code, spec.text).toBe(0);
@@ -3383,7 +3669,9 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     for (const [command, attempt] of [
       ["aidlc next --scope '`literal`'", "literal-backtick-attempt"],
       ["aidlc next --scope 'src/{a,b}.ts'", "literal-brace-attempt"],
-      ["aidlc next --scope src/\\{a,b\\}.ts", "escaped-brace-attempt"],
+      // A backslash escape is POSIX's: on Windows the CLI's shell is PowerShell,
+      // where it separates a path.
+      ...(process.platform === "win32" ? [] : [["aidlc next --scope src/\\{a,b\\}.ts", "escaped-brace-attempt"]]),
     ]) {
       const literal = runAdapter(
         dir,
@@ -3403,7 +3691,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       cwd: dir,
       input: JSON.stringify({ session_id: "plain-non-copilot", stop_hook_active: false }),
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined } as NodeJS.ProcessEnv,
+      env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined, ...STOP_NOBODY("continue-workflow") } as NodeJS.ProcessEnv,
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
   });
@@ -3545,16 +3833,117 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   }
 
   /** The engine asks about the plan, and the person approves it in chat. */
+  // The agent's record of the plan answer it read from the person's reply.
+  function recordPlanAnswer(dir: string, choice = "Approve Plan"): void {
+    const recordedByAgent = spawnSync(process.execPath, [
+      join(dir, ".aidlc", "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", choice, "--project-dir", dir,
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(recordedByAgent.status, `${recordedByAgent.stdout}${recordedByAgent.stderr}`).toBe(0);
+  }
+
   function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
     const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    // An exact pick: the hook records it, with no step for the conductor.
+    // A typed "1": the hook keeps it, and the agent records the choice it read.
     const approved = runAdapter(dir, "record-human-turn", {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
+    expect(recorded()).toHaveLength(0);
+    recordPlanAnswer(dir);
     expect(recorded()).toHaveLength(1);
   }
+
+  // A folder's long and 8.3 short spellings. The scratch path may already be
+  // short (TEMP is C:\Users\ADMINI~1\... or RUNNER~1 for a long user name, and
+  // Bun's realpathSync keeps it), so both come from the native real path. A
+  // TEMP whose folders carry no 8.3 name (one created with 8.3 names off) gets
+  // one on the project's own folder. The path goes through the environment:
+  // Bun's quoting for `cmd /c` reaches a for-loop with its quotes still on.
+  function shortAndLong(dir: string): { short: string; long: string } {
+    const long = realpathSync.native(dir);
+    const shortPath = (): string => {
+      const spelled = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T249_FOLDER).ShortPath",
+        ],
+        {
+          env: { ...process.env, AIDLC_T249_FOLDER: long },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(spelled.status, `${spelled.stdout}${spelled.stderr}`).toBe(0);
+      return spelled.stdout.trim();
+    };
+    let short = shortPath();
+    let named = "";
+    if (!short.includes("~")) {
+      const set = spawnSync(
+        "fsutil.exe",
+        ["file", "setshortname", long, `S${Math.random().toString(16).slice(2, 7).toUpperCase()}~1`],
+        { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
+      );
+      named = `${set.stdout}${set.stderr}`.trim();
+      short = shortPath();
+    }
+    // A volume without 8.3 names cannot show the defect; say so, not pass.
+    expect(short, `no 8.3 short name for ${long}; fsutil file setshortname said: ${named}`).toContain("~");
+    expect(short.toLowerCase()).not.toBe(long.toLowerCase());
+    return { short, long };
+  }
+
+  // Copilot on Windows hands its hooks a project under %TEMP% in the 8.3
+  // spelling while the engine in the terminal resolves the long one. Hashed
+  // apart, every command after `next` ran untracked, the person's turn replaced
+  // the engine's Plan Approval question, and recording their approval was
+  // refused.
+  test.skipIf(process.platform !== "win32")("27b: a short-name hook cwd and the long-name terminal folder share one coordination identity", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    inflateRules(long);
+    const { recorded } = planWritten(long);
+    const session = "copilot-short-name";
+    const ask = runLifecycle(short, session, "direct", ["next"], "short-ask", long);
+    expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // The identity the previous release wrote for the long spelling: a record
+    // written before an update still matches after it.
+    expect(marker(long).project_sha256)
+      .toBe(createHash("sha256").update(normalizeDriveLetter(realpathSync(long)), "utf-8").digest("hex"));
+    const turn = runAdapter(short, "record-human-turn", {
+      ...FIXTURES.userPromptSubmit, cwd: short, session_id: session, prompt: "1",
+    });
+    expect(turn.code, turn.stderr).toBe(0);
+    recordPlanAnswer(long);
+    expect(recorded()).toHaveLength(1);
+    let result = runLifecycle(short, session, "direct", ["next"], "short-build", long);
+    for (let part = 0; result.directive.kind === "load-steering"; part++) {
+      result = runLifecycle(short, session, part % 2 ? "direct" : "source", ["continue", String(result.directive.receipt)], `short-build-${part}`, long);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(result.directive).toMatchObject({
+      kind: "run-stage", stage: "code-generation", plan_approval: { status: "approved" },
+    });
+    expect(marker(long)).toMatchObject({ delivery: "delivered", active_attempt: { status: "settled" } });
+    expect(readAudit(long)).not.toContain("COORDINATION_STOOD_ASIDE");
+  });
+
+  // The hook's audit rows and the engine's are serialized by one lock only when
+  // both spellings name one lock folder.
+  test.skipIf(process.platform !== "win32")("27c: both spellings of a project take one audit lock", () => {
+    const { short, long } = shortAndLong(orchestrationProject());
+    expect(auditLockDir(short)).toBe(auditLockDir(long));
+    expect(auditLockDir(short, DEFAULT_RECORD_DIR, DEFAULT_SPACE)).toBe(auditLockDir(long, DEFAULT_RECORD_DIR, DEFAULT_SPACE));
+  });
 
   // Code Generation's rules often need several parts on Copilot. The person
   // approves the plan once; every part then leads on to the build, never back
@@ -3705,6 +4094,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
+    recordPlanAnswer(dir);
     expect(recorded()).toHaveLength(1);
     expect(answer()).toBe("[Answer]: A. Approve Plan");
     const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");
@@ -3829,13 +4219,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const gate = { stage: "requirements-analysis", acceptAsIs: false };
     appendInteractionEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
     dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B");
-    expect(personsGateFeedback(dir, session, gate)).toBeNull();
+    expect(personsGateReply(dir, session, gate.stage).words).toBeNull();
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
 
     settleSubagentStarts(dir);
     typedPrompt(dir, session, "Please add a p99 latency budget of 200 ms.");
     dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249C");
-    expect(personsGateFeedback(dir, session, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+    expect(personsGateReply(dir, session, gate.stage).words).toBe("Please add a p99 latency budget of 200 ms.");
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
   });
 
@@ -3957,7 +4347,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const dir = rulesProject();
     seedUnapprovedCodeGeneration(dir);
     const brief = (contract: string) =>
-      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}\nBuild the approved plan.`;
+      `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${contract}${WORKER_BRIEF_SECTIONS_FIXTURE}Build the approved plan.`;
     for (const launcher of LAUNCHERS) {
       const refused = launch(dir, launcher, "aidlc-developer-agent", brief(`sha256:${"a".repeat(64)}`));
       expect(refused.code, refused.stderr).toBe(0);
@@ -4214,6 +4604,180 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanTurnCount(dir)).toBe(1);
   });
 
+  // The Copilot CLI hands a task launch's brief to the hooks as the first prompt
+  // of the subagent's own session: under its own id on 1.0.95 and later, under
+  // the task call's id on 1.0.74 (live-captured, both in the fixture). Nothing
+  // else in the payload marks it. The launch's record is spent there, and the
+  // person's chat keeps every line they type.
+  test("35g: a brief the Copilot CLI delivers under the subagent's own session is not the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const messageTexts = (): string[] => {
+      const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+      return existsSync(messages)
+        ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+        : [];
+    };
+    for (const arrival of [FIXTURES.userPromptSubmit_subagentBrief, FIXTURES.userPromptSubmit_subagentBrief_1_0_74]) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      const delivered = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(delivered).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      const start = runAdapter(dir, "subagent-start", withCwd({ ...FIXTURES.subagentStart_task, agentName: agent }, dir));
+      expect(start.code, start.stderr).toBe(0);
+      const brief = runAdapter(dir, "record-human-turn", withCwd({ ...arrival, prompt: delivered }, dir));
+      expect(brief.code, brief.stderr).toBe(0);
+      expect(humanTurnCount(dir), String(arrival.session_id)).toBe(0);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(messageTexts()).toEqual([]);
+    expect(keptWords(dir)).toBe("");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+
+    // The person's own line in the chat counts, and so do the brief's words
+    // when they type them after the subagent started.
+    settleSubagentStarts(dir);
+    expect(typedPrompt(dir, chat, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
+  });
+
+  // The first seconds after a start hold a prompt that matches no brief only
+  // where a brief can come into the chat: VS Code's (35d). The CLI sends a
+  // brief under the helper's own session, so a message the person sends in
+  // the chat right as a helper starts is theirs, on 1.0.96's start and on
+  // 1.0.98's, which names the helper.
+  test("35j: on the Copilot CLI a message typed right after a helper starts is the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const helper = String(FIXTURES.userPromptSubmit_subagentBrief.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const starts = [
+      { ...FIXTURES.subagentStart_task, agentName: agent },
+      { ...FIXTURES.subagentStart_task, agentName: agent, agent_id: helper, agent_type: agent, parent_agent_id: chat },
+    ];
+    for (const [i, start] of starts.entries()) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      expect(runAdapter(dir, "subagent-start", withCwd(start, dir)).code).toBe(0);
+      expect(typedPrompt(dir, chat, `Approve, round ${i + 1}`).code).toBe(0);
+      expect(humanTurnCount(dir), `start ${i + 1}`).toBe(i + 1);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // In VS Code the window is for a brief still to come: once it has come, the
+  // person's next message counts, however soon.
+  test("35k: in VS Code a message typed after the helper's brief arrived is the person's turn", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000308";
+    runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      session_id: session,
+      cwd: dir,
+      tool_name: "runSubagent",
+      tool_input: { prompt: SUBAGENT_BRIEFING, description: "Look around" },
+    });
+    runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: session,
+      cwd: dir,
+      agent_id: "toolu_bdrk_01T249K",
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    expect(typedPrompt(dir, session, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(typedPrompt(dir, session, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+  });
+
+  // The Copilot CLI hands the reason of a Stop block back to the agent as a new
+  // prompt, through the same seam and with the same keys as a typed message
+  // (live: "The last AI-DLC step stopped on a problem: ..." kept as the person's
+  // message, then named by the agent as their request for two Construction
+  // setting changes). The adapter knows what it sent: that prompt is the
+  // host's turn, and what the person types after it, the same words included,
+  // is theirs.
+  test("35h: a Stop note Copilot sends back as a prompt is not the person's turn", () => {
+    const dir = scratchProject(true);
+    const session = "ed5ea5b5-0000-4000-8000-000000000291";
+    const note = blockedStop(dir, session);
+    const sequence = humanSequence(dir);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(messageRecordTexts(dir)).toEqual([]);
+    expect(humanTurnCount(dir)).toBe(0);
+    const hostTurns = auditRows(dir, "HOST_TURN");
+    expect(hostTurns).toHaveLength(1);
+    expect(auditBlockField(hostTurns[0].block, "Source")).toBe("record");
+    expect(auditBlockField(hostTurns[0].block, "Session")).toBe(session);
+    expect(keptWords(dir)).toBe("");
+    // The Stop hook reads this sequence as the person speaking.
+    expect(humanSequence(dir)).toBe(sequence);
+    expect(existsSync(stopNotePath(dir, session))).toBe(false);
+
+    // The same note again in the same chat is the host's again.
+    expect(blockedStop(dir, session)).toBe(note);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(0);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(2);
+    expect(humanSequence(dir)).toBe(sequence);
+
+    // What the person types next is theirs, and so are the note's own words
+    // once Copilot has sent it back.
+    expect(typedPrompt(dir, session, "Keep going with the plan, please.").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, session, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageRecordTexts(dir).sort()).toEqual(["Keep going with the plan, please.", note].sort());
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(2);
+  });
+
+  test("35i: a Stop note record belongs to its chat and lasts until that chat's next prompt", () => {
+    const dir = scratchProject(true);
+    const chat = "ed5ea5b5-0000-4000-8000-000000000292";
+    const other = "ed5ea5b5-0000-4000-8000-000000000293";
+    // The same words in another chat are that chat's person, and leave this
+    // chat's record for its own echo.
+    const note = blockedStop(dir, chat);
+    expect(typedPrompt(dir, other, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(existsSync(stopNotePath(dir, chat))).toBe(true);
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
+
+    // A block Copilot did not send back: the chat's next prompt spends the
+    // record, so the note's words typed after it are the person's.
+    expect(blockedStop(dir, chat)).toBe(note);
+    expect(typedPrompt(dir, chat, "What happened there?").code).toBe(0);
+    expect(existsSync(stopNotePath(dir, chat))).toBe(false);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(3);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
+
+    // A record that cannot be read is no match.
+    mkdirSync(stopNotePath(dir, chat));
+    expect(typedPrompt(dir, chat, note).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(4);
+    expect(auditRows(dir, "HOST_TURN")).toHaveLength(1);
+  });
+
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
   // hook allowed, so each AI-DLC step waited on a click. In VS Code, AI-DLC's
   // own simple commands carry the allow; on the Copilot CLI they get no
@@ -4377,14 +4941,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(pre.stdout, command).not.toContain('"permissionDecision":"allow"');
     }
 
-    // Denies are unchanged and never carry an allow: compounds and redirects, a
-    // direct lifecycle verb, and the host-only routes and hook files the
-    // state-transition guard refuses (a model cannot mint a human turn).
+    // Denies are unchanged and never carry an allow: compounds and redirects,
+    // and the host-only routes and hook files the state-transition guard
+    // refuses (a model cannot mint a human turn).
     for (const command of [
       "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
       "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
-      "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
-      "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
       "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
       "bun .aidlc/tools/aidlc.ts engine adapter copilot record-human-turn",
       "bun .aidlc/hooks/aidlc-record-human-turn.ts",
@@ -4395,6 +4957,60 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
       expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
       expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+    }
+  });
+
+  // The Allow prompt and the state tool read one check (decideFence), so they
+  // agree: in VS Code a direct stage-status command runs click-free exactly
+  // when the state tool refuses it, and keeps the prompt exactly when it would
+  // run, whatever the Guard Policy or the person's own switch.
+  test("36b: a direct state command keeps the Allow prompt exactly when the state tool would run it", () => {
+    // [policy, how the state file says it, whether the state tool refuses]
+    const policies: Array<[string, (state: string) => string, boolean]> = [
+      ["strict", (state) => state, true],
+      ["relaxed", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: relaxed (set by you)"), true],
+      ["off", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"), false],
+      ["own switch", (state) => state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ), false],
+    ];
+    for (const [label, setPolicy, refusedByStateTool] of policies) {
+      const dir = orchestrationProject();
+      const statePath = seededStateFile(dir);
+      writeFileSync(statePath, setPolicy(readFileSync(statePath, "utf-8")));
+      for (const command of [
+        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+        "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
+      ]) {
+        const pre = runAdapter(dir, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "direct-state",
+          tool_use_id: `direct-state-${label}`,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        });
+        expect(pre.code, `${label}: ${command}`).toBe(0);
+        if (refusedByStateTool) {
+          const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+          expect(out.hookSpecificOutput?.permissionDecision, `${label}: ${command}`).toBe("allow");
+        } else {
+          expect(pre.stdout, `${label}: ${command}`).toBe("");
+        }
+      }
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined };
+      delete env.AIDLC_STATE_TRANSITION_OWNER;
+      delete env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS;
+      const ran = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "approve", "requirements-analysis"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const words = `${ran.stdout}${ran.stderr}`;
+      expect(words.includes("Stage status cannot be changed with aidlc-state.ts approve"), `${label}: ${words}`)
+        .toBe(refusedByStateTool);
     }
   });
 
@@ -4635,10 +5251,473 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(out.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
         expect(out.hookSpecificOutput?.updatedInput?.command, `${shell}: ${lead}`).toBe(`${lead}${next} --aidlc-attempt-id ${attempt}`);
       }
-      // A cd anywhere else changes where the command runs, so the plan still holds it.
+      // A cd anywhere else changes where the command runs: the installed engine
+      // takes that folder as the project. The plan-approval guard reads it as
+      // `next` run there, which it does not hold, and the adapter vouches only
+      // for the project's own `next`, so Copilot's own prompt decides.
       const elsewhere = decide(`cd ${join(dir, "src")}; ${next}`, shell, `cd-elsewhere-${index}`);
-      expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBe("deny");
+      expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBeUndefined();
       expect(elsewhere.hookSpecificOutput?.updatedInput, String(shell)).toBeUndefined();
     }
+  });
+});
+
+// VS Code brackets each delegation with SubagentStart carrying agent_id under
+// the chat's own session: that pair is the one fact the engine cannot learn by
+// itself, so the adapter notes it and a payload or shell carrying the
+// subagent's id resolves to the chat. The CLI puts a per-call toolu_ id where
+// VS Code puts the chat's session; a per-call id is no chat, so the engine is
+// told nothing rather than meeting a new "chat" on every tool call.
+describe("the subagent's id belongs to the chat, and a per-call id is no chat", () => {
+  const SESSION = "copilot-session-0001";
+  const SUBAGENT_CALL = "toolu_sub_0001";
+  function helperOf(dir: string, id: string): string | null {
+    try {
+      return readFileSync(join(dir, "aidlc", ".aidlc-sessions", `${id}.helper-of`), "utf-8").trim();
+    } catch {
+      return null;
+    }
+  }
+  function heartbeat(dir: string): string | null {
+    try {
+      return (JSON.parse(
+        readFileSync(join(dir, "aidlc", ".aidlc-sessions", "copilot-heartbeat.json"), "utf-8"),
+      ) as { session_id?: string }).session_id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  test("a subagent start notes its id under the chat's session", () => {
+    const dir = scratchProject(true);
+    const start = runAdapter(dir, "subagent-start", {
+      hook_event_name: "SubagentStart",
+      session_id: SESSION,
+      cwd: dir,
+      agent_id: SUBAGENT_CALL,
+      agent_type: "aidlc-architecture-reviewer-agent",
+    });
+    expect(start.code, start.stderr).toBe(0);
+    expect(helperOf(dir, SUBAGENT_CALL)).toBe(SESSION);
+  });
+
+  test("a per-call CLI id is never passed on as the chat", () => {
+    const perCall = scratchProject(true);
+    const chat = scratchProject(true);
+    expect(runAdapter(perCall, "session-start", {
+      hook_event_name: "SessionStart", source: "new", cwd: perCall, session_id: "toolu_01callid0001",
+    }).code).toBe(0);
+    expect(heartbeat(perCall)).toBe("unknown");
+    expect(helperOf(perCall, "toolu_01callid0001")).toBeNull();
+    expect(runAdapter(chat, "session-start", {
+      hook_event_name: "SessionStart", source: "new", cwd: chat, session_id: SESSION,
+    }).code).toBe(0);
+    expect(heartbeat(chat)).toBe(SESSION);
+  });
+});
+
+// A `next` the hooks-off stop kept is run in the new chat as
+// `next --request <id>`. The adapter claims that command, but whether the
+// host's Allow prompt stays is judged by the command it runs.
+describe("a kept next run by its id is judged as the command it runs", () => {
+  test("one that keeps the prompt still gets no Allow; a kept jump does", () => {
+    const dir = orchestrationProject();
+    const call = (args: string[], attempt: string) => {
+      const pre = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse", session_id: "kept-stop", tool_use_id: attempt, cwd: dir,
+        tool_name: "run_in_terminal",
+        tool_input: { command: commandSpec(dir, "direct", args).text, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+      });
+      expect(pre.code, pre.stderr).toBe(0);
+      const out = pre.stdout.trim() ? JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } } : {};
+      return out.hookSpecificOutput?.permissionDecision;
+    };
+    const skip = saveRestartRequest(dir, ["--skip", "user-stories"], "default", null);
+    const jump = saveRestartRequest(dir, ["--stage", "requirements-analysis"], "default", null);
+    expect(call(["next", "--skip", "user-stories"], "typed-skip")).toBeUndefined();
+    expect(call(["next", "--request", skip], "kept-skip")).toBeUndefined();
+    // Anything beside the id runs nothing in the engine, so the line is judged as typed.
+    expect(call(["next", "--request", skip, "--", "and keep the old layout"], "kept-skip-words"))
+      .toBe(call(["next", "--", "and keep the old layout"], "typed-words"));
+    expect(call(["next", "--request", jump], "kept-jump")).toBe("allow");
+  });
+});
+
+// --- guard-tool-call: the four guards in the adapter's own process -----------
+//
+// A child process loads the whole engine again, so a shell call that started
+// the four guards as children cost five engine loads. They run their core hook
+// inside the adapter's process, as on Codex. These cases drive the real
+// adapter: stand-in guards that record their pid show where each one ran, and
+// the same calls through a twin project whose guard files export no run() show
+// that each decision is the one the guard's own process gave. Without run() the
+// adapter starts the guard as a child, as it always did; that child is this
+// project's own hook file only on the copy channel (a compiled engine starts
+// its packaged hook instead), so those cases run on the copy channel.
+const GUARD_HOOKS = [
+  "aidlc-state-transition-guard.ts",
+  "aidlc-reviewer-scope.ts",
+  "aidlc-review-freeze.ts",
+  "aidlc-plan-approval-guard.ts",
+] as const;
+const COPY_CHANNEL: NodeJS.ProcessEnv = { AIDLC_COMPILED_EXECUTABLE: undefined };
+
+type GuardAnswer = { code: number; stderr?: string; throws?: "Error" | "TypeError" };
+
+// A guard that records the pid it ran in and answers as told. With `child` it
+// exports no run(), so the adapter can only start it as its own process.
+function standInGuard(capture: string, hook: string, answer: GuardAnswer, child = false): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    `${child ? "" : "export "}async function run(_input: string): Promise<number> {`,
+    `  appendFileSync(${JSON.stringify(capture)}, JSON.stringify({ pid: process.pid, hook: ${JSON.stringify(hook)} }) + "\\n");`,
+    answer.throws === "Error" ? '  throw new Error("STANDIN-THREW");' : "",
+    answer.throws === "TypeError" ? "  if (answer() > 0) return (undefined as unknown as { x: number }).x;" : "",
+    answer.stderr ? `  process.stderr.write(${JSON.stringify(answer.stderr)});` : "",
+    `  return ${answer.code};`,
+    "}",
+    "function answer(): number { return 1; }",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function standInGuards(dir: string, capture: string, answers: (hook: string) => GuardAnswer, child = false): void {
+  for (const hook of GUARD_HOOKS) {
+    writeFileSync(join(dir, ".aidlc", "hooks", hook), standInGuard(capture, hook, answers(hook), child), "utf-8");
+  }
+}
+
+function guardRuns(capture: string): Array<{ pid: number; hook: string }> {
+  if (!existsSync(capture)) return [];
+  return readFileSync(capture, "utf-8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { pid: number; hook: string });
+}
+
+// The shipped guards, each behind a file whose run is no function: the adapter
+// starts the real hook as its own process, the path every call took before.
+// The file keeps the hook's other exports, because one guard imports another
+// by its file name (the plan check reads shell writes through review-freeze).
+function childOnlyGuards(dir: string): void {
+  for (const hook of GUARD_HOOKS) {
+    const file = join(dir, ".aidlc", "hooks", hook);
+    const real = hook.replace(/\.ts$/, ".real.ts");
+    cpSync(file, join(dir, ".aidlc", "hooks", real));
+    writeFileSync(file, [
+      `export * from "./${real}";`,
+      "export const run = undefined;",
+      `if (import.meta.main) {`,
+      `  const { run } = await import("./${real}");`,
+      "  process.exit(await run(await Bun.stdin.text()));",
+      "}",
+    ].join("\n"), "utf-8");
+  }
+}
+
+// The drop lines doctor reads, without their timestamps.
+function dropLines(dir: string): string[] {
+  const root = join(dir, "aidlc");
+  return (readdirSync(root, { recursive: true }) as string[])
+    .filter((name) => name.endsWith(".drops"))
+    .sort()
+    .flatMap((name) => readFileSync(join(root, name), "utf-8").split("\n").filter(Boolean))
+    .map((line) => line.replace(/^[^\t]*\t/, ""));
+}
+
+function inProject(text: string, dir: string): string {
+  return text
+    .replaceAll(JSON.stringify(dir).slice(1, -1), "<project>")
+    .replaceAll(dir, "<project>")
+    .replaceAll(toPosix(dir), "<project>");
+}
+
+function guardDecision(dir: string, payload: Record<string, unknown>) {
+  const r = runAdapter(dir, "guard-tool-call", payload, COPY_CHANNEL);
+  return { code: r.code, stdout: inProject(r.stdout, dir), drops: dropLines(dir).map((line) => inProject(line, dir)) };
+}
+
+function permission(stdout: string): string | undefined {
+  if (!stdout.trim()) return undefined;
+  return (JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string } }).hookSpecificOutput?.permissionDecision;
+}
+
+// A reviewer scoped to U01, delegated in a VS Code chat.
+function reviewerOnU01(dir: string, session: string): void {
+  const record = seededRecordDir(dir);
+  mkdirSync(join(record, ".aidlc-engine"), { recursive: true });
+  writeFileSync(
+    join(record, ".aidlc-engine/reviewer-dispatch.json"),
+    JSON.stringify({ reviewer: "aidlc-architecture-reviewer-agent", stage: "functional-design", unit: "U01", exempt: [] }),
+    "utf-8",
+  );
+  runAdapter(dir, "subagent-start", {
+    hook_event_name: "SubagentStart",
+    cwd: dir,
+    session_id: session,
+    agent_type: "aidlc-architecture-reviewer-agent",
+    agent_id: "vscode-agent-twin",
+  });
+}
+
+// Requirements Analysis with its review recorded READY: the requirements file
+// is frozen until the person decides at the gate.
+function frozenRequirements(dir: string): string {
+  const stage = join(seededRecordDir(dir), "inception", "requirements-analysis");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "requirements.md"), "# Requirements\n");
+  writeFileSync(join(stage, "requirements-analysis-questions.md"), "# Requirements Questions\n");
+  const tool = (file: string, args: string[]): string => {
+    const r = spawnSync(process.execPath, [join(dir, ".aidlc", "tools", file), ...args, "--project-dir", dir], {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_PROJECT_DIR: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    if (r.status !== 0) throw new Error(`${file} ${args.join(" ")}: ${r.stdout}${r.stderr}`);
+    return r.stdout;
+  };
+  const review = ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+  const { reviewFile } = JSON.parse(tool("aidlc-log.ts", review)) as { reviewFile: string };
+  mkdirSync(dirname(join(dir, reviewFile)), { recursive: true });
+  writeFileSync(
+    join(dir, reviewFile),
+    "**Verdict:** READY\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n",
+  );
+  tool("aidlc-log.ts", [...review, "--verdict", "READY"]);
+  tool("aidlc-state.ts", ["gate-start", "requirements-analysis"]);
+  return join(stage, "requirements.md");
+}
+
+describe("t249 Copilot guard-tool-call runs the four guards in the adapter's own process", () => {
+  test("G1: a shell call runs the four guards inside the adapter's process, in order", () => {
+    const dir = scratchProject(true);
+    const capture = join(dir, "guard-runs.ndjson");
+    standInGuards(dir, capture, () => ({ code: 0 }));
+    const r = runAdapter(dir, "guard-tool-call", withCwd(FIXTURES.preToolUse_bash, dir));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe("");
+    const runs = guardRuns(capture);
+    expect(runs.map((run) => run.hook)).toEqual([...GUARD_HOOKS]);
+    expect(r.pid).toBeGreaterThan(0);
+    expect(runs.map((run) => run.pid)).toEqual(GUARD_HOOKS.map(() => r.pid));
+  });
+
+  test("G2: a write and a subagent launch run their guards inside the adapter's process", () => {
+    const dir = orchestrationProject();
+    const capture = join(dir, "guard-runs.ndjson");
+    standInGuards(dir, capture, () => ({ code: 0 }));
+    const write = runAdapter(dir, "guard-tool-call", withCwd({
+      ...FIXTURES.preToolUse_write,
+      tool_input: { path: join(dir, "src", "notes.ts"), file_text: "x" },
+    }, dir));
+    expect(write.code, write.stderr).toBe(0);
+    expect(guardRuns(capture)).toEqual(
+      ["aidlc-reviewer-scope.ts", "aidlc-review-freeze.ts", "aidlc-plan-approval-guard.ts"].map((hook) => ({ pid: write.pid, hook })),
+    );
+    rmSync(capture);
+    const launch = runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: "task",
+      tool_input: { agent_type: "aidlc-product-agent", prompt: "Write the contribution." },
+    });
+    expect(launch.code, launch.stderr).toBe(0);
+    expect(guardRuns(capture)).toEqual([{ pid: launch.pid, hook: "aidlc-plan-approval-guard.ts" }]);
+  });
+
+  test("G3: every guard decision is byte for byte the one the guard's own process gave", () => {
+    const session = "11111111-2222-4333-8444-555555555557";
+    const sibling = (dir: string, unit: string, file: string) =>
+      join(seededRecordDir(dir), "construction", unit, "functional-design", file);
+    const cases: Array<{
+      name: string;
+      project: () => string;
+      setup?: (dir: string) => unknown;
+      payload: (dir: string, setup: unknown) => Record<string, unknown>;
+      expect: (decision: { stdout: string }) => void;
+    }> = [
+      {
+        name: "an ordinary shell command passes silently",
+        project: () => scratchProject(true),
+        payload: (dir) => withCwd(FIXTURES.preToolUse_bash, dir),
+        expect: (d) => expect(d.stdout).toBe(""),
+      },
+      {
+        name: "a shell call that runs a hook is refused by the state-transition guard",
+        project: () => scratchProject(true),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_bash, tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" } }, dir),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("AIDLC runtime records and hooks belong to the harness");
+        },
+      },
+      {
+        name: "the same call with no cwd in the payload",
+        project: () => scratchProject(true),
+        payload: () => {
+          const payload: Record<string, unknown> = { ...FIXTURES.preToolUse_bash, tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" } };
+          delete payload.cwd;
+          return payload;
+        },
+        expect: (d) => expect(d.stdout).toContain("AIDLC runtime records and hooks belong to the harness"),
+      },
+      {
+        name: "a shell command that writes code before the plan is approved is refused",
+        project: () => scratchProject(true),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_bash, tool_input: { command: "git diff --output=src/blocked.diff" } }, dir),
+        expect: (d) => expect(permission(d.stdout)).toBe("deny"),
+      },
+      {
+        name: "a write of code before the plan is approved is refused",
+        project: () => scratchProject(true),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => withCwd({ ...FIXTURES.preToolUse_write, tool_input: { path: join(dir, "src", "blocked.ts"), file_text: "x" } }, dir),
+        expect: (d) => expect(permission(d.stdout)).toBe("deny"),
+      },
+      {
+        name: "a reviewer's edit of two sibling files is refused with the first one's words",
+        project: () => scratchProject(true),
+        setup: (dir) => reviewerOnU01(dir, session),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "editFiles",
+          tool_input: { files: [sibling(dir, "U02", "design.md"), sibling(dir, "U03", "design.md")] },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("U02");
+          expect(d.stdout).not.toContain("U03");
+        },
+      },
+      {
+        name: "a reviewer's read of two sibling files is refused with the first one's words",
+        project: () => scratchProject(true),
+        setup: (dir) => reviewerOnU01(dir, session),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "read_file",
+          tool_input: { filePaths: [sibling(dir, "U02", "design.md"), sibling(dir, "U03", "design.md")] },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("U02");
+          expect(d.stdout).not.toContain("U03");
+        },
+      },
+      {
+        name: "a write the latest review froze is refused",
+        project: () => orchestrationProject(),
+        setup: (dir) => frozenRequirements(dir),
+        payload: (dir, file) => withCwd({ ...FIXTURES.preToolUse_write, tool_input: { path: file as string, file_text: "x" } }, dir),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("latest review is final");
+        },
+      },
+      {
+        name: "launching the developer before the plan is approved is refused",
+        project: () => orchestrationProject(),
+        setup: (dir) => seedUnapprovedCodeGeneration(dir),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "task",
+          tool_input: { agent_type: "aidlc-developer-agent", prompt: "AIDLC-UNIT: todo-core\nImplement todo-core" },
+        }),
+        expect: (d) => {
+          expect(permission(d.stdout)).toBe("deny");
+          expect(d.stdout).toContain("Code generation cannot start");
+        },
+      },
+      {
+        name: "a launch gets the stage rules, and the plan check passes the rewritten brief",
+        project: () => orchestrationProject(),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "agent",
+          tool_input: { agent: "aidlc-product-agent", prompt: "Run .aidlc/aidlc-common/stages/inception/user-stories.md and write the contribution." },
+        }),
+        expect: (d) => expect(d.stdout).toContain("AIDLC_DISPATCH_RULES_BEGIN"),
+      },
+      {
+        name: "a routine AI-DLC command in VS Code is allowed without the Allow prompt",
+        project: () => scratchProject(true),
+        payload: (dir) => ({
+          hook_event_name: "PreToolUse",
+          session_id: session,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command: "bun .aidlc/tools/aidlc.ts --version", explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        }),
+        expect: (d) => expect(permission(d.stdout)).toBe("allow"),
+      },
+    ];
+    for (const c of cases) {
+      const [here, child] = [c.project(), c.project()];
+      childOnlyGuards(child);
+      const ranHere = guardDecision(here, c.payload(here, c.setup?.(here)));
+      const ranAsChild = guardDecision(child, c.payload(child, c.setup?.(child)));
+      expect(ranHere, c.name).toEqual(ranAsChild);
+      expect(ranHere.code, c.name).toBe(0);
+      expect(ranHere.drops, c.name).toEqual([]);
+      c.expect(ranHere);
+    }
+  });
+
+  test("G4: a guard that throws fails alone with the line its own process left, and a later refusal still reaches the agent", () => {
+    const answers = (hook: string): GuardAnswer =>
+      hook === "aidlc-state-transition-guard.ts" ? { code: 0, throws: "TypeError" }
+        : hook === "aidlc-reviewer-scope.ts" ? { code: 0, throws: "Error" }
+        : hook === "aidlc-review-freeze.ts" ? { code: 2, stderr: "STANDIN-FREEZE-REFUSAL: the reviewed file is frozen.\n" }
+        : { code: 0 };
+    const [here, child] = [scratchProject(true), scratchProject(true)];
+    standInGuards(here, join(here, "guard-runs.ndjson"), answers);
+    standInGuards(child, join(child, "guard-runs.ndjson"), answers, true);
+    const ranHere = guardDecision(here, withCwd(FIXTURES.preToolUse_bash, here));
+    const ranAsChild = guardDecision(child, withCwd(FIXTURES.preToolUse_bash, child));
+    expect(ranHere).toEqual(ranAsChild);
+    expect(permission(ranHere.stdout)).toBe("deny");
+    expect(ranHere.stdout).toContain("STANDIN-FREEZE-REFUSAL");
+    expect(ranHere.drops).toEqual([
+      expect.stringMatching(/^reviewer-scope exited 1 under the Copilot adapter: error: STANDIN-THREW$/),
+      expect.stringMatching(/^state-transition-guard exited 1 under the Copilot adapter: TypeError: /),
+    ]);
+    // The refusal ends the call: the plan check after it never ran.
+    expect(guardRuns(join(here, "guard-runs.ndjson")).map((run) => run.hook)).toEqual(GUARD_HOOKS.slice(0, 3));
+  });
+});
+
+describe("t249 a jump the person asks for starts its step in the claimed next", () => {
+  test("next --phase makes the jump, returns the target's step, and the adapter delivers it", () => {
+    const dir = orchestrationProject();
+    const session = "jump-one-step-owner";
+    driveToRunStage(dir, session);
+    let routed = runLifecycle(dir, session, "direct", ["next", "--phase", "ideation"], `${session}-jump`);
+    // No command handed back to type: the claimed `next` made the jump itself.
+    expect(String(routed.directive.message ?? ""), JSON.stringify(routed.directive)).not.toContain("to perform the jump");
+    expect(readFileSync(seededStateFile(dir), "utf-8")).toContain("- **Current Stage**: intent-capture");
+    // The claim made on the state before the jump carries over to the state the
+    // jump wrote, so the step it returns is the claim's own, delivered at once.
+    const claimed = marker(dir);
+    expect(claimed).toMatchObject({ stage: "intent-capture", delivery: "delivered", needs_rehydrate: false });
+    expect(claimed.active_attempt).toMatchObject({ id: `${session}-jump`, status: "settled" });
+    for (let part = 0; routed.directive.kind === "load-steering"; part++) {
+      routed = runLifecycle(dir, session, "direct", ["continue", String(routed.directive.receipt)], `${session}-jump-${part}`);
+      if (part > 20) throw new Error("steering did not converge");
+    }
+    expect(routed.directive).toMatchObject({ kind: "run-stage", stage: "intent-capture" });
+    const active = marker(dir);
+    expect(active).toMatchObject({ kind: "run-stage", stage: "intent-capture", delivery: "delivered", needs_rehydrate: false });
+    expect((active.active_attempt as Record<string, unknown>).status).toBe("settled");
   });
 });

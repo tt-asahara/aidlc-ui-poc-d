@@ -111,6 +111,17 @@ function install(harness = "claude", mcp: "defaults" | "none" = "none"): string 
   return project;
 }
 
+// The person's own shell: both ends a terminal, no chat bound to it, and none of
+// the marks an agent's host puts on the commands it runs (the runner's own
+// environment may carry its host's), as commandAtPersonsTerminal reads it.
+function ownTerminal(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { AIDLC_TEST_CONFIG_TTY: "1", TERM_PROGRAM: undefined, AIDLC_SESSION_OVERRIDE: undefined };
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) env[key] = undefined;
+  }
+  return env;
+}
+
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AIDLC_RUNTIME_ROOT: DIST_RELEASE,
@@ -600,7 +611,10 @@ describe("t295 flags section", () => {
     expect(planToken).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(changedSince(before)).toEqual([]);
 
-    const recorded = flags("--bypass", name, "--plan-token", planToken, "--yes");
+    // Typed at the person's own terminal, where the receipt and its undo are
+    // printed (from a chat the switch's own line is the whole print).
+    const typed = (...args: string[]) => flagsWith(ownTerminal(), ...args);
+    const recorded = typed("--bypass", name, "--plan-token", planToken, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     // It says what happened and how to undo it, first, with no flags summary,
     // warning or closing "configured" line around it.
@@ -610,7 +624,7 @@ describe("t295 flags section", () => {
       expect(recorded.stdout).not.toContain(extra);
     }
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     // A guard reads the switch at every check, so the running step gets it too.
     expect(recorded.stdout).toContain(`1 open workflow (default/${dirName}) picks this up right away, with no restart.`);
     // AI-DLC's managed .gitignore block already lists the local file. Plus the
@@ -624,7 +638,7 @@ describe("t295 flags section", () => {
 
     // Typed without --yes, it is done as asked, with no question.
     before = files();
-    const cleared = flags("--clear-bypass", name);
+    const cleared = typed("--clear-bypass", name);
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain(`Cleared ${name} from aidlc.settings.local.json. To undo: `);
     expect(cleared.stdout).toContain(`config flags --bypass ${name} --local --yes`);
@@ -729,7 +743,6 @@ describe("t295 flags section", () => {
       expect(layered).toContain("config flags --show` shows which file sets each).");
     }
     expect(resolvedFlags(project)?.hookDebug).toBe(true);
-    // A default scope is for new work, and says so.
     expect(flags("--project", "--default-scope", "bugfix"))
       .toContain(`The default scope applies to new work; 1 open workflow (default/${dirName}) keeps the scope it started with.`);
     expect(resolvedFlags(project)).toMatchObject({ swarm: false, hookDebug: true, questionRetentionDays: 30, sensorTimeoutMs: 5000 });
@@ -753,8 +766,30 @@ describe("t295 flags section", () => {
     );
     const named = flags("--project", "--swarm", "on");
     expect(named).not.toContain("Ignore the person");
-    // The intent's own slug names it instead.
     expect(named).toContain("2 open workflows (default/evil, default/active-flags) pick this up from the next step");
+  });
+
+  test("clearing a switch no file records says the check stays off when the open work keeps it off", () => {
+    const project = install();
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const dirName = "held-off";
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(join(intents, "active-intent"), `${dirName}\n`);
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Scope**: classic\n\n## Runtime State\n- **Guard Policy**: off (set by you)\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const cleared = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv(),
+    );
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off for this piece of work: ",
+    );
+    expect(cleared.stdout).not.toContain("nothing to turn back on");
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
   });
 
   test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {
@@ -767,25 +802,64 @@ describe("t295 flags section", () => {
     const bypasses = (file: string): string[] | undefined => existsSync(join(project, file))
       ? (JSON.parse(readFileSync(join(project, file), "utf-8")) as { flags?: { bypasses?: string[] } }).flags?.bypasses
       : undefined;
+    const nothing = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
+    expect(nothing.status, nothing.stdout + nothing.stderr).toBe(0);
+    expect(nothing.stdout.trim()).toBe(
+      "The review freeze check (it stops edits to work you already approved) is not off for this project, so there is nothing to turn back on.",
+    );
+    expect(existsSync(join(project, "aidlc.settings.local.json"))).toBe(false);
+    // The one-line answer is only for a clear and nothing else: a mistyped
+    // switch keeps its names error, and a change riding beside the clear is made.
+    const typo = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE", "--yes");
+    expect(typo.status).toBe(2);
+    expect(typo.stdout + typo.stderr).toContain("--clear-bypass must be one of");
+    expect(typo.stdout + typo.stderr).not.toContain("nothing to clear");
+    const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--question-retention-days", "1", "--local", "--yes");
+    expect(beside.status, beside.stdout + beside.stderr).toBe(0);
+    expect(beside.stdout).toContain("Recorded question retention (days) 1 in aidlc.settings.local.json.");
+    expect(beside.stdout).not.toContain("nothing to turn back on");
+    expect(resolvedFlags(project)?.questionRetentionDays).toBe(1);
+    // The line is true: a switch the environment sets, or a check the piece of
+    // work keeps off, is off whatever the files record.
+    const fromEnv = run(
+      ["config", "flags", "--project-dir", project, "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"],
+      project,
+      runtimeEnv({ AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }),
+    );
+    expect(fromEnv.status, fromEnv.stdout + fromEnv.stderr).toBe(0);
+    expect(fromEnv.stdout).toContain(
+      "The review freeze check (it stops edits to work you already approved) is not recorded for this project, but it is off: " +
+        "AIDLC_DISABLE_REVIEW_FREEZE_HOOK=1 is set in the environment this command ran in.",
+    );
+    expect(fromEnv.stdout).not.toContain("nothing to turn back on");
     const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
     expect(mine.status, mine.stdout + mine.stderr).toBe(0);
     expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");
+    // One way back everywhere: the no-layer clear (at the person's own terminal
+    // it clears every file that records the switch), the form every other line
+    // and the skills name.
+    expect(mine.stdout).toContain("To undo: bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_SENSORS --yes");
+    expect(mine.stdout).not.toContain("--clear-bypass AIDLC_DISABLE_SENSORS --local --yes");
     expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
-    // Recorded for the team, a clear with no layer clears it there.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
-    const cleared = flags("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    // Typed at the person's own terminal, the no-layer clear reaches every file
+    // that records the switch (from a chat it leaves the shared one).
+    const typed = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(ownTerminal()),
+    );
+    const cleared = typed("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
     expect(cleared.stdout.startsWith("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json."), cleared.stdout)
       .toBe(true);
     expect(cleared.stdout).not.toContain("configured flags settings for");
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
-    // Recorded in both files, a clear with no layer clears both; two names spread
-    // across the files both clear.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
-    const both = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    const both = typed("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(both.status, both.stdout + both.stderr).toBe(0);
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.local.json.");
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.json.");
@@ -794,13 +868,12 @@ describe("t295 flags section", () => {
     // What it prints is the state after every file it cleared.
     expect(both.stdout).not.toContain("weakens a deterministic guard");
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
-    // A clear aimed at one file says where the switch is still on.
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     const aimed = flags("--local", "--clear-bypass", "AIDLC_DISABLE_SENSORS", "--yes");
     expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
     expect(aimed.stdout).toContain(
-      "AIDLC_DISABLE_SENSORS is still recorded in aidlc.settings.json, so it stays on. To clear it there: ",
+      "Sensors are still off: the switch is recorded in aidlc.settings.json. To clear it there: ",
     );
     expect(aimed.stdout).toContain("config flags --clear-bypass AIDLC_DISABLE_SENSORS --project --yes");
     // A personal bypass added on top leaves the team's switch on.
@@ -809,7 +882,6 @@ describe("t295 flags section", () => {
     invalidateSettingsCache();
     expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBe("1");
     expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
-    // --show names the file each switch comes from, and that file's clear ends it.
     const shown = flags("--show", "--json");
     expect(shown.status, shown.stdout + shown.stderr).toBe(0);
     const sources = (JSON.parse(shown.stdout) as { data: { sources: Record<string, string> } }).data.sources;
@@ -822,10 +894,126 @@ describe("t295 flags section", () => {
     invalidateSettingsCache();
     expect(resolveProjectFlag("AIDLC_DISABLE_SENSORS", {}, project)).toBeUndefined();
     expect(resolveProjectFlag("AIDLC_DISABLE_LEARNINGS", {}, project)).toBe("1");
-    // Any other flag with no layer still asks which one.
     const other = flags("--swarm", "on", "--yes");
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
+  });
+
+  test("a clear aimed at a file that does not record the switch writes nothing and names the file that does", () => {
+    const project = install();
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(),
+    );
+    const local = join(project, "aidlc.settings.local.json");
+    const shared = join(project, "aidlc.settings.json");
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const recorded = readFileSync(local, "utf-8");
+    expect(existsSync(shared)).toBe(false);
+    // "Back on for this project" read as the shared file, which never had it.
+    const aimed = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes");
+    expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
+    const said = aimed.stdout.trim().split("\n");
+    expect(said, aimed.stdout).toHaveLength(1);
+    // The check by its own label, still off, as the person turned it.
+    expect(said[0]).toStartWith(
+      "The review freeze check (it stops edits to work you already approved) is still off: " +
+        "the switch is recorded in aidlc.settings.local.json. To clear it there: " +
+        "bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+    );
+    expect(aimed.stdout).not.toContain("stays on");
+    expect(existsSync(shared)).toBe(false);
+    expect(readFileSync(local, "utf-8")).toBe(recorded);
+    const json = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes", "--json");
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    const data = (JSON.parse(json.stdout) as { data: { changed: boolean; notes: string[] } }).data;
+    expect(data.changed).toBe(false);
+    expect(data.notes).toEqual([
+      expect.stringContaining("is still off: the switch is recorded in aidlc.settings.local.json."),
+    ]);
+    // The command the line names turns the check back on.
+    const there = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes");
+    expect(there.status, there.stdout + there.stderr).toBe(0);
+    expect(there.stdout).toContain("The review freeze check is on again for this project.");
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
+    expect(existsSync(shared)).toBe(false);
+  });
+
+  // A local file keeps the review freeze check off while a piece of work is open.
+  function heldOffLocally(): {
+    project: string;
+    flags: (...args: string[]) => ReturnType<typeof run>;
+    local: string;
+    shared: string;
+    recorded: string;
+  } {
+    const project = install();
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(),
+    );
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, "held-off"), { recursive: true });
+    writeFileSync(join(intents, "active-intent"), "held-off\n");
+    writeFileSync(
+      join(intents, "held-off", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Project Information\n- **Scope**: classic\n\n## Current Status\n- **Status**: Running\n",
+    );
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const local = join(project, "aidlc.settings.local.json");
+    return { project, flags, local, shared: join(project, "aidlc.settings.json"), recorded: readFileSync(local, "utf-8") };
+  }
+
+  const STILL_OFF_LOCALLY = "The review freeze check (it stops edits to work you already approved) is still off: " +
+    "the switch is recorded in aidlc.settings.local.json. To clear it there: " +
+    "bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes";
+
+  test("a clear aimed at the shared file with the message it was asked in says the file that keeps the check off", () => {
+    const { flags, local, shared, recorded } = heldOffLocally();
+    // The command the agent ran in a live run: the id it is handed for every
+    // typed message changes nothing a clear does, and neither does --verbose
+    // or the harness the project has.
+    for (const extra of [["--message", "e60e556c"], ["--verbose"], ["--harness", "claude"]]) {
+      const named = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes", "--project", ...extra);
+      expect(named.status, named.stdout + named.stderr).toBe(0);
+      expect(named.stdout.trim(), extra.join(" ")).toBe(STILL_OFF_LOCALLY);
+      expect(existsSync(shared), extra.join(" ")).toBe(false);
+      expect(readFileSync(local, "utf-8")).toBe(recorded);
+    }
+    const other = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--harness", "codex", "--yes");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain("project uses claude; refusing codex");
+  });
+
+  test("a clear that also changes something else names the file that still keeps the check off", () => {
+    const { project, flags, local, recorded } = heldOffLocally();
+    // The second writes nothing: the shared file already holds it.
+    for (const extra of [["--question-retention-days", "3"], ["--question-retention-days", "3"], ["--harness", "claude"]]) {
+      const beside = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", ...extra, "--yes");
+      expect(beside.status, beside.stdout + beside.stderr).toBe(0);
+      expect(beside.stdout, extra.join(" ")).toContain(STILL_OFF_LOCALLY);
+      expect(readFileSync(local, "utf-8")).toBe(recorded);
+    }
+    expect(resolvedFlags(project)?.questionRetentionDays).toBe(3);
+  });
+
+  test("from a chat, a clear naming no file and the message it was asked in leaves the shared file as it is", () => {
+    const { flags, shared } = heldOffLocally();
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes").status).toBe(0);
+    const teams = readFileSync(shared, "utf-8");
+    const plain = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes");
+    expect(plain.status, plain.stdout + plain.stderr).toBe(0);
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const named = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--message", "e60e556c", "--yes");
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).toBe(plain.stdout);
+    expect(named.stdout).toStartWith(
+      "The project's shared settings in aidlc.settings.json keep the review freeze check " +
+        "(it stops edits to work you already approved) off for everyone on this project. Changing that file changes it.",
+    );
+    expect(readFileSync(shared, "utf-8")).toBe(teams);
   });
 
   test("a clear that reaches the machine file says which files changed when that file cannot be written", () => {
@@ -833,10 +1021,11 @@ describe("t295 flags section", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return;
     const project = install();
     const machine = temp("aidlc-t295-machine-layer-");
+    // At the person's own terminal, where the no-layer clear reaches the machine file.
     const flags = (...args: string[]) => run(
       ["config", "flags", "--project-dir", project, ...args],
       project,
-      runtimeEnv({ AIDLC_INSTALL_ROOT: machine }),
+      runtimeEnv({ AIDLC_INSTALL_ROOT: machine, ...ownTerminal() }),
     );
     expect(flags("--global", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
@@ -875,7 +1064,6 @@ describe("t295 flags section", () => {
     expect(other.status).toBe(2);
     expect(other.stdout + other.stderr).toContain("non-interactive flags mutation requires --yes");
     expect(resolvedFlags(project)?.swarm).toBeUndefined();
-    // Typed at a terminal it is done as typed, and says how to undo it.
     const typed = run(
       ["config", "flags", "--project-dir", project, "--local", "--swarm", "on"],
       project,
@@ -1017,7 +1205,7 @@ describe("t295 flags section", () => {
     );
     const recorded = flags("--bypass", name, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
-    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --yes`);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     const other = flags("--hook-debug", "on", "--yes");
     expect(other.status).toBe(2);

@@ -2,28 +2,25 @@
 // The person drives: the conductor reads what they said, in context, and
 // records the choice they made; the engine keeps their exact words and never
 // reads meaning into them (tools for determinism, the model for knowledge, the
-// human for judgement). What stays here is exact: host-made cancellation text
-// that is not a person's answer, the "(Recommended)" label decoration, how a
-// reply is shown in a message, and the labels each question offers.
+// human for judgement). What stays here is exact: a reply with no words in it,
+// the "(Recommended)" label decoration, how a reply is shown in a message, and
+// the labels each question offers.
 //
 // This module is standalone (no aidlc-lib import) so aidlc-lib can re-export
 // the primitives below.
 
-// A cancelled / auto-resolved structured-question widget is NOT a human
-// answer. Harnesses that auto-complete a dismissed question hand the conductor
-// a completed-looking object whose answer text is cancellation boilerplate
-// ("Cancelled", "user dismissed", a timeout marker). Logging that as
-// QUESTION_ANSWERED or passing it as an approval choice would launder a
-// non-decision into human authority AND consume the turn's HUMAN_TURN. The
-// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
-// only): a substantive answer that merely CONTAINS these words ("cancel the
-// standing order") does not match, because the whole trimmed string must be
-// the cancellation phrase.
-const NON_ANSWER_RE =
-  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
+import { createHash } from "node:crypto";
+
+// A reply with no words in it is nobody's answer. That is the only non-answer
+// a reply's text can show: no host hands the hook dismissal text (measured
+// 2026-10-12: Claude Code's Esc on AskUserQuestion fires no PostToolUse at all;
+// Codex's Esc fires none either, and its box that runs out returns
+// `{"answers":{}}`, which the human-turn hook reads by shape as
+// QUESTION_UNANSWERED). So "cancel", "abort" or "timed out" as a whole reply are
+// words a person typed, kept like any other words of theirs and read by the
+// conductor; the engine never judges them.
 export function isNonAnswer(text: string | undefined | null): boolean {
-  const t = (text ?? "").trim();
-  return t.length === 0 || NON_ANSWER_RE.test(t);
+  return (text ?? "").trim().length === 0;
 }
 
 // Every harness question-rendering guide tells the conductor to append
@@ -48,13 +45,20 @@ export function formatReceivedReply(text: string | undefined | null): string {
 
 // --- Exact picks ---------------------------------------------------------------
 //
-// A reply that is nothing but one offered option, by its number ("2"), its
-// letter ("b"), or its label in any case ("approve plan"), is an exact pick:
-// syntax, not meaning, so a tool may record it straight away. Surrounding quotes,
+// A reply that is nothing but one offered option, by its number ("2") or its
+// label in any case ("approve plan"), is an exact pick: syntax, not meaning, so
+// a tool may record it straight away. Its letter ("b") is a pick only where the
+// options were shown with letters (`lettered`), which is a questions file's own
+// answer line; chat shows a picker or numbers, so a lone letter typed there is
+// the person's words, and the conductor reads them. Surrounding quotes,
 // markdown emphasis, one "(Recommended)", an option prefix before the label
 // ("1. Approve"), and trailing punctuation are allowed; nothing else is. Any
 // other reply is the conductor's to read. Returns the option's index, or null.
-export function exactOptionPick(text: string | undefined | null, labels: readonly string[]): number | null {
+export function exactOptionPick(
+  text: string | undefined | null,
+  labels: readonly string[],
+  lettered = false,
+): number | null {
   const clean = (value: string): string => stripRecommendedDecorator(
     value.trim().replace(/^[`*_"'\s]+|[`*_"'\s]+$/g, ""),
   ).replace(/[\s.!]+$/g, "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -63,7 +67,7 @@ export function exactOptionPick(text: string | undefined | null, labels: readonl
   const index = (position: number): number | null => position >= 0 && position < labels.length ? position : null;
   const number = /^(?:option\s+)?[([#]?\s*(\d{1,2})\s*[)\]]?$/.exec(reply);
   if (number) return index(Number(number[1]) - 1);
-  const letter = /^(?:option\s+)?[([]?([a-z])[)\]]?$/.exec(reply);
+  const letter = lettered ? /^(?:option\s+)?[([]?([a-z])[)\]]?$/.exec(reply) : null;
   if (letter) return index(letter[1].charCodeAt(0) - 97);
   const unprefixed = reply.replace(/^(?:(?:\d{1,2}|[a-z])[.):]\s+)/, "");
   const named = labels.findIndex((label) => clean(label) === unprefixed);
@@ -82,6 +86,48 @@ export function exactOptionPick(text: string | undefined | null, labels: readonl
 
 export const APPROVAL_GATE_CHOICES = ["Approve", "Request Changes"] as const;
 
+// What a question that needs the person's own reply (a Unit or batch
+// checkpoint, the verification command, a Construction policy change) offers,
+// in the order shown: Approve and Request Changes, or Request Changes alone (a
+// batch whose files changed after its check, under a strict Guard Policy). Its
+// row names them as its Options; its record keeps their digests.
+export type ProtectedChoice = (typeof APPROVAL_GATE_CHOICES)[number];
+const PROTECTED_CHOICE_SETS: readonly (readonly ProtectedChoice[])[] = [APPROVAL_GATE_CHOICES, ["Request Changes"]];
+
+const choiceDigest = (choice: string): string => createHash("sha256").update(choice.toLowerCase(), "utf-8").digest("hex");
+
+/** The offered choices these labels name, in order and in any case; null for any other list. */
+export function protectedChoices(labels: readonly string[]): readonly ProtectedChoice[] | null {
+  const named = labels.map((label) => label.trim().toLowerCase());
+  return PROTECTED_CHOICE_SETS.find((set) => set.length === named.length &&
+    set.every((choice, at) => choice.toLowerCase() === named[at])) ?? null;
+}
+
+/** What a question's record keeps for the choices it offers. */
+export function protectedChoiceDigests(choices: readonly string[] = APPROVAL_GATE_CHOICES): string[] {
+  const offered = protectedChoices(choices);
+  if (offered === null) throw new Error("A protected question offers Approve and Request Changes, or Request Changes alone.");
+  return offered.map(choiceDigest);
+}
+
+/** The choices a question's record says it offered; null when it names no offered set. */
+export function offeredProtectedChoices(digests: unknown): readonly ProtectedChoice[] | null {
+  if (!Array.isArray(digests)) return null;
+  return PROTECTED_CHOICE_SETS.find((set) => set.length === digests.length &&
+    set.every((choice, at) => choiceDigest(choice) === digests[at])) ?? null;
+}
+
+/**
+ * The choice a reply that is exactly one of this question's offered options
+ * picks, by its number or its label ("1", "request changes"). Null for any
+ * other reply, a number it did not offer included: the conductor reads those.
+ */
+export function protectedQuestionPick(question: { options: unknown }, text: string | undefined): ProtectedChoice | null {
+  const offered = offeredProtectedChoices(question.options) ?? [];
+  const pick = exactOptionPick(text, offered);
+  return pick === null ? null : offered[pick];
+}
+
 // A picker asks this question when it offers only its choices, each once, and
 // both its approve and its change choice (the first two; "(Recommended)"
 // stripped, any case, any order). Leaving out a further choice ("I'll edit the
@@ -94,7 +140,6 @@ export function pickerOffersChoices(options: readonly string[], choices: readonl
     own.slice(0, 2).every((label) => offered.includes(label));
 }
 
-// A picked label is one of these choices ("(Recommended)" stripped, any case).
 export function isOneOfChoices(label: string, choices: readonly string[]): boolean {
   const picked = stripRecommendedDecorator(label).trim().toLowerCase();
   return choices.some((choice) => choice.toLowerCase() === picked);
@@ -115,5 +160,4 @@ export function aidlcEntryWords(prompt: string): string | null {
   const entry = /^[/$]aidlc(?:\s+|$)/i.exec(text);
   return entry === null ? null : text.slice(entry[0].length).trim();
 }
-export const ACCEPT_AS_IS_CHOICE = "Accept as-is";
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

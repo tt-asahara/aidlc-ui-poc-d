@@ -2,11 +2,11 @@
 //
 // covers: file:scripts/package.ts, file:harness/claude/manifest.ts, file:harness/codex/emit.ts
 //
-// WHAT. The one-core-N-harnesses layout (dist-unified MR-1) makes dist/ a
-// GENERATED artifact: `bun scripts/package.ts` projects the harness-neutral
-// core/ tree + harness/<name>/ surfaces into ignored local dist/ and
-// dist-release/ roots. `package.ts --check` builds all selected projections
-// twice in independent temp roots and byte-compares those builds.
+// WHAT. The one-core-N-harnesses layout makes dist/ a GENERATED artifact: `bun
+// scripts/package.ts` projects the harness-neutral core/ tree + harness/<name>/
+// surfaces into ignored local dist/ and dist-release/ roots. `package.ts --check`
+// builds all selected projections twice in independent temp roots and
+// byte-compares those builds.
 //
 // This test IS that guard, run from the suite: it asserts `package.ts --check`
 // exits 0 from source alone and rejects an intentionally nondeterministic
@@ -239,7 +239,8 @@ describe("t145 packager contract regressions", () => {
       ).toBe(true);
 
       const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
-      expect(rules).toContain('pattern = ["bun", ".foo/tools/"]');
+      expect(rules).toContain('pattern = ["bun", ".foo/tools/aidlc.ts", "engine"]');
+      expect(rules).toContain('    ".foo/tools/aidlc-orchestrate.ts"');
       expect(rules).not.toContain('pattern = ["aidlc"]');
       expect(rules).not.toContain('["bun", ".codex/');
 

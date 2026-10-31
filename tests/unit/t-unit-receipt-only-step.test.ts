@@ -35,6 +35,11 @@ import {
   unitCompletedReceipts,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
@@ -55,6 +60,7 @@ const CONSTRUCTION_STATE = `# AI-DLC State Tracking
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 - **Skeleton Stance**: on
 - **Construction Iteration**: unit-major
 
@@ -212,7 +218,6 @@ describe("t-unit-receipt-only-step: a Unit done but not recorded gets its receip
     const completed = unitVerb(proj, "complete", "unit-b");
     expect(completed.rc, completed.out).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-b")).toBe(true);
-    // Every Unit is settled now, so next presents the stage's own gate.
     const after = next(proj);
     expect(JSON.stringify(after)).not.toContain(START_B);
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");
@@ -421,8 +426,12 @@ describe("t-unit-receipt-only-step: work genuinely left keeps Run next", () => {
       const byUnit = directiveOf(
         run(ORCHESTRATE, ["report", "--stage", SLUG, "--result", "approved", "--unit", "unit-b", "--user-input", "Approve"], proj).out,
       );
+      // A solo walk's approval is the stage's: it is refused the same way, with
+      // the same step on, never an Ownership error.
       expect(byUnit.kind).toBe("error");
-      expect(String(byUnit.message)).toContain("Unit Ownership: team");
+      expect(String(byUnit.message)).toContain("1 of 2 work items are not complete (unit-b)");
+      expect(String(byUnit.message)).toContain("Run `next`");
+      expect(String(byUnit.message)).not.toContain("Unit Ownership");
     });
   }
 

@@ -598,11 +598,13 @@ function compiledKiroNewWorkRoutingGate(artifact: string): GateResult {
     const routed = run(
       artifact,
       [
+        // This engine's own option rides ahead of the person's words, where
+        // every caller puts it: after their words it is a word of a request.
         "next",
-        "poc",
-        "Create a tiny TypeScript command-line program that prints Hello World.",
         "--project-dir",
         project,
+        "poc",
+        "Create a tiny TypeScript command-line program that prints Hello World.",
       ],
       { cwd: project, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS },
     );
@@ -789,7 +791,7 @@ function textFilesUnder(root: string): string {
       try {
         out += readFileSync(path, "utf-8");
       } catch {
-        // Ignore binary/non-readable project files.
+        // Ignore project files that cannot be read.
       }
     }
   }
@@ -1035,6 +1037,49 @@ function delegatePluginSyncGate(artifact: string): GateResult {
   }
 }
 
+// A plugin author on the native install validates and builds with the compiled
+// aidlc alone, from the plugin's own folder outside any project, so the bundled
+// compose template and core names come from the runtime staged beside the
+// artifact. The runtime-root variables would point it at a developer's tree.
+function pluginAuthoringGate(artifact: string): GateResult {
+  const root = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-authoring-"));
+  const pluginRoot = join(root, "test-pro");
+  try {
+    cpSync(join(REPO_ROOT, "plugins", "test-pro"), pluginRoot, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of [
+      "AIDLC_RUNTIME_ROOT", "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME",
+      "AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR",
+    ]) delete env[name];
+    const steps = [
+      { args: ["plugin", "validate"], done: "Plugin validation: VALID" },
+      ...runtimeDistributions().map((harness) => ({
+        args: ["plugin", "build", harness, join(root, "out", harness)],
+        done: "Plugin build: COMPLETE",
+      })),
+    ];
+    let last: CommandResult | null = null;
+    for (const step of steps) {
+      last = run(artifact, step.args, { cwd: pluginRoot, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
+      const output = `${last.stdout}\n${last.stderr}`;
+      if (last.error || last.status !== 0 || !output.includes(step.done) || /\/\$bunfs\//.test(output)) {
+        return commandGate("plugin-authoring", last, false, {
+          expected: step.done,
+          actual: output.split(/\r?\n/).find((line) => /ERROR|FAILED|\$bunfs/.test(line)) ?? output.trim(),
+          detail: `aidlc ${step.args.join(" ")} from a plugin folder outside any project`,
+        });
+      }
+    }
+    return commandGate("plugin-authoring", last!, true, {
+      expected: "validate VALID, build COMPLETE for every harness",
+      actual: "validate VALID, build COMPLETE for every harness",
+      detail: `validated and built test-pro for ${runtimeDistributions().join(", ")}`,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function realPluginSyncGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-"));
   const pluginRoot = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
@@ -1160,8 +1205,8 @@ function pathlessOrchestrateGate(
   }
 }
 
-// v2's single-stage boundary gate, reshaped to the engine namespace: `report
-// --single` now REQUIRES the open STAGE_STARTED boundary that `next --single`
+// The single-stage boundary gate: `report
+// --single` REQUIRES the open STAGE_STARTED boundary that `next --single`
 // records, so the gate proves the START half (typed stage work plus the
 // synthetic-workflow audit boundary) instead of committing a report cold.
 function pathlessSingleAuditGate(artifact: string): GateResult {
@@ -2394,7 +2439,20 @@ function targetRunsOnHost(target: TargetConfig): boolean {
 function buildTarget(target: TargetConfig): TargetResult {
   removeStaleArtifacts(target);
 
-  const args = ["build", COMPILE_ENTRY, "--compile", "--no-compile-autoload-bunfig", "--no-compile-autoload-dotenv", "--outfile", target.artifact];
+  // A standalone executable loads the `.env` files of the folder it runs in and runs
+  // the preload of a `bunfig.toml` found there unless told not to. The engine runs
+  // in the person's project, so a repository they clone could otherwise set any
+  // name the engine reads, or run its own code inside it. Its environment is the
+  // host tool's; the project's files stay the project's.
+  const args = [
+    "build",
+    COMPILE_ENTRY,
+    "--compile",
+    "--no-compile-autoload-dotenv",
+    "--no-compile-autoload-bunfig",
+    "--outfile",
+    target.artifact,
+  ];
   if (target.bunTarget) args.push(`--target=${target.bunTarget}`);
 
   const start = performance.now();
@@ -2474,7 +2532,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(harnessProbeGate(
       actual.artifact,
       "kiro",
-      "agents/aidlc.{json,md} present (conductor wiring)",
+      "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)",
     ));
     result.gates.push(harnessProbeGate(
       actual.artifact,
@@ -2490,6 +2548,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(pluginSelectGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(realPluginSyncGate(actual.artifact));
+    result.gates.push(pluginAuthoringGate(actual.artifact));
     result.gates.push(conductorPersonaGate(actual.artifact));
     result.gates.push(workspaceFlagsGate(actual.artifact));
     result.gates.push(boltReentryGate(actual.artifact));
@@ -2502,8 +2561,8 @@ function buildTarget(target: TargetConfig): TargetResult {
       "pathless-next-env-scope",
       ["engine", "orchestrate", "next"],
       { AWS_AIDLC_DEFAULT_SCOPE: "feature" },
-      "error",
-      "No workflow state found",
+      "print",
+      "Nothing is in progress here yet",
     ));
     result.gates.push(pathlessOrchestrateGate(
       actual.artifact,

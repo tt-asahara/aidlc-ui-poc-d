@@ -14,8 +14,9 @@
 //      survive: multi-line text, embedded JSON, Windows paths, non-ASCII.
 //   2. The shipped hook (subprocess): one line carrying `systemMessage` (for the
 //      person) and a PostToolUse `additionalContext` note (for the model) on
-//      Claude Code, Codex, and opencode; nothing on the harnesses with no
-//      hook-to-human PostToolUse channel; genuine engine output round-trips.
+//      Claude Code and Codex, the `systemMessage` alone on opencode; nothing on
+//      the harnesses with no hook-to-human PostToolUse channel; genuine engine
+//      output round-trips.
 //   3. The adapters (subprocess / in-process plugin): Codex forwards the line
 //      once (a duplicate delivery does not repeat it), opencode turns it into a
 //      TUI toast, and Kiro CLI, Kiro IDE, Copilot, and Cursor stay silent.
@@ -75,7 +76,6 @@ function tempProject(prefix: string): string {
   return dir;
 }
 
-/** A project carrying one generated harness tree, as an install would. */
 function installed(harness: string, leaf: string): string {
   const dir = tempProject(harness);
   cpSync(join(REPO_ROOT, "dist", harness, leaf), join(dir, leaf), { recursive: true });
@@ -87,7 +87,6 @@ function errorOutput(message: string): string {
   return `${JSON.stringify({ kind: "error", message })}\n`;
 }
 
-/** The exact line the hook writes on a relay harness. */
 function relayLine(message: string): string {
   return `${JSON.stringify({
     systemMessage: engineErrorRelayText(message),
@@ -273,7 +272,11 @@ describe("t349 relay line per harness", () => {
     for (const name of ENGINE_ERROR_RELAY_HARNESSES) expect(names).toContain(name);
     for (const name of names) {
       const line = engineErrorRelayLine(SINGLE, name);
-      if (ENGINE_ERROR_RELAY_HARNESSES.has(name)) {
+      if (name === "opencode") {
+        // The plugin hands a line's note to the model, and the toast is transient,
+        // so opencode's line carries none and its skill still prints the error.
+        expect(line, name).toBe(`${JSON.stringify({ systemMessage: engineErrorRelayText(SINGLE) })}\n`);
+      } else if (ENGINE_ERROR_RELAY_HARNESSES.has(name)) {
         expect(line, name).toBe(relayLine(SINGLE));
         // A fixed label says whose words follow; the engine's message is unchanged after it.
         expect(JSON.parse(line ?? "").systemMessage).toBe(`${ENGINE_ERROR_RELAY_LABEL}\n> ${SINGLE}`);
@@ -535,5 +538,16 @@ describe("t349 harness adapters", () => {
     const failing = opencodeClient({ failToast: true });
     await opencodeBash(failing.client, proj, errorOutput(SINGLE));
     expect(failing.toasts).toEqual([]);
+  });
+});
+
+describe("t349 (f) the fixed line is one plain sentence", () => {
+  // The person reads the fixed line under the harness's own prefix ("PostToolUse:Bash
+  // says:" on Claude Code). It says what happened and nothing about how the relay
+  // works: no "quoted exactly as reported", no aside about project values.
+  test("the label says the workflow stopped and ends at the colon", () => {
+    expect(ENGINE_ERROR_RELAY_LABEL).toBe("The workflow stopped with this error:");
+    expect(ENGINE_ERROR_RELAY_LABEL).not.toMatch(/[()]/);
+    expect(engineErrorRelayText("boom")).toBe("The workflow stopped with this error:\n> boom");
   });
 });

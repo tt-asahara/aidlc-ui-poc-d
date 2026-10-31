@@ -53,7 +53,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
-import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -225,14 +224,10 @@ function runAdapter(
   const adapterProjectDir = options.adapterProjectDir ?? projectDir;
   const env: Record<string, string | undefined> = {
     ...process.env,
-    // Hermetic git evaluation: the adapter's shell evaluator consults the
-    // REAL pager environment and global git config when classifying `git`
-    // commands, so a developer host with PAGER=less or a global core.pager
-    // (e.g. delta) flips the safe-git allow cases to deny. Point the global
-    // scope at an absent file and drop pager variables; command-text
-    // assignments inside individual test payloads are unaffected.
-    PAGER: undefined,
-    GIT_PAGER: undefined,
+    // The adapter reads the global git config when it resolves a persisted
+    // alias, so the global scope points at an absent file and a developer's own
+    // aliases stay out of the classification. A developer's pager needs no
+    // hiding any more: the adapter no longer reads one.
     GIT_CONFIG_GLOBAL: join(projectDir, ".absent-global-gitconfig"),
     GIT_CONFIG_SYSTEM: join(projectDir, ".absent-system-gitconfig"),
     AIDLC_PROJECT_DIR: projectDir,
@@ -290,8 +285,19 @@ function unbind(projectDir: string): void {
   }
 }
 
-function turns(projectDir: string, intent: string): number {
-  return readAllAuditShards(projectDir, intent, "default").split("**Event**: HUMAN_TURN").length - 1;
+/** The turns in one record's audit, read from its files, not through the lib:
+ *  its readers resolve the calling process's chat, and once the startup hook
+ *  has mapped this process's ancestry to the chat, a read there binds an
+ *  unbound chat to the selection. */
+function turns(recordDir: string): number {
+  const audit = join(recordDir, "audit");
+  if (!existsSync(audit)) return 0;
+  return readdirSync(audit)
+    .filter((name) => name.endsWith(".md"))
+    .reduce(
+      (count, name) => count + readFileSync(join(audit, name), "utf-8").split("**Event**: HUMAN_TURN").length - 1,
+      0,
+    );
 }
 
 /** The rebind lines the fixture chat's next `next` carries. */
@@ -457,6 +463,81 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
+  test("0b: an edit that arrives as StrReplace(path) gets every decision and audit row Edit(file_path) gets", () => {
+    const codeGeneration = (guardPolicy?: string): string => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+      let state = readFileSync(statePath, "utf-8").replace(
+        /^- \*\*Current Stage\*\*:.*$/m,
+        "- **Current Stage**: code-generation",
+      );
+      if (guardPolicy) {
+        state = state
+          .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+          .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${guardPolicy}`);
+      }
+      writeFileSync(statePath, state);
+      writeActiveDirectiveMarker(proj, {
+        kind: "run-stage",
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+      });
+      return proj;
+    };
+    const edit = (file: string) => ({ tool_name: "Edit", tool_input: { file_path: file, old_string: "a", new_string: "b" } });
+    const strReplace = (file: string) => ({ tool_name: "StrReplace", tool_input: { path: file, old_string: "a", new_string: "b" } });
+    // Each call gets its own project, so one refusal cannot change the next one's words.
+    const guard = (
+      call: (file: string) => Record<string, unknown>,
+      file: (proj: string) => string,
+      guardPolicy?: string,
+    ): { permission?: string; agent_message?: string } => {
+      const proj = codeGeneration(guardPolicy);
+      const result = runAdapter(proj, "guards", payload("preToolUseWrite", proj, call(file(proj))));
+      expect(result.code, result.stderr).toBe(0);
+      const decision = JSON.parse(result.stdout) as { permission?: string; agent_message?: string };
+      if (decision.agent_message) decision.agent_message = decision.agent_message.replaceAll(proj, "<project>");
+      return decision;
+    };
+    const code = (proj: string) => join(proj, "src", "blocked.ts");
+    const plan = (proj: string) =>
+      join(seededRecordDir(proj), "construction", "code-generation", "code-generation-plan.md");
+
+    // Code before the plan is approved: refused, with the same way on.
+    const editCode = guard(edit, code);
+    expect(editCode.permission).toBe("deny");
+    expect(guard(strReplace, code)).toEqual(editCode);
+    // The way on: the plan itself is written in the stage's own folder.
+    const editPlan = guard(edit, plan);
+    expect(editPlan.permission).toBe("allow");
+    expect(guard(strReplace, plan)).toEqual(editPlan);
+    // Guard Policy off: whatever Edit gets.
+    expect(guard(strReplace, code, "off (from scope classic)")).toEqual(guard(edit, code, "off (from scope classic)"));
+
+    // After the edit: one ARTIFACT row each.
+    const artifactRows = (call: (file: string) => Record<string, unknown>): number => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      seedAuditFile(proj);
+      const dir = join(seededRecordDir(proj), "construction", "functional-design");
+      mkdirSync(dir, { recursive: true });
+      const artifact = join(dir, "design.md");
+      writeFileSync(artifact, "# design b\n");
+      const rows = () =>
+        (readFileSync(seededAuditShard(proj), "utf-8").match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g) ?? []).length;
+      const before = rows();
+      const result = runAdapter(proj, "audit-and-sensors", payload("postToolUseWrite", proj, {
+        ...call(artifact),
+        tool_output: "ok",
+      }));
+      expect(result.code, result.stderr).toBe(0);
+      return rows() - before;
+    };
+    expect(artifactRows(edit)).toBe(1);
+    expect(artifactRows(strReplace)).toBe(1);
+  });
+
   test("1: sessionStart re-keys core additionalContext to Cursor's additional_context", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -483,16 +564,16 @@ describe("t276 cursor adapter payload conversion", () => {
   test("3: guards convert a state-guard block to Cursor's permission-deny JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
-    // A direct lifecycle mutation through aidlc-state.ts is the state guard's
-    // canonical refusal; on Cursor it must arrive as deny JSON, exit 0.
+    // A tool call that invokes a hook is a refusal the state guard keeps; on
+    // Cursor it must arrive as deny JSON, exit 0.
     const stdin = payload("preToolUseShell", proj, {
-      tool_input: { command: "bun .cursor/tools/aidlc-state.ts approve", cwd: "", timeout: 30000 },
+      tool_input: { command: "bun .cursor/tools/aidlc.ts engine hook record-human-turn", cwd: "", timeout: 30000 },
     });
     const r = runAdapter(proj, "guards", stdin);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-orchestrate");
+    expect(out.agent_message ?? "").toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("4: guards allow an ordinary shell command with permission-allow JSON", () => {
@@ -712,6 +793,21 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(shard).toContain("HUMAN_TURN");
   });
 
+  test("6b: a Task let through is on record as sent, before its completion closes it", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    seedAuditFile(proj);
+    clearLedger(proj);
+    const completed = () => readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_COMPLETED").length;
+    const before = completed();
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    const sent = readAuditShardEvents(proj).filter((row) => row.event === "SUBAGENT_DISPATCHED");
+    expect(sent).toHaveLength(1);
+    const sentAgent = (PAYLOADS.preToolUseTask.tool_input as { subagent_type: string }).subagent_type;
+    expect(sent[0].block).toContain(`**Agent Type**: ${sentAgent}`);
+    expect(completed()).toBe(before);
+  });
+
   test("7: a delegated conversation cannot spawn a nested Task or overwrite the parent ledger", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
@@ -816,13 +912,11 @@ describe("t276 cursor adapter payload conversion", () => {
       if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
     }
     setActiveIntentCursor(proj, b.dirName, "default");
-    const turns = (dir: string) =>
-      readAllAuditShards(proj, dir, "default").split("**Event**: HUMAN_TURN").length - 1;
-    const [onA, onB] = [turns(a.dirName), turns(b.dirName)];
+    const [onA, onB] = [turns(a.recordDir), turns(b.recordDir)];
     const sent = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined }));
     expect(sent.stdout.trim()).toBe("");
-    expect(turns(a.dirName)).toBe(onA + 1);
-    expect(turns(b.dirName)).toBe(onB);
+    expect(turns(a.recordDir)).toBe(onA + 1);
+    expect(turns(b.recordDir)).toBe(onB);
     const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
     const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -846,15 +940,15 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
     unbind(proj);
     setActiveIntentCursor(proj, b.dirName, "default");
-    const [onA, onB] = [turns(proj, a.dirName), turns(proj, b.dirName)];
+    const [onA, onB] = [turns(a.recordDir), turns(b.recordDir)];
     const sent = runAdapter(
       proj,
       "mint",
       payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
     );
     expect(sent.stdout.trim()).toBe("");
-    expect(turns(proj, a.dirName)).toBe(onA + 1);
-    expect(turns(proj, b.dirName)).toBe(onB);
+    expect(turns(a.recordDir)).toBe(onA + 1);
+    expect(turns(b.recordDir)).toBe(onB);
     expect(rebindLines(proj)).toHaveLength(0);
   });
 
@@ -1437,7 +1531,7 @@ describe("t276 cursor adapter payload conversion", () => {
     rmSync(ledgerDirFor(proj));
   });
 
-  test("19g: a person's typed summary-confirmation off in a foreground chat applies as theirs", () => {
+  test("19g: a person's typed summary-confirmation off in a foreground chat is recorded, and the setter applies it as theirs", () => {
     const proj = installedProject();
     seedAidlcMemory(proj);
     const env = {
@@ -1477,10 +1571,15 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(typed.code, typed.stderr).toBe(0);
     expect(typed.stdout.trim()).toBe("");
-    const content = readFileSync(state, "utf-8");
-    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const ceremonyRows = () =>
       readAuditShardEvents(proj).filter((entry) => entry.event === "CEREMONY_SET");
+    // The hook records their line and applies nothing; the agent runs the setter.
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toBe("on (from scope feature)");
+    expect(ceremonyRows()).toHaveLength(0);
+    const applied = runTool("aidlc.ts", ["engine", "config", "set", "summary-confirmation", "off"]);
+    expect(applied.status, applied.stderr).toBe(0);
+    const content = readFileSync(state, "utf-8");
+    expect(getField(content, "Summary Confirmation")).toBe("off (set by you)");
     const audit = ceremonyRows();
     expect(audit).toHaveLength(1);
     expect(auditBlockField(audit[0].block, "New")).toBe("off");
@@ -1576,21 +1675,39 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(JSON.parse(sibling.stdout).permission).toBe("deny");
   });
 
-  test("22: an unavailable child guard denies the operation", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    rmSync(join(proj, ".cursor", "hooks", "aidlc-reviewer-scope.ts"));
-
-    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
-    expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
-    // It names the step that puts the files back, and that command is a real route.
-    expect(out.agent_message ?? "").toContain("config --harness cursor");
-    expect(out.agent_message ?? "").not.toContain("doctor");
-    const action = resolveAction(["config", "--harness", "cursor"]);
-    expect(action.type).not.toBe("error");
+  test("22: a guard that fails on its own refuses nothing, and doctor reads why", () => {
+    // As in the core hook group: a crashed member refuses nothing. Denying here
+    // stopped every call, reads included, under every Guard Policy, with no
+    // step that could fix a guard that throws on this project's state.
+    const crashes: Array<[string, string | null, string]> = [
+      ["throws", 'throw new Error("simulated guard crash [degraded]");\n', "exited 1"],
+      ["exits 1", "process.exit(1);\n", "exited 1"],
+      ["is missing", null, "exited 1"],
+    ];
+    // Windows has no POSIX signals: a killed process there reports an exit code.
+    if (process.platform !== "win32") {
+      crashes.push(["is killed", 'process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
+    }
+    for (const [how, body, said] of crashes) {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const guard = join(proj, ".cursor", "hooks", "aidlc-state-transition-guard.ts");
+      if (body === null) rmSync(guard);
+      else writeFileSync(guard, body);
+      for (const input of [
+        payload("preToolUseShell", proj),
+        payload("preToolUseShell", proj, { tool_name: "Read", tool_input: { file_path: join(proj, "README.md") } }),
+      ]) {
+        expectAllowJson(runAdapter(proj, "guards", input), how);
+      }
+      const drops = join(hooksHealthDir(proj), "state-transition-guard.drops");
+      expect(existsSync(drops), how).toBe(true);
+      const lines = readFileSync(drops, "utf-8").trim().split("\n");
+      expect(lines, how).toHaveLength(2);
+      expect(lines[0], how).toContain(`state-transition-guard ${said} under the Cursor adapter: `);
+      // A tag in the guard's own words never decides doctor's verdict.
+      expect(lines[0], how).not.toContain("[degraded]");
+    }
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
@@ -2363,6 +2480,9 @@ if (import.meta.main) {
       `& ('Remove' + '-Item') -Force ('${dispatch.slice(0, -"-dispatch.json".length)}' + '-dispatch.json')`,
       "& ('Remove-Item'.ToString()) ordinary",
       "PWN='!echo harmless | sh' git --config-env=alias.pwn=PWN pwn",
+      // A program the agent itself hands to git, by flag or through a variable:
+      // the person's own monitor setting is allowed, this is not theirs.
+      `MON=${externalGitProgram} git --config-env=core.fsmonitor=MON status --short`,
       `GIT_CONFIG_GLOBAL=${join(proj, "scratch", "gitconfig")} git pwn`,
       `git --exec-path=${externalGitDir} externalpwn`,
       `GIT_EXEC_PATH=${externalGitDir} git externalpwn`,
@@ -2373,13 +2493,12 @@ if (import.meta.main) {
       `git bisect run ${externalGitProgram}`,
       `git submodule foreach ${externalGitProgram}`,
       `git -c core.fsmonitor=${externalGitProgram} status --short`,
-      `GIT_PAGER=${externalGitProgram} git status --short`,
       "git --no-pager branch -- --list",
       "git --no-pager tag -- --list",
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached -- scratch/ordinary --no-ext-diff --no-textconv --ignore-submodules=all`,
       `git -c diff.external=${externalGitProgram} --no-pager diff --cached --no-ext-diff --ext-diff --no-textconv --ignore-submodules=all scratch/ordinary`,
       `git --no-pager diff --cached --no-ext-diff --no-textconv --textconv --ignore-submodules=all scratch/ordinary`,
-      "git --no-pager --paginate branch --list",
+
       "git config alias.pwn '!echo harmless | sh'",
       "git config --global alias.pwn '!echo harmless | sh'",
     ];
@@ -2426,6 +2545,14 @@ if (import.meta.main) {
       "GIT_PAGER=cat git status --short",
       "git -c core.fsmonitor=false status --short",
       "git rev-parse --is-inside-work-tree",
+      // The person's own pager and monitor settings are theirs: a helper's git
+      // reads a repository with them, as it does in their terminal.
+      `GIT_PAGER=${externalGitProgram} git status --short`,
+      `PAGER=${externalGitProgram} git status --short`,
+      "git --no-pager --paginate branch --list",
+      "git branch --list",
+      "git tag --list",
+      "git diff --cached --no-ext-diff --no-textconv --ignore-submodules=all",
     ]) {
       const safe = runAdapter(
         proj,
@@ -2458,34 +2585,15 @@ if (import.meta.main) {
     const safeGitDir = join(safeAlternateRepo, ".git").replaceAll("\\", "/");
     const safeWorkTree = safeAlternateRepo.replaceAll("\\", "/");
     for (const command of [
-      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
-      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
-    ]) {
-      const unsafeRepository = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-repository-conversation",
-          session_id: "reviewer-unsafe-alternate-repository-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeRepositoryOut = JSON.parse(unsafeRepository.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeRepositoryOut.permission, command).toBe("deny");
-      expect(unsafeRepositoryOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
       `GIT_COMMON_DIR=${safeGitDir} git status --ignore-submodules=all`,
       `GIT_NAMESPACE=review git status --ignore-submodules=all`,
+      // The same three against the repository whose own config names a monitor
+      // program: that setting is the person's, so a helper reads it as git does.
+      `GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `env GIT_DIR=${unsafeGitDir} GIT_WORK_TREE=${unsafeWorkTree} git status --ignore-submodules=all`,
+      `GIT_COMMON_DIR=${unsafeGitDir} git status --ignore-submodules=all`,
     ]) {
       const safeRepository = runAdapter(
         proj,
@@ -2574,41 +2682,24 @@ if (import.meta.main) {
     ).toBe(0);
     writeFileSync(join(proj, "README.md"), "# Safe pathspec fixture\n");
 
-    for (const command of [
+    for (const safeAlternateChildCommand of [
+      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`,
+      // Walking into the submodule is allowed too: its own config names a
+      // monitor program, and that is the person's setting to make.
       `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
       `env GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=none`,
     ]) {
-      const unsafeAlternateChild = runAdapter(
+      const safeAlternateChild = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-submodule-conversation",
-          session_id: "reviewer-unsafe-alternate-submodule-conversation",
-          tool_input: { command },
+          conversation_id: "reviewer-safe-alternate-submodule-conversation",
+          session_id: "reviewer-safe-alternate-submodule-conversation",
+          tool_input: { command: safeAlternateChildCommand },
         }),
       );
-      const unsafeAlternateChildOut = JSON.parse(unsafeAlternateChild.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeAlternateChildOut.permission, command).toBe("deny");
-      expect(unsafeAlternateChildOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
     }
-
-    const safeAlternateChildCommand =
-      `GIT_DIR=${safeGitDir} GIT_WORK_TREE=${safeWorkTree} git status --ignore-submodules=all`;
-    const safeAlternateChild = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-safe-alternate-submodule-conversation",
-        session_id: "reviewer-safe-alternate-submodule-conversation",
-        tool_input: { command: safeAlternateChildCommand },
-      }),
-    );
-    expectAllowJson(safeAlternateChild, safeAlternateChildCommand);
 
     const shellAlias = spawnSync(
       "git",
@@ -2729,31 +2820,12 @@ if (import.meta.main) {
     const unsafeIndexValue = unsafeAlternateIndex.replaceAll("\\", "/");
     const safeIndexValue = safeAlternateIndex.replaceAll("\\", "/");
     for (const command of [
-      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
-    ]) {
-      const unsafeIndexStatus = runAdapter(
-        proj,
-        "guards",
-        payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-alternate-index-conversation",
-          session_id: "reviewer-unsafe-alternate-index-conversation",
-          tool_input: { command },
-        }),
-      );
-      const unsafeIndexOut = JSON.parse(unsafeIndexStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafeIndexOut.permission, command).toBe("deny");
-      expect(unsafeIndexOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
-    }
-
-    for (const command of [
       `GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
       `env GIT_INDEX_FILE=${safeIndexValue} git status --ignore-submodules=none`,
+      // The index that lists the submodule carrying a monitor program reads the
+      // same way: the setting inside it is the person's.
+      `GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
+      `env GIT_INDEX_FILE=${unsafeIndexValue} git status --ignore-submodules=none`,
     ]) {
       const safeIndexStatus = runAdapter(
         proj,
@@ -3233,12 +3305,9 @@ if (import.meta.main) {
         tool_input: { command: recursiveStatusCommand },
       }),
     );
-    const recursiveStatusOut = JSON.parse(recursiveStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(recursiveStatusOut.permission).toBe("deny");
-    expect(recursiveStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The submodule's own config names a monitor program, which is the person's
+    // setting to make, so a status that walks into it reads like any other.
+    expectAllowJson(recursiveStatus, recursiveStatusCommand);
 
     const safeRestrictedStatus = "git status --short -- README.md";
     const safeRestrictedResult = runAdapter(
@@ -3269,70 +3338,45 @@ if (import.meta.main) {
       expectAllowJson(safePositionalStatus, command);
     }
 
-    const unsafeRestrictedStatus =
-      `git status --short -- ${submodulePath}`;
-    const unsafeRestrictedResult = runAdapter(
+    // A pathspec that names the submodule reads it with the monitor its own
+    // config sets, which is the person's setting, so this is allowed too.
+    const restrictedToSubmodule = `git status --short -- ${submodulePath}`;
+    const restrictedToSubmoduleResult = runAdapter(
       proj,
       "guards",
       payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-unsafe-restricted-status-conversation",
-        session_id: "reviewer-unsafe-restricted-status-conversation",
-        tool_input: { command: unsafeRestrictedStatus },
+        conversation_id: "reviewer-restricted-submodule-status-conversation",
+        session_id: "reviewer-restricted-submodule-status-conversation",
+        tool_input: { command: restrictedToSubmodule },
       }),
     );
-    const unsafeRestrictedOut = JSON.parse(unsafeRestrictedResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(unsafeRestrictedOut.permission).toBe("deny");
-    expect(unsafeRestrictedOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    expectAllowJson(restrictedToSubmoduleResult, restrictedToSubmodule);
 
+    // The same holds when the submodule is named as a bare path, from the
+    // project or from a folder inside it.
     for (const command of [
       `git status --short ${submodulePath}`,
       "git -C scratch status status-submodule",
     ]) {
-      const unsafePositionalStatus = runAdapter(
+      const positionalSubmoduleStatus = runAdapter(
         proj,
         "guards",
         payload("preToolUseShell", proj, {
-          conversation_id: "reviewer-unsafe-positional-status-conversation",
-          session_id: "reviewer-unsafe-positional-status-conversation",
+          conversation_id: "reviewer-positional-submodule-status-conversation",
+          session_id: "reviewer-positional-submodule-status-conversation",
           tool_input: { command },
         }),
       );
-      const unsafePositionalOut = JSON.parse(unsafePositionalStatus.stdout) as {
-        permission?: string;
-        agent_message?: string;
-      };
-      expect(unsafePositionalOut.permission, command).toBe("deny");
-      expect(unsafePositionalOut.agent_message ?? "", command).toContain(
-        "dynamic command evaluation",
-      );
+      expectAllowJson(positionalSubmoduleStatus, command);
     }
 
     writeFileSync(join(proj, "scratch", "ordinary.txt"), "safe\n");
-    const nestedCwdStatus = "git -C scratch status -- status-submodule";
-    const nestedCwdResult = runAdapter(
-      proj,
-      "guards",
-      payload("preToolUseShell", proj, {
-        conversation_id: "reviewer-nested-cwd-status-conversation",
-        session_id: "reviewer-nested-cwd-status-conversation",
-        tool_input: { command: nestedCwdStatus },
-      }),
-    );
-    const nestedCwdOut = JSON.parse(nestedCwdResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(nestedCwdOut.permission).toBe("deny");
-    expect(nestedCwdOut.agent_message ?? "").toContain("dynamic command evaluation");
-
     for (const command of [
       "git -C scratch status -- ordinary.txt",
       "git -C scratch status -- ':(top)README.md'",
+      // Reaching the submodule from a folder inside the project, where its own
+      // config sets the monitor, is the person's setting again.
+      "git -C scratch status -- status-submodule",
     ]) {
       const safeNestedCwd = runAdapter(
         proj,
@@ -3359,14 +3403,8 @@ if (import.meta.main) {
         },
       }),
     );
-    const workingDirectoryOut = JSON.parse(workingDirectoryResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(workingDirectoryOut.permission).toBe("deny");
-    expect(workingDirectoryOut.agent_message ?? "").toContain(
-      "dynamic command evaluation",
-    );
+    // And through the payload's own working directory, for the same reason.
+    expectAllowJson(workingDirectoryResult, workingDirectoryStatus);
 
     const safeWorkingDirectoryStatus = "git status -- ordinary.txt";
     const safeWorkingDirectoryResult = runAdapter(
@@ -3394,12 +3432,8 @@ if (import.meta.main) {
         tool_input: { command: conflictingStatusCommand },
       }),
     );
-    const conflictingStatusOut = JSON.parse(conflictingStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(conflictingStatusOut.permission).toBe("deny");
-    expect(conflictingStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The last --ignore-submodules wins, so this walks into the submodule: allowed, like the shapes above.
+    expectAllowJson(conflictingStatus, conflictingStatusCommand);
 
     const disguisedStatusCommand =
       "git status --short -- scratch --ignore-submodules=all";
@@ -3412,12 +3446,8 @@ if (import.meta.main) {
         tool_input: { command: disguisedStatusCommand },
       }),
     );
-    const disguisedStatusOut = JSON.parse(disguisedStatus.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(disguisedStatusOut.permission).toBe("deny");
-    expect(disguisedStatusOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // The flag after -- is a pathspec, so the submodule is read: allowed for the same reason.
+    expectAllowJson(disguisedStatus, disguisedStatusCommand);
 
     const ignoredSubmoduleStatus =
       "git status --short --ignore-submodules=all";
@@ -3457,12 +3487,8 @@ if (import.meta.main) {
         tool_input: { command: manifestlessStatus },
       }),
     );
-    const manifestlessOut = JSON.parse(manifestlessResult.stdout) as {
-      permission?: string;
-      agent_message?: string;
-    };
-    expect(manifestlessOut.permission).toBe("deny");
-    expect(manifestlessOut.agent_message ?? "").toContain("dynamic command evaluation");
+    // A gitlink with no .gitmodules entry is read the same way.
+    expectAllowJson(manifestlessResult, manifestlessStatus);
 
     expect(
       spawnSync("git", ["update-index", "--force-remove", submodulePath], {
@@ -4083,21 +4109,20 @@ if (import.meta.main) {
     activateReviewer(proj);
     const unsafe = join(proj, "scratch", "unsafe-git-cwd");
     mkdirSync(unsafe, { recursive: true });
+    expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj }).status).toBe(0);
     expect(spawnSync("git", ["init"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: unsafe }).status).toBe(0);
-    const helper = join(
-      proj,
-      "scratch",
-      process.platform === "win32" ? "fsmonitor-helper.cmd" : "fsmonitor-helper",
-    );
-    writeFileSync(
-      helper,
-      process.platform === "win32"
-        ? "@echo off\r\nexit /b 0\r\n"
-        : "#!/bin/sh\nexit 0\n",
-    );
-    if (process.platform !== "win32") chmodSync(helper, 0o755);
+    // The same alias name resolves two ways: in the project it is a plain
+    // inspection, and in the folder a compound command moves to it runs a
+    // shell. Which of the two the adapter reads is the whole point of the case.
+    // (It read a monitor program here before; that setting is the person's.)
     expect(
-      spawnSync("git", ["config", "core.fsmonitor", helper], {
+      spawnSync("git", ["config", "alias.inspect", "status --short"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: proj,
+      }).status,
+    ).toBe(0);
+    expect(
+      spawnSync("git", ["config", "alias.inspect", "!echo harmless | sh"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: unsafe,
       }).status,
@@ -4107,15 +4132,15 @@ if (import.meta.main) {
     const denied =
       process.platform === "win32"
         ? [
-            `cd /d ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `Set-Location ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git status --short`,
+            `cd /d ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `Set-Location ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if (Test-Path ${JSON.stringify(relativeUnsafe)}) { Set-Location ${JSON.stringify(relativeUnsafe)} }; git inspect`,
           ]
         : [
-            `cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `cd ${JSON.stringify(relativeUnsafe)} && git status --short`,
-            `builtin cd ${JSON.stringify(relativeUnsafe)}; git status --short`,
-            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git status --short`,
+            `cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `cd ${JSON.stringify(relativeUnsafe)} && git inspect`,
+            `builtin cd ${JSON.stringify(relativeUnsafe)}; git inspect`,
+            `if true; then cd ${JSON.stringify(relativeUnsafe)}; fi; git inspect`,
           ];
     for (const command of denied) {
       const result = runAdapter(
@@ -4140,14 +4165,14 @@ if (import.meta.main) {
     const allowed =
       process.platform === "win32"
         ? [
-            "cd /d no-such-dir && git status --short",
-            "cd /d no-such-dir || git status --short",
+            "cd /d no-such-dir && git inspect",
+            "cd /d no-such-dir || git inspect",
           ]
         : [
-            "cd no-such-dir && git status --short",
-            "cd no-such-dir || git status --short",
-            `cd ${JSON.stringify(relativeUnsafe)} | git status --short`,
-            `(cd ${JSON.stringify(relativeUnsafe)}); git status --short`,
+            "cd no-such-dir && git inspect",
+            "cd no-such-dir || git inspect",
+            `cd ${JSON.stringify(relativeUnsafe)} | git inspect`,
+            `(cd ${JSON.stringify(relativeUnsafe)}); git inspect`,
           ];
     for (const command of allowed) {
       const result = runAdapter(
@@ -4583,5 +4608,99 @@ if (import.meta.main) {
     expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
       tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
     })).stdout).permission).toBe("allow");
+  });
+
+  test("39: under strict and relaxed a delegate runs the AI-DLC commands the core admits it, and nothing more", () => {
+    // Reverse Engineering's helper mints and checks its scope fingerprint with
+    // AI-DLC's own command, as its template (re-artifacts.md) spells it. The
+    // core admits it to every delegate (delegateAdmittedVerbs); the
+    // interpreter and attribution-path denies refused it under strict and
+    // relaxed, so the stage stopped there on Cursor.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    setCurrentStage(proj, "reverse-engineering");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Reverse Engineering scan", prompt: "Scan and synthesize.", subagent_type: "aidlc-developer-agent" },
+    })));
+    const ledger = () => ledgerFilesFor(proj).sort().map((file) => `${file}\n${readFileSync(file, "utf-8")}`);
+    const ledgerBefore = ledger();
+    expect(ledgerBefore.length).toBe(1);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(proj, "guards", payload("preToolUseShell", proj, {
+      conversation_id: "developer-reverse-engineering",
+      session_id: "developer-reverse-engineering",
+      tool_input: { command },
+    })).stdout) as { permission?: string; agent_message?: string };
+    const staged = join(seededRecordDir(proj), ".aidlc-engine", "codekb-stage-proj", "reverse-engineering-timestamp.md");
+    const mint = "bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./";
+    const health = hooksHealthDir(proj);
+    for (const policy of ["strict (set by you)", "relaxed (set by you)"]) {
+      withPolicy(policy);
+      for (const command of [
+        mint,
+        "bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo proj --mint --paths src/,lib/",
+        `bun .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --repo proj --check "${staged}"`,
+        "aidlc engine workspace codekb-scope-diff --repo proj --mint --paths ./",
+        "aidlc.exe engine workspace codekb-scope-diff --mint --paths ./",
+        // The stage's publish line names the tool script itself.
+        `bun .cursor/tools/aidlc-utility.ts codekb-publish --repo proj --staged "${dirname(staged)}/" --paths ./ ` +
+          "--expect-store none --expect-source 0123abcd --json",
+      ]) {
+        rmSync(join(health, "review-freeze.last"), { force: true });
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}: ${out.agent_message ?? ""}`).toBe("allow");
+        // The core guards still ran on it.
+        expect(existsSync(join(health, "review-freeze.last")), command).toBe(true);
+      }
+      // The Windows spelling of the dispatcher path: the script itself in
+      // PowerShell, a different file name where a POSIX shell reads the
+      // backslashes as escapes.
+      const windows = delegateShell("bun .cursor\\tools\\aidlc.ts engine workspace codekb-scope-diff --mint --paths ./");
+      if (process.platform === "win32") expect(windows.permission, windows.agent_message).toBe("allow");
+      else expect(windows.agent_message ?? "").toContain("general-purpose interpreters");
+      // The publish as the stage writes it, over continued lines: one command
+      // to a POSIX shell; PowerShell ends the command at the first line.
+      const continued = delegateShell([
+        "bun .cursor/tools/aidlc-utility.ts codekb-publish \\",
+        "  --repo proj \\",
+        `  --staged "${dirname(staged)}/" \\`,
+        "  --paths ./ \\",
+        "  --expect-store none \\",
+        "  --expect-source 0123abcd \\",
+        "  --json",
+      ].join("\n"));
+      if (process.platform === "win32") expect(continued.agent_message ?? "").toContain("general-purpose interpreters");
+      else expect(continued.permission, continued.agent_message).toBe("allow");
+      for (const command of [
+        "bun -e 'x'",
+        `${mint}\nbun -e 'x'`,
+        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
+        "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
+        `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
+        `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
+        `FORCE=1 ${mint}`,
+        "bun scratch/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
+        "bun .cursor/tools/aidlc.ts engine knowledge sync",
+        "aidlc engine orchestrate report --stage reverse-engineering --result awaiting-approval",
+        "bun .cursor/tools/aidlc-utility.ts upgrade",
+        "bun .cursor/tools/aidlc-log.ts review --stage reverse-engineering --verdict pass",
+        "bun scratch/aidlc-utility.ts codekb-publish --repo proj",
+      ]) {
+        const out = delegateShell(command);
+        expect(out.permission, `${policy}: ${command}`).toBe("deny");
+        expect(out.agent_message ?? "", command).toContain("general-purpose interpreters");
+      }
+      // Under these policies a build or a test is still the parent's.
+      expect(delegateShell("bun test").agent_message ?? "").toContain("have the parent conversation run executable probes");
+    }
+    expect(ledger()).toEqual(ledgerBefore);
   });
 });

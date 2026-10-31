@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadGraph,
@@ -246,6 +246,81 @@ describe("t290 code-generation coverage requires per-unit test instructions", ()
     expect(buildAndTest).toContain("run that command\n   once, never N");
   });
 
+  // A project-wide coverage floor applied to one Unit's tests can fail on
+  // source other Units' tests cover with every test passing (a live 3-Unit
+  // Bun run looped back from Build and Test on a 100 % full suite).
+  test("stage prose judges a project-wide coverage floor on the full suite, not a Unit run", () => {
+    const stage = (slug: string) =>
+      readFileSync(
+        join(REPO_ROOT, "core", "aidlc-common", "stages", "construction", `${slug}.md`),
+        "utf-8",
+      ).replace(/\s+/g, " ");
+    const codeGeneration = stage("code-generation");
+    const buildAndTest = stage("build-and-test");
+
+    expect(codeGeneration).toContain(
+      "A Unit-scoped run does not judge it: on one Unit's tests a runner's coverage threshold can fail on " +
+        "source that other Units' tests cover, with every selected test passing.",
+    );
+    expect(codeGeneration).toContain("Never change that threshold to make a Unit's run pass");
+    expect(codeGeneration).toContain(
+      "Put any run that floor's threshold can fail in a command of its own, with no step after it that the " +
+        "threshold exit would stop: Build and Test does not exempt a command whose exit stopped a later step.",
+    );
+    expect(codeGeneration).toContain(
+      "A coverage target set for this Unit or one of its paths still gets its own Unit-scoped check.",
+    );
+    expect(buildAndTest).toContain(
+      "When a coverage floor is set for the whole project (by the Testing Contract, a team rule, or a threshold in " +
+        "the project's coverage configuration for all measured source), run the project's full-suite coverage " +
+        "command once on the assembled project with its own coverage configuration",
+    );
+    expect(buildAndTest).toContain(
+      "That run, never a unit-scoped one, is the Evidence for a project-wide coverage-floor row in the Target " +
+        "Verification Matrix, and one repository's run is never the Evidence for another repository's floor.",
+    );
+    expect(buildAndTest).toContain(
+      "In a multi-repo intent, run it once in each repository the floor applies to, with that repository's own " +
+        "command and coverage configuration",
+    );
+    // A threshold exit can stop a chained step before it runs, and replaying
+    // that step outside its command loses the command's own setup, so a
+    // command whose exit stopped a later step is not exempt. The reference
+    // mirrors the stage rule.
+    const reference = readFileSync(
+      join(REPO_ROOT, "docs", "reference", "04-stages", "construction.md"),
+      "utf-8",
+    ).replace(/\s+/g, " ");
+    for (const prose of [buildAndTest, reference]) {
+      expect(prose).toContain(
+        "That applies only when that exit stopped no later step of the command: when a step after it did not run " +
+          "because of it (one chained, such as `… && <lint>`, one in a script or lifecycle hook the command calls, " +
+          "or a later task or phase of a build tool; tell from the scripts, hooks and task or phase definitions the " +
+          "command runs and from its output), the command is not exempt and its non-zero exit is a failed command.",
+      );
+      expect(prose).toContain("in each repository the floor applies to");
+      expect(prose).toContain("one repository's run is never the");
+    }
+    expect(buildAndTest).toContain(
+      "Any other non-zero exit (a failed or errored test, a threshold set for one path or Unit), or output that " +
+        "does not show both, is a failed command.",
+    );
+    expect(buildAndTest).toContain(
+      "A coverage target set for one Unit needs its own check on that Unit's scope and its own evidence; a " +
+        "passing full-suite run does not make it `Met`.",
+    );
+    // The guide keeps the coverage command out of the Unit's test
+    // instructions, which Build and Test runs per Unit.
+    const guide = readFileSync(
+      join(REPO_ROOT, "core", "knowledge", "aidlc-developer-agent", "code-generation-guide.md"),
+      "utf-8",
+    ).replace(/\s+/g, " ");
+    expect(guide).toContain(
+      "Record the selected provider and rationale in the test instructions, and the coverage command you ran, " +
+        "its observed effect and the report location with the verification results.",
+    );
+  });
+
   test("Express stage-level test instructions execute and traceability joins the final gate", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
@@ -301,10 +376,7 @@ ${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
       "<record>/construction/*/code-generation/unit-test-instructions.md",
     );
     expect(buildAndTest).toContain(
-      "<record>/construction/code-generation/traceability.json",
-    );
-    expect(buildAndTest).toContain(
-      "<record>/construction/*/code-generation/traceability.json",
+      "{{INVOKE}} engine sensor-traceability --stage build-and-test",
     );
 
     const command = readFileSync(instructionsPath, "utf-8")
@@ -319,11 +391,23 @@ ${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
     expect(executed.status, `${executed.stdout}\n${executed.stderr}`).toBe(0);
     expect(readFileSync(join(proj, marker), "utf-8")).toBe("passed");
 
-    const traceability = JSON.parse(readFileSync(traceabilityPath, "utf-8")) as {
-      coverage: Array<{ id: string; status: string; target: string }>;
-    };
-    const fr1 = traceability.coverage.find((entry) => entry.id === "FR1");
-    expect(fr1?.status).toBe("OK");
-    expect(existsSync(join(proj, fr1!.target))).toBe(true);
+    // The final gate's check reads the stage-level table and finds FR1 built.
+    mkdirSync(join(seededStateFile(proj), ".."), { recursive: true });
+    writeFileSync(seededStateFile(proj), "# State\n");
+    const requirementsDir = join(seededRecordDir(proj), "inception", "requirements-analysis");
+    mkdirSync(requirementsDir, { recursive: true });
+    writeFileSync(join(requirementsDir, "requirements.md"), "# Requirements\n\n- FR1 Express flow\n");
+    const finalGate = spawnSync("bun", [join(AIDLC_SRC, "tools", "aidlc-sensor-traceability.ts"), "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(finalGate.status, finalGate.stderr).toBe(0);
+    expect(JSON.parse(finalGate.stdout)).toEqual({
+      pass: true,
+      uncovered: [],
+      coverage: [{ id: "FR1", covered: true, built_in: ["code-generation: src/express.ts"] }],
+    });
   });
 });

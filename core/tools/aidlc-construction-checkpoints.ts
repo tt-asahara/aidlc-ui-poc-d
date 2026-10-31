@@ -3,22 +3,32 @@
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage, readMessage } from "./aidlc-message-store.ts";
+import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
   constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
-  VERIFICATION_COMMAND_RECOVERY,
+  markPersonLinesHeard,
+  addPendingPersonLines,
+  verificationCommandRecovery,
   type VerificationCommand,
   claimAttemptFields,
   completionCarriesVerifiedReview,
+  reviewCompletionDidNotFinish,
+  reviewCompletionDictated,
+  reviewCompletionEdited,
+  reviewCompletionWithoutReviewer,
   reviewRecordNotHere,
   effectivePlanAction,
   eventMatchesClaimAttempt,
@@ -32,19 +42,29 @@ import {
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
   changeRequestWords,
+  personsWordsText,
+  protectedResponseFields,
   readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
+  gateWordsSinceUnitReview,
+  protectedReplyFloor,
+  isoTimestamp,
+  markProtectedQuestionReplied,
   mintProtectedQuestion,
+  PROTECTED_RESPONSE_REPLIES_MAX,
+  PROTECTED_RESPONSE_WORDS_MAX_CHARS,
+  writeProtectedResponse,
   isAutonomousMode,
   constructionCheckpointsApply,
   isNonAnswer,
   latestMainWorkflowStageRunFloorForProject,
+  leftOutLine,
+  reviewCheckOffer,
   loadStageGraph,
   maximalAttemptEvents,
-  memoryStrictHoldsGuardPolicy,
+  personMayApproveOverUnfinishedReview,
   parseCheckboxes,
-  personSpokeSinceGate,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -59,13 +79,15 @@ import {
   resolveWorkflowSelection,
   restrictSourceListing,
   reviewArtifactFingerprint,
+  reviewAttemptAccounting,
+  reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
-  selfAttributedDecisionMarker,
   setField,
   sortAttemptEvents,
   sourceListingChangedPaths,
   stageJumpReaches,
+  toPosix,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
   unitSkippedUnits,
@@ -82,13 +104,32 @@ import {
   type UnitLifecycleSnapshot,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
+  currentFingerprintForm,
+  rawFingerprintForm,
+  committedTextSha256,
 } from "./aidlc-lib.ts";
+import { unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
+import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
 
-// The walking skeleton's first Unit stops at the skeleton checkpoint; every
-// other Unit, and every Unit without the skeleton, at its own Unit checkpoint.
+// The fields an approval row records for the open review findings of the
+// stages and Units it covers, from the review ledger's one writer. The caller
+// hands it in: aidlc-review-brief.ts imports this module.
+export type ApprovalFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+  decider: ApprovalDecider,
+) => Record<string, string>;
+
+// The fields a Request Changes row records for the review findings the person
+// rejected or reopened, from the same writer.
+export type RejectedFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+) => Record<string, string>;
+
 export function constructionCheckpointKind(
   stateContent: string,
   unit: string,
@@ -143,7 +184,8 @@ export interface ConstructionCheckpoint {
    *  one review request that re-checks them, run before verifying again. With
    *  `unfinished`, the Unit's own review has not finished instead: asked for
    *  with no verdict yet, or NOT-READY with a pass left (repaired first). With
-   *  `first`, it was never asked for: this is its first request. */
+   *  `first`, it was never asked for in this run of the Unit's work (a jump
+   *  back or a reopen starts a new one): this is that run's first request. */
   rereview: {
     stage: string; reviewer: string; iteration: number; command: string;
     unfinished?: "no-verdict" | "not-ready"; first?: true;
@@ -155,19 +197,184 @@ export interface ConstructionCheckpoint {
     /** The person chose Redo for this approved Unit's work, so it is asked about as new work. */
     redone?: true;
   } | null;
-  /** The stages whose unfinished review the person let this Unit go on
-   *  without ("approve it as it is"), and the one approval question. */
-  review_not_finished?: { stages: string[]; question: string };
+  /** The stages whose review did not finish. With `approved_in_words`, the
+   *  person's "approve it as it is" let this Unit go on without them, and is
+   *  its approval: nothing more is asked. Otherwise (a review that ended in
+   *  the NOT-READY fallback) `question` is the one approval question. */
+  review_not_finished?: { stages: string[]; question?: string; approved_in_words?: true };
+  /** The stages whose fresh review records a review file edited after the
+   *  reviewer finished (strict; relaxed and off said it with the verdict). The
+   *  checkpoint says so in one line before the person is asked. */
+  review_edited?: { stages: string[] };
+  /** The stages whose fresh review records the verdict its dispatch dictated
+   *  (strict; relaxed and off said it with the verdict). The checkpoint says so
+   *  in one line before the person is asked. */
+  review_dictated?: { stages: string[] };
+  /** The stages whose fresh review records that no reviewer had finished when
+   *  its verdict was recorded (strict; relaxed and off said it with the
+   *  verdict). The checkpoint says so in one line before the person is asked. */
+  review_no_reviewer?: { stages: string[] };
   /** From verify: the one line for each change to this Unit's reviewed work
    *  its Guard Policy accepted, said before the person is asked. */
   change_notices?: string[];
   /** The person was asked to approve this Unit since its last checkpoint
    *  decision, so its learnings question, asked first, is behind them. */
   asked?: true;
+  /** From ask: what the person left out of this Unit's build, said once just
+   *  before the question. */
+  left_out?: string;
+  /** From ask: the files the person brought that this build changed or
+   *  deleted, with the way back, said once just before the question. */
+  changed_files?: string;
+  /** From ask: the one check offered when a stage's review passes are spent
+   *  and its reviewed work changed after the last review, said with
+   *  `left_out` just before the question. */
+  check_offer?: string;
+  /** From ask: what the person typed in this chat while the Unit's review ran,
+   *  before the question was asked, kept as its reply. The conductor reads it:
+   *  an answer is recorded with no question shown; anything else leaves the
+   *  question to show. */
+  earlier_reply?: string;
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
+
+/** A finite execution budget; Node timers cannot represent larger values. */
+export function verificationTimeoutMs(value: number = CHECK_TIMEOUT_MS): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new Error("checkpoint --timeout-ms must be an integer between 1 and 2147483647 milliseconds.");
+  }
+  return value;
+}
+
+interface VerificationProcessResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error: Error | null;
+}
+
+// Own one newly-created process group, never discover processes by their name.
+// Retire it before reading outputs or taking the post-check evidence snapshot.
+async function runVerificationProcess(
+  command: string, args: string[], cwd: string, outFd: number, errFd: number, timeoutMs: number,
+): Promise<VerificationProcessResult> {
+  // A watcher in the check's own group reads a private pipe from the verifier.
+  // SIGKILL cannot be caught: EOF on that pipe retires the group even when the
+  // verifier disappears. A normal shell exit disarms it; no PID polling/reuse.
+  let retiring = false;
+  const watched = process.platform !== "win32";
+  // Ignore forwarded stops before forking, so the watcher inherits protection;
+  // restore the shell's defaults before executing the person's command.
+  const watcher = [
+    'aidlc_group=$$; trap "" INT TERM HUP;',
+    '(if ! read -r aidlc_done <&3; then kill -s KILL -- "-$aidlc_group"; fi) >/dev/null 2>&1 &',
+    'trap - INT TERM HUP; exec "$@" 3<&-',
+  ].join(" ");
+  const child = spawn(watched ? "/bin/sh" : command, watched ? ["-c", watcher, "aidlc-check", command, ...args] : args, {
+    cwd, detached: watched, stdio: watched ? ["ignore", outFd, errFd, "pipe"] : ["ignore", outFd, errFd],
+    windowsHide: true, windowsVerbatimArguments: process.platform === "win32",
+  });
+  const control = watched ? child.stdio[3] as Writable | null : null;
+  if (watched) {
+    // The group can close the pipe while we are retiring it.
+    control?.on("error", () => {});
+    child.on("exit", () => { if (!retiring) control?.end("done\n"); });
+  }
+  let error: Error | null = null;
+  let timedOut = false;
+  let interrupted: NodeJS.Signals | null = null;
+  let closed = false;
+  let cleanup: Promise<string | null> = Promise.resolve(null);
+  const completed = new Promise<VerificationProcessResult>((resolve) => {
+    child.on("error", (failure) => { error = failure; });
+    child.on("close", (status, signal) => {
+      closed = true;
+      resolve({ status, signal, error });
+    });
+  });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let stalled!: (result: VerificationProcessResult) => void;
+  const retirementLimit = new Promise<VerificationProcessResult>((resolve) => { stalled = resolve; });
+  const retire = (signal: NodeJS.Signals) => {
+    if (retiring || closed || child.pid === undefined) return;
+    retiring = true;
+    watchdog = setTimeout(() => stalled({ status: null, signal: null,
+      error: new Error("verification process did not close") }), 4_000);
+    const pid = child.pid;
+    cleanup = (async () => {
+      if (process.platform === "win32") {
+        // Keep the root alive until taskkill has enumerated its owned tree.
+        return await new Promise<string | null>((resolve) => {
+          const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          const ceiling = setTimeout(() => { killer.kill(); child.kill("SIGKILL"); resolve("taskkill did not finish"); }, 2_000);
+          killer.on("error", (failure) => { clearTimeout(ceiling); child.kill("SIGKILL"); resolve(failure.message); });
+          killer.on("close", (code) => { clearTimeout(ceiling); if (code !== 0) child.kill("SIGKILL"); resolve(code === 0 ? null : `taskkill exited ${code}`); });
+        });
+      }
+      try { process.kill(-pid, signal); }
+      catch (failure) {
+        if ((failure as NodeJS.ErrnoException).code !== "ESRCH") {
+          child.kill("SIGKILL");
+          return String(failure);
+        }
+      }
+      const started = Date.now();
+      const deadline = started + 2_000;
+      let forced = signal === "SIGKILL";
+      do {
+        try { process.kill(-pid, 0); }
+        catch (failure) {
+          return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+        }
+        // Forward the person's stop first, then retire children that ignore it.
+        if (!forced && Date.now() - started >= 250) {
+          try { process.kill(-pid, "SIGKILL"); }
+          catch (failure) {
+            return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+          }
+          forced = true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      return "the owned process group still exists";
+    })().catch((failure: unknown) => String(failure));
+  };
+  const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = stopSignals.map((signal) => ({ signal, listener: () => {
+    interrupted ??= signal;
+    retire(signal);
+  } }));
+  if (process.platform !== "win32") {
+    for (const { signal, listener } of handlers) process.on(signal, listener);
+  }
+  const timer = setTimeout(() => {
+    if (retiring || closed) return;
+    timedOut = true;
+    retire("SIGKILL");
+  }, timeoutMs);
+  // Both a timeout and a person's stop wait for the same bounded retirement.
+  try {
+    const result = await Promise.race([completed, retirementLimit]);
+    if (!closed) child.unref();
+    if (!timedOut && interrupted === null) return result;
+    const incomplete = await cleanup;
+    const reason = interrupted !== null
+      ? `Verification command interrupted by ${interrupted}.`
+      : `Verification command timed out after ${timeoutMs} ms.`;
+    return {
+      ...result,
+      error: new Error(reason +
+        (incomplete || !closed ? ` Process cleanup incomplete: ${incomplete ?? "the shell did not close"}.` : " Owned process cleanup completed.")),
+    };
+  } finally {
+    clearTimeout(timer);
+    if (watchdog !== undefined) clearTimeout(watchdog);
+    for (const { signal, listener } of handlers) process.removeListener(signal, listener);
+    control?.destroy();
+  }
+}
+
 const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
@@ -177,6 +384,14 @@ export function checkpointPolicyEnabled(stateContent: string): boolean {
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+}
+
+// The record folder in a checkpoint fingerprint, as a path from the project
+// with forward slashes, so an approval made on one OS counts on another. Windows
+// wrote it with backslashes before, and an approval it recorded so still counts.
+export function checkpointRecordForms(projectDir: string, root: string): [string, string] {
+  const record = toPosix(relative(projectDir, root));
+  return [record, record.replaceAll("/", "\\")];
 }
 
 function checkpointName(kind: ConstructionCheckpointKind): string {
@@ -339,7 +554,6 @@ function proofFileAbsent(root: string, path: string): boolean {
   }
 }
 
-// What a committed verification row records of its proof.
 type CommittedCheckpointProof = Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" |
   "command_sha256" | "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at">;
 
@@ -373,9 +587,13 @@ interface Snapshot {
   /** This work's Guard Policy lets the person approve the Unit over the
    *  unfinished review `rereview` names. */
   overAllowed: boolean;
+  /** The stages whose unfinished review the person let the Unit go on
+   *  without, which its verification records. */
+  waivedStages: string[];
+  /** The message the person said to go on without the review in, as the latest verification recorded it. */
+  waiverMessage: string | null;
 }
 
-/** One stage's evidence as an approval of the Unit saw it. */
 interface ApprovedStageEvidence {
   artifact: string;
   source: string | null;
@@ -386,6 +604,16 @@ interface ApprovedStageEvidence {
 }
 
 const APPROVED_FILES_CAP = 50;
+
+// Recorded approved work in its current form: a value recorded over raw line
+// endings of documents read here reads as their current fingerprint.
+function inCurrentForm(evidence: ApprovedStageEvidence | undefined): ApprovedStageEvidence | undefined {
+  return evidence && {
+    ...evidence,
+    artifact: currentFingerprintForm(evidence.artifact) ?? evidence.artifact,
+    source: currentFingerprintForm(evidence.source),
+  };
+}
 
 // "Approved Evidence" on a GATE_APPROVED row: one JSON line from stage slug to
 // [artifact fingerprint, source fingerprint or null] plus, for a stage with
@@ -449,7 +677,7 @@ function workKeptOverScopeChange(
   // A step the Unit owes nothing (skipped for it, or not for its kind) holds no work.
   const owed = stages.filter((slug) => current[slug] !== undefined);
   return recorded !== null && owed.length > 0 && owed.every((slug) => {
-    const then = recorded.get(slug);
+    const then = inCurrentForm(recorded.get(slug));
     return then !== undefined && then.floor === floors[slug] &&
       current[slug][0] === then.artifact && current[slug][1] === then.source;
   });
@@ -564,8 +792,6 @@ function notFinishedReviews(row: AuditShardEvent | null): Map<string, string> {
   return stages;
 }
 
-// The reviews of these stages as the person reads them: "Code Generation
-// review", or "Functional Design and Code Generation reviews".
 function reviewsNamed(slugs: readonly string[]): string {
   const names = slugs.map((slug) => findStageBySlug(slug)?.name ?? slug);
   const named = names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
@@ -661,12 +887,21 @@ function snapshot(
   ));
   // The person said to approve the Unit as it is over a review of its that
   // has not finished: in their words now (`personAllows`), or as the
-  // verification that took them recorded it, per stage at its run floor. Only
-  // under off and relaxed, and never over a strict the team locks.
+  // verification that took them recorded it, per stage at its run floor. As at
+  // a stage gate: never over a strict the team locks.
   const notFinishedBefore = notFinishedReviews(verification);
   const notFinished: string[] = [];
+  // Stages whose review ended in the NOT-READY fallback no reviewer gave:
+  // ready, and asked about and approved as not finished.
+  const endedUnfinished: string[] = [];
+  // Stages whose fresh review was edited after the reviewer finished, whose
+  // fresh review records the verdict its dispatch dictated, and whose verdict
+  // was recorded before any reviewer finished.
+  const editedReviews: string[] = [];
+  const dictatedReviews: string[] = [];
+  const noReviewerReviews: string[] = [];
   let mayGoOn: boolean | null = null;
-  const overAllowed = (): boolean => (mayGoOn ??= acceptsChanges() && !memoryStrictHoldsGuardPolicy(projectDir, state));
+  const overAllowed = (): boolean => (mayGoOn ??= personMayApproveOverUnfinishedReview(projectDir, state));
   // The unfinished review `rereview` names is one the person may go on without.
   let unfinishedMayGoOn = false;
 
@@ -725,7 +960,7 @@ function snapshot(
         const manifest = readUnitSourceManifest(projectDir, slug, unit);
         if (
           !manifest.ok ||
-          manifest.rawBytesSha256 !== createHash("sha256").update(bytes).digest("hex")
+          manifest.rawBytesSha256 !== committedTextSha256(bytes)
         ) {
           errors.push(`${slug}: ${manifest.ok ? "source manifest changed while reading" : manifest.reason}`);
         } else if (listing !== null) {
@@ -743,6 +978,10 @@ function snapshot(
       : "none";
     let review: AuditShardEvent | null = null;
     let waived = false;
+    // The person approved this Unit as it was over this stage's review, and
+    // that review's verdict came in after: it is on record, and the approval
+    // stands on the review as it was then, so the Unit is not asked about again.
+    let lateVerdict = false;
     if (reviewClass !== "none") {
       let receipts = shared.receipts.get(slug);
       if (!receipts) {
@@ -774,13 +1013,18 @@ function snapshot(
         eventMatchesClaimAttempt(projectDir, row.block, unit),
       ));
       const binding = request ? reviewRequestBindingFromBlock(request.block) : null;
+      lateVerdict = review !== null && request !== null && gate?.event === "GATE_APPROVED" &&
+        auditBlockField(gate.block, "Unit") === unit && auditBlockField(gate.block, "Review") === "not finished" &&
+        notFinishedBefore.get(slug) === floor &&
+        attemptEventDefinitelyBefore(request, gate) && attemptEventDefinitelyBefore(gate, review);
       // Another Unit's own reviewed build of a path this Unit claims, or any
       // change to its code or documents the Guard Policy accepts, is not a
       // change to this Unit's approved work: its review's binding still holds.
       // So is source the Guard Policy keeps without a compare: the reviewed
       // listing not on this machine, the Unit's list of files changed after
       // its review, or source that cannot be read here.
-      const reviewedSource = review ? auditBlockField(review.block, "Unit Source Fingerprint") : null;
+      // Values the review recorded over raw line endings read in their current form.
+      const reviewedSource = review ? currentFingerprintForm(auditBlockField(review.block, "Unit Source Fingerprint")) : null;
       const sourceKept = receipts.unitSourceKept.has(unit) && acceptsChanges();
       if (
         stage.workspace_requires && reviewedSource !== null && reviewedSource !== source && (
@@ -793,7 +1037,7 @@ function snapshot(
         if (source === null && listing === null) sourceKeptUnread++;
         source = reviewedSource;
       }
-      const reviewedArtifact = review ? auditBlockField(review.block, "Artifact Fingerprint") : null;
+      const reviewedArtifact = review ? currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) : null;
       if (
         artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
         receipts.unitVerdicts.has(unit) && acceptsChanges()
@@ -807,11 +1051,11 @@ function snapshot(
         ) ||
         receipts.unitPending.has(unit) || receipts.openBoltUnits.has(unit) ||
         reviewFloor !== floor ||
-        auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+        reviewedArtifact !== artifact ||
         auditBlockField(review.block, "Iteration") !== String(receipts.unitIterations.get(unit)) ||
         (stage.workspace_requires && (
           source === null ||
-          auditBlockField(review.block, "Unit Source Fingerprint") !== source ||
+          reviewedSource !== source ||
           auditBlockField(review.block, "Source Freshness Bypass") !== null ||
           auditBlockField(review.block, "Unit Source Binding Bypass") !== null
         ))
@@ -839,16 +1083,34 @@ function snapshot(
           reviewRecordNotHere(projectDir, binding, review.block);
         const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
-            auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
+            currentFingerprintForm(auditBlockField(review.block, "Artifact Fingerprint")) !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
           ) ? receipts.unitStaleProgress.get(unit) : undefined);
         // That review still counts as waiting for its verdict, so the re-check
-        // repeats the same iteration and records it again here.
+        // repeats that same pass (the one still waiting, after a review in
+        // several passes) and records it again here.
         const retryPending = changed === undefined && recordNotHere;
         const moved = changed ?? (retryPending
-          ? { nextIteration: receipts.unitIterations.get(unit) ?? 1, recoverySpent: false }
+          ? {
+            nextIteration: receipts.unitPending.get(unit)?.iteration ?? receipts.unitIterations.get(unit) ?? 1,
+            recoverySpent: false,
+          }
           : undefined);
-        if (review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
+        // A jump back or a reopen starts the Unit's work again: a review asked
+        // for before it is not this run's, so with none asked for since, the
+        // step is this run's first request.
+        const latestRequest = onlyLatest(rows.filter((row) =>
+          row.event === "REVIEW_REQUESTED" &&
+          auditBlockField(row.block, "Stage") === slug &&
+          auditBlockField(row.block, "Unit") === unit &&
+          auditBlockField(row.block, "Reviewer") === stage.reviewer &&
+          !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+          eventMatchesClaimAttempt(projectDir, row.block, unit),
+        ));
+        const requestedThisRun = latestRequest !== null && latestMainWorkflowStageRunFloorForProject(
+          projectDir, slug, true, unit, rows.filter((row) => attemptEventDefinitelyBefore(row, latestRequest)),
+        ) === floor;
+        if (requestedThisRun && review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;
           recheckable++;
@@ -871,20 +1133,27 @@ function snapshot(
                 projectDir, stage: slug, reviewer, unit, iteration,
                 ...(pending.state === "retry-required" ? { retryPending: true } : {}),
               }),
-              unfinished: receipts.awaitingVerdict?.has(unit) ? "no-verdict" : "not-ready",
+              unfinished: receipts.awaitingVerdict?.has(unit) || pending.didNotFinish ? "no-verdict" : "not-ready",
             };
             unfinishedMayGoOn = pending.verificationFailed !== true;
           }
-        } else if (!review && !receipts.openBoltUnits.has(unit) && !receipts.unitStaleProgress.has(unit)) {
-          // The Unit's review was never asked for: the step is its first request.
+        } else if (!requestedThisRun && !receipts.openBoltUnits.has(unit)) {
+          // The Unit's review was never asked for in this run of its work: the
+          // step is its first request, at the pass the review log expects.
           const reviewer = stage.reviewer!;
+          const iteration = reviewAttemptAccounting(
+            projectDir, reviewAttemptWindow(projectDir, state, stage, shared.allRows), state, stage, reviewer, unit,
+            undefined, { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, unit, row) },
+          ).requestCount + 1;
           recheckable++;
           rereview ??= {
-            stage: slug, reviewer, iteration: 1,
-            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration: 1 }),
+            stage: slug, reviewer, iteration,
+            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration }),
             first: true,
           };
         }
+      } else if (review && reviewCompletionDidNotFinish(projectDir, review.block)) {
+        endedUnfinished.push(slug);
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {
         // A re-check of code alone asked about the documents the review before
         // it saw; a re-check of documents asked about new ones.
@@ -902,12 +1171,15 @@ function snapshot(
         }
       }
     }
+    if (review && reviewCompletionEdited(review.block) && !acceptsChanges()) editedReviews.push(slug);
+    if (review && reviewCompletionDictated(review.block) && !acceptsChanges()) dictatedReviews.push(slug);
+    if (review && reviewCompletionWithoutReviewer(review.block) && !acceptsChanges()) noReviewerReviews.push(slug);
     if (reviewClass === "none" || waived) {
       // No review re-checks this stage (or the person let the Unit go on
       // without it): a later change to the work the person approved, which
       // its Guard Policy accepts, keeps the approved values in the
       // fingerprint and is said once.
-      const recorded = recordedEvidence?.get(slug);
+      const recorded = inCurrentForm(recordedEvidence?.get(slug));
       if (
         recorded && recorded.floor === floor && artifact !== null &&
         (source !== null) === Boolean(stage.workspace_requires) &&
@@ -931,7 +1203,7 @@ function snapshot(
       // Receipt presence/currentness is checked above. Re-recording the same
       // evidence is not a change to the approved work.
       reviewer: reviewClass === "none" ? null : stage.reviewer ?? null,
-      review_verdict: review ? auditBlockField(review.block, "Verdict") : null,
+      review_verdict: review && !lateVerdict ? auditBlockField(review.block, "Verdict") : null,
     });
   }
   if (listing === null && (sourceStages === 0 || sourceKeptUnread < sourceStages)) {
@@ -939,14 +1211,30 @@ function snapshot(
   }
   if (sourceStages === 0) errors.push("No applicable stage supplies the Unit's source manifest.");
   if (errors.length !== recheckable) rereview = null;
-  const fresh = digest({
-    version: 1, intent, record: relative(projectDir, root), kind, unit,
+  const [record, olderRecord] = checkpointRecordForms(projectDir, root);
+  const fingerprintFor = (recordPath: string, stagesEvidence: unknown[] = evidence): string => digest({
+    version: 1, intent, record: recordPath, kind, unit,
     unit_kind: dag.unitKinds?.get(unit) ?? null,
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
-    stages: evidence,
+    stages: stagesEvidence,
   });
-  const fingerprint = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors) ?? fresh;
+  const fresh = fingerprintFor(record);
+  // The same evidence as it was recorded before: Windows wrote the record
+  // folder with backslashes, and documents were hashed with their raw line
+  // endings. Those forms are no change to keep over a scope change, and they
+  // still count.
+  const rawForm = (value: unknown): unknown => typeof value === "string" ? rawFingerprintForm(value) ?? value : value;
+  const rawEvidence = (evidence as Array<Record<string, unknown>>).map((entry) =>
+    ({ ...entry, ...("artifact" in entry ? { artifact: rawForm(entry.artifact), source: rawForm(entry.source) } : {}) }));
+  const olderForms = new Set([
+    fingerprintFor(olderRecord), fingerprintFor(record, rawEvidence), fingerprintFor(olderRecord, rawEvidence),
+  ]);
+  olderForms.delete(fresh);
+  const kept = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors);
+  const fingerprint = kept !== null && !olderForms.has(kept) ? kept : fresh;
+  const isFingerprint = (value: string | null | undefined): boolean =>
+    value === fingerprint || (value !== null && value !== undefined && olderForms.has(value));
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
   const proofFile = proof;
@@ -958,13 +1246,13 @@ function snapshot(
     commandSha256 !== undefined &&
     proof.kind === kind && proof.unit === unit &&
     proof.command_sha256 === commandSha256 &&
-    proof.fingerprint === fingerprint && proof.verified === true &&
+    isFingerprint(proof.fingerprint) && proof.verified === true &&
     proof.evidence_unchanged === true && proof.exit_code === 0 &&
     proof.signal === null && proof.error === null &&
     typeof proof.finished_at === "string" && verification !== null &&
     auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
     auditBlockField(verification.block, "Verification Id") === proof.id &&
-    auditBlockField(verification.block, "Fingerprint") === fingerprint &&
+    isFingerprint(auditBlockField(verification.block, "Fingerprint")) &&
     auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
     auditBlockField(verification.block, "Verified") === "true";
   const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
@@ -973,7 +1261,7 @@ function snapshot(
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
-    auditBlockField(gate.block, "Fingerprint") === fingerprint &&
+    isFingerprint(auditBlockField(gate.block, "Fingerprint")) &&
     commandSha256 !== undefined &&
     auditBlockField(gate.block, "Verification Command SHA-256") === commandSha256 &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
@@ -1023,18 +1311,26 @@ function snapshot(
       verdict: recheckVerdict, approved_before: approvedBefore, changed: recheckChanged,
       ...(redone ? { redone: true as const } : {}),
     };
+  const unfinishedStages = stages.filter((slug) => notFinished.includes(slug) || endedUnfinished.includes(slug));
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
+    waiverMessage: verification ? auditBlockField(verification.block, "Message Id") : null,
     approvedEvidence: JSON.stringify(approvedEvidence),
     overAllowed: rereview?.unfinished !== undefined && unfinishedMayGoOn && overAllowed(),
+    waivedStages: notFinished,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
-      ...(notFinished.length > 0 ? {
-        review_not_finished: { stages: notFinished, question: `Approve ${unit}? Its ${reviewsNamed(notFinished)} did not finish.` },
+      ...(unfinishedStages.length > 0 ? {
+        review_not_finished: notFinished.length > 0
+          ? { stages: unfinishedStages, approved_in_words: true as const }
+          : { stages: unfinishedStages, question: `Approve ${unit}? Its ${reviewsNamed(unfinishedStages)} did not finish.` },
       } : {}),
+      ...(editedReviews.length > 0 ? { review_edited: { stages: editedReviews } } : {}),
+      ...(dictatedReviews.length > 0 ? { review_dictated: { stages: dictatedReviews } } : {}),
+      ...(noReviewerReviews.length > 0 ? { review_no_reviewer: { stages: noReviewerReviews } } : {}),
       run_floor: floors[stages.at(-1)!] ?? "unstarted#0",
       run_floors: floors, proof_path: `${root}/${proofPath}`, verification: proof ?? restored,
       rereview, rechecked,
@@ -1094,19 +1390,22 @@ function requireReady(current: Snapshot): void {
       ? `repair what it found, request the next pass with \`${step.command}\`, record the verdict, then verify`
       : `request it again with \`${step?.command}\`, record the verdict, then verify`;
     // The person may let the Unit go on without a review that did not finish;
-    // strict, in the state or locked by the team, keeps it required.
+    // a strict the team locks keeps it required, and the agent finishes it
+    // without asking them.
     const rereview = !step ? ""
       : step.first
-        ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for: request it with \`${step.command}\`, ` +
+        ? ` The ${reviewsNamed([step.stage])} for ${result.unit} was never asked for in this run of its work: ` +
+          `request it with \`${step.command}\`, ` +
           "record the verdict, then verify."
       : !step.unfinished
         ? ` What ${step.stage} reviewed changed since its review: request the re-check with \`${step.command}\`, record the verdict, then verify.`
         : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +
           `${step.unfinished === "no-verdict" ? "did not finish" : "is NOT-READY with a pass left"}. ` +
           (current.overAllowed
-            ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
-              `with --over-unfinished-review; otherwise finish the review: ${finish}.`
-            : `Finish it first: ${finish}.`);
+            ? `If the person said to approve ${result.unit} as it is, verify with --over-unfinished-review ` +
+              "--message <id>, the id of the message they said it in; " +
+              `otherwise finish the review: ${finish}.`
+            : `Finish it first, without asking the person: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
 }
@@ -1148,19 +1447,27 @@ function outputTail(output: Buffer | null): string {
   );
 }
 
-export function verifyConstructionCheckpoint(
+export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean } = {},
-): ConstructionCheckpoint {
+  options: { overUnfinishedReview?: boolean; timeoutMs?: number; message?: string } = {},
+): Promise<ConstructionCheckpoint> {
+  // The person's "approve it as it is": the message the agent names
+  // (--message), proved, is what lets the Unit go on without its review.
+  let over: string | null = null;
+  if (options.overUnfinishedReview === true && options.message !== undefined) {
+    const proof = proveMessage(projectDir, options.message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+    over = proof.message.id;
+  }
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
-  const over = options.overUnfinishedReview === true;
-  const first = verifyOnce(projectDir, unit, kind, false, over);
+  const timeoutMs = verificationTimeoutMs(options.timeoutMs);
+  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
-  const second = verifyOnce(projectDir, unit, kind, true, over).result;
+  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs)).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -1169,16 +1476,16 @@ const CHECK_KEPT_CHANGING =
   "The check changed this Unit's files each time it ran, so no one version of them passed. " +
   "Use a check that leaves the files as they are, then verify again.";
 
-function verifyOnce(
+async function verifyOnce(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
   secondRun: boolean,
-  overUnfinishedReview: boolean,
-): { result: ConstructionCheckpoint; rerun: boolean } {
-  // The agent passes on the person's "approve it as it is"; their words since
-  // the last decision are what let the Unit go on without its review.
-  const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
+  // The message the person said to approve it as it is in, proved; null when they said nothing of it now.
+  overUnfinishedReview: string | null,
+  timeoutMs: number,
+): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
+  const personAllows = overUnfinishedReview !== null;
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);
@@ -1191,7 +1498,7 @@ function verifyOnce(
     const notices = recordAcceptedChanges(projectDir, changes);
     const authorization = current.verificationCommand;
     if (!authorization) {
-      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
+      throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + verificationCommandRecovery());
     }
     const proof: ConstructionCheckpointProof = {
       version: 4, id: randomUUID(), kind, unit, fingerprint: current.result.fingerprint,
@@ -1220,18 +1527,14 @@ function verifyOnce(
   const outputDir = mkdtempSync(join(tmpdir(), "aidlc-check-"));
   const outPath = join(outputDir, "stdout");
   const errPath = join(outputDir, "stderr");
-  let check: ReturnType<typeof spawnSync>;
+  let check: VerificationProcessResult;
   let stdout: ReturnType<typeof capturedOutput>;
   let stderr: ReturnType<typeof capturedOutput>;
   try {
     const outFd = openSync(outPath, "w");
     const errFd = openSync(errPath, "w");
     try {
-      check = spawnSync(command, args, {
-        cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
-        stdio: ["pipe", outFd, errFd], killSignal: "SIGKILL", windowsHide: true,
-        windowsVerbatimArguments: process.platform === "win32",
-      });
+      check = await runVerificationProcess(command, args, projectDir, outFd, errFd, timeoutMs);
     } finally {
       closeSync(outFd);
       closeSync(errFd);
@@ -1279,6 +1582,8 @@ function verifyOnce(
     proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
+    // The waiver it records stands on the message the person said it in: named now, or carried from the last one.
+    const waiverMessage = overUnfinishedReview ?? before.waiverMessage;
     appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
       Unit: unit,
       Kind: kind,
@@ -1290,9 +1595,10 @@ function verifyOnce(
       "Exit Code": String(proof.exit_code),
       Verified: String(proof.verified),
       "Run floor": before.result.run_floor,
-      ...(before.result.review_not_finished ? {
-        "Review Not Finished": JSON.stringify(Object.fromEntries(before.result.review_not_finished.stages
+      ...(before.waivedStages.length > 0 ? {
+        "Review Not Finished": JSON.stringify(Object.fromEntries(before.waivedStages
           .map((stage) => [stage, before.result.run_floors[stage]]))),
+        ...(waiverMessage ? { "Message Id": waiverMessage } : {}),
       } : {}),
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
@@ -1353,22 +1659,65 @@ export function askConstructionCheckpoint(
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
     if (!current.result.ready || !current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
+      throw new Error(`Verify the current Construction checkpoint first, before asking for approval. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify and require verified: true.`);
     }
+    // The person may have answered while the Unit's review ran: their words
+    // typed in this chat after it was asked for and before any other question
+    // was asked (gateWordsSinceUnitReview), read before this question's own
+    // row, are its reply, kept as a reply typed after it is, for the conductor
+    // to read.
+    const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Construction Unit Approval", Unit: unit, Kind: kind,
       Stage: current.result.stages.at(-1)!, Fingerprint: current.result.fingerprint,
-      Session: session, Options: "Approve,Request Changes",
+      Session: session, Options: APPROVAL_GATE_CHOICES.join(","),
       // What the person is shown, so a change before their answer is said
       // once instead of asking again (relaxed and off).
       "Asked Evidence": current.approvedEvidence, "Run floors": JSON.stringify(current.result.run_floors),
     }, projectDir);
-    mintProtectedQuestion(projectDir, {
-      kind: "checkpoint-approval", session, target: approvalTarget(current),
+    const question = mintProtectedQuestion(projectDir, {
+      kind: "checkpoint-approval", session, target: approvalTarget(current), choices: APPROVAL_GATE_CHOICES,
     });
-    return current.result;
+    const leftOut = leftOutLine(current.result.stages
+      .filter((slug) => findStageBySlug(slug)?.workspace_requires === true)
+      .map((slug) => join(current.root, "construction", unit, slug, "traceability.json")));
+    const offer = current.result.stages.map((slug) => findStageBySlug(slug))
+      .map((stage) => stage ? reviewCheckOffer(projectDir, stage, unit) : null).find((found) => found !== null) ?? null;
+    const changedFiles = current.result.stages.includes("code-generation")
+      ? unheardBroughtFilesLine(projectDir, readStateFile(projectDir), session, true)
+      : null;
+    // With their reply already in, the question is not shown: the line about
+    // their files rides the next step the agent speaks from instead.
+    const carried = changedFiles !== null && earlier !== null &&
+      addPendingPersonLines(projectDir, session, [changedFiles.line]);
+    if (changedFiles !== null && (earlier === null || carried)) markPersonLinesHeard(projectDir, session, [changedFiles.key]);
+    const result = {
+      ...current.result,
+      ...(leftOut === null ? {} : { left_out: leftOut }),
+      ...(changedFiles === null || carried ? {} : { changed_files: changedFiles.line }),
+      ...(offer === null ? {} : { check_offer: offer.offer }),
+    };
+    if (earlier === null) return result;
+    const words = earlier.map((reply) => reply.words).join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
+    markProtectedQuestionReplied(projectDir, question);
+    writeProtectedResponse(projectDir, {
+      version: 1, session, challengeId: question.challengeId,
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      words,
+      at: isoTimestamp(),
+      replies: earlier.slice(-PROTECTED_RESPONSE_REPLIES_MAX),
+    });
+    return { ...result, earlier_reply: words };
   });
+}
+
+// A Unit checkpoint's reply the agent names: after the Unit's review was
+// requested in the checkpoint's stages, else after their start.
+function namedReply(
+  projectDir: string, stages: readonly string[], unit: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(projectDir, stages, [unit]) };
 }
 
 export function approveConstructionCheckpoint(
@@ -1377,6 +1726,9 @@ export function approveConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
   reply?: string,
   session = "",
+  findingDispositions?: ApprovalFindingDispositions,
+  // The message the agent read the approval from, when it names one.
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply and reports their approval. The
   // receipt records it beside the person's own words, kept by the human-turn
@@ -1385,15 +1737,27 @@ export function approveConstructionCheckpoint(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current);
     if (!current.result.verified) {
-      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
+      throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run ${aidlcToolInvocation("bolt")} checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
     const humanRequired = current.result.human_required || reply !== undefined;
-    let words: string | undefined;
-    if (humanRequired) {
+    // The person's "approve it as it is", which the verification took, is the
+    // approval; nothing more is asked of them.
+    const inWords = current.result.review_not_finished?.approved_in_words === true;
+    let theirs: Record<string, string> = {};
+    if (humanRequired && inWords) {
+      // Already approved from their words: an approve run again records nothing more.
+      if (current.result.approved) return current.result;
+      // Their words are the message the verification took their approval from.
+      const named = current.waiverMessage === null ? null : readMessage(projectDir, current.waiverMessage);
+      theirs = {
+        ...(named?.words ? { "Person Reply": personsWordsText(named.words) } : {}),
+        ...(current.waiverMessage ? { "Message Id": current.waiverMessage } : {}),
+      };
+    } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
-      });
-      words = readProtectedResponse(projectDir, session)?.words;
+      }, namedReply(projectDir, current.result.stages, unit, message));
+      theirs = protectedResponseFields(readProtectedResponse(projectDir, session));
     } else if (current.result.approved) {
       return current.result;
     }
@@ -1413,14 +1777,18 @@ export function approveConstructionCheckpoint(
     // approval says so, and so does the one line they hear.
     const notFinished = rechecked.result.review_not_finished;
     if (notFinished) notices.push(`Approved. The ${reviewsNamed(notFinished.stages)} for ${unit} did not finish.`);
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_APPROVED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       "Verification Id": rechecked.result.verification!.id,
       "Approved Evidence": rechecked.approvedEvidence,
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
-      ...(words ? { "Person Reply": words } : {}),
+      ...theirs,
       ...(notFinished ? { Review: "not finished" } : {}),
+      ...findingDispositions?.(
+        gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
+      ),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -1459,6 +1827,8 @@ export function rejectConstructionCheckpoint(
   _reply: string,
   givenReason: string,
   session = "",
+  message?: string,
+  rejectedFindings?: RejectedFindingDispositions,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1470,23 +1840,24 @@ export function rejectConstructionCheckpoint(
     }
     requireProtectedResponse(projectDir, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
-    });
-    const words = readProtectedResponse(projectDir, session)?.words;
-    const reason = givenReason.trim() || changeRequestWords(words);
+    }, namedReply(projectDir, current.result.stages, unit, message));
+    const response = readProtectedResponse(projectDir, session);
+    const reason = givenReason.trim() || changeRequestWords(response?.words);
     const userInput = "Request Changes";
-    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-      selfAttributedDecisionMarker(reason, "rejection")) {
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
       throw new Error("Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
     }
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_REJECTED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
-      ...(words ? { "Person Reply": words } : {}),
+      ...protectedResponseFields(response),
+      ...rejectedFindings?.(gate["Gate Stages"].split(", ").filter(Boolean), [unit]),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

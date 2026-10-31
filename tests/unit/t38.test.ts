@@ -1,67 +1,36 @@
 // covers: subcommand:aidlc-utility:status, function:staleStageNote
 //
-// CLI-contract port of tests/unit/t38-utility-status-gate-awareness.sh
-// (TAP plan 5), mechanism = cli. Equal-or-stronger migration: every .sh
-// assertion that shelled out to `bun aidlc-utility.ts status --project-dir
+// Mechanism = cli. Every assertion (exit code and combined stdout+stderr) on
+// the status call `bun aidlc-utility.ts status --project-dir
 // <p>` is preserved by SPAWNING the real CLI via node:child_process spawnSync
-// (BUN + the tool .ts path), asserting on res.status / combined stdout+stderr
-// exactly as the .sh asserted on $? / 2>&1 output. The contract under test —
-// gate-awareness in the `Status:` line — is a PROCESS-boundary effect
-// (handleStatus reads the seeded state file off disk and writes the rendered
-// status block to stdout), so it stays a spawn; an in-process twin would lose
-// the exit-code half case 4 relies on.
+// (BUN + the tool .ts path), asserting on res.status / combined stdout+stderr.
+// The contract under test - gate-awareness in the `Status:` line - is a
+// PROCESS-boundary effect (handleStatus reads the seeded state file off disk
+// and writes the rendered status block to stdout), so it stays a spawn; an
+// in-process twin would lose the exit-code half case 4 relies on.
 //
-// CONTRACT (aidlc-utility.ts handleStatus, lines 181-313):
+// CONTRACT (aidlc-utility.ts handleStatus):
 //   - current stage's checkbox == [?] (awaiting-approval) ->
-//       statusLine = `Awaiting your approval on <displayName>`  (line 223)
+//       statusLine = `Awaiting your approval on <displayName>`
 //   - current stage's checkbox == [R] (revising) ->
-//       statusLine = `Revising <displayName> (revision <N> of 3)` when the
-//       Revision Count field is present (line 231), else `Revising
-//       <displayName>` (line 232) — never a literal "?" count.
+//       statusLine = `Revising <displayName> (revision <N> of 3)`, N being
+//       this stage's own change requests on record, else `Revising
+//       <displayName>` - never a literal "?" count.
 //   - current stage's checkbox == [-] (in-progress) -> statusLine stays the
 //       raw Status value ("Running"), no gate phrase leaks.
 //   - <displayName> = the stage-graph `name` for the current slug; for the
 //       feasibility slug used by state-mid-ideation.md that is
-//       "Feasibility & Constraints" (stage-graph.json:221-223).
-//   Checkbox -> state mapping: aidlc-lib.ts:62-63 ([?]->awaiting-approval,
+//       "Feasibility & Constraints" (stage-graph.json).
+//   Checkbox -> state mapping: aidlc-lib.ts ([?]->awaiting-approval,
 //   [R]->revising), confirmed against handleStatus's currentCheckbox?.state
 //   branches.
 //
-// PARITY NOTES (every .sh `ok` line maps to an expect()-bearing test() here;
-// several are STRONGER than the original case-insensitive grep):
-//   - .sh Test 1  grep -qi "awaiting your approval"            -> Test 1:
-//       out contains the EXACT rendered phrase "Awaiting your approval on
-//       Feasibility & Constraints" (STRONGER: exact display-name-bearing
-//       phrase, not a case-insensitive substring) + exit 0.
-//   - .sh Test 2  grep -qi "revising"                          -> Test 2:
-//       out contains "Revising Feasibility & Constraints" (STRONGER: exact
-//       display-name-bearing phrase) + exit 0.
-//   - .sh Test 3  grep -qE "revision.*2.*of.*3"                -> Test 3:
-//       out contains the EXACT "(revision 2 of 3)" substring (STRONGER:
-//       exact count clause rather than a permissive .*2.*of.*3 regex).
-//   - .sh Test 4  grep -qi "awaiting your approval\|revising" must be ABSENT
-//       on a [-] stage                                         -> Test 4:
-//       out does NOT contain "Awaiting your approval" AND does NOT contain
-//       "Revising" (same negative observable, split for clarity) + the raw
-//       "Status:         Running" line is present (STRONGER: confirms the
-//       fallthrough renders the raw Status rather than merely lacking the
-//       gate phrases) + exit 0.
-//   - .sh Test 5  assert_eq 0 $? on missing Revision Count     -> Test 5:
-//       res.status === 0 (same observable) + STRONGER additions: the
-//       [R] branch still renders the bare "Revising Feasibility &
-//       Constraints" phrase WITHOUT a "(revision" count clause (pins the
-//       graceful-fallback path of line 232, the comment the .sh case name
-//       describes but never asserted).
-//
-// 5 .sh asserts -> 5 expect()-bearing test() cases here (1:1).
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file
-// + sed_i mutate + cleanup_test_project per case): each case uses a FRESH temp
-// project dir (createTestProject, which toPortablePath-converts on Windows so
-// the project path round-trips), seeds state-mid-ideation.md via seedStateFile
-// (= seed_state_file), then mutates the seeded aidlc-state.md in place via
-// sedReplaceInFile / line-delete (= sed_i). All temp dirs cleaned in afterAll.
-// NOTHING is written under tests/fixtures/**; the source fixture is only read.
+// FIXTURE DISCIPLINE: each case uses a FRESH temp project dir
+// (createTestProject, which toPortablePath-converts on Windows so the project
+// path round-trips), seeds state-mid-ideation.md via seedStateFile, then
+// mutates the seeded aidlc-state.md in place via sedState / deleteStateLines.
+// All temp dirs cleaned in afterAll. NOTHING is written under
+// tests/fixtures/**; the source fixture is only read.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -86,7 +55,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(
   REPO_ROOT,
@@ -109,12 +78,11 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// Per-intent layout: state lives in the active intent's record (seedStateFile
 // seeds it so the active-intent cursor resolves; the spawned status tool reads
 // the same record).
 const statePath = (p: string): string => seededStateFile(p);
 
-/** Fresh project seeded with state-mid-ideation.md (create_test_project + seed_state_file). */
 function seededProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -124,10 +92,9 @@ function seededProj(): string {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string;
 }
 
-/** Spawn `bun aidlc-utility.ts status --project-dir <p>`. Mirrors `bun "$UTIL" status --project-dir "$PROJ"`. */
 function status(p: string, env: Record<string, string> = {}): CliResult {
   const res = spawnSync(BUN, [UTIL, "status", "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -140,16 +107,11 @@ function status(p: string, env: Record<string, string> = {}): CliResult {
   };
 }
 
-/**
- * In-place text replace on the seeded state file. Mirrors sed_i (fixtures.sh)
- * — the .sh used `sed_i 's/.../.../'` against $PROJ/aidlc-docs/aidlc-state.md.
- */
 function sedState(p: string, pattern: RegExp, replacement: string): void {
   const f = statePath(p);
   writeFileSync(f, readFileSync(f, "utf-8").replace(pattern, replacement));
 }
 
-/** Delete every line matching `pattern` from the seeded state file (mirrors `sed_i '/.../d'`). */
 function deleteStateLines(p: string, pattern: RegExp): void {
   const f = statePath(p);
   const kept = readFileSync(f, "utf-8")
@@ -197,15 +159,11 @@ function seedAudit(
 }
 
 describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility-status-gate-awareness.sh, plan 5)", () => {
-  // --- Test 1: [?] state -> "Awaiting your approval" phrase ---
-  // state-mid-ideation has feasibility as [-]; flip it to [?].
   test("1: [?] state triggers 'Awaiting your approval' in --status", () => {
     const p = seededProj();
     sedState(p, /^- \[-\] feasibility/m, "- [?] feasibility");
     const r = status(p);
     expect(r.status).toBe(0);
-    // STRONGER: exact rendered phrase (display name from stage-graph) instead
-    // of the .sh's case-insensitive substring grep.
     expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
     expect(r.out).not.toContain("waiting since");
     // The phase bar shows the waiting stage as in hand, not as an unknown.
@@ -355,53 +313,63 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(status(cleared).out).not.toContain("waiting since");
   });
 
-  // --- Test 2: [R] state -> "Revising" phrase ---
   test("2: [R] state triggers 'Revising' phrase in --status", () => {
     const p = seededProj();
     sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
     sedState(p, /^- \*\*Revision Count\*\*: .*/m, "- **Revision Count**: 2");
     const r = status(p);
     expect(r.status).toBe(0);
-    // STRONGER: exact display-name-bearing phrase rather than a bare
-    // case-insensitive "revising" grep.
     expect(r.out).toContain("Revising Feasibility & Constraints");
   });
 
-  // --- Test 3: [R] revision count 2 of 3 shown ---
   test("3: [R] revision count 2 of 3 shown", () => {
     const p = seededProj();
     sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
-    sedState(p, /^- \*\*Revision Count\*\*: .*/m, "- **Revision Count**: 2");
+    seedAudit(p, [
+      { timestamp: "2026-01-01T00:00:01Z", event: "GATE_REJECTED" },
+      { timestamp: "2026-01-01T00:00:02Z", event: "GATE_REJECTED" },
+    ]);
     const r = status(p);
     expect(r.status).toBe(0);
-    // STRONGER: exact "(revision 2 of 3)" clause rather than the .sh's
-    // permissive `revision.*2.*of.*3` regex.
     expect(r.out).toContain("(revision 2 of 3)");
   });
 
-  // --- Test 4: [-] normal state -> no [?] / [R] phrases ---
+  // The count is this stage's own change requests: the state file's Revision
+  // Count runs across the whole workflow.
+  test("3b: [R] revision count counts only this stage's change requests", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
+    sedState(p, /^- \*\*Revision Count\*\*: .*/m, "- **Revision Count**: 4");
+    seedAudit(p, [
+      { timestamp: "2026-01-01T00:00:01Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:02Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:03Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:04Z", event: "GATE_REJECTED" },
+    ]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("(revision 1 of 3)");
+  });
+
   test("4: [-] normal state doesn't leak gate phrases", () => {
     const p = seededProj(); // feasibility stays [-]
     const r = status(p);
     expect(r.status).toBe(0);
-    // Negative observable, split from the .sh's single OR-grep for clarity.
     expect(r.out).not.toContain("Awaiting your approval");
     expect(r.out).not.toContain("Revising");
-    // STRONGER: confirms the fallthrough renders the RAW Status (Running)
-    // rather than merely lacking the gate phrases (handleStatus:220).
+    // Confirms the fallthrough renders the RAW Status (Running)
+    // rather than merely lacking the gate phrases (handleStatus).
     expect(r.out).toContain("Status:         Running");
   });
 
-  // --- Test 5: Missing Revision Count falls back gracefully ---
   test("5: --status handles missing Revision Count gracefully", () => {
     const p = seededProj();
     sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
     deleteStateLines(p, /^- \*\*Revision Count\*\*:/);
     const r = status(p);
-    // Same observable as the .sh's assert_eq 0 $?: must not crash.
     expect(r.status).toBe(0);
-    // STRONGER: the [R] branch still renders the bare "Revising" phrase, and
-    // the absent-count fallback (handleStatus:232) omits any "(revision"
+    // The [R] branch still renders the bare "Revising" phrase, and
+    // the absent-count fallback (handleStatus) omits any "(revision"
     // clause rather than rendering a literal "?" count.
     expect(r.out).toContain("Revising Feasibility & Constraints");
     expect(r.out).not.toContain("(revision");
@@ -622,5 +590,111 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     // A new project shows no scan, whatever the trail holds.
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Greenfield");
     expect(status(p).out).toContain("Project Type:   new project (you said so)\n");
+  });
+
+  test("9: a stage the person skipped is counted out and named, and finished work that ends on it reads finished", () => {
+    const p = seededProj();
+    const before = status(p).out;
+    const completion = before.match(/^Completion: {5}(\d+)\/(\d+) stages \(\d+%\)\n/m);
+    if (!completion) throw new Error(`no Completion line in:\n${before}`);
+    const done = Number(completion[1]);
+    const total = Number(completion[2]);
+    const ideation = before.match(/^ {2}IDEATION {9}\S+ (\d+)\/(\d+)\n/m);
+    if (!ideation) throw new Error(`no IDEATION line in:\n${before}`);
+    // Skipped after it started (the [S] the engine writes for "skip
+    // deployment" at a gate): it is not work left to do.
+    sedState(p, /^- \[ \] scope-definition/m, "- [S] scope-definition");
+    const skipped = status(p);
+    expect(skipped.status).toBe(0);
+    const pct = Math.round((done / (total - 1)) * 100);
+    expect(skipped.out).toContain(`Completion:     ${done}/${total - 1} stages (${pct}%), skipped: Scope Definition\n`);
+    expect(skipped.out).not.toContain("1 skipped");
+    expect(skipped.out).toMatch(new RegExp(`^ {2}IDEATION {9}\\S+ ${ideation[1]}/${Number(ideation[2]) - 1}\\n`, "m"));
+    // The work finished with that stage skipped: the state says Completed
+    // and the cursor still points at the skipped stage (what the engine
+    // leaves after the last stage is skipped). The person reads finished,
+    // and which stage never ran.
+    sedState(p, /^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: scope-definition");
+    sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
+    const finished = status(p);
+    expect(finished.status).toBe(0);
+    expect(finished.out).toContain("Current Stage:  Scope Definition (1.4)\n");
+    expect(finished.out).toContain("Status:         Completed (Scope Definition skipped)\n");
+    expect(finished.out).not.toContain("Status:         Completed\n");
+    // A phase whose every stage was skipped says so instead of 0/0.
+    sedState(p, /^- \[.\] (intent-capture|market-research|feasibility|team-formation|rough-mockups|approval-handoff)/gm, "- [S] $1");
+    expect(status(p).out).toMatch(/^ {2}IDEATION {9}S{7} skipped\n/m);
+  });
+
+  test("10: the reviewers setting is listed with the other settings, as this work's when it was set for it", () => {
+    const p = seededProj();
+    // The feature scope sets no review ceiling: the stages' own reviews run.
+    expect(status(p).out).toContain("Collaborators: off (from scope feature)\nReviewers: adversarial (default)\n");
+    // "turn the reviewers off" stores the override the setter writes.
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Standard\n- **Review Override**: none");
+    expect(status(p).out).toContain("Reviewers: off (set for this piece of work)\n");
+    sedState(p, /^- \*\*Review Override\*\*: .*$/m, "- **Review Override**: advisory");
+    expect(status(p).out).toContain("Reviewers: advisory (set for this piece of work)\n");
+    // With no override, a scope's own ceiling reads as the scope's, and as
+    // the approved plan's when a plan composed for this work runs on it.
+    sedState(p, /^- \*\*Review Override\*\*: .*$/m, "- **Review Override**:");
+    sedState(p, /^- \*\*Scope\*\*: .*$/m, "- **Scope**: bugfix");
+    expect(status(p).out).toContain("Reviewers: advisory (from scope bugfix)\n");
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Standard\n- **Plan**: custom, based on bugfix");
+    expect(status(p).out).toContain("Reviewers: advisory (from the approved plan)\n");
+  });
+
+  // A live run (Claude Code, 2026-10-11) said "approve, and stop here" at the
+  // Build and Test gate, then asked for status: it read "Status: Running" and the
+  // agent had to say the work was paused. The park fields parkWorkflow writes
+  // under Runtime State were never read here.
+  test("11: paused work reads paused with the way back; a stale park and finished work read as before", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-operation.md"));
+    expect(status(p).out).toContain("Status:         Running\n");
+    // The person's own stop: parkWorkflow writes these three lines.
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: deployment-pipeline\n- **Parked By**: person",
+    );
+    const paused = status(p);
+    expect(paused.status).toBe(0);
+    expect(paused.out).toContain(
+      "Status:         Paused at Deployment Pipeline (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    expect(paused.out).not.toContain("Status:         Running");
+    // A park nobody attended (no Parked By) is paused too, without "you stopped it".
+    deleteStateLines(p, /^- \*\*Parked By\*\*:/);
+    expect(status(p).out).toContain("Status:         Paused at Deployment Pipeline; pick it back up with /aidlc --resume\n");
+    // A park the work has since moved past holds nothing (the router's rule).
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: ci-pipeline");
+    expect(status(p).out).toContain("Status:         Running\n");
+    // Finished work with park lines left behind still reads finished.
+    sedState(p, /^- \*\*Parked At Stage\*\*: .*$/m, "- **Parked At Stage**: deployment-pipeline");
+    sedState(p, /^- \*\*Status\*\*: .*$/m, "- **Status**: Completed");
+    expect(status(p).out).toContain("Status:         Completed\n");
+  });
+
+  // Under a Unit-by-Unit Construction the cursor stays on the block's first
+  // stage while a Unit works through the later ones; the state's Active Unit
+  // and Unit Stage (written as a Unit starts a stage) say where the work is.
+  test("12: paused Unit-by-Unit work names the Unit's own stage", () => {
+    const p = createTestProject();
+    tempDirs.push(p);
+    seedStateFile(p, join(REPO_ROOT, "tests", "fixtures", "state-construction.md"));
+    sedState(
+      p,
+      /^- \*\*Revision Count\*\*: 0$/m,
+      "- **Revision Count**: 0\n- **Parked**: 2026-10-11T08:27:33Z\n- **Parked At Stage**: functional-design\n- **Parked By**: person" +
+        "\n- **Active Unit**: alpha\n- **Unit Stage**: code-generation",
+    );
+    expect(status(p).out).toContain(
+      "Status:         Paused at Code Generation for alpha (you stopped it); pick it back up with /aidlc --resume\n",
+    );
+    // The Unit's stage is the cursor's own: no Unit clause.
+    sedState(p, /^- \*\*Unit Stage\*\*: .*$/m, "- **Unit Stage**: functional-design");
+    expect(status(p).out).toContain("Status:         Paused at Functional Design (you stopped it); pick it back up with /aidlc --resume\n");
   });
 });

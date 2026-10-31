@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 // The file-writing tools whose targets the freeze inspects. Read-only tools
@@ -1065,9 +1065,9 @@ function invocationMayMutate(commandName: string, args: string[]): boolean {
 export type CommandShell = "posix" | "powershell";
 
 // PowerShell reads the typographic quotes and dashes as ' " and -.
-const isPowerShellSingleQuote = (ch: string | undefined): boolean =>
+export const isPowerShellSingleQuote = (ch: string | undefined): boolean =>
   ch !== undefined && "'‘’‚‛".includes(ch);
-const isPowerShellDoubleQuote = (ch: string | undefined): boolean =>
+export const isPowerShellDoubleQuote = (ch: string | undefined): boolean =>
   ch !== undefined && '"“”„'.includes(ch);
 const POWERSHELL_PARAMETER = /^[-–—―]([A-Za-z_][\w-]*)$/;
 const POWERSHELL_TYPE_NAME = /\[[^\s;|&<>\]]*\]/y;
@@ -1303,7 +1303,6 @@ interface PowerShellCommand {
   // The command name, or null for an expression or a computed name.
   name: string | null;
   args: CmdletArg[];
-  // Receives pipeline input.
   piped: boolean;
 }
 
@@ -1424,7 +1423,6 @@ function readPowerShell(
     const wordStart = i;
     const { word, end } = powerShellWord(command, i, nested);
     if (end === i) {
-      // A character no word takes: skip it.
       i++;
       continue;
     }
@@ -1468,6 +1466,15 @@ const POWERSHELL_ALIASES: Record<string, string> = {
   tee: "tee-object",
 };
 
+// A cmdlet whose every written path cmdletWriteTargets binds (New-Item,
+// Set-Content, Out-File, ...), named in full or by an alias PowerShell gives no
+// native program: PowerShell 7 runs sc.exe for `sc`.
+export function powerShellPathBoundWriter(name: string): boolean {
+  const command = name.toLowerCase();
+  if (command === "sc") return false;
+  return Object.hasOwn(CMDLET_WRITES, Object.hasOwn(POWERSHELL_ALIASES, command) ? POWERSHELL_ALIASES[command] : command);
+}
+
 function powerShellCommandName(name: string, args: CmdletArg[]): string {
   if (Object.hasOwn(POWERSHELL_ALIASES, name)) return POWERSHELL_ALIASES[name];
   // Copy-Item's -Destination is not cp's -t.
@@ -1507,14 +1514,13 @@ function isNullDevice(raw: string): boolean {
   return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
 }
 
-// Commands that change the shell's working directory for the commands after them.
 export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 const MAX_SHELL_ROOTS = 64;
 
 // The directories a bare `cd` or a leading `~` or $HOME names: HOME, else the
 // OS home. PowerShell on Windows takes them from its user profile instead
 // (USERPROFILE, or HOMEDRIVE and HOMEPATH), never from HOME.
-function shellHomes(powerShell: boolean): string[] {
+export function shellHomes(powerShell: boolean): string[] {
   if (!powerShell || process.platform !== "win32") return [resolve(process.env.HOME || homedir())];
   const homes = [process.env.USERPROFILE || homedir()];
   if (process.env.HOMEDRIVE && process.env.HOMEPATH) homes.push(process.env.HOMEDRIVE + process.env.HOMEPATH);
@@ -1589,7 +1595,7 @@ function withoutRedirections(segment: string): string {
 /**
  * The directories the shell can be in when the command's writes run: `cwd`,
  * and each literal `cd`/`pushd`/`chdir`/`Set-Location` target resolved from
- * every directory collected anywhere in the command. A bare `cd` or `chdir`
+ * every directory collected so far in the command. A bare `cd` or `chdir`
  * (options and redirections aside) and a leading `~`, `$HOME` or `${HOME}`
  * name $HOME (see shellHomes). The order of the segments, loops, functions, subshells and
  * pipelines is not modelled, so a write can also be read from a directory it
@@ -1622,7 +1628,6 @@ export function shellDirectoryRoots(
       roots.splice(oldest, 1);
     }
   };
-  // A literal operand is read from every directory collected so far.
   const change = (operand: string) => {
     const next = new Set<string>();
     for (const root of roots) {
@@ -1728,6 +1733,62 @@ function powerShellLocationChanges(command: string, depth: number): Array<string
   return out;
 }
 
+// The table the traceability check's write mode writes, however the engine is
+// run (`engine sensor-traceability` or its script): its --output-path.
+function traceabilityTableWrite(args: readonly string[]): string | undefined {
+  const at = args.findIndex((arg) => arg === "sensor-traceability" || /(?:^|[\\/])aidlc-sensor-traceability\.ts$/.test(arg));
+  if (at === -1 || !args.includes("--write-upstream")) return undefined;
+  for (let i = at + 1; i < args.length; i++) {
+    if (args[i] === "--output-path") return args[i + 1];
+    if (args[i].startsWith("--output-path=")) return args[i].slice("--output-path=".length);
+  }
+  return undefined;
+}
+
+/**
+ * The folder a command line's first command moves the shell to from `cwd`,
+ * and the rest of the line, which runs there: `cd <folder>` (read as
+ * PowerShell, any of its location changes, bound as powerShellLocationChanges
+ * binds them) joined to the rest by `&&`, `;` or a newline. Null unless the
+ * folder is certain: one literal absolute operand with no glob, `.` or `..`
+ * part, naming a folder that exists and can be entered now (so after a `;` the
+ * rest runs there too). On Windows the folder names the drive `cwd` is on, in
+ * either case: cmd.exe's `cd` never changes the drive, and Git Bash reads `/x`
+ * from its own root. A group, subshell, redirect, variable, option or wrapper on
+ * the move is not followed, nor is a line whose whitespace or continuations the
+ * lexer decodes differently from the shell.
+ */
+export function leadingDirectoryChange(
+  command: string,
+  cwd: string,
+  shell: CommandShell = "posix",
+): { dir: string; rest: string } | null {
+  if (/[^\S \t\n]/u.test(command) || command.includes("\\\n")) return null;
+  const [first] = shellCommandSegments(command);
+  const joint = /^(?:&&|;|\n)/.exec(command.slice(first.length))?.[0];
+  const rest = command.slice(first.length + (joint?.length ?? 0));
+  if (joint === undefined || rest.trim() === "" || /[()<>{}[\]*?$`]/.test(first)) return null;
+  const [name = "", ...args] = shellWords(first);
+  const move = name === "cd" && args.length === (args[0] === "--" ? 2 : 1) ? directoryChange(name, args) : "unknown";
+  const operands = shell === "powershell"
+    ? Object.hasOwn(POWERSHELL_LOCATION_COMMANDS, name.toLowerCase()) ? powerShellLocationChanges(first, 0) : []
+    : typeof move === "object" ? [move.operand] : [];
+  const operand = operands.length === 1 ? operands[0] : null;
+  if (
+    typeof operand !== "string" || !isAbsolute(operand) ||
+    operand.split(/[\\/]+/).some((part) => part === "." || part === "..") ||
+    (process.platform === "win32" &&
+      !(/^[A-Za-z]:[\\/]/.test(operand) && operand[0].toLowerCase() === resolve(cwd)[0].toLowerCase()))
+  ) return null;
+  const dir = resolve(operand);
+  try {
+    accessSync(dir, constants.X_OK);
+    return statSync(dir).isDirectory() ? { dir, rest } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Concrete filesystem targets of a mutation-capable shell command. A relative
  * target is resolved from each directory `shellDirectoryRoots` collects, so
@@ -1801,8 +1862,10 @@ function shellWriteTargetsFrom(
   };
 
   // The destination/in-place operands one command writes. Commands that also
-  // have read-only source operands contribute only those.
+  // have read-only source operands contribute only their write operands.
   const invocationTargets = (commandName: string, args: string[]): void => {
+    const table = traceabilityTableWrite(args);
+    if (table !== undefined) add(table);
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       return;
@@ -2058,7 +2121,6 @@ function shellWriteTargetsFrom(
   return [...new Set(out)];
 }
 
-/** Target paths of a write-tool call. */
 export function writeTargets(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,

@@ -8,25 +8,25 @@
 // literal `{unit-name}` placeholder and nothing iterated. THE FIX: on a `next`
 // that lands on an in-flight per-unit Construction stage (off the swarm path),
 // the engine reads the ordered unit list (the compiled Bolt DAG, flattened),
-// finds the FIRST unit whose `produces[]` artifacts are not all on disk under
-// `<recordPrefix>/construction/<unit>/<slug>/`, and emits a run-stage for THAT
-// concrete unit with `directive.unit` set. The gate is suppressed (false) on
-// every unit except the last uncovered one (which carries the real gate). When
-// no unit DAG exists the engine degrades to today's single `{unit-name}`
-// directive (zero behaviour change). A deterministic coverage guard on the
-// approve path refuses an early approve while units remain.
+// finds the FIRST unsettled unit (required `produces[]` artifacts on disk under
+// `<recordPrefix>/construction/<unit>/<slug>/` plus, when the receipt ledger is
+// in use, the unit's review and completion receipts), and emits a run-stage for
+// THAT concrete unit with `directive.unit` set. The gate is suppressed (false)
+// on every unsettled unit; the real gate fires only once every unit has
+// settled. When no unit DAG exists the engine emits the single `{unit-name}`
+// directive. A deterministic coverage guard on the approve path refuses an
+// early approve while any unit remains unsettled.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   - orderedUnits / unitCovered / nextUncoveredUnit / emitPerUnitRunStage /
-//     emitForSlug, the per-unit iteration core, wired into BOTH handleNext call
-//     sites after tryEmitSwarm returns false.
-//   - the §3d coverage guard in handleReport (refuses approve while >1 uncovered).
+//   - unitCovered / unitSettled / nextUncoveredUnit / emitPerUnitRunStage, the
+//     per-unit iteration core.
+//   - the coverage guard handleReport runs through checkStageCompletionEvidence
+//     (refuses approve while any unit is unsettled).
 //   - aidlc-directive.ts, the optional `unit` field on RunStageDirective.
-// NONE are exported (the tool has zero exports), so the behaviour is observable
-// only on the JSON directive the spawned engine emits to stdout, MECHANISM =
-// cli: SPAWN `bun aidlc-orchestrate.ts next|report` and assert on the parsed
-// directive, the SAME process boundary t116 (emit/parse) and t135 (bolt_dag
-// seeding) drive.
+// The per-unit routing is observed on the JSON directive the spawned engine
+// emits to stdout, MECHANISM = cli: SPAWN `bun aidlc-orchestrate.ts next|report`
+// and assert on the parsed directive, the SAME process boundary t116
+// (emit/parse) and t135 (bolt_dag seeding) drive.
 //
 // FIXTURE DISCIPLINE (mirrors t135's seedCodegenProject + t116's fresh-temp-per-
 // emit): each case uses a FRESH temp project (createTestProject seeds the
@@ -63,6 +63,7 @@ import {
   resetAidlcEnv,
   runOrchestrateNext,
   seedAidlcMemory,
+  seedAnsweredUnitQuestions,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
@@ -70,11 +71,16 @@ import {
 } from "../harness/fixtures.ts";
 import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -188,10 +194,13 @@ interface Directive {
     }>;
   };
   remedies?: Array<{
+    op?: string;
     action: string;
     executableNow: boolean;
   }>;
   message?: string;
+  reviewer?: string;
+  protocol_modules?: string[];
   [k: string]: unknown;
 }
 
@@ -214,6 +223,7 @@ function constructionState(current: string, skeletonStance?: string): string {
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **State Version**: 8
+- **Unit Ownership**: solo
 ${stanceLine}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -251,10 +261,6 @@ function setAutonomous(proj: string): void {
   writeFileSync(statePath, state);
 }
 
-/**
- * Mark `unit` COVERED for `slug` by writing each artifact in `producesNames`
- * under the resolved per-unit dir construction/<unit>/<slug>/ in the record.
- */
 function coverUnit(
   proj: string,
   unit: string,
@@ -268,7 +274,6 @@ function coverUnit(
   }
 }
 
-/** Seed a fresh Construction project pivoted to `current`. Returns the proj dir. */
 function seedProject(current: string, skeletonStance?: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -277,7 +282,6 @@ function seedProject(current: string, skeletonStance?: string): string {
   return proj;
 }
 
-/** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string, enforceSummary = false): Directive {
   const env = { ...process.env };
   delete env.AWS_AIDLC_DEFAULT_SCOPE;
@@ -293,7 +297,6 @@ function runNext(proj: string, enforceSummary = false): Directive {
   return r.directive as Directive;
 }
 
-/** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -320,6 +323,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("1: per-unit stage with no artifacts emits the first unit with paths substituted", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
@@ -327,13 +331,15 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/functional-design/functional-spec.md`,
     );
-    // The literal placeholder is gone, the real unit was substituted.
     expect(d.produces?.some((p) => p.includes("{unit-name}"))).toBe(false);
     expect(d.wave?.entries.map((entry) => entry.unit)).toEqual([
       "alpha",
       "beta",
     ]);
     expect(d.wave?.entries.every((entry) => entry.build_required)).toBe(true);
+    // A Unit's review reads the per-Unit review rules.
+    expect(d.reviewer).toBeDefined();
+    expect(d.protocol_modules).toContain("reviewer-unit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: gate suppressed on a non-last unit, alpha + beta both uncovered, so
@@ -350,6 +356,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("3: covering the first unit keeps it active until its fresh review receipt", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
@@ -362,14 +369,16 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 4: gate STILL suppressed on the LAST uncovered unit. alpha covered, beta the
-  // only uncovered unit -> directive.unit=beta AND directive.gate===false. The
-  // gate does NOT fire here: beta's artifacts do not exist yet, so the engine
-  // suppresses the gate on EVERY uncovered unit (closing the last-unit hole). The
-  // real gate fires only on the all-covered re-entry (case 9).
+  // 4: gate STILL suppressed on the LAST uncovered unit. alpha covered and
+  // settled, beta the only uncovered unit -> directive.unit=beta AND
+  // directive.gate===false. The gate does NOT fire here: beta's artifacts do not
+  // exist yet, so the engine suppresses the gate on EVERY uncovered unit (closing
+  // the last-unit hole). The real gate fires only on the all-settled re-entry
+  // (case 9).
   test("4: gate stays suppressed (false) on the last uncovered unit (its artifacts do not exist yet)", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
+    seedAnsweredUnitQuestions(proj, "functional-design", ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     logReviewReady(proj, "functional-design", "alpha");
     completeWave(proj, "functional-design", "alpha");
@@ -378,9 +387,9 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.gate).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // 5: degrade with no DAG, no runtime-graph.json -> the engine emits today's
-  // single {unit-name} placeholder directive with NO `unit` field (unchanged
-  // single-iteration behaviour).
+  // 5: degrade with no DAG, no runtime-graph.json -> the engine emits a
+  // single {unit-name} placeholder directive with NO `unit` field
+  // (single-iteration behaviour).
   test("5: no compiled unit DAG degrades to the single {unit-name} placeholder, no unit field", () => {
     const proj = seedProject("functional-design", "on");
     // Deliberately NO seedBoltDag, there is no runtime-graph.json.
@@ -467,7 +476,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     ]);
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).not.toContain("alpha"); // alpha is covered, not named
+    expect(d.message).not.toContain("alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7: single-row case, a NON-per-unit stage (domain-design) still emits
@@ -481,6 +490,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     expect(d.stage).toBe("domain-design");
     expect(d.unit).toBeUndefined();
     expect(d.produces?.some((p) => p.includes("/construction/"))).toBe(false);
+    expect(d.reviewer).toBeDefined();
+    expect(d.protocol_modules).not.toContain("reviewer-unit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 8: second inline per-unit stage (nfr-requirements) iterates the same way,
@@ -524,9 +535,14 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     const executable = (d.remedies ?? [])
       .filter((remedy) => remedy.executableNow)
       .map((remedy) => remedy.action);
+    // The stage's questions were never asked: asking the person them is the
+    // agent's own step, in the Unit's own questions file.
+    expect(d.agent_work).toBe(true);
+    expect((d.remedies ?? []).map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
     expect(
       executable.some((action) =>
-        action.startsWith("Present the current consolidated summary")
+        action.startsWith("Ask the person the stage's questions through its question flow") &&
+        action.includes("/construction/alpha/functional-design/functional-design-questions.md")
       ),
     ).toBe(true);
     expect(
@@ -536,6 +552,33 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
           action.startsWith("Request the next permitted review"),
       ),
     ).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 9c: a parallel wave's builders are subagents that cannot ask the person,
+  // so they can write every Unit's design with none of its questions asked.
+  // The agent is handed those questions to ask, Unit by Unit; the person is
+  // not asked how to go on.
+  test("9c: a wave whose builders wrote every Unit's design without its questions hands the agent the questions to ask", () => {
+    const proj = seedProject("functional-design", "on");
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      /^(- \*\*Scope\*\*: .*)$/m,
+      "$1\n- **Construction Iteration**: stage-major\n- **Construction Execution**: swarm",
+    ));
+    seedBoltDag(proj, ["alpha", "beta"], [["alpha", "beta"]]);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
+    const d = runNext(proj, true);
+    expect(d.kind).toBe("ask");
+    expect(d.ask_type).toBe("guard-recovery");
+    expect(d.agent_work).toBe(true);
+    expect(d.reason_codes).toEqual(["SUMMARY_QUESTIONS_MISSING"]);
+    expect(d.unit).toBe("alpha");
+    expect((d.remedies ?? []).map((remedy) => remedy.op)).toEqual(["ask-stage-questions"]);
+    expect(d.remedies?.[0].action).toContain(
+      "/construction/alpha/functional-design/functional-design-questions.md",
+    );
+    expect(JSON.stringify(d)).not.toContain("Confirm the summary again");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 9b: with every unit covered, the approve is ALLOWED (the guard passes) and
@@ -577,18 +620,17 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   // 10: re-reporting an ALREADY-completed ([x]) per-unit stage with a DAG present
   // but its artifacts ABSENT (a fresh clone / moved files) must NOT be intercepted
   // by the per-unit coverage guard. The guard is scoped to `stageCheckbox.state
-  // !== "completed"` (review change 2), so an already-[x] stage skips it and falls
-  // through to the normal forward-transition path (kind=done, not error). This is
-  // the load-bearing proof of that scoping: the negative control in case 6 shows
-  // an uncovered, NOT-completed stage with the same DAG DOES error ("2 of 2 units
-  // ..."), so the only thing suppressing the error here is the completed-state
-  // scope. (Functional-design is [x] while Current Stage is nfr-requirements, so
-  // report commits a forward advance for it; the point is purely that the guard
-  // does not fire, not which forward branch handles it.)
+  // !== "completed"`, so an already-[x] stage skips it and falls through to the
+  // normal forward-transition path (kind=done, not error). This is the
+  // load-bearing proof of that scoping: the negative control in case 6 shows an
+  // uncovered, NOT-completed stage with the same DAG DOES error ("2 of 2 work
+  // items are not complete"), so the only thing suppressing the error here is the
+  // completed-state scope. (Functional-design is [x] while Current Stage is
+  // nfr-requirements, so report commits a forward advance for it; the point is
+  // purely that the guard does not fire, not which forward branch handles it.)
   test("10: the coverage guard does not block reporting an already-completed per-unit stage", () => {
     const proj = seedProject("nfr-requirements", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    // Mark functional-design completed in the seeded state; no artifacts on disk.
     const statePath = seededStateFile(proj);
     const state = readFileSync(statePath, "utf-8").replace(
       "- [-] functional-design — EXECUTE",
@@ -601,8 +643,6 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "--result",
       "approved",
     ]);
-    // The guard must not fire on a completed stage; report commits the forward
-    // transition (a done directive), never a per-unit coverage error.
     expect(d.kind).toBe("done");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

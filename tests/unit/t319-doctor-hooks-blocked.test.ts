@@ -13,11 +13,15 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
+  readdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   REPO_ROOT,
   cleanupTestProject,
@@ -143,6 +147,31 @@ function activeHealthDir(project: string): string {
   return join(intentsDir, active, ".aidlc-engine/hooks-health");
 }
 
+function activeAuditDir(project: string): string {
+  const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+  const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+  return join(intentsDir, active, "audit");
+}
+
+// A second clone after a pull: the audit shards travel in git, while the clone
+// id and the heartbeats are git-ignored and stay with the clone that ran the work.
+function asPulledByAnotherClone(project: string, writerShard: string, ownCloneId: string | null): void {
+  const audit = activeAuditDir(project);
+  const shards = readdirSync(audit).filter((file) => file.endsWith(".md"));
+  expect(shards).toHaveLength(1);
+  renameSync(join(audit, shards[0]), join(audit, writerShard));
+  const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+  if (ownCloneId === null) rmSync(cloneId, { force: true });
+  else writeFileSync(cloneId, ownCloneId, "utf-8");
+}
+
+function doctorRow(text: string, label: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => line.includes(label));
+  expect(at, text).toBeGreaterThanOrEqual(0);
+  return lines.slice(at, at + 2).join("\n");
+}
+
 function writeHeartbeat(project: string, timestamp: string): void {
   const health = activeHealthDir(project);
   mkdirSync(health, { recursive: true });
@@ -188,6 +217,11 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toContain(
       "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run doctor again.",
     );
+    // Installed while Kiro IDE was open: it keeps its old PATH, and only a
+    // full restart, not Reload Window, lets its hooks find aidlc (#2396).
+    expect(text).toContain(
+      "If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload Window does not change that.",
+    );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
   });
@@ -200,6 +234,41 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).toContain(
       'fix: This is expected before your first Claude Code chat in this folder. If you already started one, set "disableAllHooks": false',
     );
+  });
+
+  // Claude Code started in a folder inside the project offers /aidlc there but
+  // runs none of the project's hooks, and no setting changes that. Its own
+  // record of the chat (sessions/<pid>.json in its config folder) names that
+  // folder, so doctor gives the one step that works, before and after progress.
+  test("a Claude Code chat started in a folder inside the project gets the step to start it in the project folder", () => {
+    const inSrc = (project: string): Record<string, string> => {
+      const src = join(project, "src");
+      mkdirSync(src, { recursive: true });
+      const config = join(project, ".managed-policy", "claude-config");
+      mkdirSync(join(config, "sessions"), { recursive: true });
+      const session = "22222222-3333-4444-8555-666666666666";
+      writeFileSync(
+        join(config, "sessions", `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: session, cwd: src }),
+        "utf-8",
+      );
+      return { CLAUDE_PID: String(process.pid), CLAUDE_CODE_SESSION_ID: session, CLAUDE_CONFIG_DIR: config };
+    };
+    const step = (project: string) =>
+      "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
+      `start it again in ${project}, then type /aidlc.`;
+
+    const fresh = freshProject();
+    const before = output(runUtility(fresh, ["doctor", "--verbose"], inSrc(fresh)));
+    expect(before).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(before).toContain(`fix: ${step(fresh)}`);
+    expect(before).not.toContain("This is expected before your first Claude Code chat");
+
+    const progressed = projectWithWorkflowProgress();
+    const after = output(runUtility(progressed, ["doctor", "--verbose"], inSrc(progressed)));
+    expect(after).toMatch(/fail {2}Hooks have never executed although this workflow has progressed/);
+    expect(after).toContain(step(progressed));
+    expect(after).not.toContain('Set "disableAllHooks": false in this project');
   });
 
   test("Kiro IDE with a chat message's heartbeat reports the hooks as fired", () => {
@@ -343,9 +412,79 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toContain("ask your Claude Code administrator to allow project hooks");
     expect(output(run)).not.toContain("Run /hooks");
     expect(output(run)).not.toContain("AIDLC_SKIP_");
+    // Replies not being recorded is a warning the summary counts, with the
+    // harness's own step as its fix, not a passing "advisory" row.
     expect(output(run)).toMatch(
-      /ok {4}Human-turn receipts: 0 HUMAN_TURN rows across \d+ stage\/gate event\(s\) \(advisory\)/,
+      /warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far and no message of yours on record/,
     );
+    expect(output(run)).not.toContain("Human-turn receipts");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A clone that pulled a teammate's record has their audit shard but none of
+  // their heartbeats, which says nothing about its own hooks: one warning that
+  // names the machine the work ran on, and no hooks step aimed at this one.
+  for (const [name, ownCloneId] of [
+    ["a clone with its own AI-DLC record", "c10ne0000b0b\nthis-machine\n"],
+    ["a clone that has not written any AI-DLC record yet", null],
+  ] as const) {
+    test(`${name}: a workflow run only in another clone warns and names that machine`, () => {
+      const project = projectWithWorkflowProgress();
+      asPulledByAnotherClone(project, "teammate-laptop-0a1b2c3d4e5f.md", ownCloneId);
+
+      const run = runUtility(project, ["doctor", "--verbose"]);
+      const text = output(run);
+      expect(text).not.toContain("Hooks have never executed");
+      const row = doctorRow(text, "was run in another clone");
+      expect(row).toContain(
+        "warn  This workflow was run in another clone (teammate-laptop); this clone has no hook record for it yet",
+      );
+      expect(row).toContain(
+        "fix: nothing to fix in this clone: its hooks record this workflow once you carry on with it here. " +
+          "To check the hooks where it ran, run doctor in that clone",
+      );
+      expect(row).not.toContain("disableAllHooks");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("progress in this clone's own shard keeps the error beside a teammate's shard", () => {
+    const project = projectWithWorkflowProgress();
+    writeFileSync(
+      join(activeAuditDir(project), "teammate-laptop-0a1b2c3d4e5f.md"),
+      "# AI-DLC Audit Log\n\n## Stage Start\n**Timestamp**: 2026-01-02T03:04:05Z\n" +
+        "**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n**Agent**: orchestrator\n\n---\n",
+      "utf-8",
+    );
+
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(run.status).toBe(1);
+    expect(output(run)).toMatch(
+      /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
+    );
+    expect(output(run)).not.toContain("was run in another clone");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A brand-new piece of work: the opening message arrives before the work
+  // exists, so the hook saves it in the message store and writes no HUMAN_TURN
+  // row, and the initialization stages log their rows in the same turn. That
+  // is not "replies not recorded": a stored message of the person's means the
+  // hook did record them. With no stored message at all, the warning stands.
+  test("a fresh workflow whose opening message is on record is not told its replies are unrecorded", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    saveMessage(project, {
+      session: "fresh-session", at: new Date().toISOString(), source: "prompt",
+      text: "/aidlc build a small tool", picker: null, words: "build a small tool", settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Your replies are not being recorded");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a workflow with stage rows, no human turn and no stored message still warns", () => {
+    const project = projectWithWorkflowProgress();
+    writeHeartbeat(project, new Date().toISOString());
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).toMatch(/warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A record created before heartbeats moved under .aidlc-engine/ keeps them at

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create, audit:SCOPE_CHANGED
 //
 // t214 - the scope-cost preview reaches the emitted routing strings (issue:
 // preview the cost at scope confirmation). t213 pins the helper; this pins the
@@ -11,9 +11,12 @@
 //     for the MATCHED scope (N: the stages after Initialization),
 //   - the compose offer carries the express/classic/feature example trio,
 //     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
-//   - the explicit-scope creation print carries the cost parenthetical, and
+//   - the explicit-scope creation print carries the cost parenthetical,
+//   - intent create's "State initialized" line says that print's count, for
+//     every shipped scope on a new project and on existing code, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
-//     reverse-engineering adjustment applied, matching the handler).
+//     reverse-engineering adjustment applied, matching the handler), and the
+//     SCOPE_CHANGED row says the same stages and gates.
 //
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
@@ -25,17 +28,20 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import { auditEvents, field } from "../harness/scope-run.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -101,7 +107,8 @@ interface RunResult {
 }
 
 function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
-  const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+  // Ahead of the person's words, as every caller of `next` builds it.
+  const res = spawnSync(BUN, [ORCH, "next", "--project-dir", proj, ...args], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
@@ -113,7 +120,11 @@ function runNext(proj: string, args: string[], env: Record<string, string> = {})
       ...env,
     },
   });
-  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  let directive: unknown = null;
+  try { directive = JSON.parse((res.stdout ?? "").trim()); } catch { /* the caller reads the raw output */ }
+  const proposal = proposalFollowUp(directive);
+  return proposal === null ? { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` } : runNext(proj, proposal, env);
 }
 
 function runUtility(proj: string, args: string[]): RunResult {
@@ -149,8 +160,8 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
-    // bugfix asks no learnings question and no summary confirmation, and says so up front.
-    expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only.`);
+    // The plan's size and nothing after it: the settings are the plan's, and --status shows them.
+    expect(q).toContain(`- ${costClause(bf)}. Do you want me to go ahead`);
     expect(q).not.toContain("per unit of work");
   });
 
@@ -185,7 +196,8 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(q).toContain(`classic = ${classic.shown}`);
     expect(q).toContain(`feature = ${feature.shown}`);
     expect(q).not.toContain("of 33");
-    // t198:200 pins this substring's absence on the compose-offer arm.
+    // t198's "rich prose (no clear hit) -> the compose offer, never a silent
+    // default" test pins this substring's absence on the compose-offer arm.
     expect(q).not.toContain('"feature" workflow');
   });
 });
@@ -231,18 +243,20 @@ describe("t214 every plan the offer lists carries the engine's own count", () =>
 describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
-    // A genuinely empty workspace creates instead of prompting to pick (t198:208).
+    // A genuinely empty workspace creates instead of prompting to pick (t198's
+    // "known-scope positional with a description still creates (Branch 7b)" test).
+    // The plan with a description creates; named alone it first asks (#2355).
     removeWorkspaceRecord(proj);
-    const d = directiveOf(runNext(proj, ["bugfix"]).out);
+    const d = directiveOf(runNext(proj, ["bugfix", "Fix the login crash"]).out);
     expect(d.kind).toBe("print");
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
-    expect(m).toContain(`(${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only)`);
+    expect(m).toContain(`(${costClause(bf)})`);
     expect(m).not.toContain("per unit of work");
   });
 
-  test("classic creation preview omits the off clause when summary confirmation is enabled", () => {
+  test("a setting typed with the request rides the command; the preview says the plan's size only", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const result = runNext(proj, [
@@ -253,53 +267,101 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(d.kind).toBe("print");
     const message = String(d.message);
     expect(message).toContain("--summary-confirmation on");
-    // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
-    expect(message).toContain("; lead agent only");
+    expect(message).toContain(`(${costClause(counts(GRID.classic.stages, true))})`);
   });
 
-  test("feature creation preview discloses the environment sensor kill switch", () => {
+  test("a machine switch is not said in the creation preview (the person set it; --status shows it)", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
-    const result = runNext(proj, ["--scope", "feature", "--sensors", "on"], {
+    const result = runNext(proj, ["--scope", "feature", "--sensors", "on", "add login support"], {
       AIDLC_DISABLE_SENSORS: "1",
     });
     expect(result.rc, result.out).toBe(0);
     const d = directiveOf(result.out);
     expect(d.kind).toBe("print");
-    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors; lead agent only");
+    expect(String(d.message)).toContain(`(${costClause(counts(GRID.feature.stages, true))})`);
+    expect(String(d.message)).not.toContain("; no ");
   });
 
   for (const scope of ["classic", "feature"]) {
     test(`next ${scope} retains the derived per-unit clause`, () => {
       proj = createTestProject();
       removeWorkspaceRecord(proj);
-      const d = directiveOf(runNext(proj, [scope]).out);
+      const d = directiveOf(runNext(proj, [scope, "add login support"]).out);
       expect(d.kind).toBe("print");
       const expected = counts(GRID[scope].stages, true);
       expect(expected.perUnitStages).toBeGreaterThan(0);
-      expect(String(d.message)).toContain(costClause(expected));
+      expect(String(d.message)).toContain(`(${costClause(expected)})`);
       expect(String(d.message)).toContain("per unit of work");
-      if (scope === "classic") {
-        expect(String(d.message)).toContain(
-          "; no summary confirmation; lead agent only",
-        );
-      } else {
-        // feature keeps the first four ceremonies on but ships collaborators off.
-        expect(String(d.message)).toContain("; lead agent only");
-      }
     });
   }
 });
 
 describe("t214 scope-change stdout carries the stage and gate counts", () => {
-  test("scope change --scope mvp says its stages and approval gates in one line", () => {
+  // feature to mvp on the mid-ideation record, as the engine writes it: the
+  // Stage Progress note the switch rewrites the stages under, and a new
+  // project's plan with no Reverse Engineering.
+  function switchToMvp(): RunResult {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
-    const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8")
+      .replace("## Stage Progress\n", "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n")
+      .replace("- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP"));
+    return runUtility(proj, ["scope-change", "--scope", "mvp"]);
+  }
+
+  test("scope change --scope mvp says its stages and approval gates in one line", () => {
+    const r = switchToMvp();
     expect(r.rc).toBe(0);
-    // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
+    // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP. Market
+    // Research, done before the switch, still counts, as the progress line counts it.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Switched to mvp (the set of stages this work runs): ${mvp.shown} stages (`);
-    expect(r.out).toContain(`, ${mvp.gates} approval gates`);
+    expect(r.out).toContain(
+      `Switched to mvp (the set of stages this work runs): ${mvp.shown + 1} stages (2 done), ` +
+        `${mvp.gates + 1} approval gates. You can switch back to feature any time.`,
+    );
   });
+
+  test("the SCOPE_CHANGED row counts the stages and gates the line says", () => {
+    const r = switchToMvp();
+    expect(r.rc).toBe(0);
+    const said = /: (\d+) stages \(\d+ done\), (\d+) approval gates\./.exec(r.out);
+    expect(said, r.out).not.toBeNull();
+    const rows = auditEvents(proj).filter((e) => e.event === "SCOPE_CHANGED");
+    expect(rows).toHaveLength(1);
+    expect(field(rows[0].block, "Stages in Scope")).toBe(said![1]);
+    expect(field(rows[0].block, "Approval Gates")).toBe(said![2]);
+    // The change from the count the person read before: feature's stages on
+    // this record, Reverse Engineering off.
+    const before = counts(GRID.feature.stages, true).shown;
+    const delta = Number(said![1]) - before;
+    expect(field(rows[0].block, "Stage Count Delta")).toBe(delta >= 0 ? `+${delta}` : String(delta));
+  });
+});
+
+describe("t214 the creation line says the count the creation print said", () => {
+  // The offer, the creation print and each stage's "(stage N of M)" count the
+  // stages after Initialization; the line `intent create` prints says that same
+  // number, not Initialization's three stages on top.
+  for (const scope of Object.keys(GRID)) {
+    for (const code of [false, true]) {
+      test(`${scope}, ${code ? "existing code" : "a new project"}`, () => {
+        proj = createTestProject();
+        removeWorkspaceRecord(proj);
+        if (code) writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+        const d = directiveOf(runNext(proj, ["--scope", scope, "add login support"]).out);
+        expect(d.kind).toBe("print");
+        const message = String(d.message);
+        const shown = counts(GRID[scope].stages, !code).shown;
+        expect(message).toContain(`(${shown} stages, `);
+        const request = /--request (\S+)/.exec(message)?.[1];
+        const created = runUtility(proj, [
+          "intent-create", "--scope", scope, ...(request ? ["--request", request] : []), "--label", "count check",
+        ]);
+        expect(created.rc, created.out).toBe(0);
+        expect(created.out).toContain(`State initialized: ${scope} scope, ${shown} stages,`);
+      });
+    }
+  }
 });

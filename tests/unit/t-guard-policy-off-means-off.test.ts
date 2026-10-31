@@ -3,7 +3,8 @@
 //
 // Guard Policy off means off: with relaxed or off, a changed input after a
 // review is recorded and said once, never a stop. Strict keeps its stop, and
-// the step that stop names is one AI-DLC accepts in that state.
+// the step that stop names is one AI-DLC accepts in that state; a stage-start
+// record missing on this machine (a fresh clone) is said once under strict too.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -37,6 +38,11 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -83,6 +89,7 @@ function project(policy: Policy, source = "from scope feature"): { project: stri
   const state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8")
     .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (${source})`)
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
+    .replace("- [ ] units-generation \u2014 EXECUTE", "- [x] units-generation \u2014 EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [?] code-generation — EXECUTE");
   writeFileSync(join(record, "aidlc-state.md"), state, "utf-8");
   const dag = join(record, "inception", "units-generation");
@@ -230,15 +237,14 @@ describe("a file no unit claims", () => {
     review(dir, record, "beta", []);
     const refused = approve(dir);
     expect(refused.rc).toBe(1);
-    expect(refused.out).toContain("Add each path to the owning unit's source-manifest.json");
-    // The named step: claim the path in its Unit and record that Unit's review.
+    expect(refused.out).toContain("lists the path in its source manifest");
     review(dir, record, "alpha", ["app.ts", "extra.ts"]);
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
   });
 });
 
-describe("the record of where the stage started is missing on this machine", () => {
+describe("the record of where the stage started is missing or changed on this machine", () => {
   function dropBaseline(record: string): void {
     const snapshots = join(record, ".aidlc-engine", "source-review", "code-generation");
     for (const name of readdirSync(snapshots)) {
@@ -256,11 +262,26 @@ describe("the record of where the stage started is missing on this machine", () 
     expect(done.out).toContain("I could not check Code Generation for files changed outside the units on this machine; carrying on.");
   });
 
-  test("strict: it stops naming a restart, and that restart is accepted", () => {
+  // A fresh clone or a second machine: the snapshot is AI-DLC's own ignored
+  // file, so losing it fails toward the person's approval with the one line.
+  test("strict: the stage completes with the same one line", () => {
     const { project: dir, record } = project("strict", "from scope enterprise");
     review(dir, record, "alpha", ["app.ts"]);
     review(dir, record, "beta", []);
     dropBaseline(record);
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("I could not check Code Generation for files changed outside the units on this machine; carrying on.");
+  });
+
+  test("strict: a record that is here but changed stops naming a restart, and that restart is accepted", () => {
+    const { project: dir, record } = project("strict", "from scope enterprise");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    const snapshots = join(record, ".aidlc-engine", "source-review", "code-generation");
+    for (const name of readdirSync(snapshots)) {
+      if (name.startsWith("baseline-")) writeFileSync(join(snapshots, name), "workspace\nnot the listing it was\n");
+    }
     const refused = approve(dir);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("--stage code-generation` to check again from here");
@@ -396,6 +417,11 @@ describe("the project source cannot be read on this machine", () => {
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
+    const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
+    expect(doctor.out).toContain("Workspace source boundary binds: no (");
+    expect(doctor.out).toContain("the build starts without a check of the project's files");
+    expect(doctor.out).not.toContain("refused");
+    expect(doctor.out).not.toContain("build the plan anyway");
   });
 
   test("strict: it says the source could not be read, not that it changed, and names doctor", () => {
@@ -409,6 +435,7 @@ describe("the project source cannot be read on this machine", () => {
     expect(refused.out).not.toContain("because the project source changed after");
     const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
     expect(doctor.out).toContain("Workspace source boundary binds: no (");
+    expect(doctor.out).toContain("Plan Approval decisions are refused while the source cannot be bound.");
   });
 });
 

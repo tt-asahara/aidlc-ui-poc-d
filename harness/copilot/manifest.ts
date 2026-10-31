@@ -59,8 +59,7 @@ const manifest: HarnessManifest = {
       'In VS Code, turn on Chat: Use Hooks for this folder ("chat.useHooks": true in ' +
       ".vscode/settings.json), then send your next message in the same chat. If your " +
       "organization has switched it off, ask your administrator to turn it on. In the Copilot " +
-      "CLI, start it again in this folder and trust the folder when it asks. Headless " +
-      "`copilot -p` runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
+      "CLI, start it again in this folder and trust the folder when it asks.",
     notRunYet:
       "This is expected before your first Copilot chat in this folder. If you already started " +
       'one, turn on Chat: Use Hooks in VS Code for this folder ("chat.useHooks": true in ' +
@@ -82,9 +81,10 @@ const manifest: HarnessManifest = {
       'VS Code. Ask your administrator to turn it on." In the Copilot CLI, change no file and ' +
       'show this line instead: "Quit Copilot, start it again in this folder and trust the folder ' +
       'when it asks, then type <entry> to carry on." In a headless `copilot -p` run, show this ' +
-      'line instead: "Set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for headless copilot -p runs, ' +
-      'then run it again." Until the person has done their step, do not touch the project\'s ' +
-      'files or the workflow, and read any "fix it" as this setting. End your turn right after ' +
+      'line instead: "Start copilot in this folder once, trust the folder when it asks and ' +
+      'choose to remember it, then run copilot -p again." Until the person has done their step, ' +
+      'do not touch the project\'s files or the workflow, and read any "fix it" as this setting. ' +
+      "End your turn right after " +
       "the line: your own next command in this turn would still run without the change.",
   },
   harnessDir: ".aidlc",
@@ -106,6 +106,12 @@ const manifest: HarnessManifest = {
           "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
           // The variant shipped with notes above each group of lines.
           "sha256:d23129d2d4de49fdd943b9966c2995cc5064b365a2741c8b4a8f50c0facf2c1a",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
         ],
       },
     },
@@ -167,6 +173,33 @@ const manifest: HarnessManifest = {
           // The variant whose Guards section did not say that "re-approve when
           // files change" is Guard Policy relaxed.
           "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
+          // The variant whose title asked to be replaced with the project's name (#2058).
+          "sha256:cdfb9d50a7899b4c5a2aa3128d49a2f50c12ee9d3aba13dbe42ff92ad7a2f22e",
+          // The variant shipped before the checks paragraph offered the wider place as a
+          // plain question, so an install that still carries it stays recognizable.
+          "sha256:3979d69468a5997423ef8fe3b7d9f9bc948ddf34524ca39e1c10112a6a80f835",
+          // The variant shipped before the method include read aidlc/active-memory/
+          // (the engine's copy of the active space's method).
+          "sha256:2a818c7c6a39421df576d70829d4d2c960809df3d60b32ca1a0659965c56433a",
+          // The variant whose onboarding said the init runner with a scope
+          // always creates the work in one step (a scope alone now asks first).
+          "sha256:0274b7bd2c26f8fc6158aafd6632a99aced247305d2aa09d1c60312283de7e69",
+          // The variant whose onboarding said headless `copilot -p` runs also
+          // need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 (a trusted folder is enough).
+          "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
+          // The variant whose setter rows named no --person-words.
+          "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
+          // The variant whose Guards paragraph did not say a remark about a check is not a request to change it.
+          "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
+          // The variant whose Guards paragraph had the agent work out and ask the wider-place
+          // question itself (the switch's own line now carries it).
+          "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
+          // The variant whose Guards paragraph said the clear with no file named clears a
+          // switch everywhere it is recorded (from a chat it now leaves the shared file).
+          "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
+          // The variant whose Guards setters passed the person's words (--person-words);
+          // they now name the message the person asked in (--message <id>).
+          "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
         ],
       },
     },

@@ -66,12 +66,14 @@ import {
   resolveProjectDir,
   resolveWorkflowSelection,
   serializeSourceListing,
+  sourceChangedOutsideAidlc,
   sourceListingEntriesEqual,
   sourceListingSha256,
   swarmUnitCheckpointRejections,
   type WorkspaceSourceState,
   type WorkflowSelection,
   UNBINDABLE_FINGERPRINT,
+  onlyAidlcFilesChangedSince,
   validateUnitName,
   workspaceSourceFailureSuffix,
   recordedSourceListingUnderCurrentBoundary,
@@ -82,18 +84,22 @@ import {
   unmergedRootSettingsNotices,
   workspaceSourceState,
   worktreePath,
+  writeBaselineSourceSnapshot,
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
-  REPO_NAME_REGEX,
+  repoNameRefusal,
   entrySkillInvocation,
+  asksForHelp,
+  printUsageAndExit,
 } from "./aidlc-lib.js";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
-// hyphens. Mirrors stage-schema.ts:95+:101 — the codebase already duplicates
-// this regex across conceptual domains; a one-line constant beats a cross-
-// module import for a tool-local check.
+// hyphens. Mirrors SLUG_RE in aidlc-stage-schema.ts: the codebase already
+// duplicates this regex across conceptual domains; a one-line constant beats a
+// cross-module import for a tool-local check.
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 // The emitter uses isoTimestamp() (YYYY-MM-DDTHH:MM:SSZ); fixtures may carry fractional seconds.
 const AUDIT_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
@@ -107,7 +113,7 @@ const VALID_VERIFY_EVENTS = new Set([
   "WORKTREE_DISCARDED",
 ]);
 
-// --- Flag parsing (mirrors aidlc-bolt.ts:30-46) ---
+// --- Flag parsing (mirrors aidlc-bolt.ts parseFlags) ---
 
 function parseFlags(args: string[]): Record<string, string> {
   const flags: Record<string, string> = {};
@@ -454,6 +460,15 @@ function recordedWorktreeSelector(
   }
 }
 
+// The repository a Bolt lands in, as resolveConstructionRepo takes it: the one
+// asked for, else the one its worktree records; null or none is the work's own.
+function landingRepo(
+  requested: string | undefined,
+  recorded: ReturnType<typeof recordedWorktreeSelector>,
+): string | undefined {
+  return requested ?? (typeof recorded?.repoSelector === "string" ? recorded.repoSelector : undefined);
+}
+
 // Compare-and-delete each ref: if another process moved one after enumeration,
 // preserve it and report a cleanup failure instead of deleting newer evidence.
 function deleteRetainedSourceRefs(repoCwd: string, identity: BoltIdentity, refs: RetainedSourceRef[], tag: string): string | null {
@@ -489,11 +504,11 @@ function deleteRetainedSourceRefs(repoCwd: string, identity: BoltIdentity, refs:
 // Intent-scoped branches avoid collisions between these external checkouts;
 // pre-upgrade names are supported for existing Bolts, never for new creation.
 //
-// P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
+// Multi-repo: the guard is ANCHORED to the TARGET repo's checkout. When
 // `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
 // git probe runs there — so the nesting test is evaluated against the sibling
-// repo, not the (non-git) workspace root. Absent `--repo` (legacy single-repo),
-// `repoCwd` is the projectDir and the behaviour is unchanged.
+// repo, not the (non-git) workspace root. Absent `--repo`, the lone recorded
+// repo is inferred, or `repoCwd` is the projectDir for a legacy intent.
 
 // True when `child` is strictly inside `parent` (never for equal paths). A leading
 // `..` segment on a separator boundary means outside, not a `..foo` directory name.
@@ -587,10 +602,10 @@ function validateSlug(slug: string | undefined): string {
 }
 
 function validateStrategy(strategy: string | undefined): string {
-  if (!strategy) error("Missing --strategy <squash|merge|rebase>");
+  if (!strategy) error(`Missing --strategy <${[...VALID_STRATEGIES].join("|")}>`);
   if (!VALID_STRATEGIES.has(strategy)) {
     error(
-      `Invalid --strategy: "${strategy}". Must be one of: squash, merge, rebase.`
+      `Invalid --strategy: "${strategy}". Must be one of: ${[...VALID_STRATEGIES].join(", ")}.`
     );
   }
   return strategy;
@@ -609,7 +624,7 @@ function resolveCommandBoltIdentity(
   }
 }
 
-// Resolve the cwd every git op in a construction handler must run in (P7). With
+// Resolve the cwd every git op in a construction handler must run in. With
 // `--repo <name>` it is the sibling repo dir; absent it the lone recorded repo is
 // inferred (or the projectDir for a legacy single-repo intent). A disambiguation
 // failure (multi-repo intent without --repo, or an out-of-set name) errors before
@@ -631,10 +646,12 @@ function resolveRepoTarget(
 //
 // Usage: aidlc-worktree create --slug <slug> --base <branch> [--repo <name>]
 //                              [--intent <dir>] [--space <name>]
+//                              [--swarm-unit <unit> --swarm-batch <n>
+//                               --swarm-stage <slug> --swarm-floor <floor>]
 //
-// --repo (P7): the sibling repo to fork the worktree inside (a multi-repo intent
+// --repo: the sibling repo to fork the worktree inside (a multi-repo intent
 // requires it; a single-repo intent infers the lone repo; a legacy intent with no
-// recorded repos runs in the projectDir, today's behaviour).
+// recorded repos runs in the projectDir).
 function rawBaseSourceListing(
   repoCwd: string,
   baseCommit: string,
@@ -706,7 +723,7 @@ function handleCreate(args: string[]): void {
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
   const intentRecord = relativeRecordDirForSelection(selection);
-  // P7: anchor every git op to the target sibling repo (or the projectDir for a
+  // Anchor every git op to the target sibling repo (or the projectDir for a
   // legacy single-repo intent). The guard is evaluated against that same checkout.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
   const repoCwd = repoTarget.cwd;
@@ -908,7 +925,7 @@ function handleCreate(args: string[]): void {
 //   aidlc-worktree merge --slug <slug> --target <branch> --strategy <squash|merge|rebase>
 //                        [--message <msg>] [--repo <name>] [--intent <dir>] [--space <name>]
 //
-// --repo (P7): the sibling repo the merge lands in — same resolution as `create`.
+// --repo: the sibling repo the merge lands in - same resolution as `create`.
 // Refuse a source merge whose worktree no longer holds the bytes that
 // converged. Reads the newest SWARM_UNIT_CONVERGED for this unit; a Bolt that
 // never went through the swarm has none and passes straight through, and a
@@ -1977,45 +1994,11 @@ function assertConvergedSourceUnchanged(
   return record.commit;
 }
 
-function sourceListingsEqual(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, value] of left) {
-    if (!sourceListingEntriesEqual(right.get(key), value)) return false;
-  }
-  return true;
-}
-
-function changedSourceListingKeys(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): Set<string> {
-  const changed = new Set<string>();
-  for (const [key, value] of left) {
-    if (!sourceListingEntriesEqual(right.get(key), value)) changed.add(key);
-  }
-  for (const key of right.keys()) {
-    if (!left.has(key)) changed.add(key);
-  }
-  return changed;
-}
-
-function changedSourceListingPaths(
-  left: ReadonlyMap<string, string>,
-  right: ReadonlyMap<string, string>,
-): string[] {
-  return [...changedSourceListingKeys(left, right)]
-    .sort()
-    .slice(0, 10)
-    .map((key) => {
-      const separator = key.indexOf("\0");
-      const repo = separator === -1 ? "" : key.slice(0, separator);
-      const path = separator === -1 ? key : key.slice(separator + 1);
-      return repo ? `${repo}/${path}` : path;
-    });
-}
+// The main checkout changed under a strict landing: the change is the person's,
+// so the way on is theirs to pick, never an undo by the agent.
+const PERSON_DECIDES_CHANGES =
+  "Those are the person's own changes, so they decide: keep them (with their go-ahead, set Guard Policy relaxed " +
+  "for this piece of work) or undo them themselves; then run the merge again.";
 
 function assertAggregateSourceBeforeMerge(
   pd: string,
@@ -2023,6 +2006,9 @@ function assertAggregateSourceBeforeMerge(
   record: ConvergedSourceRecord | null,
   intent?: string,
   space?: string,
+  // The checkout holds a landing this tool staged and a hook refused: it is
+  // mid-landing by design, so the chain is checked and the checkout is not.
+  resuming = false,
 ): {
   state: WorkspaceSourceState;
   openingFingerprint: string;
@@ -2068,13 +2054,15 @@ function assertAggregateSourceBeforeMerge(
         `refusing to merge: unit "${record.unit}" already has current-attempt source-merge authority`,
       );
     }
-    if (!sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
+    if (resuming) return { state: current, openingFingerprint: chain.fingerprint };
+    if (
+      !sameWorkspaceSource(chain.fingerprint, current.fingerprint) &&
+      !onlyAidlcFilesChangedSince(pd, record.stage, chain.listing, current, intent, space)
+    ) {
       if (acceptsChanges) return keepChange(chain.fingerprint, null);
       errorWithSlug(
         slug,
-        "refusing to merge: the main checkout source changed after the previous reviewed-source merge. " +
-          "Undo those changes in the main checkout and run the merge again; or, if the person wants to keep " +
-          "them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
+        `refusing to merge: the main checkout source changed after the previous reviewed-source merge. ${PERSON_DECIDES_CHANGES}`,
       );
     }
     return {
@@ -2095,34 +2083,34 @@ function assertAggregateSourceBeforeMerge(
       `refusing to merge: the current stage has no verifiable predecessor for the first aggregate link (${opening.reason})`,
     );
   }
+  if (resuming) return { state: current, openingFingerprint: opening.fingerprint };
   const openingListing = opening.listing === undefined
     ? undefined
     : recordedSourceListingUnderCurrentBoundary(opening.listing, current.listing);
-  if (
-    opening.source === "stage-baseline" &&
-    openingListing !== undefined &&
-    !sourceListingsEqual(current.listing, openingListing)
-  ) {
-    const changed = changedSourceListingPaths(
-      current.listing,
-      openingListing,
-    );
+  // An AI-DLC update the person took changed only AI-DLC's own files: nobody's source.
+  const changed = openingListing !== undefined
+    ? sourceChangedOutsideAidlc(pd, openingListing, current.listing)
+    : [];
+  if (changed.length > 0) {
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
-        "Undo those changes and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
+      (opening.source === "prior-accepted"
+        ? "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate"
+        : "refusing to merge: the main checkout source changed since the stage-entry baseline") +
+        ` (${renderChangedPaths(changed)}). ${PERSON_DECIDES_CHANGES}`,
     );
   }
+  // A rejection an earlier release wrote kept no listing: compare fingerprints.
   if (
     opening.source === "prior-accepted" &&
+    openingListing === undefined &&
     !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
     if (acceptsChanges) return keepChange(opening.fingerprint, null);
     errorWithSlug(
       slug,
-      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. " +
-        "Undo the changes made since then and run the merge again; or, if the person wants to keep them, set Guard Policy relaxed for this piece of work with their go-ahead, then run the merge again.",
+      `refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. ${PERSON_DECIDES_CHANGES}`,
     );
   }
   return {
@@ -2131,73 +2119,297 @@ function assertAggregateSourceBeforeMerge(
   };
 }
 
-function expectedAggregateAfterCommit(
-  before: ReadonlyMap<string, string>,
-  priorCommittedRepo: ReadonlyMap<string, string>,
-  landedCommittedRepo: ReadonlyMap<string, string>,
-  repo: string | null,
-): Map<string, string> {
-  const expected = new Map(before);
-  for (const key of changedSourceListingKeys(
-    priorCommittedRepo,
-    landedCommittedRepo,
-  )) {
-    const aggregateKey = `${repo ?? ""}${key}`;
-    const landed = landedCommittedRepo.get(key);
-    if (landed === undefined) expected.delete(aggregateKey);
-    else expected.set(aggregateKey, landed);
-  }
-  return expected;
-}
-
 function stagedTreeOid(repoCwd: string): string | null {
   const tree = runGit(["write-tree"], repoCwd);
   const oid = tree.ok ? tree.stdout.trim() : "";
   return /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
 }
 
-function assertLandedMergeCommit(
+function gitPaths(repoCwd: string, args: string[]): Set<string> | null {
+  const diff = runGit(["diff", "--name-only", "-z", ...args], repoCwd);
+  if (!diff.ok) return null;
+  return new Set(diff.stdout.split("\0").filter(Boolean));
+}
+
+// What the checkout reports as changed but not committed, by path. A post-commit
+// hook that writes a file or edits one without staging it changes the person's
+// checkout, so the record names it too.
+function statusPaths(repoCwd: string): Map<string, string> | null {
+  const status = runGit(
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    repoCwd,
+  );
+  if (!status.ok) return null;
+  const fields = status.stdout.split("\0");
+  const entries = new Map<string, string>();
+  for (let at = 0; at < fields.length; at++) {
+    const field = fields[at];
+    if (field.length < 4) continue;
+    const code = field.slice(0, 2);
+    entries.set(field.slice(3), code);
+    // A rename or copy emits its original path as the next field.
+    if (code.startsWith("R") || code.startsWith("C")) at++;
+  }
+  return entries;
+}
+
+// A landing this tool staged earlier that the person's hook refused: finish it
+// instead of staging it again. git's squash message names the squashed tip;
+// the merge strategy keeps it in MERGE_HEAD.
+// ponytail: a HEAD moved underneath a kept SQUASH_MSG is not told apart; the
+// normal path then surfaces git's own dirty-index error.
+function stagedLandingOf(repoCwd: string, strategy: string, tip: string): boolean {
+  if (!/^[0-9a-f]{40,64}$/.test(tip)) return false;
+  if (strategy === "squash") {
+    const path = runGit(["rev-parse", "--git-path", "SQUASH_MSG"], repoCwd);
+    if (!path.ok) return false;
+    const file = resolve(repoCwd, path.stdout.trim());
+    if (!existsSync(file)) return false;
+    return new RegExp(`^commit ${tip}\\r?$`, "m").test(readFileSync(file, "utf-8"));
+  }
+  if (strategy === "merge") {
+    const head = runGit(["rev-parse", "-q", "--verify", "MERGE_HEAD"], repoCwd);
+    return head.ok && head.stdout.trim() === tip;
+  }
+  return false;
+}
+
+// The person's hook refused `git commit`. Say so in its own words, leave the
+// landing staged exactly as git left it, and name the plain next step.
+function refuseLanding(
+  slug: string,
+  repoCwd: string,
+  wtPath: string,
+  target: string,
+  strategy: string,
+  unit: string,
+  commit: GitResult,
+): never {
+  const staged = runGit(["diff", "--cached", "--name-only", "-z"], repoCwd);
+  process.stdout.write(
+    `${JSON.stringify({
+      status: "commit-refused",
+      slug,
+      worktree_path: wtPath,
+      target,
+      strategy,
+      staged: staged.ok ? staged.stdout.split("\0").filter(Boolean) : [],
+      output: `${commit.stdout}${commit.stderr}`.trim(),
+      detail: `\`git commit\` refused the landing of Unit ${unit} in ${repoCwd}; the landing is still staged there.`,
+      next:
+        `Fix what it named (edit and \`git add\` in ${repoCwd}, or pass --message for a commit-message rule), ` +
+        "then run this same merge again: it finishes the staged landing. " +
+        `To drop the staged landing instead: \`git reset --merge\` in ${repoCwd}.`,
+    })}\n`,
+  );
+  process.exit(1);
+}
+
+// How git left an unmerged path, from its `git status` code: the target is
+// git's "us", the Unit's landing "them".
+function clashShape(code: string | undefined, target: string, unit: string): string | null {
+  switch (code) {
+    case "UU": return "changed on both sides";
+    case "AA": return "added on both sides";
+    case "DD": return "deleted on both sides";
+    case "DU": return `deleted on ${target}, changed by Unit ${unit}`;
+    case "UD": return `changed on ${target}, deleted by Unit ${unit}`;
+    case "AU": return `added on ${target}`;
+    case "UA": return `added by Unit ${unit}`;
+    default: return null;
+  }
+}
+
+// git could not merge files the target changed too. The landing stays staged
+// as git left it; settling them there and running the same merge again
+// finishes it (stagedLandingOf), and the agent may write exactly those files
+// while the batch is out (stagedLandingClashFiles).
+function refuseClash(
+  slug: string,
+  repoCwd: string,
+  wtPath: string,
+  target: string,
+  unit: string,
+  files: string[],
+): never {
+  const one = files.length === 1;
+  const codes = statusPaths(repoCwd);
+  const shaped = files.map((file) => {
+    const shape = clashShape(codes?.get(file), target, unit);
+    return shape === null ? file : `${file} (${shape})`;
+  });
+  const where = one
+    ? shaped[0]
+    : files.length === 0
+      ? "the files `git status` lists as unmerged"
+      : `${countFiles(files)}: ${renderLandedPaths(shaped)}`;
+  // Both sides kept every file: combine them. Otherwise one may be dropped.
+  const bothKept = files.every((file) => ["UU", "AA"].includes(codes?.get(file) ?? ""));
+  process.stdout.write(
+    `${JSON.stringify({
+      status: "conflict",
+      slug,
+      worktree_path: wtPath,
+      conflict_files: files,
+      detail: `Unit ${unit}'s landing clashes with what is already on ${target}: it is staged in ${repoCwd}, and git could not merge ${where}.`,
+      next:
+        (bothKept
+          ? `Combine both sides in ${one ? "that file" : "those files"} and \`git add\` ${one ? "it" : "them"} in ${repoCwd}, `
+          : `\`git add\` ${one ? "that file" : "each of those files"} to keep or combine it, or \`git rm\` it to drop it, in ${repoCwd}, `) +
+        "then run this same merge again: it finishes the landing. " +
+        `To drop the landing instead: \`git reset --merge\` in ${repoCwd}.`,
+    })}\n`,
+  );
+  process.exit(1);
+}
+
+// git would not start the landing because files it changes hold changes not
+// committed in the checkout (an AI-DLC update to .gitignore the person has not
+// committed, say). Name them and the step; any other failure keeps git's words.
+function refuseUncommittedInTheWay(
+  slug: string,
+  repoCwd: string,
+  mergeTarget: string,
+  statusBefore: Map<string, string> | null,
+  unit: string,
+  strategy: string,
+  tip: string,
+): void {
+  if (statusBefore === null || statusBefore.size === 0 || stagedLandingOf(repoCwd, strategy, tip)) return;
+  const landing = gitPaths(repoCwd, [`HEAD...${mergeTarget}`]);
+  if (landing === null) return;
+  const inTheWay = [...landing].filter((path) => statusBefore.has(path)).sort();
+  if (inTheWay.length === 0) return;
+  const which = inTheWay.length === 1
+    ? `${inTheWay[0]}, which has changes not committed in ${repoCwd}`
+    : `${countFiles(inTheWay)} that have changes not committed in ${repoCwd} (${renderLandedPaths(inTheWay)})`;
+  errorWithSlug(
+    slug,
+    `Unit ${unit}'s landing changes ${which}, so git did not start it and nothing in the checkout changed. ` +
+      `Commit those changes in ${repoCwd}, then run this same merge again.`,
+  );
+}
+
+function combinedLine(unit: string, combined: readonly string[], target: string): string {
+  return combined.length === 1
+    ? `Landed Unit ${unit} with ${combined[0]} settled by hand against what was already on ${target}.`
+    : `Landed Unit ${unit} with ${countFiles(combined)} settled by hand against what was already on ${target}: ${renderLandedPaths(combined)}.`;
+}
+
+function assertLandedOnTop(
   slug: string,
   repoCwd: string,
   priorHead: string,
-  commitSha: string,
-  expectedTree: string,
-  expectedSecondParent: string | null | undefined,
+  landedHead: string,
+  unit: string,
 ): void {
-  const parent = runGit(["rev-parse", `${commitSha}^1`], repoCwd);
-  const tree = runGit(["rev-parse", `${commitSha}^{tree}`], repoCwd);
-  const secondParent = runGit(["rev-parse", `${commitSha}^2`], repoCwd);
-  const secondParentMatches =
-    expectedSecondParent === undefined ||
-    (expectedSecondParent === null
-      ? !secondParent.ok
-      : secondParent.ok &&
-        secondParent.stdout.trim() === expectedSecondParent);
-  if (
-    !parent.ok ||
-    parent.stdout.trim() !== priorHead ||
-    !tree.ok ||
-    tree.stdout.trim() !== expectedTree ||
-    !secondParentMatches
-  ) {
+  const descends = runGit(["merge-base", "--is-ancestor", priorHead, landedHead], repoCwd);
+  if (landedHead === "" || landedHead === priorHead || !descends.ok) {
     errorWithSlug(
       slug,
-      `[merge-succeeded:${commitSha}] unexpected commit or tree change landed during the source merge; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+      `the target branch moved while landing Unit ${unit}: expected a descendant of ${priorHead}, found ${landedHead || "nothing"}; nothing was recorded. Check the branch and run the merge again.`,
     );
   }
 }
 
-function renderSourcePathKeys(keys: Iterable<string>): string {
-  return [...keys]
-    .sort()
-    .slice(0, 10)
-    .map((key) => {
-      const separator = key.indexOf("\0");
-      const repo = separator === -1 ? "" : key.slice(0, separator);
-      const path = separator === -1 ? key : key.slice(separator + 1);
-      return repo ? `${repo}/${path}` : path;
-    })
-    .join(", ");
+interface LandedDifferences {
+  /** Paths whose landed bytes differ from the reviewed worktree's. */
+  changed: string[];
+  /** Every changed path was re-staged before the one landed commit: a pre-commit hook. */
+  byPreCommit: boolean;
+  /** Paths git three-way merged through a driver the person configured, by driver name. */
+  drivers: Map<string, string[]>;
+}
+
+// What landed that the reviewer did not see. The person's hooks, filters and
+// merge drivers are their own git: a difference is recorded and said once,
+// never refused. Paths both sides changed were merged by git itself, so only a
+// configured driver is reported for them.
+function landedDifferences(
+  repoCwd: string,
+  wtPath: string,
+  repo: string | null,
+  reviewedCommit: string,
+  priorHead: string,
+  landedHead: string,
+  stagedTree: string,
+  landedListing: ReadonlyMap<string, string>,
+  statusBefore: ReadonlyMap<string, string> | null,
+): LandedDifferences {
+  const none: LandedDifferences = { changed: [], byPreCommit: false, drivers: new Map() };
+  const shown = (path: string): string => (repo ? `${repo}/${path}` : path);
+  const base = runGit(["merge-base", priorHead, reviewedCommit], repoCwd);
+  const baseCommit = base.ok ? base.stdout.trim() : "";
+  const unitPaths = baseCommit ? gitPaths(repoCwd, [baseCommit, reviewedCommit]) : null;
+  const mainPaths = baseCommit ? gitPaths(repoCwd, [baseCommit, priorHead]) : null;
+  const landingPaths = gitPaths(repoCwd, [priorHead, landedHead]);
+  const reviewed = workspaceSourceState(wtPath);
+  if (unitPaths === null || mainPaths === null || landingPaths === null || reviewed === null) return none;
+  const merged = new Set([...unitPaths].filter((path) => mainPaths.has(path)));
+  const changedPaths = [...new Set([...unitPaths, ...landingPaths])]
+    .filter((path) => !merged.has(path))
+    .filter((path) => !sourceListingEntriesEqual(
+      reviewed.listing.get(`\0${path}`),
+      landedListing.get(`${repo ?? ""}\0${path}`),
+    ))
+    .sort();
+  // Anything the landing left uncommitted in the checkout: new since the merge
+  // started, or reported differently than it was. The person's own work in
+  // progress was already there, so it is not attributed to their hooks, and
+  // AI-DLC's own records are not application source.
+  const statusAfter = statusPaths(repoCwd);
+  const leftBehind: string[] = [];
+  if (statusBefore !== null && statusAfter !== null) {
+    for (const [path, code] of statusAfter) {
+      if (statusBefore.get(path) === code) continue;
+      if (workspaceSourcePathIsExcluded(repoCwd, path) === true) continue;
+      leftBehind.push(path);
+    }
+  }
+  const allChanged = [...new Set([...changedPaths, ...leftBehind])].sort();
+  const parent = runGit(["rev-parse", `${landedHead}^`], repoCwd);
+  const hookStaged = stagedTree ? gitPaths(repoCwd, [stagedTree, `${landedHead}^{tree}`]) : null;
+  // A pre-commit hook stages what it changes, so a landing that left something
+  // uncommitted is not one.
+  const byPreCommit = changedPaths.length > 0 && leftBehind.length === 0 &&
+    parent.ok && parent.stdout.trim() === priorHead &&
+    hookStaged !== null && changedPaths.every((path) => hookStaged.has(path));
+  const drivers = new Map<string, string[]>();
+  if (merged.size > 0) {
+    const attrs = runGit(["check-attr", "-z", "merge", "--", ...[...merged].sort()], repoCwd);
+    const fields = attrs.ok ? attrs.stdout.split("\0") : [];
+    for (let at = 0; at + 2 < fields.length; at += 3) {
+      const path = fields[at];
+      const driver = fields[at + 2];
+      if (["unspecified", "unset", "set"].includes(driver)) continue;
+      if (!runGit(["config", "--get", `merge.${driver}.driver`], repoCwd).ok) continue;
+      drivers.set(driver, [...(drivers.get(driver) ?? []), shown(path)]);
+    }
+  }
+  return { changed: allChanged.map(shown), byPreCommit, drivers };
+}
+
+function countFiles(paths: readonly string[]): string {
+  return `${paths.length} ${paths.length === 1 ? "file" : "files"}`;
+}
+
+function renderLandedPaths(paths: readonly string[]): string {
+  const shown = paths.slice(0, 20);
+  const more = paths.length - shown.length;
+  return more > 0 ? `${shown.join(", ")} +${more} more` : shown.join(", ");
+}
+
+function landedChangeLine(
+  unit: string,
+  changed: readonly string[],
+  resumed: boolean,
+  byPreCommit: boolean,
+): string {
+  const files = countFiles(changed);
+  const list = renderLandedPaths(changed);
+  if (resumed) return `Landed Unit ${unit} with ${files} changed since your hook refused it: ${list}.`;
+  if (byPreCommit) return `Your pre-commit hook changed ${files} while landing Unit ${unit}: ${list}.`;
+  return `Your git hooks or filters changed ${files} while landing Unit ${unit}: ${list}.`;
 }
 
 interface MergedSwarmAuthority {
@@ -2515,90 +2727,6 @@ function reconcileMergedSwarmCleanup(
   return true;
 }
 
-function refuseConfiguredMergeDrivers(
-  slug: string,
-  repoCwd: string,
-  record: ConvergedSourceRecord | null,
-): void {
-  if (
-    record?.kind !== "bound" ||
-    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
-  ) {
-    return;
-  }
-  const configured = runGit(
-    [
-      "config",
-      "-z",
-      "--name-only",
-      "--get-regexp",
-      "^merge\\..*\\.driver$",
-    ],
-    repoCwd,
-  );
-  if (!configured.ok && configured.code === 1) return;
-  if (!configured.ok) {
-    errorWithSlug(
-      slug,
-      "refusing to merge: cannot inspect effective repository merge-driver configuration",
-    );
-  }
-  const keys = [
-    ...new Set(
-      configured.stdout
-        .split("\0")
-        .map((key) => key.trim())
-        .filter(Boolean),
-    ),
-  ].sort();
-  errorWithSlug(
-    slug,
-    `refusing to merge: repository merge-driver configuration is present (${keys.join(", ")}); remove the merge.<name>.driver configuration, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
-  );
-}
-
-function refuseConfiguredCheckoutFilters(
-  slug: string,
-  repoCwd: string,
-  record: ConvergedSourceRecord | null,
-): void {
-  if (
-    record?.kind !== "bound" ||
-    process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1"
-  ) {
-    return;
-  }
-  const configured = runGit(
-    [
-      "config",
-      "-z",
-      "--name-only",
-      "--get-regexp",
-      "^filter\\..*\\.(smudge|process)$",
-    ],
-    repoCwd,
-  );
-  if (!configured.ok && configured.code === 1) return;
-  if (!configured.ok) {
-    errorWithSlug(
-      slug,
-      "refusing to merge: cannot inspect effective repository checkout-filter configuration",
-    );
-  }
-  const keys = [
-    ...new Set(
-      configured.stdout
-        .split("\0")
-        .map((key) => key.trim())
-        .filter(Boolean),
-    ),
-  ].sort();
-  errorWithSlug(
-    slug,
-    `refusing to merge: repository checkout-filter configuration is present (${keys.join(", ")}); remove the filter.<name>.smudge/process configuration, or retry with AIDLC_SKIP_SOURCE_FRESHNESS=1`,
-  );
-}
-
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -2629,12 +2757,8 @@ function handleMerge(args: string[]): void {
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
   const recorded = recordedWorktreeSelector(identity);
-  if (
-    flags.repo === undefined &&
-    typeof recorded?.repoSelector === "string"
-  ) {
-    flags.repo = recorded.repoSelector;
-  }
+  const repo = landingRepo(flags.repo, recorded);
+  if (repo !== undefined) flags.repo = repo;
   const worktreeIdentity = currentSwarmWorktreeIdentity(identity);
   const cleanupAuthority =
     worktreeIdentity === null
@@ -2652,7 +2776,7 @@ function handleMerge(args: string[]): void {
       flags.repo = cleanupAuthority.repo;
     }
   }
-  // P7: anchor every git op to the target sibling repo. The merge runs IN that
+  // Anchor every git op to the target sibling repo. The merge runs IN that
   // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
   // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
   const repoTarget = resolveRepoTarget(pd, flags, slug);
@@ -2706,12 +2830,17 @@ function handleMerge(args: string[]): void {
       "cannot resolve the Bolt worktree source role from its metadata",
     );
   }
+  const landingTip = sourceRecord?.kind === "bound"
+    ? sourceRecord.commit
+    : runGit(["rev-parse", `${branchName}^{commit}`], repoCwd).stdout.trim();
+  const resuming = stagedLandingOf(repoCwd, strategy, landingTip);
   const aggregateBefore = assertAggregateSourceBeforeMerge(
     pd,
     slug,
     sourceRecord,
     flags.intent,
     flags.space,
+    resuming,
   );
   // Refuse before anything lands when cleanup would have to keep the
   // worktree for a submodule copy; the same check runs again at cleanup.
@@ -2753,9 +2882,6 @@ function handleMerge(args: string[]): void {
       );
     }
   }
-  refuseConfiguredMergeDrivers(slug, repoCwd, sourceRecord);
-  refuseConfiguredCheckoutFilters(slug, repoCwd, sourceRecord);
-
   // Rebase requires a remote for <target>. The remote-existence check is
   // a pre-audit guard (no state change). The actual `git fetch` is post-
   // audit because fetch mutates remote-tracking refs — running it before
@@ -2812,115 +2938,86 @@ function handleMerge(args: string[]): void {
   }
 
   let commitSha = "";
+  let stagedTree = "";
   const priorTargetHead = currentSha(repoCwd);
-  const disabledHooksPath = join(
-    tmpdir(),
-    `aidlc-disabled-hooks-${process.pid}-${randomUUID()}`,
-  ).replaceAll("\\", "/");
-  const mutationArgs = (args: string[]): string[] =>
-    sourceRecord?.kind === "bound"
-      ? ["-c", `core.hooksPath=${disabledHooksPath}`, ...args]
-      : args;
+  const statusBefore = statusPaths(repoCwd);
+  const landingUnit = sourceRecord?.unit ?? convergedUnitName(pd, slug, flags.intent, flags.space);
   // conflictCwd records which checkout the conflicting state lives in:
   // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
   // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
   // `git diff --name-only --diff-filter=U` in the SAME cwd so the index reflects
-  // the real conflict. (P7: repoCwd is the sibling repo, or the projectDir for a
-  // legacy single-repo intent — squash/merge default to it now, not the caller's cwd.)
+  // the real conflict. (repoCwd is the sibling repo, or the projectDir for a
+  // legacy single-repo intent - squash/merge default to it.)
   let conflictCwd: string | undefined = repoCwd;
   let conflictHit = false;
+  // Files combined by hand after this landing clashed, run again to finish it.
+  let combined: string[] = [];
   switch (strategy) {
     case "squash": {
-      const m = runGit(
-        mutationArgs(["merge", "--squash", "--no-verify", mergeTarget]),
-        repoCwd,
-      );
-      if (!m.ok) {
-        if (isConflict(m)) {
-          conflictHit = true;
-          break;
+      if (!resuming) {
+        const m = runGit(["merge", "--squash", mergeTarget], repoCwd);
+        if (!m.ok) {
+          if (isConflict(m)) {
+            conflictHit = true;
+            break;
+          }
+          refuseUncommittedInTheWay(slug, repoCwd, mergeTarget, statusBefore, landingUnit, strategy, landingTip);
+          errorWithSlug(
+            slug,
+            `git merge --squash failed: ${m.stderr.trim() || `exit ${m.code}`}`
+          );
         }
-        errorWithSlug(
-          slug,
-          `git merge --squash failed: ${m.stderr.trim() || `exit ${m.code}`}`
-        );
+      } else if (listConflictFiles(repoCwd).length > 0) {
+        conflictHit = true;
+        break;
       }
-      const expectedTree = stagedTreeOid(repoCwd);
-      if (expectedTree === null) {
+      if (resuming) combined = combinedSinceMerge(repoCwd);
+      const staged = stagedTreeOid(repoCwd);
+      if (staged === null) {
         errorWithSlug(slug, "cannot resolve the staged squash merge tree");
       }
-      const c = runGit(
-        mutationArgs(["commit", "--no-verify", "-m", message]),
-        repoCwd,
-      );
+      stagedTree = staged;
+      const c = runGit(["commit", "-m", message], repoCwd);
       if (!c.ok) {
-        errorWithSlug(
-          slug,
-          `git commit failed: ${c.stderr.trim() || `exit ${c.code}`}`
-        );
+        refuseLanding(slug, repoCwd, wtPath, flags.target, strategy, landingUnit, c);
       }
       commitSha = currentSha(repoCwd);
-      assertLandedMergeCommit(
-        slug,
-        repoCwd,
-        priorTargetHead,
-        commitSha,
-        expectedTree,
-        null,
-      );
+      assertLandedOnTop(slug, repoCwd, priorTargetHead, commitSha, landingUnit);
       break;
     }
     case "merge": {
-      const m = runGit(
-        mutationArgs([
-          "merge",
-          "--no-ff",
-          "--no-commit",
-          "--no-verify",
-          mergeTarget,
-        ]),
-        repoCwd,
-      );
-      if (!m.ok) {
-        if (isConflict(m)) {
-          conflictHit = true;
-          break;
+      if (!resuming) {
+        const m = runGit(["merge", "--no-ff", "--no-commit", mergeTarget], repoCwd);
+        if (!m.ok) {
+          if (isConflict(m)) {
+            conflictHit = true;
+            break;
+          }
+          refuseUncommittedInTheWay(slug, repoCwd, mergeTarget, statusBefore, landingUnit, strategy, landingTip);
+          errorWithSlug(
+            slug,
+            `git merge --no-ff failed: ${m.stderr.trim() || `exit ${m.code}`}`
+          );
         }
-        errorWithSlug(
-          slug,
-          `git merge --no-ff failed: ${m.stderr.trim() || `exit ${m.code}`}`
-        );
+      } else if (listConflictFiles(repoCwd).length > 0) {
+        conflictHit = true;
+        break;
       }
-      const expectedTree = stagedTreeOid(repoCwd);
-      if (expectedTree === null) {
+      if (resuming) combined = combinedSinceMerge(repoCwd);
+      const staged = stagedTreeOid(repoCwd);
+      if (staged === null) {
         errorWithSlug(slug, "cannot resolve the staged merge tree");
       }
+      stagedTree = staged;
       const c = runGit(
-        mutationArgs([
-          "commit",
-          "--no-verify",
-          "-m",
-          `Merge bolt ${slug}`,
-        ]),
+        ["commit", "-m", flags.message ?? `Merge bolt ${slug}`],
         repoCwd,
       );
       if (!c.ok) {
-        errorWithSlug(
-          slug,
-          `git commit failed: ${c.stderr.trim() || `exit ${c.code}`}`,
-        );
+        refuseLanding(slug, repoCwd, wtPath, flags.target, strategy, landingUnit, c);
       }
       commitSha = currentSha(repoCwd);
-      assertLandedMergeCommit(
-        slug,
-        repoCwd,
-        priorTargetHead,
-        commitSha,
-        expectedTree,
-        sourceRecord?.kind === "bound"
-          ? sourceRecord.commit
-          : undefined,
-      );
+      assertLandedOnTop(slug, repoCwd, priorTargetHead, commitSha, landingUnit);
       break;
     }
     case "rebase": {
@@ -2955,6 +3052,7 @@ function handleMerge(args: string[]): void {
 
   if (conflictHit) {
     const files = listConflictFiles(conflictCwd);
+    if (conflictCwd === repoCwd) refuseClash(slug, repoCwd, wtPath, flags.target, landingUnit, files);
     process.stdout.write(
       `${JSON.stringify({
         status: "conflict",
@@ -2975,6 +3073,7 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
+  const landingNotices: string[] = [];
   if (sourceRecord?.kind === "bound") {
     const aggregateAfter = workspaceSourceState(pd, flags.intent, flags.space);
     if (aggregateBefore === null || aggregateAfter === null) {
@@ -2983,42 +3082,42 @@ function handleMerge(args: string[]): void {
         `${cleanupTag} cannot bind the post-merge main-checkout source aggregate; worktree and retained source commit preserved`,
       );
     }
-    const priorCommittedRepo = gitCommitSourceListing(
+    const landed = landedDifferences(
       repoCwd,
-      priorTargetHead,
-      repoTarget.repo === null,
-    );
-    const landedCommittedRepo = gitCommitSourceListing(
-      repoCwd,
-      commitSha,
-      repoTarget.repo === null,
-    );
-    if (priorCommittedRepo === null || landedCommittedRepo === null) {
-      errorWithSlug(
-        slug,
-        `${cleanupTag} cannot reconstruct the committed source delta; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
-      );
-    }
-    const expectedAfter = expectedAggregateAfterCommit(
-      aggregateBefore.state.listing,
-      priorCommittedRepo,
-      landedCommittedRepo,
+      wtPath,
       repoTarget.repo,
+      sourceRecord.commit,
+      priorTargetHead,
+      commitSha,
+      stagedTree,
+      aggregateAfter.listing,
+      statusBefore,
     );
-    const mismatchedEntries = [
-      ...changedSourceListingKeys(expectedAfter, aggregateAfter.listing),
-    ];
-    if (mismatchedEntries.length > 0) {
-      errorWithSlug(
-        slug,
-        `${cleanupTag} post-merge source does not match landed merge commit ${commitSha} (${renderSourcePathKeys(mismatchedEntries) || "unknown paths"}); no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+    if (landed.changed.length > 0) {
+      landingNotices.push(
+        landedChangeLine(sourceRecord.unit, landed.changed, resuming && combined.length === 0, landed.byPreCommit),
       );
     }
-    if (currentSha(repoCwd) !== commitSha) {
-      errorWithSlug(
-        slug,
-        `${cleanupTag} target HEAD changed after the source merge result was verified; no SWARM_SOURCE_MERGED authority was emitted. Do not retry this merge. Preserve the worktree and restart the stage attempt.`,
+    // Named the way landedDifferences names every landed path: with its repository.
+    const settled = combined.map((path) => (repoTarget.repo ? `${repoTarget.repo}/${path}` : path));
+    if (settled.length > 0) {
+      landingNotices.push(combinedLine(sourceRecord.unit, settled, flags.target));
+    }
+    const landedChanges = [...new Set([...landed.changed, ...settled])].sort();
+    for (const [driver, paths] of landed.drivers) {
+      landingNotices.push(
+        `Your merge driver ${driver} merged ${countFiles(paths)} while landing Unit ${sourceRecord.unit}: ${renderLandedPaths(paths)}.`,
       );
+    }
+    const driverMerged = [...landed.drivers.values()].flat().sort();
+    // The listing this landing left, so the next landing and the stage's
+    // completion can tell an AI-DLC update from a change to source. Without it
+    // they compare fingerprints, so a failed write never fails the landing.
+    let listing: string | undefined;
+    try {
+      listing = writeBaselineSourceSnapshot(pd, sourceRecord.stage, aggregateAfter.listing, flags.intent, flags.space);
+    } catch {
+      listing = undefined;
     }
     try {
       emitAudit(
@@ -3031,9 +3130,16 @@ function handleMerge(args: string[]): void {
           "Run floor": sourceRecord.floor,
           "Previous Source Fingerprint": aggregateBefore.openingFingerprint,
           "Source Fingerprint": aggregateAfter.fingerprint,
+          ...(listing === undefined ? {} : { "Source Listing": listing }),
           "Source Commit": sourceRecord.commit,
           "Merge commit": commitSha,
           Repo: repoTarget.repo ?? "-",
+          ...(landedChanges.length > 0
+            ? { "Landed changes": renderLandedPaths(landedChanges) }
+            : {}),
+          ...(driverMerged.length > 0
+            ? { "Driver merges": renderLandedPaths(driverMerged) }
+            : {}),
         },
         flags.intent,
         flags.space,
@@ -3061,7 +3167,10 @@ function handleMerge(args: string[]): void {
   assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
   // A setting changed in the worktree did not land and goes with it: say so
   // before the checkout is reset.
-  const notices = sourceRecord?.kind === "bound" ? unmergedRootSettingsNotices(wtPath) : [];
+  const notices = [
+    ...landingNotices,
+    ...(sourceRecord?.kind === "bound" ? unmergedRootSettingsNotices(wtPath) : []),
+  ];
   for (const notice of notices) process.stderr.write(`note: ${notice}\n`);
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
@@ -3214,10 +3323,9 @@ function currentSha(cwd?: string): string {
 }
 
 function isConflict(r: GitResult): boolean {
-  // Anchor on git's canonical CONFLICT marker prefix. The previous
-  // permissive form (`/conflict/i` etc.) false-positived on stdout that
-  // happened to contain the substring "conflict" — including unrelated
-  // hint text in future git releases.
+  // Anchor on git's canonical CONFLICT marker prefix. A permissive form
+  // (`/conflict/i` etc.) false-positives on stdout that happens to contain the
+  // substring "conflict", including unrelated hint text in future git releases.
   const blob = `${r.stdout}\n${r.stderr}`;
   return /^CONFLICT \(/m.test(blob);
 }
@@ -3227,12 +3335,57 @@ function listConflictFiles(cwd?: string): string[] {
   // the index. Deterministic across all conflict shapes (content, rename/
   // rename, modify/delete) — beats parsing git's prose stderr, which has
   // varied across git releases.
-  const r = runGit(["diff", "--name-only", "--diff-filter=U"], cwd);
+  // -z: without it git quotes a path that is not plain ASCII.
+  const r = runGit(["diff", "--name-only", "-z", "--diff-filter=U"], cwd);
   if (!r.ok) return [];
-  return r.stdout
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  return r.stdout.split("\0").filter((s) => s.length > 0);
+}
+
+// The files combined by hand since git stopped on a clash in this checkout: git
+// keeps a resolved path's conflict stages until the next merge starts.
+function combinedSinceMerge(repoCwd: string): string[] {
+  const undo = runGit(["ls-files", "--resolve-undo", "--full-name", "-z"], repoCwd);
+  if (!undo.ok) return [];
+  return [...new Set(
+    undo.stdout.split("\0").filter((entry) => entry.includes("\t")).map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+  )].sort();
+}
+
+// The files the agent may write while a parallel batch is out, in a landing this
+// tool staged for one of `units`: while git could not merge some, those and the
+// ones combined since (refuseClash names them), and only those once all are
+// combined; when the landing merged clean and the person's hook refused its
+// commit, every file it staged (refuseLanding names them). A clean merge has no
+// combined file: git clears them when the next merge starts. In the checkout that
+// landing runs in: the project's, or in a workspace of several repositories the
+// Unit's own. Relative to `projectDir`, forward slashes; none when no such landing
+// is staged.
+export function stagedLandingClashFiles(projectDir: string, units: readonly string[]): string[] {
+  const selection = resolveWorkflowSelection(projectDir, {});
+  const files = new Set<string>();
+  for (const unit of units) {
+    try {
+      const identity = resolveBoltIdentity(projectDir, boltSlugForUnit(unit), selection);
+      const { cwd, repo } = resolveConstructionRepo(
+        projectDir, landingRepo(undefined, recordedWorktreeSelector(identity)), selection.intent, selection.space,
+      );
+      const staged = (retainedSourceRefs(cwd, identity) ?? []).some(({ oid }) =>
+        stagedLandingOf(cwd, "squash", oid) || stagedLandingOf(cwd, "merge", oid));
+      if (!staged) continue;
+      const prefix = runGit(["rev-parse", "--show-prefix"], cwd);
+      if (!prefix.ok) continue;
+      const under = prefix.stdout.trim();
+      const unmerged = listConflictFiles(cwd);
+      const combined = combinedSinceMerge(cwd);
+      const toCommit = unmerged.length > 0 || combined.length > 0 ? [] : gitPaths(cwd, ["--cached"]) ?? [];
+      for (const path of [...unmerged, ...combined, ...toCommit]) {
+        if (path.startsWith(under)) files.add(`${repo === null ? "" : `${repo}/`}${path.slice(under.length)}`);
+      }
+    } catch {
+      // No landing of this Unit's to finish.
+    }
+  }
+  return [...files];
 }
 
 const PARKED_STAMP_RE = /^\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?$/;
@@ -3453,7 +3606,7 @@ function assertNoForeignBoltDirectory(pd: string, identity: BoltIdentity, select
 // Usage: aidlc-worktree discard --slug <slug> [--repo <name>]
 //                               [--intent <dir>] [--space <name>]
 //
-// --repo (P7): the sibling repo the worktree was forked in — same resolution as
+// --repo: the sibling repo the worktree was forked in - same resolution as
 // `create`. Park the attempt in Git before auditing/removing the live checkout.
 // With no directory, branch, or retained sources, succeed without another audit.
 function handleDiscard(args: string[]): void {
@@ -3461,7 +3614,7 @@ function handleDiscard(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
   if (flags.repo !== undefined && !isValidRepoName(flags.repo)) {
-    errorWithSlug(slug, `Invalid --repo "${flags.repo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`);
+    errorWithSlug(slug, repoNameRefusal("Invalid --repo", flags.repo));
   }
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
   const identity = resolveCommandBoltIdentity(pd, slug, selection);
@@ -3519,7 +3672,7 @@ function handleDiscard(args: string[]): void {
       `refusing to discard: selected repository ${JSON.stringify(flags.repo)} does not match creating repository ${JSON.stringify(creatingRepo ?? "-")}`,
     );
   }
-  // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
+  // Anchor every git op to the target sibling repo (or projectDir for legacy).
   const { cwd: repoCwd, repo: parkedRepo } = creatingRepo === null
     ? { cwd: pd, repo: null }
     : resolveRepoTarget(pd, flags, slug);
@@ -4066,17 +4219,17 @@ function handleList(_args: string[]): void {
 // --- Subcommand: verify ---
 //
 // Usage: aidlc-worktree verify --event <WORKTREE_*> --slug <slug>
-//                              [--max-age-seconds <n>]
+//                              [--max-age-seconds <n>] [--intent <dir>] [--space <name>]
 //
-// Greps `aidlc-docs/audit.md` for the most recent block matching both
-// `**Event**: <event>` and `**Bolt slug**: <slug>`. Read-only — no audit
-// emission. The orchestrator's deterministic post-dispatch backstop.
+// Reads the selected workflow's audit shards for the most recent block
+// matching both `**Event**: <event>` and `**Bolt slug**: <slug>`. Read-only,
+// no audit emission. The orchestrator's deterministic post-dispatch backstop.
 function handleVerify(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.event) error("Missing --event <WORKTREE_CREATED|WORKTREE_MERGED|WORKTREE_DISCARDED>");
+  if (!flags.event) error(`Missing --event <${[...VALID_VERIFY_EVENTS].join("|")}>`);
   if (!VALID_VERIFY_EVENTS.has(flags.event)) {
     error(
-      `Invalid --event: "${flags.event}". Must be one of: WORKTREE_CREATED, WORKTREE_MERGED, WORKTREE_DISCARDED.`
+      `Invalid --event: "${flags.event}". Must be one of: ${[...VALID_VERIFY_EVENTS].join(", ")}.`
     );
   }
   const slug = validateSlug(flags.slug);
@@ -4089,7 +4242,6 @@ function handleVerify(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
-  // Read across every per-clone audit shard (single shard in the common case).
   const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stdout.write(
@@ -4141,7 +4293,7 @@ function handleVerify(args: string[]): void {
 
 // --- Subcommand: info ---
 //
-// Usage: aidlc-worktree info --slug <slug>
+// Usage: aidlc-worktree info --slug <slug> [--intent <dir>] [--space <name>]
 //
 // Reads the latest WORKTREE_CREATED audit block for `slug`. Its Branch name and
 // Worktree path are repository content, validated against the selected intent's
@@ -4157,7 +4309,6 @@ function handleInfo(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
-  // Read across every per-clone audit shard (single shard in the common case).
   const audit = readAllAuditShards(pd, selection.intent ?? undefined, selection.space);
   if (audit.length === 0) {
     process.stderr.write(
@@ -4278,13 +4429,77 @@ function findLatestEvent(
   // `worktree verify --max-age-seconds` reporting a fresh worktree STALE, or
   // `worktree info` returning a stale path/branch). Delegate to findAllEvents,
   // which CRLF-normalizes before splitting and sorts ascending by ISO-8601
-  // timestamp with a buffer-position tiebreak — the SAME ordering fix the other
-  // readers (findAllEvents / buildWorkflowHeader / hasStageAuditEvent) already
-  // use — then take the last (newest) match. Returns null on no match.
+  // timestamp with a buffer-position tiebreak, the SAME ordering the other
+  // readers (findAllEvents / buildWorkflowHeader / hasStageAuditEvent) use, then
+  // take the last (newest) match. Returns null on no match.
   const matches = findAllEvents(audit, event, slug);
   if (matches.length === 0) return null;
   const newest = matches[matches.length - 1];
   return { timestamp: newest.timestamp, block: newest.block };
+}
+
+// --- Usage ---
+
+// What `--help` prints (#2449), from the same value and flag lists the
+// subcommands check, so the usage cannot drift from what they accept.
+const FLAG_VALUES: Record<string, string> = {
+  parked: " <stamp>",
+  "older-than": " <days>",
+  repo: " <name>",
+  intent: " <intent>",
+  space: " <space>",
+  raw: "",
+};
+
+function worktreeUsage(subcommand: string | undefined): string {
+  const invoke = (verb: string) => aidlcDispatcherInvocation(`worktree ${verb}`);
+  const selector = "--repo <name>, --intent <intent>, --space <space>";
+  const recoveryOptions = (verb: string) =>
+    RECOVERY_FLAGS[verb]
+      .filter((flag) => flag !== "slug" && flag !== "project-dir")
+      .map((flag) => `--${flag}${FLAG_VALUES[flag] ?? " <value>"}`)
+      .join(", ");
+  const usage: Record<string, string[]> = {
+    create: [
+      `${invoke("create")} --slug <slug> --base <branch>`,
+      "  Creates the Bolt's worktree on a new branch from --base. Required: --slug, --base.",
+      "  A swarm Unit's worktree also takes --swarm-unit, --swarm-batch, --swarm-stage and --swarm-floor, all four together.",
+      `  Options: ${selector}`,
+    ],
+    merge: [
+      `${invoke("merge")} --slug <slug> --target <branch> --strategy ${[...VALID_STRATEGIES].join("|")}`,
+      "  Merges the Bolt's branch into --target and removes its worktree. Required: --slug, --target, --strategy.",
+      `  Options: --message <text>, ${selector}`,
+    ],
+    discard: [
+      `${invoke("discard")} --slug <slug>`,
+      "  Parks the Bolt's attempt in Git, then removes its worktree. Required: --slug.",
+      `  Options: ${selector}`,
+    ],
+    restore: [
+      `${invoke("restore")} --slug <slug>`,
+      "  Checks out a parked attempt again, the newest unless --parked names one. Required: --slug.",
+      `  Options: ${recoveryOptions("restore")}`,
+    ],
+    purge: [
+      `${invoke("purge")} --slug <slug>`,
+      "  Deletes the Bolt's parked attempts: all, the one --parked names, or those older than --older-than. Required: --slug.",
+      `  Options: ${recoveryOptions("purge")}`,
+    ],
+    list: [`${invoke("list")}`, "  Lists the Bolt worktrees."],
+    verify: [
+      `${invoke("verify")} --event ${[...VALID_VERIFY_EVENTS].join("|")} --slug <slug>`,
+      "  Checks that the event was recorded for the Bolt. Required: --event, --slug.",
+      "  Options: --max-age-seconds <n> (default 60), --intent <intent>, --space <space>",
+    ],
+    info: [
+      `${invoke("info")} --slug <slug>`,
+      "  Prints the Bolt's worktree path and branch. Required: --slug.",
+      `  Options: ${recoveryOptions("info")}`,
+    ],
+  };
+  if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+  return Object.values(usage).map((lines) => lines.join("\n")).join("\n\n");
 }
 
 // --- CLI entry point ---
@@ -4305,6 +4520,8 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(worktreeUsage(undefined));
+  if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(worktreeUsage(subcommand));
 
   try {
     const validFlags = RECOVERY_FLAGS[subcommand];

@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:projectSettingsRepair, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the
@@ -9,11 +9,14 @@
 // workflow with stage progress, and no heartbeat at all in that record. There
 // is no stop when the run is unattended, when the person switched the presence
 // check off, when the conversation has not joined the record, or when a link
-// on the way to the status files keeps any heartbeat from being written.
+// on the way to the status files keeps any heartbeat from being written. On
+// the first turn of a fresh project the host's hook beats before the record
+// exists, and `intent-create && next` as one command leave no beat in it; that
+// beat of the turn that created the record counts for it (#2263).
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -44,8 +47,10 @@ const HARNESSES: Harness[] = [
     dir: ".claude",
     lines: () => [
       "Choose Yes when Claude Code asks to change this project's settings, then answer the question below.",
-      "Claude Code is still starting with its hooks off. If you started it with a setting that turns hooks off, " +
-        "start it again without that setting; otherwise ask your Claude Code administrator to allow project hooks.",
+      "Claude Code is still starting with its hooks off. If AI-DLC was set up while Claude Code was open, exit " +
+        "Claude Code and start it again in this folder, then type /aidlc. If you started it with a setting that " +
+        "turns hooks off, start it again without that setting; otherwise ask your Claude Code administrator to " +
+        "allow project hooks.",
     ],
   },
   {
@@ -80,9 +85,26 @@ const HARNESSES: Harness[] = [
       `Quit opencode and start it again with just \`opencode\` in ${proj && normalize(proj)}, then type /aidlc to carry on.`,
     ],
   },
+  {
+    // Measured live on Kiro IDE 1.2.37 (#2167): a folder trusted after Kiro
+    // opened it runs the agent's commands but no hook until Developer: Reload
+    // Window. The same tree runs in Kiro CLI v3 and ACP clients, which get
+    // this line; inside Kiro IDE the agent gets KIRO_IDE_LINE alone.
+    name: "kiro-ide",
+    dir: ".kiro",
+    lines: () => [
+      "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder, then type /aidlc to carry on. If you " +
+        "drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
+    ],
+  },
 ];
 const COPILOT = HARNESSES[2];
 const OPENCODE = HARNESSES[4];
+const KIRO_IDE = HARNESSES[5];
+const KIRO_IDE_LINE =
+  "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
+  "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the " +
+  "Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.";
 
 const projects: string[] = [];
 const outsides: string[] = [];
@@ -120,6 +142,17 @@ function attendedEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     "AIDLC_RUNTIME_HARNESS_ROOT",
     "AIDLC_COPILOT_SESSION_ID",
     "AIDLC_UNATTENDED",
+    // The host the agent's shell is in is the case's own, never the runner's.
+    "TERM_PROGRAM",
+    "VSCODE_IPC_HOOK",
+    "VSCODE_PID",
+    // So is the chat it runs in, and the host's own record of where that chat started.
+    "CLAUDE_PID",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+    "CODEX_HOME",
   ]) delete env[key];
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "0";
   return { ...env, ...extra };
@@ -136,7 +169,20 @@ function run(proj: string, argv: string[], env: NodeJS.ProcessEnv, input = "") {
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-function intentCreate(proj: string, h: Harness): void {
+// Backdates every audit event's `**Timestamp**:` line, so a record reads as
+// one whose first turn passed long ago with no heartbeat anywhere.
+function age(proj: string): void {
+  const intentsRoot = join(proj, "aidlc", "spaces", "default", "intents");
+  const old = new Date(Date.now() - 10 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  for (const shard of readdirSync(intentsRoot, { recursive: true }).map(String)) {
+    if (!shard.replace(/\\/g, "/").match(/\/audit\/[^/]+\.md$/)) continue;
+    const path = join(intentsRoot, shard);
+    const text = readFileSync(path, "utf-8");
+    writeFileSync(path, text.replace(/^\*\*Timestamp\*\*: .*/gm, `**Timestamp**: ${old}`), "utf-8");
+  }
+}
+
+function intentCreate(proj: string, h: Harness, extra: Record<string, string> = {}): void {
   const r = run(proj, [
     join(proj, h.dir, "tools", "aidlc-utility.ts"),
     "intent-create",
@@ -146,11 +192,16 @@ function intentCreate(proj: string, h: Harness): void {
     "hooks off",
     "--arguments",
     "fix the flag parser",
-  ], attendedEnv());
+  ], attendedEnv(extra));
   expect(r.code, r.stderr).toBe(0);
+  age(proj);
 }
 
-type Printed = { kind: string; message?: string };
+type Printed = { kind: string; message?: string; narration?: string };
+
+// Nothing here to carry on with: the first step in a new project asks what to build.
+const noWorkflow = (directive: Printed) =>
+  directive.kind === "print" && directive.narration === "Tell me what to build and I'll start it.";
 
 function next(proj: string, h: Harness, extra: Record<string, string> = {}, args: string[] = []): Printed {
   const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next", ...args], attendedEnv(extra));
@@ -159,6 +210,12 @@ function next(proj: string, h: Harness, extra: Record<string, string> = {}, args
 }
 
 // What `next` returns when it stops for hooks that never ran.
+// The kept `next --stage requirements-analysis` ran: that `next` made the jump
+// and returned the step it lands on (its rules first, where they come in parts).
+function jumpedToRequirements(directive: Printed): boolean {
+  return directive.kind !== "print" && (directive as { stage?: unknown }).stage === "requirements-analysis";
+}
+
 function isStop(directive: Printed): boolean {
   return directive.kind === "print" && (directive.message ?? "").startsWith(RULES);
 }
@@ -167,6 +224,55 @@ function beat(proj: string, hook: string): void {
   const dir = hooksHealthDir(proj);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${hook}.last`), new Date().toISOString(), "utf-8");
+}
+
+const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+const intentsRoot = (proj: string, space = "default"): string => join(proj, "aidlc", "spaces", space, "intents");
+
+// A beat the host's hook writes before any record is selected: the space's
+// pre-workflow folder.
+function spaceBeat(proj: string, hook: string, atMs: number, space = "default"): void {
+  const dir = join(intentsRoot(proj, space), ".aidlc-engine", "hooks-health");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${hook}.last`), new Date(atMs).toISOString(), "utf-8");
+}
+
+function recordBeat(proj: string, record: string, hook: string, atMs: number, space = "default"): void {
+  const dir = join(intentsRoot(proj, space), record, ".aidlc-engine", "hooks-health");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${hook}.last`), new Date(atMs).toISOString(), "utf-8");
+}
+
+function activeRecord(proj: string, space = "default"): string {
+  return readFileSync(join(intentsRoot(proj, space), "active-intent"), "utf-8").trim();
+}
+
+function auditShards(proj: string): string[] {
+  const shards: string[] = [];
+  for (const space of readdirSync(join(proj, "aidlc", "spaces"))) {
+    const root = intentsRoot(proj, space);
+    if (!existsSync(root)) continue;
+    for (const rel of readdirSync(root, { recursive: true }).map(String)) {
+      if (rel.replace(/\\/g, "/").match(/\/audit\/[^/]+\.md$/)) shards.push(join(root, rel));
+    }
+  }
+  return shards.sort();
+}
+
+// `intent-create` as the agent runs it, with no hook of this harness between it
+// and the `next` after it; its audit then reads as written at `atMs` (now when
+// absent), so a case can place it before or after a beat.
+function createAt(proj: string, h: Harness, atMs?: number, label = "hooks off"): void {
+  const r = run(proj, [
+    join(proj, h.dir, "tools", "aidlc-utility.ts"),
+    "intent-create", "--scope", "bugfix", "--label", label, "--arguments", "fix the flag parser",
+  ], attendedEnv());
+  expect(r.code, r.stderr).toBe(0);
+  if (atMs === undefined) return;
+  for (const shard of auditShards(proj)) {
+    const text = readFileSync(shard, "utf-8");
+    writeFileSync(shard, text.replace(/^\*\*Timestamp\*\*: .*/gm, `**Timestamp**: ${iso(atMs)}`), "utf-8");
+  }
 }
 
 describe("next stops with the agent's step when the engine knows the hooks never ran", () => {
@@ -185,6 +291,156 @@ describe("next stops with the agent's step when the engine knows the hooks never
       expect(isStop(next(proj, h))).toBe(false);
     });
   }
+
+  // #2263: on a first turn the host's hook beats before the record exists, in
+  // the space's pre-workflow folder, and `intent-create && next` run as one
+  // shell command leave no beat in the new record. That beat is the turn that
+  // created it, so it counts for it, and the stop needs no wait.
+  for (const h of HARNESSES) {
+    test(`${h.name}: the creating command's beat, before the record existed, counts for it`, () => {
+      const proj = installed(h);
+      const began = Date.now();
+      spaceBeat(proj, "plan-approval-guard", began - 2000);
+      createAt(proj, h, began);
+      expect(isStop(next(proj, h))).toBe(false);
+    });
+  }
+
+  // With no beat anywhere, the hooks did not run for this chat: the stop comes
+  // at the first `next` after creation, not five minutes later.
+  for (const h of HARNESSES) {
+    test(`${h.name}: with no heartbeat anywhere, the stop comes at the first next after creation`, () => {
+      const proj = installed(h);
+      createAt(proj, h);
+      expect(isStop(next(proj, h))).toBe(true);
+    });
+  }
+
+  test("a pre-workflow beat from more than the slack before the record began does not count", () => {
+    const proj = installed(HARNESSES[0]);
+    spaceBeat(proj, "plan-approval-guard", Date.now() - 6 * 60 * 1000);
+    createAt(proj, HARNESSES[0]);
+    expect(isStop(next(proj, HARNESSES[0]))).toBe(true);
+  });
+
+  // New work beside existing work, chained: the turn's beat landed in the
+  // record the chat was on, and the cursor has moved to the new one.
+  test("new work beside other work, chained: the beat in the record the chat was on counts", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now();
+    createAt(proj, h, began, "first work");
+    const first = activeRecord(proj);
+    createAt(proj, h, began, "second work");
+    expect(activeRecord(proj)).not.toBe(first);
+    recordBeat(proj, first, "plan-approval-guard", began - 2000);
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  // The creation beat speaks for the first turn only: a record that moved on
+  // more than the slack past it with no beat of its own reads as hooks-off.
+  test("counted at creation, then the work moves on past the slack with no beat of its own: the stop", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 10 * 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    // Its newest stage event is now.
+    const shard = auditShards(proj).at(-1)!;
+    const text = readFileSync(shard, "utf-8");
+    const at = text.lastIndexOf(`**Timestamp**: ${iso(began)}`);
+    writeFileSync(shard, `${text.slice(0, at)}**Timestamp**: ${iso(Date.now())}${text.slice(at + `**Timestamp**: ${iso(began)}`.length)}`, "utf-8");
+    expect(isStop(next(proj, h))).toBe(true);
+  });
+
+  // Nor for long: hooks off in this chat, a beat from another chat with hooks
+  // on just before the record began, and the work parked at a gate since (a
+  // refusal writes no stage or gate event): past the slack, the stop.
+  test("only another turn's beat, more than the slack ago, and the work parked since: the stop", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 6 * 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    expect(isStop(next(proj, h))).toBe(true);
+  });
+
+  test("in a space of its own, the space's pre-workflow beat counts", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const utility = join(proj, h.dir, "tools", "aidlc-utility.ts");
+    expect(run(proj, [utility, "space-create", "platform"], attendedEnv()).code).toBe(0);
+    expect(run(proj, [utility, "space", "switch", "platform"], attendedEnv()).code).toBe(0);
+    const began = Date.now();
+    spaceBeat(proj, "plan-approval-guard", began - 2000, "platform");
+    createAt(proj, h, began);
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  // A fresh space, chained: `space-create`, `space switch`, `intent-create`
+  // and `next` as one command, so the turn's beat landed in the space it left,
+  // in its pre-workflow folder or in the record the chat was on there.
+  for (const where of ["default's pre-workflow folder", "the record it was on in default"]) {
+    test(`a new space, chained: the turn's beat in ${where} counts`, () => {
+      const h = HARNESSES[0];
+      const proj = installed(h);
+      const utility = join(proj, h.dir, "tools", "aidlc-utility.ts");
+      const began = Date.now();
+      if (where === "default's pre-workflow folder") {
+        spaceBeat(proj, "plan-approval-guard", began - 1000);
+      } else {
+        createAt(proj, h, began, "first work");
+        recordBeat(proj, activeRecord(proj), "plan-approval-guard", began - 1000);
+      }
+      expect(run(proj, [utility, "space-create", "platform"], attendedEnv()).code).toBe(0);
+      expect(run(proj, [utility, "space", "switch", "platform"], attendedEnv()).code).toBe(0);
+      createAt(proj, h, began);
+      expect(activeRecord(proj, "platform")).not.toBe("");
+      expect(isStop(next(proj, h))).toBe(false);
+    });
+  }
+
+  test("doctor reads the creating command's beat as the hooks having run", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    const doctor = run(proj, [join(proj, h.dir, "tools", "aidlc-utility.ts"), "doctor", "--verbose"], attendedEnv());
+    expect(doctor.stdout).toMatch(/ok {4}Hooks last fired: plan-approval-guard /);
+    expect(doctor.stdout).not.toContain("Hooks have never executed");
+  });
+
+  // Kiro IDE's agent, told both lines with "In Kiro IDE" and "In Kiro CLI or an
+  // ACP client", showed the Kiro CLI one in Kiro IDE (live on 1.2.37, #2167).
+  // Its own commands carry TERM_PROGRAM=kiro, so the engine picks the line.
+  test("kiro-ide: inside Kiro IDE the agent gets only the trust and reload line, elsewhere only the Kiro CLI one", () => {
+    const proj = installed(KIRO_IDE);
+    intentCreate(proj, KIRO_IDE);
+    const cliLine = KIRO_IDE.lines(proj)[0];
+    const agentShell = { TERM_PROGRAM: "kiro", KIRO_SESSION_ID: "sess_test", VSCODE_GIT_ASKPASS_NODE: "C:\\Kiro\\Kiro.exe" };
+    const inKiroIde: Record<string, string>[] = [agentShell, { TERM_PROGRAM: "Kiro" }, { VSCODE_PID: "4242" }];
+    for (const host of inKiroIde) {
+      const inIde = next(proj, KIRO_IDE, host);
+      expect(isStop(inIde), JSON.stringify(host)).toBe(true);
+      expect(inIde.message).toContain(`Show the person this line: "${KIRO_IDE_LINE}" Then end your turn.`);
+      expect(inIde.message).not.toContain("Kiro CLI");
+      expect(inIde.message).not.toContain("ACP");
+    }
+    // Kiro CLI started from VS Code's terminal: VS Code's own VSCODE_ variables, but not Kiro IDE.
+    const elsewhereHosts: Record<string, string>[] = [
+      {},
+      { TERM_PROGRAM: "vscode" },
+      { TERM_PROGRAM: "vscode", VSCODE_PID: "4242" },
+      { TERM_PROGRAM: "vscode", VSCODE_IPC_HOOK: "/tmp/vscode-ipc.sock" },
+    ];
+    for (const host of elsewhereHosts) {
+      const elsewhere = next(proj, KIRO_IDE, host);
+      expect(isStop(elsewhere), JSON.stringify(host)).toBe(true);
+      expect(elsewhere.message).toContain(`Show the person this line: "${cliLine}" Then end your turn.`);
+      expect(elsewhere.message).not.toContain("Reload Window");
+    }
+  });
 
   test("Claude's step runs the engine's own next command again, so the waiting question shows again", () => {
     const h = HARNESSES[0];
@@ -329,9 +585,9 @@ describe("next stops with the agent's step when the engine knows the hooks never
     }
   });
 
-  for (const name of ["kiro-ide", "cursor"]) {
+  for (const name of ["cursor"]) {
     test(`${name} declares no step yet, so next never stops for this there`, () => {
-      const h: Harness = { name, dir: name === "cursor" ? ".cursor" : ".kiro", lines: () => [] };
+      const h: Harness = { name, dir: ".cursor", lines: () => [] };
       const proj = installed(h);
       expect(isStop(next(proj, h))).toBe(false);
       intentCreate(proj, h);
@@ -420,8 +676,6 @@ describe("the request the first next stopped with carries on after the restart",
   const LINE = "Carrying on with your earlier request.";
   const kept = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "kept-request.json");
   type Routed = Printed & { narration?: string };
-  const noWorkflow = (directive: Printed) =>
-    directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
 
   for (const h of HARNESSES) {
     test(`${h.name}: the entry word alone carries on with the request, once`, () => {
@@ -443,6 +697,21 @@ describe("the request the first next stopped with carries on after the restart",
     const picked = next(proj, OPENCODE) as Routed;
     expect(picked.kind, JSON.stringify(picked)).toBe("print");
     expect(picked.message ?? "").toContain("intent create --scope bugfix");
+  });
+
+  test("words beside its id drop the same-chat copy, so a request they cancel never comes back", () => {
+    const proj = installed(OPENCODE);
+    const stop = next(proj, OPENCODE, {}, ["--", REQUEST]);
+    expect(isStop(stop)).toBe(true);
+    const id = (stop.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+    expect(existsSync(kept(proj))).toBe(true);
+    beat(proj, "record-human-turn");
+    const beside = next(proj, OPENCODE, {}, ["--request", id, "--", "never mind that"]);
+    expect(beside.message ?? "", JSON.stringify(beside)).toStartWith("Nothing ran.");
+    // Shown whole when the step can carry it.
+    expect(beside.message ?? "").toContain(JSON.stringify(`/aidlc -- ${REQUEST}`));
+    expect(existsSync(kept(proj))).toBe(false);
+    expect(noWorkflow(next(proj, OPENCODE))).toBe(true);
   });
 
   test("their new words win: the earlier request is dropped and never comes back", () => {
@@ -513,6 +782,331 @@ describe("the request the first next stopped with carries on after the restart",
   });
 });
 
+// Where the step has the person start a new chat, that chat never saw the
+// stopped command, inside a workflow too: the line names it by the id the
+// engine kept it under, and the new chat runs it once, in the work it was
+// stopped in, as if the person had typed it there. A bare entry carries on
+// where the work stands and never runs it.
+describe("a next stopped inside a workflow is named in the restart line and runs once in the new chat", () => {
+  const LINE = "Carrying on with your earlier request.";
+  const RESTART_HARNESSES = HARNESSES.filter((h) => h.name !== "codex");
+  const idIn = (directive: Printed): string => (directive.message ?? "").match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+  const JUMP = ["--stage", "requirements-analysis"];
+  const ran = (directive: Printed) =>
+    directive.kind === "print" && (directive.message ?? "").startsWith("That request was already used once");
+
+  for (const h of RESTART_HARNESSES) {
+    test(`${h.name}: a stopped jump is named by its id and runs once`, () => {
+      const proj = installed(h);
+      intentCreate(proj, h);
+      const stopped = next(proj, h, {}, JUMP);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const id = idIn(stopped);
+      expect(id, stopped.message).toMatch(/^[0-9a-f]{8}$/);
+      expect(stopped.message ?? "").toContain(`/aidlc --request ${id}`);
+      // Only the id: the stopped command's own arguments never enter the line.
+      expect(stopped.message ?? "").not.toContain("requirements-analysis");
+      beat(proj, "reviewer-scope");
+      // The entry alone carries on where the work stands.
+      expect(JSON.stringify(next(proj, h))).not.toContain("aidlc-jump");
+      // The kept jump is made by that `next`, which returns the step it lands on
+      // and says first that it carries on with the earlier request.
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { change_notices?: string[] };
+      expect(jumpedToRequirements(picked), JSON.stringify(picked)).toBe(true);
+      expect(picked.change_notices?.[0], JSON.stringify(picked)).toBe(LINE);
+      expect(ran(next(proj, h, {}, ["--request", id]))).toBe(true);
+    });
+  }
+
+  test("a step that carries on in the same chat keeps nothing under an id", () => {
+    const h = HARNESSES[1];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const stopped = next(proj, h, {}, JUMP);
+    expect(isStop(stopped)).toBe(true);
+    expect(stopped.message ?? "").not.toContain("--request");
+    expect(existsSync(join(proj, "aidlc", ".aidlc-sessions", "restarts"))).toBe(false);
+  });
+
+  test("stopped words reach the new chat with the step that reads them", () => {
+    const words = "take me back to requirements analysis";
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", words]));
+    beat(proj, "reviewer-scope");
+    const picked = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(picked.kind).toBe("print");
+    expect(picked.message ?? "").toStartWith(`The person's words, typed before the restart and kept by AI-DLC`);
+    expect(picked.message ?? "").toContain(JSON.stringify(words));
+    expect(picked.message ?? "").toContain("report --result resumed");
+  });
+
+  test("long stopped words reach the print whole; only words no step can carry are cut, and said so", () => {
+    const words = "take me back to requirements analysis and keep the old layout ".repeat(60).trim();
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", words]));
+    beat(proj, "reviewer-scope");
+    const picked = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(picked.kind, JSON.stringify(picked).slice(0, 300)).toBe("print");
+    expect(picked.message ?? "").toContain(JSON.stringify(words));
+    // Longer than any step can carry: cut, still a print, and a step that passes them on tells the person.
+    // Quotes and line breaks cost more once the step is written out: measured there.
+    const huge = 'keep the "old" layout\nand the old colours '.repeat(1200).trim();
+    const big = installed(OPENCODE);
+    intentCreate(big, OPENCODE);
+    // Through a request file: one argument this long is past Windows' command-line limit.
+    mkdirSync(join(big, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(big, "aidlc", ".aidlc-request-text", "request.txt"), huge);
+    const bigId = idIn(next(big, OPENCODE, {}, ["--request-file", "aidlc/.aidlc-request-text/request.txt"]));
+    beat(big, "reviewer-scope");
+    const cut = next(big, OPENCODE, {}, ["--request", bigId]);
+    expect(cut.kind, JSON.stringify(cut).slice(0, 300)).toBe("print");
+    expect(cut.message ?? "").toContain("(cut to fit this step: if this step has you pass their words on, tell the person in one line that their request was too long to carry on whole");
+    expect(cut.message ?? "").not.toContain(JSON.stringify(huge));
+    expect(existsSync(join(big, "aidlc", ".aidlc-request-text", `kept-${bigId}.txt`))).toBe(false);
+  });
+
+  test("it runs in the work it was stopped in, never in work selected since", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const first = readdirSync(join(proj, "aidlc", "spaces", "default", "intents"), { withFileTypes: true })
+      .find((entry) => entry.isDirectory())?.name ?? "";
+    const other = run(proj, [
+      join(proj, OPENCODE.dir, "tools", "aidlc-utility.ts"),
+      "intent-create", "--scope", "bugfix", "--label", "other work", "--arguments", "fix the other parser",
+    ], attendedEnv());
+    expect(other.code, other.stderr).toBe(0);
+    const elsewhere = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(elsewhere.kind, JSON.stringify(elsewhere)).toBe("print");
+    expect(elsewhere.message ?? "").toContain(`intent switch ${first}`);
+    expect(elsewhere.message ?? "").toContain(`next --request ${id}\` again`);
+    // Words typed beside the id: nothing ran, before any switch.
+    const withWords = next(proj, OPENCODE, {}, ["--request", id, "--", "and keep the old layout"]);
+    expect(withWords.message ?? "").toStartWith("Nothing ran.");
+    // Nothing ran: once that work is selected, the same command runs it.
+    const switched = run(proj, [join(proj, OPENCODE.dir, "tools", "aidlc.ts"), "engine", "intent", "switch", first], attendedEnv());
+    expect(switched.code, switched.stdout + switched.stderr).toBe(0);
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+  });
+
+  test("work renamed since is the same work, found by its uuid", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const before = readdirSync(intents, { withFileTypes: true }).find((entry) => entry.isDirectory())?.name ?? "";
+    const after = `${before}-renamed`;
+    renameSync(join(intents, before), join(intents, after));
+    const registry = join(intents, "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${before}"`, `"${after}"`), "utf-8");
+    writeFileSync(join(intents, "active-intent"), `${after}\n`, "utf-8");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+  });
+
+  test("anything beside the id runs nothing: the agent reads the kept request with it, then runs the id alone or not at all", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    mkdirSync(join(proj, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(proj, "aidlc", ".aidlc-request-text", "request.txt"), "and keep the old layout\n");
+    const beside = [
+      ["--", "and keep the old layout"], ["and", "keep", "the", "old", "layout"], ["--resume"], ["--json"],
+      ["--request-file", "aidlc/.aidlc-request-text/request.txt"],
+    ];
+    for (const line of [...beside.map((words) => ["--request", id, ...words]), ["and", "keep", "the", "old", "layout", "--request", id]]) {
+      const step = next(proj, OPENCODE, {}, line);
+      expect(step.kind, JSON.stringify(step)).toBe("print");
+      expect(step.message ?? "").toStartWith("Nothing ran.");
+      expect(step.message ?? "").toContain(`next --request ${id}\` with nothing beside it first`);
+      expect(step.message ?? "").toContain('kept before the restart, is "/aidlc --stage requirements-analysis"');
+      expect(step.message ?? "").toContain("If the person's words beside it change or cancel that request, follow them and do not run the id.");
+      expect(step.message ?? "").toContain("then run what was beside it as its own `next`");
+      expect(step.message ?? "").toContain("send what they typed beside the id again in the new chat");
+    }
+    // Nothing was used or changed: the id alone still runs the kept command as it was kept.
+    const kept = JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.json`), "utf-8")) as { args: string[] };
+    expect(kept.args).toEqual(JUMP);
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+  });
+
+  test("a kept stop stopped again keeps its own id, even with work selected since", () => {
+    const proj = installed(OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--", "add a dark mode toggle"]));
+    intentCreate(proj, OPENCODE);
+    const again = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(isStop(again), JSON.stringify(again)).toBe(true);
+    expect(idIn(again)).toBe(id);
+  });
+
+  test("the same command stopped again in the same chat keeps its id, so two lines never run it twice", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const chat = { AIDLC_SESSION_OVERRIDE: SESSION };
+    const id = idIn(next(proj, OPENCODE, chat, JUMP));
+    expect(idIn(next(proj, OPENCODE, chat, JUMP))).toBe(id);
+    expect(readdirSync(join(proj, "aidlc", ".aidlc-sessions", "restarts")).filter((name) => name.endsWith(".json")))
+      .toHaveLength(1);
+    // Another chat's stop is its own request, with its own id.
+    const other = idIn(next(proj, OPENCODE, { AIDLC_SESSION_OVERRIDE: "22222222-3333-4444-8555-666666666666" }, JUMP));
+    expect(other).toMatch(/^[0-9a-f]{8}$/);
+    expect(other).not.toBe(id);
+  });
+
+  test("words after -- are the person's, even when they hold a kept id", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const words = next(proj, OPENCODE, {}, ["--", "--request", id]);
+    expect(words.message ?? "", JSON.stringify(words)).not.toContain("with nothing beside it");
+    // A line that does not parse names a kept id only through --request.
+    const unparsed = next(proj, OPENCODE, {}, [id, "--project-type"]);
+    expect(unparsed.message ?? "", JSON.stringify(unparsed)).not.toContain("with nothing beside it");
+    // A plan named before it is a flag of the same line, so the id is still read as kept.
+    const planned = next(proj, OPENCODE, {}, ["bugfix", "--request", id]);
+    expect(planned.message ?? "", JSON.stringify(planned)).toContain("with nothing beside it");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+  });
+
+  test("before any workflow, it runs in the space it was stopped in, and not once that space is gone", () => {
+    const proj = installed(OPENCODE);
+    beat(proj, "record-human-turn");
+    const store = join(proj, OPENCODE.dir, "tools", "aidlc-question-store.ts");
+    const saved = run(proj, [
+      "-e",
+      `const { saveRestartRequest } = await import(${JSON.stringify(store)}); ` +
+        `console.log(saveRestartRequest(${JSON.stringify(proj)}, ["--", "add a dark mode toggle"], "elsewhere", null));`,
+    ], attendedEnv());
+    expect(saved.code, saved.stderr).toBe(0);
+    const id = saved.stdout.trim();
+    mkdirSync(join(proj, "aidlc", "spaces", "elsewhere"), { recursive: true });
+    const there = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(there.kind, JSON.stringify(there)).toBe("print");
+    expect(there.message ?? "").toContain("space switch elsewhere");
+    expect(there.message ?? "").toContain(`next --request ${id}\` again`);
+    rmSync(join(proj, "aidlc", "spaces", "elsewhere"), { recursive: true, force: true });
+    const gone = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(gone.kind, JSON.stringify(gone)).toBe("error");
+    expect(gone.message ?? "").toContain("space this request was kept for is no longer in this project");
+  });
+
+  test("a step that refuses it has used it: the same line then says to ask for it again", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage", "--", "and keep the old layout"]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    // The refusal shows the kept words, for the person to ask again.
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage -- and keep the old layout".');
+    const again = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(ran(again)).toBe(true);
+    expect(again.message ?? "").toContain("If it was refused then, ask for it again.");
+    // Used, with more beside it: the agent runs that more without the id, never dropped.
+    for (const more of [["--", "also add a logout button"], ["--resume"]]) {
+      const beside = next(proj, OPENCODE, {}, ["--request", id, ...more]);
+      expect(beside.kind, JSON.stringify(beside)).toBe("print");
+      expect(beside.message ?? "").toContain(`Run what was typed beside it without \`--request ${id}\``);
+    }
+  });
+
+  test("a refused kept request with no words shows the line to ask for it again", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage"]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage".');
+  });
+
+  test("a long kept request is shown cut, so the refusal still fits", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const long = "keep the old layout ".repeat(200).trim();
+    const id = idIn(next(proj, OPENCODE, {}, ["--stage", "no-such-stage", "--", long]));
+    beat(proj, "reviewer-scope");
+    const refused = next(proj, OPENCODE, {}, ["--request", id]);
+    expect(refused.kind, JSON.stringify(refused).slice(0, 300)).toBe("error");
+    expect(refused.message ?? "").toContain('Your earlier request was: "/aidlc --stage no-such-stage -- keep the old layout');
+    expect(refused.message ?? "").toContain('..."');
+    expect(refused.message ?? "").not.toContain(long);
+  });
+
+  test("a kept id named beside another request is still run alone or not at all", () => {
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    const both = next(proj, OPENCODE, {}, ["--request", id, "--request", "0badc0de"]);
+    expect(both.kind, JSON.stringify(both)).toBe("print");
+    expect(both.message ?? "").toContain("Nothing ran.");
+    expect(jumpedToRequirements(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+  });
+
+  // Windows: a folder's mode does not stop a write there; as root nothing does.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a mark that cannot be written does not keep the request from running",
+    () => {
+      const proj = installed(OPENCODE);
+      intentCreate(proj, OPENCODE);
+      const id = idIn(next(proj, OPENCODE, {}, JUMP));
+      beat(proj, "reviewer-scope");
+      const restarts = join(proj, "aidlc", ".aidlc-sessions", "restarts");
+      chmodSync(restarts, 0o500);
+      try {
+        const unmarked = next(proj, OPENCODE, {}, ["--request", id]) as Printed & { change_notices?: string[] };
+        expect(jumpedToRequirements(unmarked), JSON.stringify(unmarked)).toBe(true);
+        // With no chat to keep the line for, it rides the step's notices, which a stage in parts keeps too.
+        expect(unmarked.change_notices ?? []).toContain(
+          "AI-DLC could not mark it as run, so the same line would run it again.",
+        );
+      } finally {
+        chmodSync(restarts, 0o700);
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")("a link in the mark's place counts as run", () => {
+    // Windows: a symlink needs a privilege the runner may not have.
+    const proj = installed(OPENCODE);
+    intentCreate(proj, OPENCODE);
+    const id = idIn(next(proj, OPENCODE, {}, JUMP));
+    beat(proj, "reviewer-scope");
+    symlinkSync(join(proj, "nowhere"), join(proj, "aidlc", ".aidlc-sessions", "restarts", `${id}.taken`));
+    expect(ran(next(proj, OPENCODE, {}, ["--request", id]))).toBe(true);
+    // The entry alone before any workflow reads the same mark.
+    const early = installed(OPENCODE);
+    const earlyId = idIn(next(early, OPENCODE, {}, ["--", "add a dark mode toggle"]));
+    symlinkSync(join(early, "nowhere"), join(early, "aidlc", ".aidlc-sessions", "restarts", `${earlyId}.taken`));
+    beat(early, "record-human-turn");
+    expect(JSON.stringify(next(early, OPENCODE))).not.toContain("add a dark mode toggle");
+  });
+
+  test("before any workflow, the id and the entry alone carry it on once between them", () => {
+    const REQUEST = "add a dark mode toggle to the settings page";
+    // The id first: the entry alone then finds nothing to carry on with.
+    const named = installed(OPENCODE);
+    const id = idIn(next(named, OPENCODE, {}, ["--", REQUEST]));
+    beat(named, "record-human-turn");
+    const picked = next(named, OPENCODE, {}, ["--request", id]) as Printed & { narration?: string };
+    expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+    expect(JSON.stringify(picked)).toContain(REQUEST);
+    expect(noWorkflow(next(named, OPENCODE))).toBe(true);
+    // The entry alone first: the id then says it was already used.
+    const bare = installed(OPENCODE);
+    const bareId = idIn(next(bare, OPENCODE, {}, ["--", REQUEST]));
+    beat(bare, "record-human-turn");
+    expect(JSON.stringify(next(bare, OPENCODE))).toContain(REQUEST);
+    expect(ran(next(bare, OPENCODE, {}, ["--request", bareId]))).toBe(true);
+  });
+});
+
 describe("a refusal for a reply that was not recorded carries the same step when the hooks never ran", () => {
   test("it never asks the person to answer again, and gives the tool's own line only while no hook has run", () => {
     const h = HARNESSES[0];
@@ -539,6 +1133,284 @@ describe("a refusal for a reply that was not recorded carries the same step when
       if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;
       else delete process.env.AIDLC_PROJECT_DIR;
     }
+  });
+});
+
+// Claude Code runs AI-DLC's hooks from the project's .claude/settings.json and
+// reads it as strict JSON. With the file missing or not valid JSON no setting
+// brings them back, so the person is given the file's own repair: doctor's
+// config command for a missing file, the file itself for one config cannot
+// parse either. A file that cannot be opened for another reason keeps the step.
+describe("claude: a .claude/settings.json that is missing or not valid JSON gets its repair, not a setting", () => {
+  const h = HARNESSES[0];
+  const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
+  const MISSING =
+    ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. In a " +
+    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude " +
+    `root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
+  const INVALID =
+    "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs none " +
+    `of AI-DLC's hooks here. Correct the file, ${restart}`;
+  const settings = (proj: string) => join(proj, ".claude", "settings.json");
+  const show = (line: string) => `${RULES} Show the person this line and end your turn: "${line}`;
+
+  test("missing: the line names the config command that puts it back, and keeps the stopped command", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = readFileSync(settings(proj), "utf-8");
+    unlinkSync(settings(proj));
+    expect(next(proj, h).message).toBe(`${show(MISSING)}."`);
+    const jump = ["--stage", "requirements-analysis"];
+    const message = next(proj, h, {}, jump).message ?? "";
+    const id = message.match(/ --request ([0-9a-f]{8})\./)?.[1] ?? "";
+    expect(message).toBe(`${show(MISSING)} --request ${id}."`);
+    // Once the file is back and a hook has run, the new chat runs the kept command.
+    writeFileSync(settings(proj), shipped, "utf-8");
+    beat(proj, "reviewer-scope");
+    expect(jumpedToRequirements(next(proj, h, {}, ["--request", id]))).toBe(true);
+  });
+
+  test("not valid JSON: the line names the file to correct, not config, which stops on it too", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const shipped = readFileSync(settings(proj), "utf-8");
+    writeFileSync(settings(proj), `<<<<<<< HEAD\n${shipped}=======\n${shipped}>>>>>>> theirs\n`, "utf-8");
+    expect(next(proj, h).message).toBe(`${show(INVALID)}."`);
+  });
+
+  test("a settings.json that cannot be opened as a file keeps the tool's step", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    unlinkSync(settings(proj));
+    mkdirSync(settings(proj));
+    const message = next(proj, h).message ?? "";
+    for (const line of h.lines(proj)) expect(message).toContain(`"${line}"`);
+  });
+
+  test("the refusal for a reply that was not recorded carries the same line, with the bare entry", () => {
+    const proj = installed(h);
+    intentCreate(proj, h);
+    unlinkSync(settings(proj));
+    const saved = { unattended: process.env.AIDLC_UNATTENDED, project: process.env.AIDLC_PROJECT_DIR };
+    delete process.env.AIDLC_UNATTENDED;
+    process.env.AIDLC_PROJECT_DIR = proj;
+    try {
+      const hint = unattendedHumanPresenceHint();
+      expect(hint).toContain("do not ask them to answer again");
+      expect(hint).toContain(`${show(MISSING)}."`);
+      expect(hint).not.toContain("disableAllHooks");
+    } finally {
+      if (saved.unattended !== undefined) process.env.AIDLC_UNATTENDED = saved.unattended;
+      if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;
+      else delete process.env.AIDLC_PROJECT_DIR;
+    }
+  });
+});
+
+// Claude Code runs a project's hooks only when it is started in the project
+// folder, and Codex runs them from the folder it started in, where their
+// commands do not find AI-DLC; both offer the entry from a folder inside the
+// project (live, Claude Code 2.1.310 and Codex 0.164.0). Each keeps its own
+// record of the running chat, which names the folder it started in: a folder
+// strictly inside the project gets the one step that works, and anything else
+// keeps the tool's usual step.
+describe("a chat started in a folder inside the project is told to start the tool in the project folder", () => {
+  const CHAT = "22222222-3333-4444-8555-666666666666";
+  const CLAUDE = HARNESSES[0];
+  const CODEX = HARNESSES[1];
+  const entryOf = (h: Harness) => (h.name === "codex" ? "$aidlc" : "/aidlc");
+  // The engine names the folder the way this OS writes it, unless the project
+  // came in AIDLC_PROJECT_DIR, which it names as given.
+  const lineFor = (h: Harness, proj: string, entry: string, folder = normalize(proj)) =>
+    h.name === "codex"
+      ? `AI-DLC's hooks work only when Codex is started in the project folder. Exit Codex, start it again in ` +
+        `${folder}, then type ${entry}.`
+      : `Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, ` +
+        `start it again in ${folder}, then type ${entry}.`;
+  const show = (h: Harness, proj: string, entry: string, folder?: string) =>
+    `Show the person this line and end your turn: "${lineFor(h, proj, entry, folder)}"`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+
+  function scratch(prefix: string): string {
+    const dir = mkdtempSync(join(process.env.TMPDIR || tmpdir(), prefix));
+    outsides.push(dir);
+    return dir;
+  }
+
+  // Claude Code's record: sessions/<pid>.json in its config folder, for the pid
+  // and session id in its agent's shell. This test's own pid stands in: it is alive.
+  function claudeChat(folder: string, record: Record<string, unknown> | string = {}, pid = process.pid): Record<string, string> {
+    const config = scratch("aidlc-claude-config-");
+    mkdirSync(join(config, "sessions"));
+    const body = typeof record === "string"
+      ? record
+      : JSON.stringify({ pid, sessionId: CHAT, cwd: folder, kind: "interactive", ...record });
+    writeFileSync(join(config, "sessions", `${pid}.json`), body, "utf-8");
+    return { CLAUDE_PID: String(pid), CLAUDE_CODE_SESSION_ID: CHAT, CLAUDE_CONFIG_DIR: config };
+  }
+
+  // Codex's record: the thread's rollout, under the day its UUIDv7 id was made
+  // (or `daysOff` days from it), whose first line names the folder. The line
+  // after it names the folder above, so a reader that went past the first line
+  // would miss the start. With `home`, it sits in that home folder's .codex and
+  // CODEX_HOME is not set.
+  function codexChat(
+    folder: string,
+    meta: Record<string, unknown> | string = {},
+    options: { daysOff?: number; home?: string } = {},
+  ): Record<string, string> {
+    const codexHome = options.home === undefined ? scratch("aidlc-codex-home-") : join(options.home, ".codex");
+    const now = new Date();
+    const hex = now.getTime().toString(16).padStart(12, "0");
+    const thread = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7abc-8def-0123456789ab`;
+    const filed = new Date(now.getTime() + (options.daysOff ?? 0) * 24 * 60 * 60 * 1000);
+    const day = join(codexHome, "sessions", String(filed.getFullYear()), pad(filed.getMonth() + 1), pad(filed.getDate()));
+    mkdirSync(day, { recursive: true });
+    const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}-` +
+      `${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+    const first = typeof meta === "string"
+      ? meta
+      : JSON.stringify({ timestamp: now.toISOString(), type: "session_meta", payload: { id: thread, cwd: folder, originator: "codex-tui", ...meta } });
+    const later = JSON.stringify({ timestamp: now.toISOString(), type: "turn_context", payload: { cwd: dirname(folder) } });
+    writeFileSync(join(day, `rollout-${stamp}-${thread}.jsonl`), `${first}\n${later}\n`, "utf-8");
+    return options.home === undefined
+      ? { CODEX_THREAD_ID: thread, CODEX_HOME: codexHome }
+      : { CODEX_THREAD_ID: thread, HOME: options.home, USERPROFILE: options.home };
+  }
+
+  const chatIn = (h: Harness, folder: string, record?: Record<string, unknown> | string) =>
+    h.name === "codex" ? codexChat(folder, record) : claudeChat(folder, record);
+
+  function withSrc(h: Harness): { proj: string; src: string } {
+    const proj = installed(h);
+    const src = join(proj, "src");
+    mkdirSync(src);
+    return { proj, src };
+  }
+
+  for (const h of [CLAUDE, CODEX]) {
+    test(`${h.name}: before any workflow, the line names the project folder and the kept request, which carries on there`, () => {
+      const { proj, src } = withSrc(h);
+      const REQUEST = "fix the flag parser";
+      const stopped = next(proj, h, chatIn(h, src), ["--", REQUEST]);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      const message = stopped.message ?? "";
+      const id = message.match(/ --request ([0-9a-f]{8})\b/)?.[1] ?? "";
+      expect(id, message).toMatch(/^[0-9a-f]{8}$/);
+      expect(message).toBe(`${RULES} ${show(h, proj, `${entryOf(h)} --request ${id}`)}`);
+      for (const line of h.lines(proj)) expect(message).not.toContain(line);
+      // The new chat, in the project folder: its hooks run, and the request carries on.
+      beat(proj, "record-human-turn");
+      const picked = next(proj, h, {}, ["--request", id]) as Printed & { narration?: string };
+      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith("Carrying on with your earlier request.");
+      expect(JSON.stringify(picked)).toContain(REQUEST);
+    });
+
+    test(`${h.name}: inside a workflow, the same line, and doctor gives it too`, () => {
+      const { proj, src } = withSrc(h);
+      const chat = chatIn(h, src);
+      intentCreate(proj, h, chat);
+      const stopped = next(proj, h, chat);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      expect(stopped.message).toBe(`${RULES} ${show(h, proj, entryOf(h))}`);
+      const doctor = run(proj, [join(proj, h.dir, "tools", "aidlc-utility.ts"), "doctor", "--verbose"], attendedEnv(chat));
+      expect(doctor.stdout).toContain("Hooks have never executed");
+      expect(doctor.stdout).toContain(lineFor(h, proj, entryOf(h)));
+      for (const line of h.lines(proj)) expect(doctor.stdout).not.toContain(line);
+    });
+
+    test(`${h.name}: a record naming the project folder, a folder outside it, another chat, or nothing readable keeps the tool's step`, () => {
+      const { proj, src } = withSrc(h);
+      const other = scratch("aidlc-elsewhere-");
+      const records: Array<[string, Record<string, string>]> = [
+        ["the project folder", chatIn(h, proj)],
+        ["a folder outside it", chatIn(h, other)],
+        ["another chat", h.name === "codex" ? codexChat(src, { id: "01a16f23-f923-7441-b0c0-89e1823eedee" }) : claudeChat(src, { sessionId: "33333333-4444-4555-8666-777777777777" })],
+        ["not JSON", chatIn(h, src, "{not json")],
+        ["no folder", chatIn(h, src, h.name === "codex" ? { cwd: 7 } : { cwd: null })],
+        ["a relative folder", chatIn(h, src, { cwd: "src" })],
+      ];
+      if (h.name === "codex") {
+        // Only the first line counts: a thread whose first line is not its own
+        // session record names no folder, whatever a later line says.
+        records.push(["a first line that is not its session record", codexChat(src, JSON.stringify({ type: "turn_context", payload: { cwd: src } }))]);
+      } else {
+        // A chat that is gone: its pid is not running.
+        const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+        records.push(["a pid that is not running", claudeChat(src, {}, gone)]);
+        records.push(["no record", { ...claudeChat(src), CLAUDE_CONFIG_DIR: scratch("aidlc-claude-config-") }]);
+      }
+      for (const [what, chat] of records) {
+        const message = next(proj, h, chat).message ?? "";
+        for (const line of h.lines(proj)) expect(message, what).toContain(`"${line}"`);
+        expect(message, what).not.toContain("is started in the project folder");
+      }
+    });
+  }
+
+  test.skipIf(process.platform === "win32")("claude: with .claude/settings.local.json a link, the line is still the start-folder one", () => {
+    // Windows: a symlink needs a privilege the runner may not have.
+    const { proj, src } = withSrc(CLAUDE);
+    const elsewhere = join(scratch("aidlc-elsewhere-"), "settings.local.json");
+    writeFileSync(elsewhere, "{}\n", "utf-8");
+    symlinkSync(elsewhere, join(proj, ".claude", "settings.local.json"));
+    expect(next(proj, CLAUDE, claudeChat(src)).message).toBe(`${RULES} ${show(CLAUDE, proj, "/aidlc")}`);
+  });
+
+  test("claude: the refusal for a reply that was not recorded carries the same line, with the bare entry", () => {
+    const { proj, src } = withSrc(CLAUDE);
+    const chat = claudeChat(src);
+    intentCreate(proj, CLAUDE, chat);
+    const keys = ["AIDLC_UNATTENDED", "AIDLC_PROJECT_DIR", ...Object.keys(chat)];
+    const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    delete process.env.AIDLC_UNATTENDED;
+    Object.assign(process.env, { AIDLC_PROJECT_DIR: proj, ...chat });
+    try {
+      const hint = unattendedHumanPresenceHint();
+      expect(hint).toContain("do not ask them to answer again");
+      expect(hint).toContain(`${RULES} ${show(CLAUDE, proj, "/aidlc", proj)}`);
+      expect(hint).not.toContain("disableAllHooks");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  for (const h of [CLAUDE, CODEX]) {
+    test.if(process.platform === "win32")(`${h.name}: on Windows a start folder spelled in another letter case still counts`, () => {
+      const { proj, src } = withSrc(h);
+      expect(next(proj, h, chatIn(h, src.toUpperCase())).message).toBe(`${RULES} ${show(h, proj, entryOf(h))}`);
+    });
+  }
+
+  test("codex: the rollout is found in the day folder either side of its id's day, not two days off", () => {
+    const { proj, src } = withSrc(CODEX);
+    for (const daysOff of [-1, 1]) {
+      expect(next(proj, CODEX, codexChat(src, {}, { daysOff })).message, String(daysOff)).toBe(`${RULES} ${show(CODEX, proj, "$aidlc")}`);
+    }
+    for (const daysOff of [-2, 2]) {
+      const message = next(proj, CODEX, codexChat(src, {}, { daysOff })).message ?? "";
+      expect(message, String(daysOff)).toContain(`"${CODEX.lines(proj)[0]}"`);
+    }
+  });
+
+  test("codex: a first line longer than one read is read whole, and one with no end within 1 MB names no folder", () => {
+    const { proj, src } = withSrc(CODEX);
+    const long = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(200 * 1024) })).message;
+    expect(long).toBe(`${RULES} ${show(CODEX, proj, "$aidlc")}`);
+    const endless = next(proj, CODEX, codexChat(src, { base_instructions: "x".repeat(1024 * 1024) })).message ?? "";
+    expect(endless).toContain(`"${CODEX.lines(proj)[0]}"`);
+  });
+
+  test("codex: with CODEX_HOME unset the record is read from the home folder's .codex, and with no record the step is the usual one", () => {
+    const { proj, src } = withSrc(CODEX);
+    expect(next(proj, CODEX, codexChat(src, {}, { home: scratch("aidlc-home-") })).message).toBe(
+      `${RULES} ${show(CODEX, proj, "$aidlc")}`,
+    );
+    const none = { ...codexChat(src), CODEX_HOME: scratch("aidlc-codex-home-") };
+    expect(next(proj, CODEX, none).message ?? "").toContain(`"${CODEX.lines(proj)[0]}"`);
   });
 });
 
@@ -658,7 +1530,7 @@ describe("a person at their own terminal is told the step that works there", () 
     intentCreate(other, h);
     const agent = run(other, [join(other, h.dir, "tools", "aidlc.ts"), "engine", "config", "set", "guard.plan-approval", "off"], attendedEnv());
     expect(agent.code).not.toBe(0);
-    expect(`${agent.stdout}${agent.stderr}`).toContain("No reply from the person");
+    expect(`${agent.stdout}${agent.stderr}`).toContain("Run it with --message <id>, the message they asked in, when they ask for it.");
     expect(`${agent.stdout}${agent.stderr}`).not.toMatch(/AIDLC_SKIP_/);
   });
 

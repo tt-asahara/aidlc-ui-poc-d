@@ -1,8 +1,10 @@
 // covers: function:validateCodeGenerationForkApproval, function:evaluateCodeGenerationApproval,
-// function:beginCodeGeneration, hook:aidlc-plan-approval-guard, subcommand:aidlc-orchestrate:next
+// function:beginCodeGeneration, hook:aidlc-plan-approval-guard, subcommand:aidlc-orchestrate:next,
+// subcommand:aidlc-swarm:prepare, function:bindCodeGenerationWorktreeApproval
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -23,9 +25,13 @@ import {
   AIDLC_SRC, cleanupTestProject, resetAidlcEnv, runOrchestrateNext, seedBoltDagBatches,
   seededRecordDir, seededStateFile, setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import {
+  approvePlan, cleanupCheckpointFixtures, fixtureWithSource, prepare, wt,
+} from "../harness/swarm-checkpoint.ts";
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
@@ -39,9 +45,38 @@ const projects: string[] = [];
 const STAGE = "code-generation";
 const UNITS = ["alpha", "beta"];
 const SESSION = "grouped-successor";
+const outsideDirs: string[] = [];
 afterEach(() => {
   while (projects.length) cleanupTestProject(projects.pop());
+  cleanupCheckpointFixtures();
+  while (outsideDirs.length) rmSync(outsideDirs.pop()!, { recursive: true, force: true });
 }, NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
+
+// A committed link to a file or folder outside the project, or to nothing yet:
+// a monorepo's `../shared` config, an output not built yet. A commit holds the
+// link, never what it leads to.
+const OUTSIDE_LINKS = {
+  "an absolute file link outside the project": (code: string, outside: string) =>
+    symlinkSync(join(outside, "shared.json"), join(code, "config", "shared.json")),
+  "a relative file link outside the project": (code: string, outside: string) =>
+    symlinkSync(relative(join(code, "config"), join(outside, "shared.json")), join(code, "config", "shared.json")),
+  "an absolute folder link outside the project": (code: string, outside: string) =>
+    symlinkSync(join(outside, "lib"), join(code, "vendor-lib"), "dir"),
+  "a dangling link": (code: string) => symlinkSync("not-built-yet.json", join(code, "config", "generated.json")),
+};
+type OutsideLink = keyof typeof OUTSIDE_LINKS;
+
+function addOutsideLink(code: string, link: OutsideLink): string {
+  const outside = mkdtempSync(join(tmpdir(), "t340-outside-"));
+  outsideDirs.push(outside);
+  writeFileSync(join(outside, "shared.json"), "{ \"shared\": true }\n");
+  writeFileSync(join(outside, "other.json"), "{ \"other\": true }\n");
+  mkdirSync(join(outside, "lib"));
+  writeFileSync(join(outside, "lib", "util.ts"), "export const util = 1;\n");
+  mkdirSync(join(code, "config"), { recursive: true });
+  OUTSIDE_LINKS[link](code, outside);
+  return outside;
+}
 
 function git(pd: string, args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: pd, stdout: "pipe", stderr: "pipe" });
@@ -132,8 +167,23 @@ function approve(pd: string, grouped = true): void {
   }
 }
 
+// The Unit's worktree holds the link as committed (a relative one out of the
+// project leads to nothing from there) and the approval delegated to it.
+function delegated(pd: string): void {
+  const child = wt(pd);
+  expect(lstatSync(join(child, "config", "shared.json")).isSymbolicLink()).toBe(true);
+  const approval = evaluateCodeGenerationApproval(child, { unit: "alpha" });
+  expect(approval.ok, approval.reason).toBe(true);
+  const authority = resolveCodeGenerationAuthority(child, { unit: "alpha" });
+  const receipt = readPlanApprovalReceipt(child, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: approval.approvalFingerprint!,
+  });
+  expect(receipt?.delegation?.unit).toBe("alpha");
+}
+
 function fixture(options: {
   dirty?: boolean; legacy?: boolean; grouped?: boolean; applicationSourceOnly?: boolean;
+  link?: OutsideLink; retargetLink?: boolean;
 } = {}): string {
   const pd = setupIntegrationProject();
   projects.push(pd);
@@ -171,6 +221,7 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
   seedBoltDagBatches(pd, [UNITS]);
   mkdirSync(join(pd, "src"));
   for (const unit of UNITS) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  const outside = options.link ? addOutsideLink(pd, options.link) : null;
   const sourceBefore = options.applicationSourceOnly ? workspaceSourceState(pd) : null;
   for (const args of [
     ["init", "-q"], ["config", "user.name", "AI-DLC Tests"], ["config", "user.email", "tests@example.com"],
@@ -183,6 +234,10 @@ ${options.legacy ? "" : "- **Construction Checkpoints**: enabled\n- **Constructi
     expect(workspaceSourceFingerprint(pd)).toBe(sourceBefore!.fingerprint);
   }
   if (options.dirty) writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+  if (options.retargetLink && outside) {
+    rmSync(join(pd, "config", "shared.json"));
+    symlinkSync(join(outside, "other.json"), join(pd, "config", "shared.json"));
+  }
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
@@ -336,17 +391,18 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       }
       if (condition === "missing all") {
         for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
-          // An ad-hoc discard is not a published recovery selection (#1149);
-          // only the exact guard-recovery abort invocation passes without one.
+          // A bolt command is the engine's own: an ad-hoc discard, the recovery
+          // abort and a generation start are all judged by the bolt tool, not
+          // by this guard, which holds only the build (the developer, the code).
           const abort = guard(pd,
             `${entry} engine bolt abort --name alpha --slug alpha --reason "Human Retry" --discard --project-dir "${pd}"`);
-          expect(abort.code, `${entry}: ad-hoc discard\n${abort.out}\n${abort.err}`).toBe(2);
+          expect(abort.code, `${entry}: ad-hoc discard\n${abort.out}\n${abort.err}`).toBe(0);
           const recovery = guard(pd,
             `${entry} engine bolt abort --name alpha --slug alpha --reason "stale review recovery exhausted" --discard`);
           expect(recovery.code, `${entry}: recovery abort\n${recovery.out}\n${recovery.err}`).toBe(0);
           const start = guard(pd,
             `${entry} engine bolt start --name alpha --slug alpha --batch 1 --worktree --project-dir "${pd}"`);
-          expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(2);
+          expect(start.code, `${entry}: generation start\n${start.out}\n${start.err}`).toBe(0);
           for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
         }
       }
@@ -360,42 +416,62 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
           `check ${checkedUnit} --check-cmd "git diff --check"`,
           `finalize --batch 1 --units ${units} --claimed ${units} --check-cmd "git diff --check"`,
         ]) {
+          // The swarm tool binds each Unit's approval itself (swarm prepare
+          // refuses a Unit without one); the guard passes its plain spelling.
           const command = `${entry} engine swarm ${route} --project-dir "${targetProject}"`;
           const result = guard(pd, command);
-          expect(result.code, `${condition}: ${command}\n${result.out}\n${result.err}`).toBe(2);
+          expect(result.code, `${condition}: ${command}\n${result.out}\n${result.err}`).toBe(0);
         }
       }
       expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
     },
   );
 
-  test("approved swarm admission excludes compound commands, redirections, preloads and project environment prefixes", () => {
+  test("a swarm command under a launcher runs while the plans hold, under a preload of a hook it waits; a project folder in the environment is the engine's own; beside it, a write is judged by where it lands", () => {
     const pd = fixture();
     const foreign = join(pd, "foreign-project");
     const route = `engine swarm prepare --batch 1 --units alpha,beta --base main --project-dir "${pd}"`;
-    const commands: string[] = [];
+    const refused: string[] = [];
+    const judgedByTheirWrites: string[] = [];
     for (const entry of ["aidlc", "bun .claude/tools/aidlc.ts"]) {
       const command = `${entry} ${route}`;
-      commands.push(
+      // A readable second command or a pipe writes nothing of the build: the
+      // guard has nothing to hold. A redirection lands a file in the parent
+      // checkout, which a parallel batch never writes: that door stays shut.
+      judgedByTheirWrites.push(
         `${command} && printf done`,
         `${command}; printf done`,
         `${command} | cat`,
+      );
+      refused.push(
         `${command} > swarm-output.txt`,
         `${command} 2> swarm-error.txt`,
+      );
+      // A project folder named in the shell's own environment is the engine's to
+      // judge (its --project-dir is on the line). A launcher such as `env` is a
+      // wrapper, so its writes cannot be seen: while both plans hold it runs, as
+      // in a serial build once the plan is approved.
+      judgedByTheirWrites.push(
         `AIDLC_PROJECT_DIR="${foreign}" ${command}`,
         `CLAUDE_PROJECT_DIR="${foreign}" ${command}`,
         `env AIDLC_PROJECT_DIR="${foreign}" ${command}`,
       );
     }
-    commands.push(
+    // A preload of a hook is runtime integrity's to refuse (a tool call cannot invoke
+    // a hook), whatever the plans say.
+    refused.push(
       `bun --preload .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
       `bun -r .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
     );
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     const worktrees = git(pd, ["worktree", "list", "--porcelain"]);
-    for (const command of commands) {
+    for (const command of refused) {
       const result = guard(pd, command);
       expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(2);
+    }
+    for (const command of judgedByTheirWrites) {
+      const result = guard(pd, command);
+      expect(result.code, `${command}\n${result.out}\n${result.err}`).toBe(0);
     }
     expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(worktrees);
     for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
@@ -515,8 +591,23 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-      const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
-      expect(report.code, `${report.out}\n${report.err}`).toBe(2);
+      // A completion is the engine's own command: the guard admits it, and
+      // through the engine neither the stage's report nor a Unit's completion
+      // records anything here (the plan's own step is pinned by
+      // t-code-generation-completion-owner).
+      for (const completion of [
+        "aidlc engine orchestrate report --stage code-generation --result completed --approved",
+        "aidlc engine state unit complete --stage code-generation --unit alpha",
+      ]) {
+        const admitted = guard(pd, completion);
+        expect(admitted.code, `${completion}\n${admitted.err}`).toBe(0);
+        expect(admitted.err, completion).toBe("");
+      }
+      const before = readFileSync(seededStateFile(pd), "utf-8");
+      const reported = tool(pd, "tools/aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "completed"]);
+      const unitComplete = tool(pd, "tools/aidlc-state.ts", ["unit", "complete", "--stage", STAGE, "--unit", "alpha"]);
+      expect(unitComplete.code, unitComplete.out).not.toBe(0);
+      expect(readFileSync(seededStateFile(pd), "utf-8"), `${reported.out}\n${unitComplete.err}`).toBe(before);
       const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");
       expect(checkpoint.code, `${checkpoint.out}\n${checkpoint.err}`).toBe(0);
       expect(gates(pd)).toBe(0);
@@ -598,4 +689,52 @@ describe("t340 initial worktree approval preflight", () => {
     git(pd, ["commit", "-qm", "approved parent source"]);
     expect(() => validateCodeGenerationForkApproval(pd, "alpha", pd, null, head)).not.toThrow();
   });
+
+  test.skipIf(process.platform === "win32").each(Object.keys(OUTSIDE_LINKS) as OutsideLink[])(
+    "%s, committed with the source, lets the approved source fork",
+    (link) => {
+      const pd = fixture({ link });
+      expect(git(pd, ["ls-files", "-s"]).split("\n").filter((line) => line.startsWith("120000"))).toHaveLength(1);
+      expect(git(pd, ["status", "--porcelain", "--", "src", "config", "vendor-lib"])).toBe("");
+      const head = git(pd, ["rev-parse", "HEAD"]);
+      expect(() => validateCodeGenerationForkApproval(pd, "alpha", pd, null, head)).not.toThrow();
+    },
+  );
+
+  test.skipIf(process.platform === "win32")("a committed link pointed elsewhere and left uncommitted still refuses before a child exists", () => {
+    const pd = fixture({ link: "an absolute file link outside the project", retargetLink: true });
+    const before = git(pd, ["worktree", "list", "--porcelain"]);
+    const head = git(pd, ["rev-parse", "HEAD"]);
+    expect(git(pd, ["status", "--porcelain", "--", "config"])).toBe("M config/shared.json");
+    expect(() => validateCodeGenerationForkApproval(pd, "alpha", pd, null, head)).toThrow("Commit the already-approved parent source before prepare");
+    expect(git(pd, ["worktree", "list", "--porcelain"])).toBe(before);
+    expect(git(pd, ["rev-parse", "HEAD"])).toBe(head);
+  });
+
+  test.skipIf(process.platform === "win32").each([
+    "an absolute file link outside the project", "a relative file link outside the project",
+  ] as const)("%s: prepare forks the Unit and hands its worktree the approval", (link) => {
+    const pd = fixtureWithSource((code) => addOutsideLink(code, link));
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(existsSync(wt(pd))).toBe(true);
+    delegated(pd);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32").each([
+    "an absolute file link outside the project", "a relative file link outside the project",
+  ] as const)("%s: a kept worktree takes the plan approved again after main's code moved on", (link) => {
+    const pd = fixtureWithSource((code) => addOutsideLink(code, link));
+    const first = prepare(pd);
+    expect(first.code, `${first.out}\n${first.err}`).toBe(0);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+    git(pd, ["add", "src/alpha.ts"]);
+    git(pd, ["commit", "-qm", "the person's change"]);
+    approvePlan(pd, "alpha", "revised");
+    const again = prepare(pd);
+    expect(again.code, `${again.out}\n${again.err}`).toBe(0);
+    expect(JSON.parse(again.out).units[0]).toMatchObject({ ok: true, retained: true, approval_transferred: true });
+    expect(readFileSync(join(wt(pd), "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 2;\n");
+    delegated(pd);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

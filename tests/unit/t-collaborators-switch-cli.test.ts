@@ -21,6 +21,7 @@ import {
   createTestProject,
   DEFAULT_SPACE,
   FIXTURES_DIR,
+  followProposal,
   removeWorkspaceRecord,
   runOrchestrateNext,
   seedAidlcMemory,
@@ -70,10 +71,11 @@ function directiveOf(out: string): Record<string, unknown> {
 }
 
 function runNext(proj: string, args: string[]): Record<string, unknown> {
-  return directiveOf(runOrchestrateNext(ORCH, proj, args, { cwd: proj, env: childEnv() }).out);
+  // The agent's proposal step follows the plan proposal print, as it does live.
+  const options = { cwd: proj, env: childEnv() };
+  return directiveOf(followProposal(runOrchestrateNext(ORCH, proj, args, options), ORCH, proj, options).out);
 }
 
-// An answer command the engine printed, run the way the agent runs it.
 function runEmitted(proj: string, command: string): Record<string, unknown> {
   return runNext(proj, command.slice(command.indexOf(" next ") + 6).split(" "));
 }
@@ -89,7 +91,13 @@ describe("t-collaborators-cli a switch typed with the request reaches the work",
     for (const command of [ask.new_intent_command, ask.continue_command, ask.compose_command]) {
       expect(String(command)).toContain("--collaborators on");
     }
-    const created = runEmitted(proj, String(ask.new_intent_command));
+    // No plan was named with the words, so the separate-work answer reaches the
+    // plan question (the agent's proposal, through the test's stand-in reading):
+    // the switch rides that hop too, onto the question's commands and the creation.
+    const offer = runEmitted(proj, String(ask.new_intent_command));
+    expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
+    expect(String(offer.confirm_command)).toContain("--collaborators on");
+    const created = runEmitted(proj, String(offer.confirm_command));
     expect(created.kind).toBe("print");
     expect(String(created.message)).toContain("intent create --scope bugfix");
     expect(String(created.message)).toContain("--collaborators on");
@@ -101,7 +109,6 @@ describe("t-collaborators-cli a switch typed with the request reaches the work",
     removeWorkspaceRecord(proj);
     const ask = runNext(proj, ["--collaborators", "on", "Fix the login crash when the session expires"]);
     expect(ask.ask_type).toBe("scope-confirm");
-    // The preview counts collaborators as on for this work.
     expect(String(ask.question)).not.toContain("lead agent only");
     expect(String(ask.confirm_command)).toContain("--collaborators on");
     const created = runEmitted(proj, String(ask.confirm_command));
@@ -165,7 +172,7 @@ describe("t-collaborators-cli an isolated Reverse Engineering run finishes on it
     const proj = isolatedProject("bugfix", "- **Collaborators**: on (set by you)");
     const run = runNext(proj, ["--stage", RE_STAGE, "--single"]);
     expect(run.kind, JSON.stringify(run)).toBe("run-stage");
-    expect(run.pipeline).toEqual({ links: [LEAD], completed: [] });
+    expect(run.pipeline).toEqual({ links: [LEAD], completed: [], record: [expect.objectContaining({ link: LEAD })] });
     const lead = recordLink(proj, LEAD);
     expect(lead.rc, lead.out).toBe(0);
     writeCodekb(proj);
@@ -177,7 +184,7 @@ describe("t-collaborators-cli an isolated Reverse Engineering run finishes on it
     const proj = isolatedProject("enterprise", "- **Collaborators**: off (set by you)");
     const run = runNext(proj, ["--stage", RE_STAGE, "--single"]);
     expect(run.kind, JSON.stringify(run)).toBe("run-stage");
-    expect(run.pipeline).toEqual({ links: [LEAD, FINAL], completed: [] });
+    expect(run.pipeline).toEqual({ links: [LEAD, FINAL], completed: [], record: [expect.objectContaining({ link: LEAD }), expect.objectContaining({ link: FINAL })] });
     const lead = recordLink(proj, LEAD);
     expect(lead.rc, lead.out).toBe(0);
     const architect = recordLink(proj, FINAL);
@@ -278,10 +285,10 @@ describe("t-collaborators-cli a mid-stage switch never reuses a receipt that no 
     expect(scan.rc, scan.out).toBe(0);
     setCollaborators(proj, "off");
     const resumed = runNext(proj, []);
-    expect(resumed.pipeline).toEqual({ links: [LEAD], completed: [] });
+    expect(resumed.pipeline).toEqual({ links: [LEAD], completed: [], record: [expect.objectContaining({ link: LEAD })] });
     const full = recordLink(proj, LEAD, false);
     expect(full.rc, full.out).toBe(0);
-    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD], completed: [LEAD] });
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD], completed: [LEAD], record: [] });
   });
 
   test("off to on after the developer's full run: only the architect is left", () => {
@@ -289,7 +296,7 @@ describe("t-collaborators-cli a mid-stage switch never reuses a receipt that no 
     const full = recordLink(proj, LEAD, false);
     expect(full.rc, full.out).toBe(0);
     setCollaborators(proj, "on");
-    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD, FINAL], completed: [LEAD] });
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD, FINAL], completed: [LEAD], record: [expect.objectContaining({ link: FINAL })] });
     const architect = recordLink(proj, FINAL, false);
     expect(architect.rc, architect.out).toBe(0);
   });

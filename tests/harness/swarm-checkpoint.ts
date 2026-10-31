@@ -179,12 +179,25 @@ export function addSubmodule(pd: string): void {
   git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
 }
 
-export function fixture(units = ["alpha"], command = CHECK, withSubmodule = false): string {
+// With `repo`, a workspace of several repositories: its roof holds the records
+// and is no repository, and the Units' code is in that one recorded sibling.
+export function fixture(
+  units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null, policy = "strict",
+): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
+  const code = repo === null ? pd : join(pd, repo);
+  if (repo !== null) {
+    mkdirSync(code);
+    git(code, ["init", "-q", "-b", "main"]);
+    // The test identity setupWorktreeFixture gave the roof's repository, which goes.
+    for (const key of ["user.name", "user.email"]) git(code, ["config", key, git(pd, ["config", key])]);
+    rmSync(join(pd, ".git"), { recursive: true, force: true });
+    rmSync(join(pd, "README.md"));
+  }
   // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
   // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
-  if (process.platform === "win32") git(pd, ["config", "core.longpaths", "true"]);
+  if (process.platform === "win32") git(code, ["config", "core.longpaths", "true"]);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), `# State
 ## Project Information
@@ -200,7 +213,7 @@ export function fixture(units = ["alpha"], command = CHECK, withSubmodule = fals
 - **Skeleton Stance**: off
 - **Unit Ownership**: solo
 - **Review Override**: adversarial
-- **Change Control**: strict
+- **Change Control**: ${policy}
 - **Bolt Refs**: [empty list]
 - **Worktree Path**: -
 ## Scope Configuration
@@ -225,20 +238,40 @@ export function fixture(units = ["alpha"], command = CHECK, withSubmodule = fals
     "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
     "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
   ].join("\n"));
+  if (repo !== null) {
+    const registry = join(pd, "aidlc", "spaces", "default", "intents", "intents.json");
+    const entries = JSON.parse(readFileSync(registry, "utf-8"));
+    entries[0].repos = [repo];
+    writeFileSync(registry, JSON.stringify(entries));
+  }
   seedBoltDagBatches(pd, [units, ["later"]]);
-  mkdirSync(join(pd, "src"), { recursive: true });
-  for (const unit of units) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  mkdirSync(join(code, "src"), { recursive: true });
+  for (const unit of units) writeFileSync(join(code, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   if (withSubmodule) addSubmodule(pd);
+  addSourceBeforeBaseline?.(code);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
   appendAuditEntry("STAGE_STARTED", { Stage: STAGE, "Source Baseline": baseline }, pd);
-  recordCommand(pd, command);
+  if (command !== null) recordCommand(pd, command);
   publish(pd, units);
   for (const unit of units) plan(pd, unit);
-  git(pd, ["add", "-A"]);
-  git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
+  git(code, ["add", "-A"]);
+  git(code, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
   for (const unit of units) approvePlan(pd, unit);
   return pd;
+}
+
+// More of the person's code, written by fixtureWithSource before the source
+// baseline so the approved plan covers it; null for every other fixture.
+let addSourceBeforeBaseline: ((code: string) => void) | null = null;
+
+export function fixtureWithSource(addSource: (code: string) => void, units = ["alpha"]): string {
+  addSourceBeforeBaseline = addSource;
+  try {
+    return fixture(units);
+  } finally {
+    addSourceBeforeBaseline = null;
+  }
 }
 
 export function prepare(pd: string, units = ["alpha"], resume = false) {
@@ -321,11 +354,11 @@ export function starts(pd: string, unit = "alpha") {
     auditBlockField(row.block, "Bolt slug") === boltSlugForUnit(unit));
 }
 
-export function reviewRevisedSource(pd: string, unit = "alpha"): void {
+export function reviewRevisedSource(pd: string, unit = "alpha", writes = [`src/${unit}.ts`]): void {
   const child = wt(pd, unit);
   const dir = codeGenerationRecordDir(child, unit);
   writeFileSync(join(dir, "source-manifest.json"), JSON.stringify({
-    stage: STAGE, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
+    stage: STAGE, unit, version: 1, writes: writes.map((path) => ({ path })),
   }));
   const planPath = join(dir, "code-generation-plan.md");
   writeFileSync(planPath, readFileSync(planPath, "utf-8").replace("- [ ] Implement", "- [x] Implement"));
@@ -362,7 +395,9 @@ export function writeUnitSource(pd: string, unit: string, value: number): void {
   writeFileSync(join(wt(pd, unit), "src", `${unit}.ts`), `export const ${unit} = ${value};\n`);
 }
 
-export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>): void {
+// Lands each Unit as the swarm protocol says: on the landing_branch finalize
+// names for its row, which must be `target`.
+export function checkReviewFinalizeAndLand(pd: string, values: Record<string, number>, target = "main"): void {
   const units = Object.keys(values);
   for (const unit of units) {
     const checked = swarm(pd, ["check", unit]);
@@ -372,9 +407,12 @@ export function checkReviewFinalizeAndLand(pd: string, values: Record<string, nu
   const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", units.join(","),
     "--claimed", units.join(",")]);
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+  const rows = JSON.parse(finalized.out).units as Array<{ unit: string; landing_branch?: string }>;
   for (const unit of units) {
+    const landingBranch = rows.find((row) => row.unit === unit)?.landing_branch;
+    expect(landingBranch, finalized.out).toBe(target);
     const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
-      "merge", "--slug", boltSlugForUnit(unit), "--target", "main", "--strategy", "squash", "--project-dir", pd,
+      "merge", "--slug", boltSlugForUnit(unit), "--target", landingBranch as string, "--strategy", "squash", "--project-dir", pd,
     ]);
     expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
     expect(existsSync(wt(pd, unit))).toBe(false);

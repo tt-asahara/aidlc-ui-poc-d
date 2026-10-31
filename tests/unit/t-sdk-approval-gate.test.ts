@@ -35,6 +35,7 @@ mock.module("@anthropic-ai/claude-agent-sdk", () => ({
   query: (input: QueryInput) => scenario(input),
 }));
 const {
+  buildAnswers,
   driveAidlc,
   prepareSdkStageFixture,
   stageApprovalQuestionBoundary,
@@ -389,7 +390,6 @@ describe("the answer stream stays open while subagents still run", () => {
     });
     expect(driven.toolResults.filter((row) => row.resultText.includes("Stream closed"))).toEqual([]);
     expect(driven.askedQuestions.map((asked) => asked.questions[0].header)).toEqual(["Kiosk privacy", "Approval"]);
-    // The unexpected question takes its first option; the approval is the scripted one.
     expect(driven.askedQuestions[0].answers).toEqual({ [kiosk().questions[0].question]: "A. Add an inactivity timeout" });
     expect(driven.askedQuestions[1].answers).toEqual({ "Approve the user stories?": "Approve" });
     expect(driven.stoppedAfterToolResult).toBe(true);
@@ -455,7 +455,6 @@ describe("the answer stream stays open while subagents still run", () => {
     const sent: unknown[] = [];
     let closedByDriver = false;
     scenario = async function* (input) {
-      // The CLI's stdin: each message the driver sends, until it closes.
       const prompts = (input.prompt as AsyncIterable<{ message: { content: unknown } }>)[Symbol.asyncIterator]();
       const signal = input.options!.abortController!.signal;
       const aborted = new Promise<undefined>((resolve) => signal.addEventListener("abort", () => resolve(undefined)));
@@ -531,5 +530,27 @@ describe("the answer stream stays open while subagents still run", () => {
     expect(driven.resultEvent?.subtype).toBe("success");
     // The earlier success does not make the timed-out run pass.
     expect(() => assertResultOk(driven)).toThrow("the drive timed out");
+  });
+});
+
+describe("the test person's decision does not move with the box's order", () => {
+  test.each([
+    [["Approve", "Request Changes"]],
+    [["Request Changes", "Approve"]],
+    [["Request Changes", "Approve", "Add User Stories"]],
+    [["Approve, and add User Stories next", "Approve", "Request Changes"]],
+  ])("the default person approves the gate: %j", (labels) => {
+    const asked = approval();
+    asked.questions[0].options = labels.map((label) => ({ label }));
+    expect(buildAnswers(asked.questions, "default", 0)).toEqual({ [asked.questions[0].question]: "Approve" });
+  });
+
+  test("the gate is the gate whatever order the box shows its choices in", async () => {
+    const project = positionedProject();
+    const gate = await stageApprovalQuestionBoundary(project, STAGE);
+    holdGate(project);
+    expect(gate.matches(menu("Approval", ["Request Changes", "Approve"], "Review the reverse-engineering artifacts."))).toBe(true);
+    expect(gate.matches(menu("Approval", ["Approve", "Request Changes", "Add User Stories"], "Review the artifacts."))).toBe(true);
+    expect(gate.matches(menu("Approval", ["Approve", "Add User Stories"], "Review the artifacts."))).toBe(false);
   });
 });

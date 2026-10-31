@@ -58,7 +58,7 @@ function toLateQuestion(policy: Policy): { run: ScopeRun; late: Directive } {
         if (stage === "units-generation" && !off) {
           off = true;
           agent.person.say("build the Units one at a time, but do not stop after each Unit; I will approve them together at the end");
-          const set = agent.host.bash("bun .claude/tools/aidlc-state.ts set-construction-checkpoints disabled");
+          const set = agent.host.bash(`bun .claude/tools/aidlc-state.ts set-construction-checkpoints disabled --message ${agent.latestMessageId()}`);
           if (set.status !== 0) agent.fail(`checkpoints off was refused: ${set.stdout}${set.stderr}`);
         }
         return undefined;
@@ -98,7 +98,6 @@ function after(agent: AgentStandIn, marks: Marks) {
   };
 }
 
-/** The person types their words at the late question. */
 function personAsksForTheChange(agent: AgentStandIn, late: Directive): void {
   const prompt = String((late.approve_together as { prompt?: string }).prompt ?? "");
   agent.askPerson("approval", String(late.stage), prompt, ["Approve", "Request Changes"], WORDS);

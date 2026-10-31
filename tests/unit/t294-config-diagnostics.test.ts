@@ -10,19 +10,21 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir, platform, tmpdir } from "node:os";
 import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import { LEGACY_AIDLC_HOOK_TARGETS, sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
+import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
@@ -34,6 +36,7 @@ import {
   copilotTrustIssues,
   deriveNonInteractivePath,
   detectAwsCredentials,
+  frameworkFilesDoctorCheck,
   harnessOwnsModelAccess,
   insideGitRepository,
   instructionFileDoctorCheck,
@@ -59,7 +62,8 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
+import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
+import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -106,6 +110,11 @@ function run(
       ...process.env,
       AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
       AIDLC_BIN_DIR: join(machine, "bin"),
+      // The status line choice reads the person's own Claude Code and Codex
+      // settings (#1407); a fixture's are empty folders, never the host's.
+      CLAUDE_CONFIG_DIR: join(machine, "claude"),
+      CODEX_HOME: join(machine, "codex"),
+      AIDLC_MANAGED_SETTINGS_PATH: join(machine, "managed-settings.json"),
       ...env,
     },
     encoding: "utf-8",
@@ -119,7 +128,7 @@ function run(
   };
 }
 
-function install(harness: string): string {
+function install(harness: string, source = join(DIST_RELEASE, harness)): string {
   const project = temp(`aidlc-t294-${harness}-`);
   mkdirSync(join(project, ".git"));
   const result = run([
@@ -127,7 +136,7 @@ function install(harness: string): string {
     "--project-dir",
     project,
     "--from",
-    join(DIST_RELEASE, harness),
+    source,
     "--harness",
     harness,
     "--mcp",
@@ -136,6 +145,21 @@ function install(harness: string): string {
   ], project);
   expect(result.status, result.stdout + result.stderr).toBe(0);
   return project;
+}
+
+// A Codex release as releases before #1407 shipped it, with AI-DLC's status
+// line in the shared config: the refresh cases below move an AI-DLC array value
+// between releases, and status_line is the one such value.
+const OLD_CODEX_TUI_BLOCK =
+  "\n# Statusline (D-6): predefined item IDs only; task-progress is fed by the\n" +
+  "# update_plan tool, which the orchestrator skill keeps current per stage.\n" +
+  '[tui]\nstatus_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]\n';
+function codexTuiRelease(): string {
+  const source = temp("aidlc-t294-codex-tui-release-");
+  cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+  const path = join(source, ".codex", "config.toml");
+  writeFileSync(path, `${readFileSync(path, "utf-8")}${OLD_CODEX_TUI_BLOCK}`);
+  return source;
 }
 
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -859,13 +883,13 @@ describe("t294 runtime diagnostics", () => {
     );
     expect(existsSync(ran)).toBe(false);
     if (windows) {
-      // cmd.exe would expand % in the path, so such a .cmd is not run.
-      const expanding = join(root, "npm%PATH%");
-      const expandingRan = join(root, "expanding-ran");
+      // A folder name with % or ! (an account name can hold them) is taken as written, never expanded.
+      const expanding = join(root, "npm%PATH%!x!");
       mkdirSync(expanding, { recursive: true });
-      writeFileSync(join(expanding, command), script([`type nul > "${expandingRan}"`, "echo 1.0.80"]));
-      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
-      expect(existsSync(expandingRan)).toBe(false);
+      writeFileSync(join(expanding, command), script(["echo 1.0.81"]));
+      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding })).toEqual(
+        expect.objectContaining({ status: "found", version: "1.0.81", path: join(expanding, command) }),
+      );
     }
 
     // npm's Windows layout: the extensionless shell script, copilot.cmd and
@@ -875,6 +899,20 @@ describe("t294 runtime diagnostics", () => {
     for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
     expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
     expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    // The one cmd.exe rule (config's probes and opencode's plugin): the path
+    // quoted whole, plain words after it; what cmd.exe would expand or read
+    // again is not started.
+    // The path goes through the environment, so cmd.exe never reads it again.
+    expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", ["--version"], "C:\\Windows\\system32\\cmd.exe")).toEqual({
+      file: "C:\\Windows\\system32\\cmd.exe",
+      args: ["/d", "/v:off", "/s", "/c", '""%AIDLC_CMD_SCRIPT%" --version"'],
+      env: { AIDLC_CMD_SCRIPT: "C:\\npm\\copilot.cmd" },
+    });
+    for (const script of ["C:\\Program Files\\npm\\copilot.cmd", "C:\\npm%PATH%\\copilot.cmd", "C:\\npm!x!\\copilot.cmd", "C:\\a&b^(c)\\copilot.cmd"]) {
+      expect(cmdScriptLaunch(script, ["--version"])?.env, script).toEqual({ AIDLC_CMD_SCRIPT: script });
+    }
+    expect(cmdScriptLaunch('C:\\npm"\\copilot.cmd', ["--version"])).toBeNull();
+    for (const arg of ["a b", "a&b", "a|b", "%x%", "^"]) expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", [arg]), arg).toBeNull();
 
     // Windows spelling: any case, backslashes, a trailing separator. The
     // search skips the folder, and a resolver that names it anyway is ignored.
@@ -1168,7 +1206,9 @@ describe("t294 provider diagnostics", () => {
 
     // Each surface is independent. Keep its real distribution and assertions,
     // but do not charge eleven tree copies to one default test deadline.
-    test("Claude writes provider settings and MCP region", () => {
+    // The Bedrock env is the person's own (applyClaudeLocalProvider, #2712);
+    // the shared settings.json carries none of it.
+    test("Claude writes the MCP region and no Bedrock env to the shared settings", () => {
       const claude = temp("aidlc-t294-provider-claude-");
       cpSync(join(DIST, "claude"), claude, { recursive: true });
       applyConfigDiagnosticRecords(
@@ -1180,9 +1220,9 @@ describe("t294 provider diagnostics", () => {
       const settings = JSON.parse(
         readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
       ) as { env: Record<string, string> };
-      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-      expect(settings.env.AWS_REGION).toBe("eu-west-1");
-      expect(settings.env.AWS_PROFILE).toBe("dev");
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(settings.env.AWS_REGION).toBeUndefined();
+      expect(settings.env.AWS_PROFILE).toBeUndefined();
       const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
       expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
       expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
@@ -1709,7 +1749,7 @@ describe("t294 trust diagnostics", () => {
       Object.assign(process.env, overrides);
       const shipped = await nativeTrust();
       expect(shipped.pass, shipped.label).toBe(true);
-      const conductor = join(harnessRoot, "agents", "aidlc.md");
+      const conductor = join(harnessRoot, "agents", "aidlc-aidlc.md");
       const grant = `        - "aidlc engine *"\n`;
       expect(readFileSync(conductor, "utf-8")).toContain(grant);
       expect(readFileSync(join(harnessRoot, "agents", "aidlc-developer-agent.md"), "utf-8"))
@@ -1726,6 +1766,90 @@ describe("t294 trust diagnostics", () => {
       }
     }
   });
+
+  // Doctor's one native trust row for a Kiro project, as the installed aidlc
+  // command reads it. The environment is set for the read alone, so a config
+  // run between two reads gets the test's own.
+  async function kiroNativeTrust(project: string, harness: "kiro-ide" | "kiro") {
+    const machine = temp(`aidlc-t294-trust-kiro-${harness}-machine-`);
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_HARNESS_NAME: harness,
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".kiro"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    try {
+      Object.assign(process.env, overrides);
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+  const KIRO_TRUST_INCOMPLETE =
+    "Native command trust is incomplete: 1 Bun-shaped entry, native hooks present, native permission/trust present";
+  // An AI-DLC hook left from before the native install. It is written as text:
+  // its "then" key is the hook's action.
+  const LEFT_OVER_KIRO_HOOK =
+    '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
+    '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}';
+
+  for (const harness of ["kiro-ide", "kiro"] as const) {
+    test(`${harness}: Kiro native trust passes with a dropped plugin's compose hook, and still counts a leftover Bun entry`, async () => {
+      const project = temp(`aidlc-t294-trust-kiro-plugin-${harness}-`);
+      cpSync(join(DIST_RELEASE, harness), project, { recursive: true });
+      // test-pro dropped as its Kiro IDE build writes it: the plugin's folder
+      // and its session-start registration, which a switch to Kiro CLI keeps.
+      cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
+      expect(readFileSync(registration, "utf-8")).toContain("bun ./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts");
+      const dropped = await kiroNativeTrust(project, harness);
+      expect(dropped.pass, dropped.label).toBe(true);
+      writeFileSync(join(project, ".kiro", "hooks", "aidlc-left-over.kiro.hook"), LEFT_OVER_KIRO_HOOK);
+      const leftover = await kiroNativeTrust(project, harness);
+      expect(leftover.pass, leftover.label).toBe(false);
+      expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
+    });
+
+    for (const earlier of EARLIER_KIRO_IDE_DROPS) {
+      test(`${harness}: Kiro native trust passes with a plugin dropped from ${earlier.build}, a refresh keeps it so, and an edited registration or a leftover Bun entry still fails it`, async () => {
+        const project = install(harness);
+        const files = earlier.drop(project);
+        const [registration] = files;
+        const written = files.map((file) => readFileSync(file));
+        const dropped = await kiroNativeTrust(project, harness);
+        expect(dropped.pass, dropped.label).toBe(true);
+        const refreshed = run([
+          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", harness,
+          "--mcp", "defaults", "--yes",
+        ], project);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        expect(files.map((file) => readFileSync(file))).toEqual(written);
+        const kept = await kiroNativeTrust(project, harness);
+        expect(kept.pass, kept.label).toBe(true);
+        // Edited, it is no longer the registration the plugin's build wrote.
+        writeFileSync(registration, written[0].toString("utf-8").replace("SessionStart", "PreToolUse"));
+        const edited = await kiroNativeTrust(project, harness);
+        expect(edited.label).toBe(KIRO_TRUST_INCOMPLETE);
+        writeFileSync(registration, written[0]);
+        writeFileSync(join(project, ".kiro", "hooks", "aidlc-left-over.kiro.hook"), LEFT_OVER_KIRO_HOOK);
+        const leftover = await kiroNativeTrust(project, harness);
+        expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
+      });
+    }
+  }
 
   test("Codex detects complete and missing user trust without changing the seed", () => {
     const project = temp("aidlc-t294-trust-codex-");
@@ -1786,6 +1910,94 @@ describe("t294 trust diagnostics", () => {
     expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
   });
 
+  // Each shipped hook as Codex keys it in `project`, with its hash.
+  function codexSeedEntries(project: string): Array<[string, string]> {
+    const seed = parseToml(readFileSync(join(project, ".codex", "trust-seed.toml"), "utf-8")) as {
+      hooks: { state: Record<string, { trusted_hash: string }> };
+    };
+    return Object.entries(seed.hooks.state).map(([key, state]) => [
+      key.replace("<PROJECT_DIR>", project),
+      state.trusted_hash,
+    ]);
+  }
+
+  function codexTrustText(entries: Array<[string, string]>, quote: (key: string) => string): string {
+    return entries.map(([key, hash]) => `[hooks.state.${quote(key)}]\ntrusted_hash = "${hash}"\n`).join("\n");
+  }
+
+  test("Codex counts the trust it writes on Windows as complete: literal keys, backslashes, any case", () => {
+    const project = temp("aidlc-t294-trust-codex-win-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-win-home-");
+    const env = { HOME: home, CODEX_HOME: home };
+    // Codex writes a key that holds a backslash as a TOML literal string (seen
+    // live on Codex 0.160), so on Windows every hook key is one (#2838).
+    writeFileSync(
+      join(home, "config.toml"),
+      codexTrustText(codexSeedEntries(project), (key) => `'${key.replaceAll("/", "\\").toLowerCase()}'`),
+    );
+    expect(codexTrustIssues(project, ".codex", env, "win32")).toEqual([]);
+    // Elsewhere a backslash is part of a folder name, as Codex keys it there.
+    expect(codexTrustIssues(project, ".codex", env, "linux")[0]?.id).toBe("codex-hook-trust-incomplete");
+  });
+
+  test("Codex counts a literal-string key with forward slashes as the same key", () => {
+    const project = temp("aidlc-t294-trust-codex-literal-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-literal-home-");
+    writeFileSync(join(home, "config.toml"), codexTrustText(codexSeedEntries(project), (key) => `'${key}'`));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
+  });
+
+  test("Codex counts a hash only under its own hook's key", () => {
+    const project = temp("aidlc-t294-trust-codex-stale-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-stale-home-");
+    const entries = codexSeedEntries(project);
+    const [[firstKey, firstHash]] = entries;
+    // This project's first hook was trusted at an older hash; another
+    // project's copy of it holds the current one.
+    writeFileSync(join(home, "config.toml"), codexTrustText([
+      [firstKey, "sha256:older"],
+      ...entries.slice(1),
+      [`${join(home, "other", ".codex", "hooks.json")}:session_start:0:0`, firstHash],
+    ], (key) => JSON.stringify(key)));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([
+      expect.objectContaining({
+        id: "codex-hook-trust-incomplete",
+        message: `1 of ${entries.length} Codex hook trust entries are missing`,
+      }),
+    ]);
+  });
+
+  test("a Codex config.toml that does not parse is named with its repair, not as missing trust", () => {
+    const project = temp("aidlc-t294-trust-codex-invalid-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-invalid-home-");
+    const env = { HOME: home, CODEX_HOME: home };
+    const configPath = join(home, "config.toml");
+    const entries = codexSeedEntries(project);
+    const trusted = codexTrustText(entries, (key) => JSON.stringify(key));
+    // A second copy of one table, which Codex refuses to load too.
+    writeFileSync(configPath, `${trusted}\n${codexTrustText(entries.slice(0, 1), (key) => JSON.stringify(key))}`);
+    const message = `${configPath} is not a Codex config AI-DLC can read, so Codex's hook trust is unknown`;
+    const remediation = `Repair ${configPath}: valid TOML, then rerun the setup check.`;
+    expect(codexTrustIssues(project, ".codex", env)).toEqual([
+      { id: "codex-config-unreadable", message, remediation },
+    ]);
+    const actions = postApplyOutstandingActions(project, ".codex", "codex", {
+      skipSections: ["runtime", "providers", "models"],
+      env,
+    });
+    const action = actions.find((entry) => entry.id === "codex-config-unreadable");
+    expect(action).toEqual(expect.objectContaining({ section: "trust", message, step: remediation }));
+    expect(action?.command.endsWith("config trust --check")).toBe(true);
+    expect(actions.some((entry) => entry.message === "Codex has not trusted this project's hooks yet")).toBe(false);
+    // Repaired, the check goes on to count the trust.
+    writeFileSync(configPath, trusted);
+    expect(codexTrustIssues(project, ".codex", env)).toEqual([]);
+  });
+
   test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
     const configIn = (dir: string) => join(dir, ".copilot", "config.json");
     // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The
@@ -1806,6 +2018,78 @@ describe("t294 trust diagnostics", () => {
     expect(copilotConfigPath({ COPILOT_HOME: "", HOME: "/home/dev" }, "linux"))
       .toBe(configIn("/home/dev"));
     expect(copilotConfigPath({}, "win32")).toBe(configIn(homedir()));
+  });
+
+  // opencode v1.18.18 reads its global config from xdg-basedir's config dir
+  // (XDG_CONFIG_HOME, else os.homedir()/.config, on every platform; USERPROFILE
+  // is the home on Windows, never APPDATA) plus the file OPENCODE_CONFIG names,
+  // deep-merged in that order before any project file.
+  test("opencode's global config files come in its merge order from the home opencode uses on each platform", async () => {
+    const diagnostics = await import("../../core/tools/aidlc-config-diagnostics.ts") as Record<string, unknown>;
+    expect(typeof diagnostics.openCodeGlobalConfigFiles).toBe("function");
+    const files = diagnostics.openCodeGlobalConfigFiles as (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => string[];
+    const under = (dir: string) => ["config.json", "opencode.json", "opencode.jsonc"].map((file) => join(dir, "opencode", file));
+    expect(files({ XDG_CONFIG_HOME: "/xdg", HOME: "/home/dev" }, "linux")).toEqual(under("/xdg"));
+    expect(files({ HOME: "/home/dev" }, "linux")).toEqual(under(join("/home/dev", ".config")));
+    expect(files({ USERPROFILE: "C:\\Users\\dev", HOME: "H:\\", APPDATA: "C:\\Users\\dev\\AppData\\Roaming" }, "win32"))
+      .toEqual(under(join("C:\\Users\\dev", ".config")));
+    expect(files({ XDG_CONFIG_HOME: "D:\\xdg", USERPROFILE: "C:\\Users\\dev" }, "win32")).toEqual(under("D:\\xdg"));
+    expect(files({ HOME: "/home/dev", OPENCODE_CONFIG: "/etc/oc/team.jsonc" }, "linux"))
+      .toEqual([...under(join("/home/dev", ".config")), "/etc/oc/team.jsonc"]);
+    expect(files({}, "linux")).toEqual(under(join(homedir(), ".config")));
+  });
+
+  test("a global short-form permission rule gives one line naming its file; an object, allow, or a later object gives none", async () => {
+    const diagnostics = await import("../../core/tools/aidlc-config-diagnostics.ts") as Record<string, unknown>;
+    expect(typeof diagnostics.openCodeGlobalShortFormNote).toBe("function");
+    const note = diagnostics.openCodeGlobalShortFormNote as (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => string | null;
+    const home = temp("aidlc-t294-oc-home-");
+    const dir = join(home, ".config", "opencode");
+    mkdirSync(dir, { recursive: true });
+    const env = { HOME: home, XDG_CONFIG_HOME: join(home, ".config") };
+    const jsonc = join(dir, "opencode.jsonc");
+    // The host's own platform and paths: the line names the file as the person
+    // sees it, under "~" on Linux and macOS, the full path on Windows.
+    const host = platform();
+    const shown = (file: string) => (host === "win32" ? file : `~${file.slice(home.length)}`);
+    const tail = (file: string) => `in this project AI-DLC's permission rules replace that short form. To keep asking, write it as "bash": {"*": "ask"} in ${file}.`;
+    expect(note(env, host)).toBeNull();
+    // The short form opencode's own skill teaches, in a file with comments and a trailing comma.
+    const shortForm = '{\n  // the person\x27s own file\n  "model": "amazon-bedrock/x",\n  "permission": { "bash": "ask", },\n}\n';
+    writeFileSync(jsonc, shortForm);
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
+    expect(readFileSync(jsonc, "utf-8")).toBe(shortForm);
+    writeFileSync(jsonc, '{ "permission": { "edit": "deny" } }');
+    expect(note(env, host)).toBe(
+      `Your opencode setting refuses every file edit; in this project AI-DLC\x27s permission rules replace that short form. To keep refusing, write it as "edit": {"*": "deny"} in ${shown(jsonc)}.`,
+    );
+    writeFileSync(jsonc, '{ "permission": { "bash": "ask", "edit": "deny" } }');
+    expect(note(env, host)).toBe(
+      `Your opencode settings ask before every shell command and refuse every file edit; in this project AI-DLC\x27s permission rules replace those short forms. To keep them, write them as "bash": {"*": "ask"} and "edit": {"*": "deny"} in ${shown(jsonc)}.`,
+    );
+    // The map form, and allow (opencode's own default): nothing to say.
+    writeFileSync(jsonc, '{ "permission": { "bash": { "*": "ask" }, "edit": "allow" } }');
+    expect(note(env, host)).toBeNull();
+    // opencode's order: config.json, opencode.json, opencode.jsonc, then OPENCODE_CONFIG; a later object replaces an earlier short form and the other way round.
+    writeFileSync(join(dir, "config.json"), '{ "permission": { "bash": "ask" } }');
+    writeFileSync(jsonc, '{ "permission": { "bash": { "git *": "allow" } } }');
+    expect(note(env, host)).toBeNull();
+    writeFileSync(join(dir, "config.json"), '{ "permission": { "bash": { "git *": "allow" } } }');
+    writeFileSync(jsonc, '{ "permission": { "bash": "ask" } }');
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
+    rmSync(join(dir, "config.json"));
+    writeFileSync(jsonc, '{ "permission": { "bash": { "*": "ask" } } }');
+    const custom = join(home, "team.jsonc");
+    writeFileSync(custom, '{ "permission": { "bash": "ask" } }');
+    expect(note({ ...env, OPENCODE_CONFIG: custom }, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(custom))}`);
+    // A file outside the home is named in full; a malformed file is skipped and the others decide.
+    const elsewhere = temp("aidlc-t294-oc-elsewhere-");
+    const team = join(elsewhere, "team.json");
+    writeFileSync(team, '{ "permission": { "bash": "ask" } }');
+    expect(note({ ...env, OPENCODE_CONFIG: team }, host)).toBe(`Your opencode setting asks before every shell command; ${tail(team)}`);
+    writeFileSync(join(dir, "opencode.json"), "{ not json");
+    writeFileSync(jsonc, '{ "permission": { "bash": "ask" } }');
+    expect(note(env, host)).toBe(`Your opencode setting asks before every shell command; ${tail(shown(jsonc))}`);
   });
 
   test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
@@ -1894,7 +2178,7 @@ describe("t294 trust diagnostics", () => {
     expect(existsSync(join(project, ".vscode"))).toBe(false);
     const status = trustStatus(project, ".kiro", "kiro-ide");
     expect(status.issues).toEqual([]);
-    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
+    expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc-aidlc.md"));
     expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
     expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
     // Under the shared name `kiro` the installed tree, not the name, picks the
@@ -1964,13 +2248,13 @@ describe("t294 trust diagnostics", () => {
 
   test("doctor fails changed flow hooks, warns on advisory drift, and ignores project hooks", () => {
     const env = runtimeEnv();
+    // The flow-altering rows settings.json registers. The four tool-call checks
+    // ride one of them, `guard-tool-call`, so that row is the drift that matters
+    // (#2066); their own names are no longer registrations.
     const flowHooks = [
       "continue-workflow",
       "deliver-stage-rules",
-      "plan-approval-guard",
-      "review-freeze",
-      "reviewer-scope",
-      "state-transition-guard",
+      "guard-tool-call",
     ];
     for (const [source, hook] of [[DIST, "session-end"], [DIST_RELEASE, "session-start"]]) {
       const project = temp("aidlc-t294-doctor-unwired-");
@@ -2230,6 +2514,89 @@ describe("t294 trust diagnostics", () => {
       }),
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro hooks switched off in Agent Hooks: guards and the reply recorder fail, the rest warn", () => {
+    const ide = temp("aidlc-t294-kiro-ide-hooks-off-");
+    cpSync(join(DIST, "kiro-ide"), ide, { recursive: true });
+    const hooks = join(ide, ".kiro", "hooks");
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([]);
+    const switchOff = (file: string, where: "file" | "entry") => {
+      const parsed = JSON.parse(readFileSync(join(hooks, file), "utf-8"));
+      if (where === "file") parsed.enabled = false;
+      else parsed.hooks[0].enabled = false;
+      writeFileSync(join(hooks, file), JSON.stringify(parsed));
+    };
+    switchOff("aidlc-guard-tool-call.json", "file");
+    {
+      const renamed = JSON.parse(readFileSync(join(hooks, "aidlc-guard-tool-call.json"), "utf-8"));
+      renamed.hooks[0].name = "my-renamed-guard";
+      writeFileSync(join(hooks, "aidlc-guard-tool-call.json"), JSON.stringify(renamed));
+    }
+    switchOff("aidlc-record-human-turn.json", "entry");
+    switchOff("aidlc-session-start.json", "file");
+    switchOff("aidlc-log-subagent.json", "entry");
+    writeFileSync(join(hooks, "team-guard.json"), JSON.stringify({ enabled: false, hooks: [{ name: "team-guard" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
+        fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
+      },
+      {
+        pass: false,
+        label: "AI-DLC hook aidlc-record-human-turn is switched off in Kiro's Agent Hooks: your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
+        fix: 'turn aidlc-record-human-turn back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-record-human-turn.json',
+      },
+      {
+        pass: true,
+        severity: "warn",
+        label: "AI-DLC hooks switched off in Kiro's Agent Hooks: aidlc-log-subagent (a specialist agent's finished part is not recorded); aidlc-session-start (your first prompt starts the session instead)",
+        fix: 'turn them back on under Kiro\'s Agent Hooks, or set "enabled": true in their .kiro/hooks/ files',
+      },
+    ]);
+
+    // With an install manifest, an aidlc- file it does not list is the project's.
+    mkdirSync(join(ide, ".kiro", "tools", "data"), { recursive: true });
+    writeFileSync(join(ide, ".kiro", "tools", "data", "aidlc-manifest.json"), JSON.stringify({
+      files: { ".kiro/hooks/aidlc-guard-tool-call.json": "x", ".kiro/hooks/aidlc-record-human-turn.json": "x" },
+    }));
+    writeFileSync(join(hooks, "aidlc-team-extra.json"), JSON.stringify({ enabled: false, hooks: [{ name: "aidlc-team-extra" }] }));
+    expect(kiroDisabledHookChecks(ide, ".kiro").map((row) => row.label)).toEqual([
+      expect.stringContaining("aidlc-guard-tool-call is switched off"),
+      expect.stringContaining("aidlc-record-human-turn is switched off"),
+    ]);
+
+    // No Kiro engine runs the Kiro CLI tree's .kiro.hook files (#1487), so their
+    // flag protects nothing; a hook file that parses to a non-object is skipped.
+    const cli = temp("aidlc-t294-kiro-cli-hooks-off-");
+    cpSync(join(DIST, "kiro"), cli, { recursive: true });
+    const cliHook = join(cli, ".kiro", "hooks", "aidlc-plan-approval-guard.kiro.hook");
+    writeFileSync(cliHook, readFileSync(cliHook, "utf-8").replace('"enabled":true', '"enabled":false'));
+    writeFileSync(join(cli, ".kiro", "hooks", "aidlc-null.json"), "null");
+    expect(kiroDisabledHookChecks(cli, ".kiro")).toEqual([]);
+  });
+
+  test("doctor fails a Kiro IDE guard hook switched off in Agent Hooks", () => {
+    const project = install("kiro-ide");
+    const guard = join(project, ".kiro", "hooks", "aidlc-guard-tool-call.json");
+    writeFileSync(guard, JSON.stringify({ ...JSON.parse(readFileSync(guard, "utf-8")), enabled: false }));
+    const result = spawnSync(BUN, [
+      join(project, ".kiro", "tools", "aidlc.ts"),
+      "--doctor",
+      "--json",
+      "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...runtimeEnv(), AIDLC_HARNESS_DIR: ".kiro", AIDLC_HARNESS_NAME: "kiro-ide" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (result.error) throw result.error;
+    expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
+    }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t294 post-apply outstanding actions", () => {
@@ -2474,12 +2841,13 @@ describe("t294 instruction-file doctor row", () => {
     const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
     writeFileSync(agentsPath, `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
     expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
-    // An earlier release's text the team changed: the session start cannot
-    // add the part, so the doctor says so instead of calling it intact.
+    // An earlier release's text the team changed is the team's text now: the
+    // session start adds the part after it, and until then the doctor says the
+    // part is missing.
     writeFileSync(agentsPath, `${readFileSync(join(DIST, "codex", "AGENTS.md"), "utf-8")}\nOur own line.\n`);
     const edited = instructionFileDoctorCheck(project, ".codex");
     expect(edited.pass).toBe(false);
-    expect(edited.label).toContain("conflict (AGENTS.md)");
+    expect(edited.label).toContain("missing (AGENTS.md)");
     // The team's own file, before the session start adds the part.
     writeFileSync(agentsPath, "# Shop\n");
     const own = instructionFileDoctorCheck(project, ".codex");
@@ -2661,8 +3029,10 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const localPath = join(project, ".claude", "settings.local.json");
+    expect(readFileSync(localPath, "utf-8")).toContain('"AWS_REGION": "eu-west-1"');
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "eu-west-1"');
+      .not.toContain('"AWS_REGION"');
     expect(readFileSync(join(project, ".mcp.json"), "utf-8"))
       .toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
 
@@ -2691,7 +3061,7 @@ describe("t294 config diagnostics CLI", () => {
       };
     };
     expect(payload.data.files.map((entry) => entry.file)).toContain(
-      join(project, ".claude", "settings.json"),
+      join(project, ".claude", "settings.local.json"),
     );
     expect(payload.data.files.map((entry) => entry.file)).toContain(
       join(project, ".mcp.json"),
@@ -2723,8 +3093,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--yes",
     ], project, env).status).toBe(0);
-    expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "eu-west-1"');
+    expect(readFileSync(localPath, "utf-8")).toContain('"AWS_REGION": "eu-west-1"');
 
     const reset = run([
       "config",
@@ -2739,6 +3108,8 @@ describe("t294 config diagnostics CLI", () => {
       .not.toContain('"AWS_REGION"');
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
       .not.toContain('"CLAUDE_CODE_USE_BEDROCK"');
+    // The profile stays in the person's file; nothing proves it was AI-DLC's.
+    expect(JSON.parse(readFileSync(localPath, "utf-8")).env).toEqual({ AWS_PROFILE: "dev" });
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
       .toBeNull();
 
@@ -3126,10 +3497,6 @@ describe("t294 config diagnostics CLI", () => {
       )
         .replace("# AI-DLC on Codex CLI", "# Team-owned Codex instructions")
         .replace(
-          'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }',
-          'set = { AIDLC_RULES_DIR = "team/rules" }',
-        )
-        .replace(
           'sandbox_mode = "workspace-write"',
           'sandbox_mode = "read-only"',
         ),
@@ -3150,8 +3517,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     // The project's own values for AI-DLC's keys stay theirs on a refresh,
     // with or without --force; the release here ships the same values.
     const codexEdited = readFileSync(codexPath, "utf-8");
@@ -3173,8 +3538,6 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(readFileSync(codexPath, "utf-8")).sandbox_mode).toBe("read-only");
     expect(readFileSync(codexPath, "utf-8"))
       .toContain("# Team-owned Codex instructions");
-    expect(readFileSync(codexPath, "utf-8"))
-      .toContain('AIDLC_RULES_DIR = "team/rules"');
     expect(readFileSync(codexPath, "utf-8"))
       .toContain('model = "team-model"');
     expect(readFileSync(codexPath, "utf-8"))
@@ -3348,7 +3711,7 @@ describe("t294 config diagnostics CLI", () => {
   // A release source whose only change is the shipped tui.status_line value.
   function codexStatusRelease(status: string[], edit: (text: string) => string = (text) => text): string {
     const source = temp("aidlc-t294-codex-status-source-");
-    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    cpSync(codexTuiRelease(), source, { recursive: true });
     const path = join(source, ".codex", "config.toml");
     writeFileSync(path, edit(readFileSync(path, "utf-8").replace(
       /^status_line\s*=.*$/m,
@@ -3366,7 +3729,7 @@ describe("t294 config diagnostics CLI", () => {
     return source;
   }
 
-  const SHIPPED_SET_LINE = 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }';
+  const SHIPPED_INLINE_LINE = 'experimental_request_user_input = { enabled = true }';
 
   const SHIPPED_STATUS_LINE =
     'status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-used"]';
@@ -3374,7 +3737,7 @@ describe("t294 config diagnostics CLI", () => {
   const RELEASE_STATUS = ["model-with-reasoning", "context-used"];
 
   test("Codex refresh keeps the project's own keys, tables and comments byte for byte", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     const shipped = readFileSync(configPath, "utf-8");
@@ -3399,7 +3762,10 @@ describe("t294 config diagnostics CLI", () => {
     expect(() => parseToml(edited)).not.toThrow();
     writeFileSync(configPath, edited);
 
-    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    // The same release again (one that ships AI-DLC's status line).
+    const same = run([
+      "config", "--project-dir", project, "--from", codexTuiRelease(), "--harness", "codex", "--yes",
+    ], project, env);
     expect(same.status, same.stdout + same.stderr).toBe(0);
     expect(same.stdout).not.toContain("Note:");
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
@@ -3425,11 +3791,11 @@ describe("t294 config diagnostics CLI", () => {
       `tui = { status_line = ${SHIPPED_STATUS_VALUE}, project_note = "keep-me" }\n\n`,
     ];
     for (const spelling of spellings) {
-      const project = install("codex");
+      const project = install("codex", codexTuiRelease());
       const configPath = join(project, ".codex", "config.toml");
       const shipped = readFileSync(configPath, "utf-8");
-      const withoutTui = shipped.replace(/\[tui\][\s\S]*$/, "");
-      const firstTable = withoutTui.indexOf("[shell_environment_policy]");
+      const withoutTui = shipped.replace(/^\[tui\][\s\S]*$/m, "");
+      const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
       const edited = withoutTui.slice(0, firstTable) + spelling + withoutTui.slice(firstTable);
       expect(() => parseToml(edited)).not.toThrow();
       writeFileSync(configPath, edited);
@@ -3447,40 +3813,38 @@ describe("t294 config diagnostics CLI", () => {
       });
     }
 
-    // A release that retires [tui] removes the unchanged dotted key and keeps
-    // the person's own key beside it.
-    const retired = temp("aidlc-t294-codex-retired-tui-");
-    cpSync(join(DIST_RELEASE, "codex"), retired, { recursive: true });
-    const retiredPath = join(retired, ".codex", "config.toml");
-    writeFileSync(retiredPath, readFileSync(retiredPath, "utf-8").replace(/\[tui\][\s\S]*$/, ""));
-    const project = install("codex");
+    // This release no longer ships [tui], and a project that has AI-DLC's
+    // status line keeps it (#1407, C1), in its own spelling, with the person's
+    // own key beside it.
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
-    const withoutTui = readFileSync(configPath, "utf-8").replace(/\[tui\][\s\S]*$/, "");
-    const firstTable = withoutTui.indexOf("[shell_environment_policy]");
-    writeFileSync(
-      configPath,
-      withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable),
-    );
+    const withoutTui = readFileSync(configPath, "utf-8").replace(/^\[tui\][\s\S]*$/m, "");
+    const firstTable = withoutTui.indexOf("[sandbox_workspace_write]");
+    const dotted = withoutTui.slice(0, firstTable) + spellings[0] + withoutTui.slice(firstTable);
+    writeFileSync(configPath, dotted);
     const refreshed = run([
-      "config", "--project-dir", project, "--from", retired, "--harness", "codex", "--yes",
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"), "--harness", "codex", "--yes",
     ], project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     const after = readFileSync(configPath, "utf-8");
-    expect(after).not.toContain("tui.status_line");
-    expect(parseToml(after).tui).toEqual({ project_note: "keep-me" });
+    expect(after).toBe(dotted);
+    expect(parseToml(after).tui).toEqual({
+      status_line: parseToml(SHIPPED_STATUS_LINE).status_line,
+      project_note: "keep-me",
+    });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh adds a release's new inline member beside the project's own", () => {
     const env = runtimeEnv();
     const release = codexRelease((text) => text.replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", RELEASE_VAR = "new" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, release_var = "new" }',
     ));
     const project = install("codex");
     const configPath = join(project, ".codex", "config.toml");
     const edited = readFileSync(configPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", PROJECT_VAR = "must-stay" }',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input = { enabled = true, project_var = "must-stay" }',
     );
     writeFileSync(configPath, edited);
     const args = (dir: string) => [
@@ -3489,8 +3853,8 @@ describe("t294 config diagnostics CLI", () => {
     const refreshed = run(args(project), project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited.replace(
-      'PROJECT_VAR = "must-stay" }',
-      'PROJECT_VAR = "must-stay", RELEASE_VAR = "new" }',
+      'project_var = "must-stay" }',
+      'project_var = "must-stay", release_var = "new" }',
     ));
 
     // Where the new key has no safe place beside the project's own dotted keys,
@@ -3498,8 +3862,8 @@ describe("t294 config diagnostics CLI", () => {
     const dotted = install("codex");
     const dottedPath = join(dotted, ".codex", "config.toml");
     const dottedEdited = readFileSync(dottedPath, "utf-8").replace(
-      SHIPPED_SET_LINE,
-      'set.AIDLC_RULES_DIR = "aidlc/spaces/default/memory"\nset.PROJECT_VAR = "must-stay"',
+      SHIPPED_INLINE_LINE,
+      'experimental_request_user_input.enabled = true\nexperimental_request_user_input.project_var = "must-stay"',
     );
     writeFileSync(dottedPath, dottedEdited);
     const written = run(["config", "--project-dir", dotted, "--yes"], dotted, env);
@@ -3535,14 +3899,16 @@ describe("t294 config diagnostics CLI", () => {
 
   test("a comment inside a reformatted AI-DLC value stops the refresh instead of going", () => {
     const env = runtimeEnv();
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
     const edited = readFileSync(configPath, "utf-8").replace(
       SHIPPED_STATUS_LINE,
       'status_line = [\n  # team: keep the model first\n  "model-with-reasoning", "git-branch", "task-progress", "context-used",\n]',
     );
     writeFileSync(configPath, edited);
-    const same = run(["config", "--project-dir", project, "--yes"], project, env);
+    const same = run([
+      "config", "--project-dir", project, "--from", codexTuiRelease(), "--harness", "codex", "--yes",
+    ], project, env);
     expect(same.status, same.stdout + same.stderr).toBe(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
     const moved = run([
@@ -3553,28 +3919,57 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh keeps the team's active space and needs no --force", () => {
-    const project = install("codex");
+  test("Codex refresh empties the space pointer an earlier release shipped, at whichever space a switch left it", () => {
     const env = runtimeEnv();
-    const configPath = join(project, ".codex", "config.toml");
-    // What /aidlc space teamb writes at the next session start.
-    const onSpace = readFileSync(configPath, "utf-8").replace(
-      'AIDLC_RULES_DIR = "aidlc/spaces/default/memory"',
-      'AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"',
-    );
-    writeFileSync(configPath, onSpace);
-    const refreshed = run([
-      "config", "--project-dir", project, "--from", codexStatusRelease(RELEASE_STATUS),
-      "--harness", "codex", "--yes",
-    ], project, env);
-    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(refreshed.stdout).not.toContain("Note:");
-    expect(readFileSync(configPath, "utf-8"))
-      .toBe(onSpace.replace(SHIPPED_STATUS_VALUE, JSON.stringify(RELEASE_STATUS)));
+    // 2.11.0 shipped `AIDLC_RULES_DIR` under [shell_environment_policy] and a
+    // space switch rewrote it in place; this release ships it empty (2.11.0's
+    // own refresh cannot take the member out), and the engine reads the active
+    // space itself.
+    const EMPTY = 'set = { AIDLC_RULES_DIR = "" }';
+    for (const [label, older, refreshedTo] of [
+      ["the default space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }', EMPTY],
+      ["a switched space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory" }', EMPTY],
+      ["a switched space, dotted", 'set.AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'set.AIDLC_RULES_DIR = ""'],
+    ] as const) {
+      const project = install("codex");
+      const configPath = join(project, ".codex", "config.toml");
+      const clean = readFileSync(configPath, "utf-8");
+      expect(clean, label).toContain(EMPTY);
+      writeFileSync(configPath, clean.replace(EMPTY, older));
+      const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
+      expect(refreshed.status, `${label}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, label).not.toContain("Note:");
+      expect(readFileSync(configPath, "utf-8"), label).toBe(clean.replace(EMPTY, refreshedTo));
+    }
+    // A table the project extended: only the pointer's value changes, the
+    // project's own members and the table stay, whichever order they were in.
+    for (const [members, left] of [
+      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'AIDLC_RULES_DIR = "", PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = ""'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "", OTHER = 1'],
+    ] as const) {
+      const extended = install("codex");
+      const extendedPath = join(extended, ".codex", "config.toml");
+      const before = readFileSync(extendedPath, "utf-8").replace(EMPTY, `set = { ${members} }`);
+      writeFileSync(extendedPath, before);
+      const refreshed = run(["config", "--project-dir", extended, "--yes"], extended, env);
+      expect(refreshed.status, `${members}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
+      expect(refreshed.stdout, members).not.toContain("Note:");
+      expect(readFileSync(extendedPath, "utf-8"), members).toBe(before.replace(`set = { ${members} }`, `set = { ${left} }`));
+    }
+    // A folder of the person's own is theirs, and stays.
+    const own = install("codex");
+    const ownPath = join(own, ".codex", "config.toml");
+    writeFileSync(ownPath, readFileSync(ownPath, "utf-8").replace(EMPTY, 'set = { AIDLC_RULES_DIR = "team/rules" }'));
+    const kept = run(["config", "--project-dir", own, "--yes"], own, env);
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    expect(readFileSync(ownPath, "utf-8")).toContain('set = { AIDLC_RULES_DIR = "team/rules" }');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
-    const project = temp("aidlc-t294-codex-own-config-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const project = temp("aidlc-t294-own-config-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".codex"));
     const own = "# team codex settings\nmodel = \"team-model\"\n\n" +
@@ -3614,7 +4009,9 @@ describe("t294 config diagnostics CLI", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own output budget and says so once", () => {
-    const project = temp("aidlc-t294-codex-own-budget-");
+    // A short name: on Windows a project folder 75 characters deep gets
+    // config's own warning that it is too deep for AI-DLC's records.
+    const project = temp("aidlc-t294-own-budget-");
     mkdirSync(join(project, ".git"));
     mkdirSync(join(project, ".codex"));
     const own = "model = \"team-model\"\ntool_output_token_limit = 40000\n";
@@ -3639,7 +4036,7 @@ describe("t294 config diagnostics CLI", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Codex refresh keeps CRLF line ends and a byte order mark", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     const edited = `\uFEFF${readFileSync(configPath, "utf-8")
@@ -3663,8 +4060,8 @@ describe("t294 config diagnostics CLI", () => {
     const project = install("codex");
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
-    // AI-DLC's [tui] written as an array of tables: nothing to merge safely.
-    const edited = readFileSync(configPath, "utf-8").replace(/^\[tui\]$/m, "[[tui]]");
+    // AI-DLC's [agents] written as an array of tables: nothing to merge safely.
+    const edited = readFileSync(configPath, "utf-8").replace(/^\[agents\]$/m, "[[agents]]");
     expect(() => parseToml(edited)).not.toThrow();
     writeFileSync(configPath, edited);
     const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
@@ -3683,7 +4080,7 @@ describe("t294 config diagnostics CLI", () => {
   }
 
   test("a baseline written before per-key records still takes release values for untouched tables", () => {
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const env = runtimeEnv();
     const configPath = join(project, ".codex", "config.toml");
     withoutValueRecords(project);
@@ -3711,15 +4108,15 @@ describe("t294 config diagnostics CLI", () => {
     writeFileSync(legacyPath, legacyEdited);
     const retiring = codexRelease((text) => text
       .replace("max_depth = 1", "max_depth = 2")
-      .replace(/\[tui\][\s\S]*$/, ""));
+      .replace("[sandbox_workspace_write]\nnetwork_access = true\n", ""));
     const retired = run([
       "config", "--project-dir", legacy, "--from", retiring, "--harness", "codex", "--yes",
     ], legacy, env);
     expect(retired.status, retired.stdout + retired.stderr).toBe(0);
     expect(retired.stdout).toContain("Note: kept your agents.max_depth in .codex/config.toml");
     const after = readFileSync(legacyPath, "utf-8");
-    expect(after).toBe(legacyEdited.replace(`[tui]\n${SHIPPED_STATUS_LINE}\n`, ""));
-    expect(parseToml(after).tui).toBeUndefined();
+    expect(after).toBe(legacyEdited.replace("[sandbox_workspace_write]\nnetwork_access = true\n", ""));
+    expect(parseToml(after).sandbox_workspace_write).toBeUndefined();
 
     // A root key is read from its real statement, not a lookalike line inside
     // a string that an odd closing quote run hides.
@@ -3890,10 +4287,12 @@ describe("t294 config diagnostics CLI", () => {
       const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
       expect(after.permissions).toEqual(settings.permissions);
       expect(after.hooks).toEqual(settings.hooks);
-      expect(after.env).toEqual(expect.objectContaining({
+      expect(after.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      const localPath = join(project, ".claude", "settings.local.json");
+      expect(JSON.parse(readFileSync(localPath, "utf-8")).env).toEqual({
         CLAUDE_CODE_USE_BEDROCK: "1",
         AWS_REGION: "us-east-1",
-      }));
+      });
       if (change !== "pristine") expect(after.env.MY_TEAM_SETTING).toBe("preserved");
       if (change === "permissions") {
         const current = run([
@@ -3910,6 +4309,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(optedOut.permissions).toEqual(settings.permissions);
         expect(optedOut.env.MY_TEAM_SETTING).toBe("preserved");
         expect(optedOut.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+        expect(existsSync(localPath)).toBe(false);
         expect(optedOut.hooks).toEqual(settings.hooks);
       }
     }
@@ -3959,10 +4359,10 @@ describe("t294 config diagnostics CLI", () => {
     const shippedHooks = structuredClone(settings.hooks);
     const guardGroup = settings.hooks.PreToolUse.find(
       (group: { hooks: Array<{ command: string }> }) =>
-        group.hooks.some((hook) => hook.command.includes("plan-approval-guard")),
+        group.hooks.some((hook) => hook.command.includes("guard-tool-call")),
     );
     const guardIndex = guardGroup.hooks.findIndex(
-      (hook: { command: string }) => hook.command.includes("plan-approval-guard"),
+      (hook: { command: string }) => hook.command.includes("guard-tool-call"),
     );
     const [guard] = guardGroup.hooks.splice(guardIndex, 1);
     const ownPreToolUse = {
@@ -3998,7 +4398,7 @@ describe("t294 config diagnostics CLI", () => {
     expect(after.hooks.PostToolUse).toEqual([...shippedHooks.PostToolUse, ownPostToolUse]);
     expect(after.hooks.PostToolUse.flatMap(
       (group: { hooks: Array<{ command: string }> }) => group.hooks,
-    ).some((hook: { command: string }) => hook.command.includes("plan-approval-guard"))).toBe(false);
+    ).some((hook: { command: string }) => hook.command.includes("guard-tool-call"))).toBe(false);
     expect(after.hooks.Notification).toEqual([ownNotification]);
     expect(after.permissions.deny).toEqual(["Bash(rm -rf:*)"]);
 
@@ -4027,16 +4427,15 @@ describe("t294 config diagnostics CLI", () => {
     const env = runtimeEnv();
     const settingsPath = join(project, ".claude", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    const guardGroup = settings.hooks.PreToolUse.find(
-      (group: { hooks: Array<{ command: string }> }) =>
-        group.hooks.some((hook) => hook.command === "aidlc engine hook plan-approval-guard"),
-    );
-    const guard = guardGroup.hooks.find(
-      (hook: { command: string }) =>
-        hook.command === "aidlc engine hook plan-approval-guard",
-    );
-    guard.command =
+    // A project configured before one row carried the checks (#2066) holds the
+    // legacy per-file row for the guard itself; the refresh migrates it to the
+    // shipped wiring without claiming a command that only looks like AI-DLC's.
+    const legacyGuardCommand =
       'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"';
+    settings.hooks.PreToolUse.push({
+      matcher: "Edit|MultiEdit|Write|NotebookEdit|Bash|Task|Agent",
+      hooks: [{ type: "command", command: legacyGuardCommand }],
+    });
     const projectCommands = [
       "team-aidlc engine hook plan-approval-guard",
       "aidlc engine hook plan-approval-guard && team-audit",
@@ -4047,8 +4446,11 @@ describe("t294 config diagnostics CLI", () => {
       matcher: "Bash",
       hooks: projectCommands.map((command) => ({ type: "command", command })),
     });
-    settings.statusLine.command =
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    // An earlier release's AI-DLC status line in the shared file (#1407).
+    settings.statusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"',
+    };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
     const refreshed = run([
@@ -4062,13 +4464,14 @@ describe("t294 config diagnostics CLI", () => {
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
     expect(commands.filter(
-      (command) => command === "aidlc engine hook plan-approval-guard",
+      (command) => command === "aidlc engine hook guard-tool-call",
     )).toHaveLength(1);
     expect(commands).toEqual(expect.arrayContaining(projectCommands));
-    expect(commands).not.toContain(
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-plan-approval-guard.ts"',
-    );
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    expect(commands).not.toContain(legacyGuardCommand);
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
   }, 60_000);
 
   test("Claude refresh recognizes the installed dispatcher by absolute path", () => {
@@ -4083,19 +4486,21 @@ describe("t294 config diagnostics CLI", () => {
       "aidlc.ts",
     ).replaceAll("\\", "/");
     const absoluteGuard =
-      `bun "${absoluteDispatcher}" engine hook plan-approval-guard`;
+      `bun "${absoluteDispatcher}" engine hook guard-tool-call`;
     const guardGroup = settings.hooks.PreToolUse.find(
       (group: { hooks: Array<{ command: string }> }) =>
         group.hooks.some((hook) =>
-          hook.command === "aidlc engine hook plan-approval-guard"
+          hook.command === "aidlc engine hook guard-tool-call"
         ),
     );
     guardGroup.hooks.find(
       (hook: { command: string }) =>
-        hook.command === "aidlc engine hook plan-approval-guard",
+        hook.command === "aidlc engine hook guard-tool-call",
     ).command = absoluteGuard;
-    settings.statusLine.command =
-      `bun "${absoluteDispatcher}" engine statusline`;
+    settings.statusLine = {
+      type: "command",
+      command: `bun "${absoluteDispatcher}" engine statusline`,
+    };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
     const refreshed = run([
@@ -4109,10 +4514,13 @@ describe("t294 config diagnostics CLI", () => {
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
     expect(commands.filter((command) =>
-      command === "aidlc engine hook plan-approval-guard"
+      command === "aidlc engine hook guard-tool-call"
     )).toHaveLength(1);
     expect(commands).not.toContain(absoluteGuard);
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
   }, 60_000);
 
   test("Claude refresh treats an unchanged legacy hook installation as a clean migration", () => {
@@ -4124,9 +4532,16 @@ describe("t294 config diagnostics CLI", () => {
       for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
         for (const hook of group.hooks) {
           const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
-          // New D adapters never shipped as legacy framework hook scripts.
-          // Convert exactly the historical targets the core's legacy contract names.
-          if (target && LEGACY_AIDLC_HOOK_TARGETS.has(target)) {
+          // Only a hook that ships a file of its own ever had the per-file form.
+          // One row runs several checks in one process (#2066) and ships no file,
+          // so no installation can carry a legacy spelling of it. New D adapters
+          // never shipped as legacy framework hook scripts either, so convert
+          // exactly the historical targets the core's legacy contract names.
+          if (
+            target &&
+            LEGACY_AIDLC_HOOK_TARGETS.has(target) &&
+            existsSync(join(project, ".claude", "hooks", `aidlc-${target}.ts`))
+          ) {
             hook.command =
               `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
           }
@@ -4141,8 +4556,11 @@ describe("t294 config diagnostics CLI", () => {
         command: `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`,
       }],
     })));
-    settings.statusLine.command =
-      'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"';
+    // An earlier release's AI-DLC status line in the shared file (#1407).
+    settings.statusLine = {
+      type: "command",
+      command: 'bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"',
+    };
 
     const manifestPath = join(
       project,
@@ -4196,7 +4614,10 @@ describe("t294 config diagnostics CLI", () => {
       (groups) => (groups as Array<{ hooks: Array<{ command: string }> }>)
         .flatMap((group) => group.hooks.map((hook) => hook.command)),
     );
-    expect(after.statusLine.command).toBe("aidlc engine statusline");
+    // AI-DLC's status line leaves the shared file; this clone keeps it in its own.
+    expect(after.statusLine).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).statusLine.command)
+      .toBe("aidlc engine statusline");
     expect(commands).toContain(projectCommand);
     expect(commands).toContain(projectLegacyCommand);
     expect(readFileSync(projectLegacyPath, "utf-8")).toBe(
@@ -4216,7 +4637,13 @@ describe("t294 config diagnostics CLI", () => {
       for (const group of groups as Array<{ hooks: Array<{ command: string }> }>) {
         for (const hook of group.hooks) {
           const target = /^aidlc engine hook ([A-Za-z0-9_-]+)$/.exec(hook.command)?.[1];
-          if (target) {
+          // Only a hook that ships a file of its own ever had the per-file form.
+          // One row runs several checks in one process (#2066) and ships no file,
+          // so no installation can carry a legacy spelling of it.
+          if (
+            target &&
+            existsSync(join(project, ".claude", "hooks", `aidlc-${target}.ts`))
+          ) {
             hook.command =
               `bun "$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-${target}.ts"`;
           }
@@ -4367,12 +4794,13 @@ process.exit(0);
     expect(retired.stdout).not.toContain("Note: re-added");
   }, 90_000);
 
-  test("Claude refresh keeps a personal statusLine and restores the shipped one when absent", () => {
+  test("Claude refresh keeps the team's own statusLine and puts none back when it is absent", () => {
     const project = install("claude");
     const env = runtimeEnv();
     const settingsPath = join(project, ".claude", "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    const shippedStatusLine = structuredClone(settings.statusLine);
+    // AI-DLC ships no status line in the shared file (#1407).
+    expect(settings.statusLine).toBeUndefined();
     settings.statusLine = { type: "command", command: "my-status", padding: 2 };
     writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
     const args = [
@@ -4382,7 +4810,6 @@ process.exit(0);
     const refreshed = run(args, project, env);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
-    // Same release: the personal choice stands without a note.
     expect(refreshed.stdout).not.toContain("Note:");
     const doctor = spawnSync(BUN, [
       join(project, ".claude", "tools", "aidlc.ts"),
@@ -4402,36 +4829,35 @@ process.exit(0);
         check.label.includes("aidlc-statusline.ts shipped but not wired"),
     )).toBe(false);
 
-    // A release that ships a different statusLine says so, but still keeps yours.
+    // A release whose own status line value changed still leaves the team's alone.
     const source = temp("aidlc-t294-statusline-source-");
     cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
-    const sourceSettingsPath = join(source, ".claude", "settings.json");
-    const release = JSON.parse(readFileSync(sourceSettingsPath, "utf-8"));
+    const sourceDataPath = join(source, ".claude", "tools", "data", "harness.json");
+    const release = JSON.parse(readFileSync(sourceDataPath, "utf-8"));
     release.statusLine = { ...release.statusLine, padding: 1 };
-    writeFileSync(sourceSettingsPath, `${JSON.stringify(release, null, 2)}\n`);
+    writeFileSync(sourceDataPath, `${JSON.stringify(release, null, 2)}\n`);
     const changedRelease = run([
       "config", "--project-dir", project, "--from", source, "--harness", "claude", "--yes",
     ], project, env);
     expect(changedRelease.status, changedRelease.stdout + changedRelease.stderr).toBe(0);
     expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(settings.statusLine);
-    expect(changedRelease.stdout).toContain("Note: kept your statusLine");
+    expect(changedRelease.stdout).not.toContain("statusLine");
 
     const withoutStatusLine = JSON.parse(readFileSync(settingsPath, "utf-8"));
     delete withoutStatusLine.statusLine;
     writeFileSync(settingsPath, `${JSON.stringify(withoutStatusLine, null, 2)}\n`);
-    const restored = run(args, project, env);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toEqual(shippedStatusLine);
-    expect(restored.stdout).not.toContain("Note:");
+    const refreshedAgain = run(args, project, env);
+    expect(refreshedAgain.status, refreshedAgain.stdout + refreshedAgain.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toBeUndefined();
+    expect(refreshedAgain.stdout).not.toContain("Note:");
   }, 60_000);
 
-  test("Claude refresh replaces malformed statusLine values and repairs doctor", () => {
+  test("Claude refresh drops malformed statusLine values and repairs doctor", () => {
     const env = runtimeEnv();
     for (const malformed of [null, {}, { type: "command" }]) {
       const project = install("claude");
       const settingsPath = join(project, ".claude", "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      const shippedStatusLine = structuredClone(settings.statusLine);
       settings.statusLine = malformed;
       writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 
@@ -4440,8 +4866,8 @@ process.exit(0);
         "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes",
       ], project, env);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine)
-        .toEqual(shippedStatusLine);
+      // Not a status line anyone can run, and not one AI-DLC ships there: it goes.
+      expect(JSON.parse(readFileSync(settingsPath, "utf-8")).statusLine).toBeUndefined();
 
       const doctor = spawnSync(BUN, [
         join(project, ".claude", "tools", "aidlc.ts"),
@@ -4775,17 +5201,13 @@ process.exit(0);
     expect(baseline.entries[".claude/settings.json"]).toEqual(expect.objectContaining({
       companyAnnouncements: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       permissions: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
-      statusLine: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooks: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       hooksAidlc: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     }));
     for (const target of [
       "continue-workflow",
       "deliver-stage-rules",
-      "plan-approval-guard",
-      "review-freeze",
-      "reviewer-scope",
-      "state-transition-guard",
+      "guard-tool-call",
     ]) {
       expect(baseline.entries[".claude/settings.json"][
         `hooksAidlc:${target}`
@@ -4795,7 +5217,7 @@ process.exit(0);
 
   test("refresh keeps a person's Codex value and says so once the release ships another", () => {
     const env = runtimeEnv();
-    const project = install("codex");
+    const project = install("codex", codexTuiRelease());
     const configPath = join(project, ".codex", "config.toml");
     const userStatus = ["git-branch", "context-used"];
     const edited = readFileSync(configPath, "utf-8").replace(
@@ -4807,6 +5229,10 @@ process.exit(0);
       "config",
       "--project-dir",
       project,
+      "--from",
+      codexTuiRelease(),
+      "--harness",
+      "codex",
       "--yes",
     ], project, env);
     expect(ordinary.status, ordinary.stdout + ordinary.stderr).toBe(0);
@@ -4814,7 +5240,7 @@ process.exit(0);
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
 
     const source = temp("aidlc-t294-codex-entries-source-");
-    cpSync(join(DIST_RELEASE, "codex"), source, { recursive: true });
+    cpSync(codexTuiRelease(), source, { recursive: true });
     const sourceConfigPath = join(source, ".codex", "config.toml");
     const releaseStatus = ["model-with-reasoning", "context-used"];
     writeFileSync(sourceConfigPath, readFileSync(sourceConfigPath, "utf-8").replace(
@@ -4851,7 +5277,7 @@ process.exit(0);
     expect(parseToml(readFileSync(configPath, "utf-8")).tui)
       .toEqual({ status_line: releaseStatus });
 
-    const pristine = install("codex");
+    const pristine = install("codex", codexTuiRelease());
     const pristineRefresh = fromSource(pristine);
     expect(pristineRefresh.status, pristineRefresh.stdout + pristineRefresh.stderr).toBe(0);
     expect(pristineRefresh.stdout).not.toContain("Note:");
@@ -4877,8 +5303,8 @@ process.exit(0);
       'value:["sandbox_mode"]': hash,
       'value:["suppress_unstable_features_warning"]': hash,
       'value:["tool_output_token_limit"]': hash,
-      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
+      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["agents","max_depth"]': hash,
       'value:["tools","experimental_request_user_input","enabled"]': hash,
       'value:["features","default_mode_request_user_input"]': hash,
@@ -5029,7 +5455,7 @@ process.exit(0);
     expect(opencodeAfter.mcp).toEqual(opencodeSettings.mcp);
     expect(opencodeAfter.provider["amazon-bedrock"].options.region).toBe("eu-west-1");
 
-    const codex = install("codex");
+    const codex = install("codex", codexTuiRelease());
     const codexPath = join(codex, ".codex", "config.toml");
     const userStatus = ["git-branch"];
     const edited = readFileSync(codexPath, "utf-8").replace(
@@ -6121,7 +6547,7 @@ process.exit(0);
     const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
     expect(show.stdout).toContain(
-      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+      "Model access: comes with Kiro; AI-DLC configures no model provider",
     );
     expect(show.stdout).toContain("Legacy provider answer present and ignored;");
     expect(show.stdout).toContain("config providers --reset");
@@ -6229,9 +6655,9 @@ process.exit(0);
     expect(readConfigDiagnosticRecords(join(kiro, ".kiro")).providers).toBeNull();
     expect(readFileSync(mcpPath, "utf-8")).toBe(projectMcp);
 
-    // The preservation must not turn mcp.json into a runtime-generated file: with
-    // the nondefault region still in place, enabling aws-mcp by hand and adding a
-    // server is a local modification the refresh has to refuse, not overwrite.
+    // With the nondefault region still in place, enabling aws-mcp by hand and
+    // adding a server are the person's own entries: the refresh keeps both and
+    // leaves the file as it is.
     const parsedMcp = JSON.parse(projectMcp) as {
       mcpServers: Record<string, Record<string, unknown>>;
     };
@@ -6239,7 +6665,7 @@ process.exit(0);
     parsedMcp.mcpServers["team-docs"] = { type: "http", url: "https://docs.example.test/mcp" };
     const editedMcp = `${JSON.stringify(parsedMcp, null, 2)}\n`;
     writeFileSync(mcpPath, editedMcp);
-    const refused = run([
+    const kept = run([
       "config",
       "--project-dir",
       kiro,
@@ -6249,8 +6675,8 @@ process.exit(0);
       "kiro",
       "--yes",
     ], kiro, noCredentials);
-    expect(refused.status, refused.stdout + refused.stderr).not.toBe(0);
-    expect(refused.stdout + refused.stderr).toContain("locally modified");
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    expect(kept.stdout + kept.stderr).not.toContain("locally modified");
     expect(readFileSync(mcpPath, "utf-8")).toBe(editedMcp);
 
     const claude = install("claude");
@@ -6263,6 +6689,205 @@ process.exit(0);
     ], claude, env);
     expect(claudeCheck.status).toBe(1);
     expect(claudeCheck.stdout + claudeCheck.stderr).toContain("bedrock-model-access");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Kiro CLI's .kiro/settings/mcp.json merges per server, as Claude Code's
+  // .mcp.json does: a server the person added and a server of AI-DLC's they
+  // turned on stay theirs, and AI-DLC's untouched servers follow the release.
+  test("Kiro CLI mcp.json keeps the person's servers across a refresh", () => {
+    type Mcp = { mcpServers: Record<string, Record<string, unknown>> };
+    const kiro = install("kiro");
+    const mcpPath = join(kiro, ".kiro", "settings", "mcp.json");
+    const mine = JSON.parse(readFileSync(mcpPath, "utf-8")) as Mcp;
+    mine.mcpServers["context7"].disabled = false;
+    mine.mcpServers["team-docs"] = { command: "team-docs-server", args: ["--stdio"] };
+    writeFileSync(mcpPath, `${JSON.stringify(mine, null, 2)}\n`);
+
+    // The next release changes one of AI-DLC's servers and stops shipping another.
+    const release = temp("aidlc-t294-kiro-mcp-release-");
+    cpSync(join(DIST_RELEASE, "kiro"), release, { recursive: true });
+    const releaseMcpPath = join(release, ".kiro", "settings", "mcp.json");
+    const next = JSON.parse(readFileSync(releaseMcpPath, "utf-8")) as Mcp;
+    next.mcpServers["aws-pricing"].args = ["awslabs.aws-pricing-mcp-server@9.9.9"];
+    delete next.mcpServers["aws-iac"];
+    writeFileSync(releaseMcpPath, `${JSON.stringify(next, null, 2)}\n`);
+    const args = ["config", "--project-dir", kiro, "--from", release, "--harness", "kiro", "--yes"];
+
+    const refresh = run(args, kiro);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    let merged = JSON.parse(readFileSync(mcpPath, "utf-8")) as Mcp;
+    expect(merged.mcpServers["team-docs"]).toEqual(mine.mcpServers["team-docs"]);
+    expect(merged.mcpServers["context7"]).toEqual(mine.mcpServers["context7"]);
+    expect(merged.mcpServers["aws-pricing"]).toEqual(next.mcpServers["aws-pricing"]);
+    expect(merged.mcpServers["aws-mcp"]).toEqual(next.mcpServers["aws-mcp"]);
+    expect(Object.hasOwn(merged.mcpServers, "aws-iac")).toBe(false);
+
+    // A server added after that refresh is the person's as well, and the
+    // doctor does not name the file as one config stops on.
+    merged.mcpServers["second"] = { command: "second-server" };
+    writeFileSync(mcpPath, `${JSON.stringify(merged, null, 2)}\n`);
+    expect(frameworkFilesDoctorCheck(kiro, ".kiro").label).not.toContain("mcp.json");
+    const again = run(args, kiro);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect((JSON.parse(readFileSync(mcpPath, "utf-8")) as Mcp).mcpServers["second"]).toEqual({ command: "second-server" });
+
+    // --force takes back a server AI-DLC still owns, as shipped; the person's
+    // servers, context7 included since they turned it on, stay theirs.
+    merged = JSON.parse(readFileSync(mcpPath, "utf-8")) as Mcp;
+    merged.mcpServers["aws-mcp"].disabled = false;
+    writeFileSync(mcpPath, `${JSON.stringify(merged, null, 2)}\n`);
+    const forced = run([...args, "--force"], kiro);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    merged = JSON.parse(readFileSync(mcpPath, "utf-8")) as Mcp;
+    expect(merged.mcpServers["aws-mcp"]).toEqual(next.mcpServers["aws-mcp"]);
+    expect(merged.mcpServers["context7"]).toEqual(mine.mcpServers["context7"]);
+    expect(merged.mcpServers["team-docs"]).toEqual(mine.mcpServers["team-docs"]);
+    expect(merged.mcpServers["second"]).toEqual({ command: "second-server" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro CLI setup keeps an mcp.json the project already had", () => {
+    const project = temp("aidlc-t294-kiro-own-mcp-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".kiro", "settings"), { recursive: true });
+    const mcpPath = join(project, ".kiro", "settings", "mcp.json");
+    writeFileSync(mcpPath, `${JSON.stringify({ mcpServers: { "team-docs": { command: "team-docs-server" } } }, null, 2)}\n`);
+    const result = run(
+      ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"],
+      project,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const merged = JSON.parse(readFileSync(mcpPath, "utf-8")) as { mcpServers: Record<string, unknown> };
+    const shipped = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(merged.mcpServers).toEqual({ "team-docs": { command: "team-docs-server" }, ...shipped.mcpServers });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Kiro CLI offers an agent only the servers its tools name: config names
+  // every server in the project's file and in the person's own Kiro settings
+  // for the AI-DLC agent and its 14 specialists, and reads the person's file
+  // without writing it.
+  test("Kiro CLI config grants the AI-DLC agent and its specialists every MCP server it finds", () => {
+    type Agent = { includeMcpJson?: unknown; tools: string[]; allowedTools: string[] };
+    const kiroHome = temp("aidlc-t294-kiro-home-");
+    mkdirSync(join(kiroHome, "settings"), { recursive: true });
+    const personalMcp = join(kiroHome, "settings", "mcp.json");
+    writeFileSync(personalMcp, `${JSON.stringify({ mcpServers: { "my-docs": { command: "my-docs-server" } } }, null, 2)}\n`);
+    const personalBefore = readFileSync(personalMcp);
+    const env = { KIRO_HOME: kiroHome };
+    const project = temp("aidlc-t294-kiro-grants-");
+    mkdirSync(join(project, ".git"));
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "kiro"), "--harness", "kiro", "--yes"];
+    const shippedAgent = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", "aidlc.json"), "utf-8")) as Agent;
+    const shippedServers = Object.keys((JSON.parse(
+      readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
+    ) as { mcpServers: Record<string, unknown> }).mcpServers);
+    const agentPath = join(project, ".kiro", "agents", "aidlc.json");
+    // Each specialist keeps its own tools and allowedTools, with the grants given.
+    const specialists = readdirSync(join(DIST_RELEASE, "kiro", ".kiro", "agents"))
+      .filter((file) => /^aidlc-.+-agent\.json$/.test(file));
+    expect(specialists).toHaveLength(14);
+    const specialistGrants = (root: string, grants: string[], file?: string) => {
+      for (const name of file ? [file] : specialists) {
+        const shipped = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", name), "utf-8")) as Agent;
+        const current = JSON.parse(readFileSync(join(root, ".kiro", "agents", name), "utf-8")) as Agent;
+        expect(current.includeMcpJson, name).toBe(true);
+        expect(current.tools, name).toEqual([...shipped.tools.filter((tool) => !tool.startsWith("@")), ...grants]);
+        expect(current.allowedTools, name).toEqual(shipped.allowedTools);
+      }
+    };
+    const grantsOf = (path: string) =>
+      (JSON.parse(readFileSync(path, "utf-8")) as Agent).tools.filter((tool) => tool.startsWith("@"));
+
+    const setup = run(args, project, env);
+    expect(setup.status, setup.stdout + setup.stderr).toBe(0);
+    let agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.includeMcpJson).toBe(true);
+    expect(agent.tools).toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
+
+    // A server the person adds to the project's file reaches the agent the
+    // next time config runs.
+    const mcpPath = join(project, ".kiro", "settings", "mcp.json");
+    const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as { mcpServers: Record<string, unknown> };
+    mcp.mcpServers["team-docs"] = { command: "team-docs-server" };
+    writeFileSync(mcpPath, `${JSON.stringify(mcp, null, 2)}\n`);
+    const refresh = run(args, project, env);
+    expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+    agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.tools).toEqual([
+      ...shippedAgent.tools,
+      ...[...shippedServers, "team-docs"].map((name) => `@${name}`),
+      "@my-docs",
+    ]);
+    expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
+    expect(readFileSync(personalMcp)).toEqual(personalBefore);
+
+    // The agent file travels with the project, so a teammate's config run
+    // keeps the servers named for someone else and adds their own.
+    const teammateHome = temp("aidlc-t294-kiro-home-teammate-");
+    mkdirSync(join(teammateHome, "settings"), { recursive: true });
+    writeFileSync(
+      join(teammateHome, "settings", "mcp.json"),
+      `${JSON.stringify({ mcpServers: { "their-docs": { command: "their-docs-server" } } }, null, 2)}\n`,
+    );
+    const teammate = run(args, project, { KIRO_HOME: teammateHome });
+    expect(teammate.status, teammate.stdout + teammate.stderr).toBe(0);
+    agent = JSON.parse(readFileSync(agentPath, "utf-8")) as Agent;
+    expect(agent.tools).toEqual([
+      ...shippedAgent.tools,
+      ...[...shippedServers, "team-docs", "their-docs", "my-docs"].map((name) => `@${name}`),
+    ]);
+    specialistGrants(project, grantsOf(agentPath));
+
+    // A personal file kept as a link (a dotfiles folder) is read through it.
+    const linkedHome = temp("aidlc-t294-kiro-home-linked-");
+    const dotfiles = temp("aidlc-t294-kiro-dotfiles-");
+    mkdirSync(join(linkedHome, "settings"), { recursive: true });
+    writeFileSync(
+      join(dotfiles, "mcp.json"),
+      `${JSON.stringify({ mcpServers: { "linked-docs": { command: "linked-docs-server" } } }, null, 2)}\n`,
+    );
+    symlinkSync(join(dotfiles, "mcp.json"), join(linkedHome, "settings", "mcp.json"), "file");
+    const linked = run(args, project, { KIRO_HOME: linkedHome });
+    expect(linked.status, linked.stdout + linked.stderr).toBe(0);
+    expect((JSON.parse(readFileSync(agentPath, "utf-8")) as Agent).tools).toContain("@linked-docs");
+    specialistGrants(project, grantsOf(agentPath));
+
+    // A copy install puts the runtime's files in the project before config
+    // runs: the agent file as shipped is AI-DLC's, so setup names the servers
+    // in it rather than stopping on it. A hand edit to it still stops config.
+    const copied = temp("aidlc-t294-kiro-grants-copy-");
+    mkdirSync(join(copied, ".git"));
+    cpSync(join(DIST_RELEASE, "kiro"), copied, { recursive: true });
+    const copySetup = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(copySetup.status, copySetup.stdout + copySetup.stderr).toBe(0);
+    const copiedAgentPath = join(copied, ".kiro", "agents", "aidlc.json");
+    expect((JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent).tools)
+      .toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    specialistGrants(copied, grantsOf(copiedAgentPath));
+    // A grant added by hand to one specialist stays on that one, not the others.
+    const developerPath = join(copied, ".kiro", "agents", "aidlc-developer-agent.json");
+    const developer = JSON.parse(readFileSync(developerPath, "utf-8")) as Agent;
+    developer.tools.push("@hand-docs");
+    writeFileSync(developerPath, `${JSON.stringify(developer, null, 2)}\n`);
+    const handRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(handRun.status, handRun.stdout + handRun.stderr).toBe(0);
+    specialistGrants(copied, [...grantsOf(copiedAgentPath), "@hand-docs"], "aidlc-developer-agent.json");
+    specialistGrants(copied, grantsOf(copiedAgentPath), "aidlc-architect-agent.json");
+    expect(grantsOf(copiedAgentPath)).not.toContain("@hand-docs");
+    // A grant added by hand stays named like any other; another hand edit, such
+    // as a built-in tool, stops config and keeps the person's bytes.
+    const edited = JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent;
+    edited.tools.push("web_fetch");
+    const editedText = `${JSON.stringify(edited, null, 2)}\n`;
+    writeFileSync(copiedAgentPath, editedText);
+    const editedRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(editedRun.status).not.toBe(0);
+    expect(readFileSync(copiedAgentPath, "utf-8")).toBe(editedText);
+    expect(editedRun.stdout + editedRun.stderr).toContain(".kiro/agents/aidlc.json (locally modified");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("check names an unrecorded providers section instead of calling it clean", () => {
@@ -6885,12 +7510,342 @@ describe("t294 invariants", () => {
     expect(files).toEqual(expect.arrayContaining([
       {
         setting: "AWS region and profile",
-        file: join(project, ".claude", "settings.json"),
+        file: join(project, ".claude", "settings.local.json"),
       },
       {
         setting: "AWS MCP region endpoint and metadata",
         file: join(project, ".mcp.json"),
       },
     ]));
+  });
+});
+
+// A Bedrock answer on Claude Code is the person's own (#2712): it goes into
+// their git-ignored .claude/settings.local.json, never the team's shared
+// settings.json, and the shared record keeps no profile.
+describe("t294 a Claude Bedrock answer stays the person's own", () => {
+  const BEDROCK_KEYS = ["CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "AWS_PROFILE"];
+  // Doctor reads every place Claude Code takes env from, so the host's own
+  // shell must not decide these cases (run() already isolates the user file).
+  const hostFree = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => runtimeEnv({
+    CLAUDE_CODE_USE_BEDROCK: undefined,
+    AWS_REGION: undefined,
+    AWS_PROFILE: undefined,
+    AWS_DEFAULT_REGION: undefined,
+    ...extra,
+  });
+  const envOf = (project: string, file: string): Record<string, string> | null => {
+    const path = join(project, ".claude", file);
+    return existsSync(path) ? (JSON.parse(readFileSync(path, "utf-8")).env ?? {}) : null;
+  };
+  const recorded = (project: string) => readConfigDiagnosticRecords(join(project, ".claude")).providers;
+  const providers = (project: string, args: string[], env = hostFree()): string => {
+    const result = run(["config", "providers", "--project-dir", project, ...args, "--yes"], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return result.stdout;
+  };
+  const check = (project: string, env = hostFree()) =>
+    run(["config", "providers", "--project-dir", project, "--check"], project, env);
+  const bedrock = (region: string, ...rest: string[]) => ["--provider", "amazon-bedrock", "--region", region, ...rest];
+  // As 2.11.1 left a Bedrock answer: in the shared settings.json, the profile in the record.
+  const asEarlierRelease = (project: string, region: string, profile: string): void => {
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, { CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: region, AWS_PROFILE: profile });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region,
+      profile,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+  };
+
+  test("the answer goes to settings.local.json, and no tracked file holds the profile", () => {
+    const project = install("claude");
+    const out = providers(project, bedrock("eu-west-1", "--profile", "my-personal-profile"));
+    expect(out).toContain(
+      "Providers    amazon-bedrock region=eu-west-1 profile=my-personal-profile, in .claude/settings.local.json (just for you)",
+    );
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+      AWS_PROFILE: "my-personal-profile",
+    });
+    const shared = envOf(project, "settings.json") ?? {};
+    for (const key of BEDROCK_KEYS) expect(shared, key).not.toHaveProperty(key);
+    expect(recorded(project)).toEqual(expect.objectContaining({ provider: "amazon-bedrock", region: "eu-west-1" }));
+    expect(recorded(project)).not.toHaveProperty("profile");
+    const holding = (readdirSync(project, { recursive: true }) as string[])
+      .filter((name) => name.split(/[\\/]/)[0] !== ".git")
+      .map((name) => join(project, name))
+      .filter((path) => {
+        try {
+          return readFileSync(path, "utf-8").includes("my-personal-profile");
+        } catch {
+          return false; // a folder
+        }
+      });
+    expect(holding).toEqual([join(project, ".claude", "settings.local.json")]);
+    expect(readFileSync(join(project, ".gitignore"), "utf-8").split(/\r?\n/)).toContain(".claude/settings.local.json");
+    // What --show reports still names the profile, from the person's own file.
+    const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, hostFree());
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    const data = JSON.parse(shown.stdout).data;
+    expect(data.record.profile).toBe("my-personal-profile");
+    expect(data.files).toContainEqual(expect.objectContaining({
+      setting: "AWS region and profile",
+      file: join(project, ".claude", "settings.local.json"),
+    }));
+  });
+
+  test("a teammate's clone is told once how to use it, and their answer of the same values is written", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--profile", "setter", "--mark-done", "bedrock-model-access"));
+    // A clone has the shared record and none of the setter's own file.
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const warned = check(project);
+    expect(warned.status, warned.stdout + warned.stderr).toBe(0);
+    expect(warned.stdout).toContain(
+      "provider-claude-not-set-up (Amazon Bedrock (eu-west-1) is recorded for this project but not turned on in " +
+        "your Claude Code settings; to use it, run",
+    );
+    const saved = {
+      config: process.env.CLAUDE_CONFIG_DIR,
+      bedrock: process.env.CLAUDE_CODE_USE_BEDROCK,
+      region: process.env.AWS_REGION,
+      profile: process.env.AWS_PROFILE,
+      key: process.env.AWS_ACCESS_KEY_ID,
+      secret: process.env.AWS_SECRET_ACCESS_KEY,
+    };
+    process.env.CLAUDE_CONFIG_DIR = temp("aidlc-t294-claude-user-");
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.AWS_REGION;
+    delete process.env.AWS_PROFILE;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
+    try {
+      expect(providerDoctorCheck(project, ".claude")).toEqual(expect.objectContaining({
+        pass: true,
+        severity: "warn",
+        label: "Providers: 1 warning(s)",
+      }));
+    } finally {
+      for (const [name, value] of [
+        ["CLAUDE_CONFIG_DIR", saved.config],
+        ["CLAUDE_CODE_USE_BEDROCK", saved.bedrock],
+        ["AWS_REGION", saved.region],
+        ["AWS_PROFILE", saved.profile],
+        ["AWS_ACCESS_KEY_ID", saved.key],
+        ["AWS_SECRET_ACCESS_KEY", saved.secret],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    const before = readFileSync(join(project, ".claude", "tools", "data", "harness.json"));
+    const first = providers(project, bedrock("eu-west-1"));
+    expect(first).not.toContain("providers configuration unchanged");
+    expect(envOf(project, "settings.local.json")).toEqual({ CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "eu-west-1" });
+    // Their own answer changes nothing the team shares.
+    expect(readFileSync(join(project, ".claude", "tools", "data", "harness.json"))).toEqual(before);
+    expect(providers(project, bedrock("eu-west-1"))).toContain("providers configuration unchanged");
+    const clean = check(project);
+    expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("providers configuration is clean for claude");
+  });
+
+  test("a refresh leaves an earlier release's shared answer byte for byte", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const settings = readFileSync(join(project, ".claude", "settings.json"));
+    const data = readFileSync(join(project, ".claude", "tools", "data", "harness.json"));
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, hostFree());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Moved your Amazon Bedrock settings");
+    expect(readFileSync(join(project, ".claude", "settings.json"))).toEqual(settings);
+    expect(readFileSync(join(project, ".claude", "tools", "data", "harness.json"))).toEqual(data);
+    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+    const clean = check(project);
+    expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("providers configuration is clean for claude");
+  });
+
+  test("a new answer moves an earlier release's shared answer into the person's file", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const out = providers(project, bedrock("us-west-2"));
+    expect(out).toContain("Moved your Amazon Bedrock settings from .claude/settings.json to .claude/settings.local.json.");
+    expect(out).toContain("config providers --provider amazon-bedrock --region eu-west-1 --profile team");
+    const shared = envOf(project, "settings.json") ?? {};
+    for (const key of BEDROCK_KEYS) expect(shared, key).not.toHaveProperty(key);
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-west-2",
+      AWS_PROFILE: "team",
+    });
+    expect(recorded(project)).toEqual(expect.objectContaining({ region: "us-west-2" }));
+    expect(recorded(project)).not.toHaveProperty("profile");
+  });
+
+  test("--show names the shared settings.json while an earlier release's answer is still there", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, hostFree());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const carrying = () => {
+      const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, hostFree());
+      expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+      return (JSON.parse(shown.stdout).data.files as { setting: string; file: string }[])
+        .filter((entry) => entry.setting === "AWS region and profile")
+        .map((entry) => entry.file);
+    };
+    expect(carrying()).toEqual([join(project, ".claude", "settings.json")]);
+    providers(project, bedrock("us-west-2"));
+    expect(carrying()).toEqual([join(project, ".claude", "settings.local.json")]);
+  });
+
+  test("a Bedrock answer with no profile says once that the profile left in the person's file is the one used", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--profile", "team"));
+    providers(project, ["--provider", "current"]);
+    const stays =
+      "AWS_PROFILE in .claude/settings.local.json stays, so Claude Code uses that profile with Amazon Bedrock; " +
+      "delete it there to use the default credential chain.";
+    expect(providers(project, bedrock("eu-west-1"))).toContain(stays);
+    // Nothing proves the profile was AI-DLC's, so it stays.
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+      AWS_PROFILE: "team",
+    });
+    // The answer now carries that profile, so the next one says nothing more.
+    expect(providers(project, bedrock("eu-west-1"))).not.toContain(stays);
+  });
+
+  test("moving off Bedrock takes out the switch and region and keeps what is the person's", () => {
+    for (const transition of [["--provider", "current"], ["--reset"]]) {
+      const project = install("claude");
+      const localPath = join(project, ".claude", "settings.local.json");
+      writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" }, permissions: { allow: [] } }, null, 2)}\n`);
+      providers(project, bedrock("eu-west-1", "--profile", "team"));
+      const out = providers(project, transition);
+      expect(out, transition.join(" ")).toContain(
+        "AWS_PROFILE stays in .claude/settings.local.json; delete it there if it was only for Amazon Bedrock.",
+      );
+      expect(JSON.parse(readFileSync(localPath, "utf-8"))).toEqual({
+        env: { MY_OWN: "kept", AWS_PROFILE: "team" },
+        permissions: { allow: [] },
+      });
+    }
+    // A file AI-DLC made for an answer with no profile goes with it.
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1"));
+    const out = providers(project, ["--reset"]);
+    expect(out).not.toContain("AWS_PROFILE stays");
+    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+  });
+
+  test("each conflict names its file, and following its step clears it", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--mark-done", "bedrock-model-access"));
+    const issue = (env: NodeJS.ProcessEnv) => {
+      const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, env);
+      expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+      return (JSON.parse(shown.stdout).data.issues as { id: string; message: string; remediation: string }[])
+        .filter((item) => item.id.startsWith("provider-claude-"));
+    };
+    // Above the person's file: the organization's managed settings. Writing the
+    // answer again cannot change them, so the step never says to.
+    const managed = join(temp("aidlc-t294-managed-"), "managed-settings.json");
+    writeFileSync(managed, `${JSON.stringify({ env: { AWS_REGION: "ap-southeast-2" } })}\n`);
+    const managedEnv = hostFree({ AIDLC_MANAGED_SETTINGS_PATH: managed });
+    const [above] = issue(managedEnv);
+    expect(above.id).toBe("provider-claude-managed-override");
+    expect(above.message).toContain(managed);
+    expect(above.message + above.remediation).not.toContain("config providers");
+    providers(project, bedrock("eu-west-1"), managedEnv);
+    expect(issue(managedEnv).map((item) => item.id)).toEqual(["provider-claude-managed-override"]);
+    writeFileSync(managed, `${JSON.stringify({ env: { AWS_REGION: "eu-west-1" } })}\n`);
+    expect(issue(managedEnv)).toEqual([]);
+    // Below it: the team's shared settings.json. Its step writes the person's
+    // file, which Claude Code reads first, and the row goes.
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, { CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "us-east-1" });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const [below] = issue(hostFree());
+    expect(below.id).toBe("provider-claude-settings");
+    expect(below.message).toContain("AWS_REGION in .claude/settings.json does not match the recorded Amazon Bedrock answer");
+    expect(below.remediation).toContain("config providers to write the recorded answer to .claude/settings.local.json");
+    providers(project, bedrock("eu-west-1"));
+    expect(issue(hostFree())).toEqual([]);
+    // The team's own values stay theirs.
+    expect(envOf(project, "settings.json")).toEqual(expect.objectContaining({ AWS_REGION: "us-east-1" }));
+    // Lowest: the environment Claude Code starts in.
+    delete settings.env.CLAUDE_CODE_USE_BEDROCK;
+    delete settings.env.AWS_REGION;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const shellEnv = hostFree({ CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "us-east-1" });
+    const [shell] = issue(shellEnv);
+    expect(shell.message).toContain(
+      "AWS_REGION in the environment Claude Code starts in does not match the recorded Amazon Bedrock answer",
+    );
+    providers(project, bedrock("eu-west-1"), shellEnv);
+    expect(issue(shellEnv)).toEqual([]);
+  });
+
+  test("a dry run writes nothing, and a file AI-DLC cannot edit is a note, not a refusal", () => {
+    const project = install("claude");
+    const localPath = join(project, ".claude", "settings.local.json");
+    writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" } }, null, 2)}\n`);
+    const before = readFileSync(localPath);
+    const dry = run(
+      ["config", "providers", "--project-dir", project, ...bedrock("eu-west-1"), "--dry-run", "--yes"],
+      project,
+      hostFree(),
+    );
+    expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+    expect(readFileSync(localPath)).toEqual(before);
+    writeFileSync(localPath, "{ not json\n");
+    const out = providers(project, bedrock("eu-west-1"));
+    expect(out).toContain(
+      "Could not write your Amazon Bedrock settings to .claude/settings.local.json (it is not a JSON object AI-DLC can edit); " +
+        "fix that file, then run",
+    );
+    expect(recorded(project)).toEqual(expect.objectContaining({ provider: "amazon-bedrock", region: "eu-west-1" }));
+    expect(readFileSync(localPath, "utf-8")).toBe("{ not json\n");
+    // The same answer once the file is fixed is written.
+    writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" } }, null, 2)}\n`);
+    expect(providers(project, bedrock("eu-west-1"))).not.toContain("providers configuration unchanged");
+    expect(envOf(project, "settings.local.json")).toEqual({
+      MY_OWN: "kept",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+    });
   });
 });

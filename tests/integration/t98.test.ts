@@ -1,62 +1,24 @@
 // covers: subcommand:aidlc-runtime:compile
 //
-// CLI-contract port of tests/integration/t98-sensor-firings-populator.sh (TAP
-// plan 16), mechanism = cli. Equal-or-stronger migration: every .sh
-// assertion that shelled out to `bun aidlc-runtime.ts --project-dir <p>
-// compile` and then projected a scalar out of the written runtime-graph.json
-// via a `bun -e` JSON.parse is preserved by SPAWNING the real CLI via
-// node:child_process spawnSync (BUN + the tool .ts path) and asserting on the
-// runtime-graph.json the tool WROTE — the PROCESS boundary plus its file
-// effect. The .sh's `graph_query` helper read the same on-disk graph through
-// an embedded `bun -e` expression; in-process we JSON.parse the identical file
-// and assert against the real object, so the observable (the materialised
-// field value) is unchanged, expressed against the return shape rather than a
-// `bun -e` stringification. An in-process compile() twin would lose the
-// re-compile-byte-equal half (case 8, which hashes the written file) and the
-// process boundary the .sh's `run_compile` relies on.
+// Mechanism = cli. The tests SPAWN the real CLI via node:child_process
+// spawnSync (BUN + the tool .ts path) and assert on the runtime-graph.json
+// the tool WROTE - the PROCESS boundary plus its file effect. We JSON.parse
+// that file and assert against the real object (the materialised field
+// value). An in-process compile() twin would lose the process boundary.
 //
-// SUBCOMMAND UNIT: this .cli file credits `aidlc-runtime compile` (covers KEY
+// SUBCOMMAND UNIT: this test file credits `aidlc-runtime compile` (covers KEY
 // subcommand:aidlc-runtime:compile, COLON form). compile is the only
-// subcommand the .sh fires; every case runs it.
+// subcommand these tests fire.
 //
-// PARITY NOTES (every .sh `ok` line maps to an expect()-bearing test() below;
-// several are STRONGER than the original — flagged S#):
-//   - .sh 1  aaaa0001 result == "passed"                       -> Test 1.
-//   - .sh 2  bbbb0002 result == "failed" AND detail_path !=null -> Test 2
-//       (exact "failed" + a non-empty detail_path string assert; the .sh only
-//       checked != "null"/"" — we assert the literal path STRONGER S1).
-//   - .sh 3  cccc0003 result == "budget-override"              -> Test 3.
-//   - .sh 4  dddd0004 result == "incomplete" (closed window)   -> Test 4.
-//   - .sh 5  old00001 result == "incomplete" (open ≥60s)       -> Test 5.
-//   - .sh 6  young002 omitted from array (open <60s)           -> Test 6
-//       (.some(...)===false -> we assert find(...)===undefined, same observable).
-//   - .sh 7  fire0001..0004 each paired by fire_id, not posn   -> Test 7
-//       (4 results asserted: passed/failed/passed/passed; the failed one also
-//       carries its detail_path STRONGER S2).
-//   - .sh 8  re-compile byte-equal runtime-graph.json          -> Test 8
-//       (sha256 before/after, identical to the .sh's `shasum -a 256`).
-//   - .sh 9  sensor_firings sorted ts-ascending                -> Test 9.
-//   - .sh 10 auth=[auth0001] cart=[cart0002] pay=[] per inst   -> Test 10.
-//   - .sh 11 parent holds only [pnt00003]                      -> Test 11.
-//   - .sh 12 no double-count: parent excludes worktree fire_ids -> Test 12.
-//   - .sh 13 approved stage learnings_captured = {2,1}         -> Test 13.
-//   - .sh 14 pending stage learnings_captured = null           -> Test 14.
-//   - .sh 15 instance-bearing parent learnings_captured = null -> Test 15.
-//   - .sh 16 forward-compat shape (fire_id, 4-state enum,
-//            detail_path only on failed)                       -> Test 16.
-//
-// 16 .sh asserts -> 16 expect()-bearing test() cases here.
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's make_project_with_audit, itself a
-// `mktemp -d` + copy of state-construction.md + the per-case audit fixture):
-// each case builds a FRESH temp project dir via makeProjectWithAudit, which
-// toPortablePath-wraps the mktemp path (the tool writes runtime-graph.json via
-// forward-slash helpers, so on native Windows the read-back must use the
-// cygpath-rewritten path — mirrors createTestProject / t90's makeProject).
-// NOTHING is written under tests/fixtures/**; the on-disk audit fixtures under
-// tests/fixtures/v05-mr12-learnings/ (and the one milestone 11 fixture for case 15)
-// are READ ONLY, copied in by reading their bytes and re-writing into the temp
-// dir — exactly as the .sh `cp`'d them. All temp dirs cleaned in afterAll.
+// FIXTURE DISCIPLINE: each fixture gets a FRESH temp project dir via
+// makeProjectWithAudit, which toPortablePath-wraps the mktemp path (the tool
+// writes runtime-graph.json via forward-slash helpers, so on native Windows
+// the read-back must use the cygpath-rewritten path - mirrors
+// createTestProject / t90's makeProject). NOTHING is written under
+// tests/fixtures/**; the on-disk audit fixtures under
+// tests/fixtures/v05-mr12-learnings/ (and the one milestone 11 fixture for
+// case 15) are READ ONLY, copied in by reading their bytes and re-writing into
+// the temp dir. All temp dirs cleaned in afterAll.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -73,18 +35,18 @@ import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
 import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// With no intent cursor seeded, compile resolves the BARE space record root
 // (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
-// runtime-graph, and the per-clone audit SHARD live under it (the flat
-// aidlc-docs/ root is retired — there is no fallback). The detail_path strings
-// asserted below are read VERBATIM from the read-only audit fixtures, so they
-// keep their recorded aidlc-docs/ values (compile echoes the recorded row).
+// runtime-graph, and the per-clone audit SHARD live under it (there is no flat
+// aidlc-docs/ fallback). The detail_path strings asserted below are read
+// VERBATIM from the read-only audit fixtures, so they keep their recorded
+// aidlc-docs/ values (compile echoes the recorded row).
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const RUNTIME_TS = join(
   REPO_ROOT,
@@ -113,7 +75,7 @@ const graphPath = (proj: string): string =>
   join(recordRoot(proj), "runtime-graph.json");
 
 /**
- * make_project_with_audit (t98:66-78): fresh temp project carrying the shared
+ * makeProjectWithAudit: fresh temp project carrying the shared
  * state-construction.md as aidlc-state.md plus the given audit fixture, both
  * under the bare space record root. toPortablePath wraps the mktemp path so the
  * runtime-graph.json the tool writes round-trips on native Windows
@@ -134,7 +96,6 @@ function makeProjectWithAudit(auditFixturePath: string): string {
   return proj;
 }
 
-/** run_compile (t98:80-82): bun RUNTIME_TS --project-dir <p> compile, output discarded. */
 function runCompile(proj: string): number {
   const res = spawnSync(BUN, [RUNTIME_TS, "--project-dir", proj, "compile"], {
     encoding: "utf-8",
@@ -142,20 +103,18 @@ function runCompile(proj: string): number {
   return res.status ?? -1;
 }
 
-/** Parse the runtime-graph.json the tool wrote (the .sh's graph_query target). */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function readGraph(proj: string): any {
   return JSON.parse(readFileSync(graphPath(proj), "utf-8"));
 }
 
-/** sha256 of the written graph — mirrors the .sh's `shasum -a 256 ... | awk '{print $1}'`. */
 const sha256 = (proj: string): string =>
   createHash("sha256").update(readFileSync(graphPath(proj))).digest("hex");
 
 interface SensorFiring {
   id: string;
   fire_id: string;
-  result: "passed" | "failed" | "budget-override" | "incomplete";
+  result: "passed" | "failed" | "could-not-run" | "budget-override" | "incomplete";
   ts: string;
   detail_path?: string;
 }
@@ -168,7 +127,6 @@ interface StageRow {
   instances?: any[];
 }
 
-/** g.stages.find(s => s.stage_slug === slug) — the .sh's repeated projection. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function stage(g: any, slug: string): StageRow {
   // biome-ignore lint/suspicious/noExplicitAny: graph row is loosely typed
@@ -183,7 +141,7 @@ const byFireId = (firings: SensorFiring[], id: string): SensorFiring | undefined
 
 // ============================================================
 // Pairing — single-stage code-generation with mixed terminals
-// (.sh "Pairing" block, audit-sensor-pairing.md)
+// (audit-sensor-pairing.md)
 // ============================================================
 
 describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator.sh, plan 16)", () => {
@@ -193,7 +151,6 @@ describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator
   const sf = (): SensorFiring[] => stage(readGraph(PROJ), "code-generation").sensor_firings;
 
   test("compile exits 0 (pairing fixture)", () => {
-    // S: the .sh discarded stdout/$?; we pin a clean exit before reading the graph.
     expect(rc).toBe(0);
   });
 
@@ -204,8 +161,7 @@ describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator
   test("2: FIRED+FAILED paired -> result failed with detail_path", () => {
     const f = byFireId(sf(), "bbbb0002");
     expect(f?.result).toBe("failed");
-    // STRONGER (S1): the .sh only checked detail_path != "null"/"" — assert the
-    // exact path the sensor-failed row carried.
+    // Assert the exact path the sensor-failed row carried.
     expect(f?.detail_path).toBe(
       "aidlc-docs/.aidlc-sensors/code-generation/linter-bbbb0002.md",
     );
@@ -233,17 +189,51 @@ describe("t98 sensor_firings pairing (migrated from t98-sensor-firings-populator
     expect(ts).toEqual([...ts].sort());
   });
 
-  test("16: forward-compat shape — fire_id present, 4-state enum, detail_path only on failed", () => {
-    const valid = ["passed", "failed", "budget-override", "incomplete"];
+  test("16: forward-compat shape - fire_id present, 5-state enum, detail_path only on failed", () => {
+    const valid = ["passed", "failed", "could-not-run", "budget-override", "incomplete"];
     for (const f of sf()) {
       expect(typeof f.fire_id).toBe("string");
       expect(f.fire_id.length).toBeGreaterThan(0);
       expect(valid).toContain(f.result);
       if (f.result !== "failed") {
-        // detail_path is omitted (undefined) on every non-failed firing.
         expect(f.detail_path).toBeUndefined();
       }
     }
+  });
+});
+
+// A check whose script crashed or could not start is recorded as could not
+// run (its own terminal row), and the firing says so: never passed or failed.
+describe("t98 a fire whose check could not run", () => {
+  const fixture = readFileSync(join(FIXTURES_DIR, "audit-sensor-pairing.md"), "utf-8");
+  const pair = [
+    "## Sensor Fired\n**Timestamp**: 2026-05-28T08:06:00Z\n**Event**: SENSOR_FIRED\n**Fire id**: eeee0005\n**Sensor ID**: type-check\n**Stage slug**: code-generation\n**Output path**: src/cli.ts\n",
+    "## Sensor Could Not Run\n**Timestamp**: 2026-05-28T08:06:03Z\n**Event**: SENSOR_COULD_NOT_RUN\n**Fire id**: eeee0005\n**Sensor ID**: type-check\n**Stage slug**: code-generation\n**Output path**: src/cli.ts\n**Duration ms**: 300\n**Note**: script-error: exit-1\n",
+  ].join("\n---\n\n");
+  const at = fixture.indexOf("## Stage Completed");
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-t98c-"));
+  tempDirs.push(dir);
+  const audit = join(dir, "audit.md");
+  writeFileSync(audit, `${fixture.slice(0, at)}${pair}\n---\n\n${fixture.slice(at)}`, "utf-8");
+  const PROJ = makeProjectWithAudit(audit);
+  const rc = runCompile(PROJ);
+
+  test("pairs by fire_id as could-not-run, with no detail path", () => {
+    expect(at).toBeGreaterThan(0);
+    expect(rc).toBe(0);
+    const f = byFireId(stage(readGraph(PROJ), "code-generation").sensor_firings, "eeee0005");
+    expect(f?.result).toBe("could-not-run");
+    expect(f?.detail_path).toBeUndefined();
+  });
+
+  test("the session summary counts it as could not run, not passed", () => {
+    const res = spawnSync(BUN, [RUNTIME_TS, "--project-dir", PROJ, "summary", "--json"], { encoding: "utf-8" });
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const sensors = JSON.parse(res.stdout).sensors;
+    expect(sensors.could_not_run).toBe(1);
+    expect(sensors.passed).toBe(1);
+    const text = spawnSync(BUN, [RUNTIME_TS, "--project-dir", PROJ, "summary"], { encoding: "utf-8" });
+    expect(text.stdout).toContain("Could not run:    1");
   });
 });
 
@@ -261,7 +251,6 @@ describe("t98 open-window orphan cutoff", () => {
   });
 
   test("6: orphan in open window <60s past baseline_ts -> omitted (no 5th pending state)", () => {
-    // .sh: .some(f => f.fire_id === 'young002') === false.
     expect(byFireId(sf(), "young002")).toBeUndefined();
   });
 });
@@ -280,8 +269,8 @@ describe("t98 four-parallel fire_id pairing", () => {
     expect(byFireId(sf, "fire0002")?.result).toBe("failed");
     expect(byFireId(sf, "fire0003")?.result).toBe("passed");
     expect(byFireId(sf, "fire0004")?.result).toBe("passed");
-    // STRONGER (S2): the failed pairing carries its own detail_path even though
-    // its terminal row interleaved after two later PASSED rows by spawn duration.
+    // The failed pairing carries its own detail_path even though its terminal row
+    // interleaved after two PASSED rows by spawn duration.
     expect(byFireId(sf, "fire0002")?.detail_path).toBe(
       "aidlc-docs/.aidlc-sensors/code-generation/upstream-coverage-fire0002.md",
     );

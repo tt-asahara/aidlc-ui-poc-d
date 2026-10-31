@@ -8,9 +8,7 @@
 //
 // Claude is a peer harness, not the identity transform: its prose carries the
 // same {{HARNESS_DIR}} token as every other harness; the packager substitutes
-// `.claude` here. Because that substitution restores exactly today's `.claude/`
-// literals, the regenerated dist/claude is byte-identical to the hand-authored
-// tree it replaces (the MR-1 keystone gate).
+// `.claude` here.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import onboardingFills from "./onboarding.fills.ts";
@@ -18,6 +16,21 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   productName: "Claude Code",
+  // AI-DLC's status line. It ships here, not in .claude/settings.json: the
+  // team file outranks the person's own status line, so the engine writes this
+  // into their .claude/settings.local.json only when they choose it (#1407).
+  statusLine: {
+    type: "command",
+    command: 'bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine statusline',
+  },
+  // SubagentStop runs before a foreground agent's result comes back (it can
+  // keep the agent running), and a background dispatch is counted in the
+  // in-flight ledger until its SubagentStop. Claude Code sets
+  // CLAUDE_CODE_SESSION_ID in its agent's shell.
+  agentFinishRecorded: { env: ["CLAUDE_CODE_SESSION_ID"] },
+  // AskUserQuestion takes four options besides its own "Type something" row
+  // (question-rendering.md, "Batching limits"), so a question is lettered A-D.
+  questionOptions: 4,
   // A Claude Code session open before setup has no /aidlc and runs none of
   // its hooks until it starts again.
   configNextStep:
@@ -38,6 +51,20 @@ const manifest: HarnessManifest = {
       "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
       "<entry>.",
     agentStepEdits: ".claude/settings.local.json",
+    // Measured live: Claude Code runs none of the hooks in a settings.json it
+    // cannot parse as strict JSON, and config stops on such a file, so that
+    // case names the file. The restart matches what config itself says.
+    registration: {
+      file: ".claude/settings.json",
+      missing:
+        ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. " +
+        "In a terminal in this folder, <repair>, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+      invalid:
+        "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs " +
+        "none of AI-DLC's hooks here. Correct the file, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+    },
     // The human-turn hook leaves a heartbeat on every message, before the
     // first workflow too.
     notRunYet:
@@ -55,9 +82,16 @@ const manifest: HarnessManifest = {
       "this chat: do not ask for a restart and do not mention /hooks. Then run <next> and act " +
       "on what it returns, so the waiting question shows again. If it brings back this same " +
       "message, the hooks are still off from outside this project: show this line instead and " +
-      'end your turn: "Claude Code is still starting with its hooks off. If you started it with a ' +
-      "setting that turns hooks off, start it again without that setting; otherwise ask your " +
-      'Claude Code administrator to allow project hooks."',
+      'end your turn: "Claude Code is still starting with its hooks off. If AI-DLC was set up while ' +
+      "Claude Code was open, exit Claude Code and start it again in this folder, then type <entry>. " +
+      "If you started it with a setting that turns hooks off, start it again without that setting; " +
+      'otherwise ask your Claude Code administrator to allow project hooks."',
+    // Measured live (2.1.278, 2.1.310): started in a folder inside the
+    // project, Claude Code offers /aidlc there but runs none of the project's
+    // hooks, whatever the settings say.
+    startedInsideProject:
+      "Claude Code runs this project's hooks only when it is started in the project folder. Exit Claude Code, " +
+      "start it again in <folder>, then type <entry>.",
   },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
@@ -73,8 +107,7 @@ const manifest: HarnessManifest = {
           "sha256:3da36b2d01551aeae2e366caa08be8cce0dbc9110e252445dcaa4e758e24a0b6",
           "sha256:4f1cd2e930bd37d2f5d715a06ea3fa1e2d39479fc662f0f0562116376132114b",
           "sha256:f2affb8b34499f057284852456cb8a24ae586b8e816595bf98346141f3516281",
-          // The pre-v2-sync shipped variant (the reshape branch's .gitignore
-          // before the 2.6.123 merge changed the shipped bytes).
+          // The pre-v2-sync shipped variant.
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
@@ -84,6 +117,12 @@ const manifest: HarnessManifest = {
           "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
           // The variant shipped with notes above each group of lines.
           "sha256:051866aa49f8ed915ab5ae30707422068df814ca5be806a1fe28784c543a4aab",
+          // The variant shipped before the block ignored aidlc/active-memory/ (the
+          // engine's copy of the active space's method).
+          "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
         ],
       },
     },
@@ -115,12 +154,10 @@ const manifest: HarnessManifest = {
   ],
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
-  // The method ("memory") is NO LONGER a core dir projected into the harness
-  // tree — it relocated to the workspace-root aidlc/spaces/default/memory/ (one
-  // hand-editable copy, emitted by the packager's memory step), read by Claude
-  // via the .claude/rules/aidlc.md @-stub (a harnessFile). The rulesRename
-  // machinery (steering/aidlc-rules) still rewrites the <harness>/rules/ prose
-  // mentions other core files carry, so it stays.
+  // The method ("memory") is not a core dir projected into the harness tree; it
+  // lives at the workspace-root aidlc/spaces/default/memory/ (one hand-editable
+  // copy, emitted by the packager's memory step), read by Claude through
+  // aidlc/active-memory/ via the .claude/rules/aidlc.md @-stub (a harnessFile).
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
@@ -129,7 +166,6 @@ const manifest: HarnessManifest = {
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
     { src: "hooks", dst: "hooks" },
-    // The harness-neutral standalone skills ship in-tree under skills/.
     { src: "skills/aidlc-session-cost", dst: "skills/aidlc-session-cost" },
     { src: "skills/aidlc-replay", dst: "skills/aidlc-replay" },
     { src: "skills/aidlc-outcomes-pack", dst: "skills/aidlc-outcomes-pack" },
@@ -143,10 +179,12 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-issue-autopilot/SKILL.md", dst: "skills/aidlc-issue-autopilot/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
-    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated
-    // method (aidlc/spaces/default/memory/*) into Claude's ambient context by
-    // reference (explicit @-imports, no copy). The rules/ dir is no longer a
-    // core projection — this stub is the only file in it.
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
+    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the method
+    // into Claude's ambient context by reference (explicit @-imports of the
+    // engine's git-ignored copy of the active space's memory,
+    // aidlc/active-memory/*). The rules/ dir is not a core projection; this stub
+    // is the only file in it.
     { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "settings.json", dst: "settings.json" },
     { src: "settings.local.json.example", dst: "settings.local.json.example" },
@@ -165,14 +203,13 @@ const manifest: HarnessManifest = {
   // Claude keeps neutral guidance and native setup together in its always-on file.
   onboarding: { dst: "CLAUDE.md", fills: onboardingFills },
 
-  // Claude renames no core dir.
   rulesRename: null,
 
   runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
   // No emit() plugin: Claude's runners come from the shared runner-gen
   // composition and its compiled data from graph compile, both driven by the
-  // packager. (Codex is the only harness that ships an emit.ts today.)
+  // packager.
   emit: null,
 };
 

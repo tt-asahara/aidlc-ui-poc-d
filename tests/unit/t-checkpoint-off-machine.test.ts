@@ -28,6 +28,11 @@ import {
   readAuditShardEvents, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
+// The stage's checks run once before its review or gate, and again at the gate
+// (completionChecksStep, t-checks-before-review); this file's fixture documents
+// are not written for them and its subject is not them, so they stay off here.
+process.env.AIDLC_DISABLE_SENSORS = "1";
+
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
@@ -49,9 +54,9 @@ const SEPARATOR = "\u2014";
 const STRICT = "strict (set by you)";
 const ACCEPTING = ["relaxed (set by you)", "off (from scope classic)"];
 
-// Classic, two Units, advisory reviews (one pass per stage), checkpoints on,
-// Unit by Unit.
-function fixture(policy: string) {
+// Classic, two Units, advisory reviews (one pass per stage) unless a case asks
+// for adversarial ones, checkpoints on, Unit by Unit.
+function fixture(policy: string, reviewClass: "advisory" | "adversarial" = "advisory") {
   const p = createTestProject();
   projects.push(p);
   seedAidlcMemory(p);
@@ -69,7 +74,7 @@ function fixture(policy: string) {
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
-- **Review Override**: advisory
+- **Review Override**: ${reviewClass}
 - **Guard Policy**: ${policy}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -132,7 +137,6 @@ function recordCommand(p: string) {
   }
 }
 
-// Verify, ask and approve a Unit at its checkpoint.
 function approve(p: string, unit: string): void {
   recordCommand(p);
   const checkpoint = (args: string[]) => {
@@ -200,13 +204,48 @@ function build(p: string, unit: string): string[] {
   return reviews;
 }
 
+// The same Unit with Code Generation reviewed in two passes, as an adversarial
+// review runs: NOT-READY, the code plan repaired, then READY.
+function buildTwoPasses(p: string, unit: string): void {
+  for (const slug of stages) {
+    const stage = findStageBySlug(slug)!;
+    const output = join(seededRecordDir(p), "construction", unit, slug);
+    mkdirSync(output, { recursive: true });
+    for (const name of stage.produces ?? []) {
+      writeFileSync(join(output, artifactFilename(name)), `# ${unit} ${name}\n`);
+    }
+    if (stage.workspace_requires) writeManifest(p, unit, [`src/${unit}.ts`]);
+    const pass = (iteration: number) => [
+      "review", "--stage", slug, "--reviewer", stage.reviewer!, "--unit", unit, "--iteration", String(iteration),
+    ];
+    if (slug === "code-generation") {
+      const requested = tool(p, "log", pass(1));
+      expect(requested.status, requested.out).toBe(0);
+      const file = (JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as { reviewFile: string }).reviewFile;
+      writeFileSync(join(p, file), `**Verdict:** NOT-READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 1\n\n### Findings\n\n` +
+        "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n" +
+        `| R-01 | Major | src/${unit}.ts | It is not covered. | Cover it. | New |\n`);
+      const recorded = tool(p, "log", [...pass(1), "--verdict", "NOT-READY"]);
+      expect(recorded.status, recorded.out).toBe(0);
+      writeFileSync(join(output, artifactFilename(stage.produces![0])), `# ${unit} ${stage.produces![0]}, repaired\n`);
+      reviewThroughLog(p, pass(2));
+    } else {
+      reviewThroughLog(p, pass(1));
+    }
+    const floor = latestMainWorkflowStageRunFloorForProject(p, slug, true, unit);
+    appendAuditEntry("UNIT_COMPLETED", stage.workspace_requires ? { Stage: slug, Unit: unit, "Run floor": floor } : {
+      Stage: slug, Unit: unit, Mode: "wave", "Run floor": floor,
+      "Artifact Fingerprint": reviewArtifactFingerprint(p, stage, unit, { requireRequiredArtifacts: true })!,
+    }, p);
+  }
+}
+
 function writeManifest(p: string, unit: string, paths: string[]): void {
   writeFileSync(join(seededRecordDir(p), "construction", unit, "code-generation", "source-manifest.json"), JSON.stringify({
     stage: "code-generation", unit, version: 1, writes: paths.map((path) => ({ path })),
   }));
 }
 
-// What each case does to the approved Unit alpha.
 const cases: Record<string, { what: string; act: (p: string, reviews: string[]) => void }> = {
   "manifest-changed": {
     what: "a file added to alpha's list of files after its review",
@@ -273,7 +312,6 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       act(p, reviews);
       const status = checkpointStatus(p, "alpha");
       expect(status.approved, `${name}: ${JSON.stringify(status)}`).toBe(false);
-      // What the person and the agent are given next.
       const next = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
       console.log(`t-checkpoint-off-machine strict ${name}: status ${JSON.stringify({ errors: status.errors, rereview: status.rereview })} next ${JSON.stringify(next.directive ?? next.stderr).slice(0, 1500)}`);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -300,6 +338,42 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       ]);
     }
     expect(rechecked.length, "no re-check was offered").toBeGreaterThan(0);
+    const status = checkpointStatus(p, "alpha");
+    expect(status, JSON.stringify(status)).toMatchObject({ errors: [] });
+    approve(p, "alpha");
+    expect(checkpointStatus(p, "alpha").approved).toBe(true);
+    expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The same on a clone of a Unit whose Code Generation review took two passes:
+  // the re-check repeats the pass still waiting for its written review, which
+  // the review log accepts, and the Unit is approved again.
+  test("Guard Policy strict, the written reviews not on this machine after a review in two passes: the re-check repeats the pending pass, then alpha is approved again", () => {
+    const p = fixture(STRICT, "adversarial");
+    buildTwoPasses(p, "alpha");
+    approve(p, "alpha");
+    const records = readAuditShardEvents(p)
+      .filter((row) => row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha")
+      .map((row) => auditBlockField(row.block, "Review Record"));
+    expect(records.length).toBe(stages.length + 1);
+    for (const record of records) unlinkSync(join(seededRecordDir(p), record!));
+    const offered: Array<{ stage: string; iteration: number; command: string }> = [];
+    for (let round = 0; round <= 2 * stages.length; round++) {
+      const status = checkpointStatus(p, "alpha");
+      if (!status.rereview) break;
+      offered.push(status.rereview);
+      reviewThroughLog(p, [
+        "review", "--stage", status.rereview.stage, "--reviewer", status.rereview.reviewer,
+        "--unit", "alpha", "--iteration", String(status.rereview.iteration),
+        ...(status.rereview.command.includes("--retry-pending") ? ["--retry-pending"] : []),
+      ]);
+    }
+    console.log(`t-checkpoint-off-machine two passes: re-checks ${JSON.stringify(offered.map((step) =>
+      `${step.stage} ${step.iteration}${step.command.includes("--retry-pending") ? " retry" : ""}`))}`);
+    const codeGeneration = offered.find((step) => step.stage === "code-generation");
+    expect(codeGeneration, JSON.stringify(offered)).toBeDefined();
+    expect(codeGeneration?.iteration).toBe(2);
+    expect(codeGeneration?.command).toContain("--retry-pending");
     const status = checkpointStatus(p, "alpha");
     expect(status, JSON.stringify(status)).toMatchObject({ errors: [] });
     approve(p, "alpha");
