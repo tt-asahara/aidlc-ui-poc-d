@@ -6,8 +6,9 @@
 見えるようにするためである。
 
 ページの一覧と順番は `{{HARNESS_DIR}}/tools/d-acceleration/pdm-deck-catalog.json` が持つ（31 ページ、
-9 章）。ページを足したり、順番を変えたり、省いたりしない。作る・検査する・描くのは
-`python3 -I {{HARNESS_DIR}}/tools/d-acceleration/pdm-deck.py` で、あなたが書くのは内容の JSON（spec）だけ。
+9 章）。ページを足したり、順番を変えたり、省いたりしない。各ページの `blocks` は勧める部品、`shape` は
+想定する見せ方。作る・検査する・描くのは `python3 -I {{HARNESS_DIR}}/tools/d-acceleration/pdm-deck.py` で、
+あなたが書くのは内容の JSON（spec）だけ。配置・余白・文字の大きさ・ページ番号はツールが決める。
 
 ## 置き場所（プロダクトのリポジトリ）
 
@@ -25,7 +26,7 @@
 2. **テンプレート。** `pdm-deck/template.pptx` があれば使う。無ければ AI-DLC の質問の流れで一度だけ聞く:
    「会社のテンプレート（.pptx）を使う」と「テンプレートなしで作る」。使うと答えたら、その絶対パスを聞き、
    `pdm-deck.py template --from <パス> --deck-dir <pdm-deck>` でプロダクトに取り込む。パスは記録に残さない。
-   テンプレートの既存スライドは使わず、スライドマスターとレイアウト（表紙・中表紙・タイトルだけの本文
+   テンプレートの既存スライドは使わず、スライドマスターとレイアウト（表紙・タイトルだけの本文
    ページ）とテーマの色・フォントだけを使う。
 3. **材料を集める。** `bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-manifest --json
    --project-dir "$PWD"` の各 `record_root` の成果物（ideation の intent-capture・market-research・
@@ -40,10 +41,15 @@
    --title <資料名>` で全ページの spec を作る（既にあれば作らない）。材料のあるページに、結論の
    タイトル（action title）だけを書く。ページ順にタイトルだけ読めば話がつながるように書き、
    AI-DLC の質問の流れで「この骨子で中身を書く」か「直す」かを聞く。人の答えに従う。
-6. **中身を書く。** ページごとに `status`、`title`、`lead`、`blocks`、`sources`、`gaps` を書く。
-   - `done`: 材料がそろっている。`partial`: 一部だけ。足りない論点を `gaps` に書く。
-     `missing`: 材料が無い。何も書かない（ツールが「未検討」のページと検討すべき問いを描く）。
+6. **中身を書く。** ページごとに `status`、`title`、`blocks`、`sources`、`gaps` を書く。
+   - `done`: 材料がそろっている。`partial`: 一部だけ。足りない論点を `gaps`（3 つまで）に書く。
+     右の列に「未検討の論点」として出る。
+     `missing`: 材料が無い。何も書かない（ツールが問い・埋めるための材料・想定する見せ方を描く）。
    - 迷ったら `missing` か `partial` にする。埋めるために推測しない。
+   - 事実の部品（表・グラフ・ツリーなど）は左に、意味合いは `implication` ブロックに書く。右の列に
+     三角つきで出る。タイトルの下に説明の行は置かない（`lead` は使わない）。
+   - エグゼクティブサマリーは `summary` で、論点ごとに結論 1 文・根拠 2〜3 点・深掘りのページ（`ref` に
+     ページ id。ツールが P.n に直す）を書く。
 7. **検査して描く。** `pdm-deck.py check --spec <pdm-deck>/deck.json` が通るまで直し、
    `pdm-deck.py build --spec <pdm-deck>/deck.json --out <pdm-deck>/deck.pptx [--template <pdm-deck>/template.pptx]`
    で描く。
@@ -53,24 +59,37 @@
 ## 書き方（コンサルティング資料の作法）
 
 - **タイトルは結論。** 「競合比較」ではなく「競合はいずれも低価格帯に集中し、上位帯は空いている」。
-  1 ページ 1 メッセージ、60 字以内。トピック名だけのタイトルは検査で落ちる。
-- **リードは so-what。** タイトルを支える一文（140 字以内）。
-- **MECE。** 分解は漏れなくダブりなく。ツリー・表の切り口をそろえる。
-- **数字には単位・時点・出典。** すべてのページの `sources` に、材料にした成果物やページを書く。
-- **密に、ただし読める量で。** 1 ページにブロックは 1〜4。表は 12 行 × 7 列、箇条書きは 9 個まで。
-  文章を長く書くより、表・ツリー・マトリクス・タイムライン・グラフに整理する。
+  1 ページ 1 メッセージ、60 字以内、常体（です・ます にしない）。トピック名だけのタイトル、
+  「競合比較：〜」のような前置き、他のページと同じタイトルは検査で落ちる。
+- **タイトルだけを通して読むと話がつながる。** 主語と対象を省かず、「この」「その」で他のページを指さない。
+- **左に事実、右に意味合い。** 意味合いは `implication` に 2〜5 点。So what を書き、事実の言い換えにしない。
+- **MECE。** 分解は漏れなくダブりなく。ツリーの枝は 2 つ以上に分け、表の行・列の切り口をそろえる。
+- **表は「軸のある表」。** 行＝項目、列＝観点。左上のセルには行の軸の名前を書く。評価は ●◕◑◔○、
+  高中低は `heat` に列番号を入れると濃淡になる（凡例はツールが付ける）。
+- **強調は 1 ページ 1 か所。** `highlight`（行・カード・枝・段階・棒・象限）は、目を向けたい 1 か所だけ。
+- **数字には単位・時点・出典。** グラフは `unit` に「何の量、単位、期間」を書く。すべてのページの
+  `sources` に、材料にした成果物やページを書く。グラフに描くのは原典の数字だけ。
+- **密に、ただし読める量で。** 表は 10 行 × 6 列、箇条書きは 8 個、1 点 80 字まで。量が少ないページは
+  ツールが文字を大きくして中央に置く。埋めるために中身を足さない。
 - 色・フォントは指定しない（テンプレートのテーマが決める）。
 
 ## ブロック
 
 | kind | 書くもの |
 |---|---|
-| `bullets` | `items`（文字列、または `{"text", "sub": [...]}`）、任意で `heading` |
-| `table` | `columns`、`rows`（各行は列と同じ数）、任意で `heading`・`widths`（列幅の比） |
-| `cards` | `items`（`{"title", "body"}`、6 個まで） |
+| `summary` | `items`（`{"text", "details": [...], "ref": ページ id}`、5 個まで） |
+| `implication` | `items`（文字列、5 個まで）、任意で `heading`（既定は「示唆」） |
+| `bullets` | `items`（文字列、または `{"text", "sub": [...]}`、2〜8 個）、任意で `heading` |
+| `table` | `columns`（先頭は行の軸の名前）、`rows`、任意で `heading`・`widths`・`highlight_row`・`heat`（列番号の配列） |
+| `cards` | `items`（`{"title", "caption", "points": [...], "highlight"}`、4 個まで。ペルソナ・柱） |
+| `stats` | `items`（`{"value", "label", "note", "highlight"}`、4 個まで。value は 10 字以内） |
+| `steps` | `items`（`{"title", "points": [...], "highlight"}`、6 個まで。title は動詞を含む 16 字以内） |
 | `callout` | `text`（強調したい一文） |
-| `tree` | `root`、`children`（`{"label", "children": [{"label"}]}`、2 段まで） |
-| `matrix2x2` | `x`、`y`（軸の名前）、`quadrants`（4 つ、`{"label", "items", "highlight"}`） |
-| `timeline` | `periods`（列）、`lanes`（`{"label", "items": [{"label", "start", "end", "milestone"}]}`、start/end は列の番号） |
-| `chart_bar` | `categories`、`series`（`{"name", "values"}`） |
+| `tree` | `root`、`children`（`{"label", "value", "highlight", "children": [{"label", "value"}]}`、葉は 8 個まで） |
+| `matrix2x2` | `x`、`y`（軸の名前）、任意で `x_high`・`y_high`、`quadrants`（左上・右上・左下・右下の 4 つ、`{"label", "items", "highlight"}`） |
+| `timeline` | `periods`（列）、`lanes`（`{"label", "items": [{"label", "start", "end", "milestone", "highlight"}]}`、start/end は列の番号）、任意で `axis` |
+| `chart_bar` | `unit`、`categories`、`series`（`{"name", "values"}`）、任意で `highlight`（棒の番号）・`horizontal`・`number_format` |
 | `image` | `path`（spec からの相対パス、例 `figures/Web-13.png`）、`caption` |
+| `before_after` | `before`・`after`（`{"path", "label", "points": [...]}`） |
+
+ページの `layout` を `"columns"` にすると、左の部品を縦でなく横に並べる。
