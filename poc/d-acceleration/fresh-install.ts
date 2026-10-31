@@ -6,7 +6,8 @@
 //
 //   install   official `aidlc config` (dry-run, then apply) + exact C payload
 //             (no-clobber) + project-local compose twice (idempotence) +
-//             parity + D preflight
+//             parity + D preflight + the project's D configuration with
+//             every key (d-config-writer.ts; --set records the person's answers)
 //   update    the same, for a product that was installed and composed before.
 //             Composed stage sources differ from the shipped bytes on purpose,
 //             so the official config reports them as conflicts. Those (and only
@@ -32,6 +33,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { hookGroupMemberNames } from "../../core/tools/aidlc-command.ts";
+import { writeDConfig, type DConfigWrite } from "./d-config-writer.ts";
 
 type Json = Record<string, unknown>;
 export class SetupStop extends Error {}
@@ -149,6 +151,19 @@ function composeTwice(p: ReturnType<typeof paths>) {
   const second = treeHash(join(p.P, ".claude"));
   if (first.sha256 !== second.sha256) throw new SetupStop("second compose changed the installed tree; compose is not idempotent");
   return second;
+}
+
+/**
+ * The written configuration and any switch it turned on whose prerequisite is
+ * still missing (PR Lens before setup-pr-lens.ts, a design skill before
+ * setup-design-skill.ts). Install verified D itself with no configuration;
+ * these rows say what a chosen switch still needs, without failing setup.
+ */
+export function configWithPrerequisites(P: string, config: DConfigWrite, harnessDir = ".claude"): DConfigWrite & { unmet: Json[] } {
+  const result = run(process.execPath, [join(P, harnessDir, "tools", "d-acceleration", "run.ts"), "--project-dir", P, "--preflight"], P);
+  let unmet: Json[] = [];
+  try { unmet = ((JSON.parse(result.stdout) as Json).prerequisites as { unmet?: Json[] } | undefined)?.unmet ?? []; } catch { unmet = [{ requires: `D preflight did not return JSON: ${result.stderr.trim()}` }]; }
+  return { ...config, unmet };
 }
 
 function preflight(P: string): Json {
@@ -368,7 +383,7 @@ function writeReceipt(p: ReturnType<typeof paths>): Receipt {
   return receipt;
 }
 
-export async function install(src: string, product: string): Promise<Json> {
+export async function install(src: string, product: string, answers: Readonly<Record<string, boolean>> = {}): Promise<Json> {
   const p = paths(src, product);
   requireCleanGit(p.P);
   const conflicts = configConflicts(p);
@@ -381,7 +396,8 @@ export async function install(src: string, product: string): Promise<Json> {
   if (!report.ok) throw new SetupStop(`package parity failed: ${JSON.stringify(report)}`);
   const pf = preflight(p.P);
   const receipt = writeReceipt(p);
-  return { mode: "install", gitignoreAdded, receipt: { path: RECEIPT, composeOwned: Object.keys(receipt.composeOwned).length }, product: p.P, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, acceleration: pf.acceleration, missing: pf.missing, runtime: pf.runtime } };
+  const config = configWithPrerequisites(p.P, writeDConfig(p.P, ".claude", answers));
+  return { mode: "install", config, gitignoreAdded, receipt: { path: RECEIPT, composeOwned: Object.keys(receipt.composeOwned).length }, product: p.P, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, acceleration: pf.acceleration, missing: pf.missing, runtime: pf.runtime } };
 }
 
 export function composeOwnedStageSources(P: string): Set<string> {
@@ -441,7 +457,8 @@ export async function update(src: string, product: string, legacyInstallCommit?:
   if (!report.ok) throw new SetupStop(`package parity failed after update: ${JSON.stringify(report)}`);
   const pf = preflight(p.P);
   writeReceipt(p);
-  return { mode: "update", product: p.P, replacedComposeOwned: conflicts, replacedPluginFiles: stalePlugin, retiredLegacyDHooks, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, missing: pf.missing, runtime: pf.runtime } };
+  const config = configWithPrerequisites(p.P, writeDConfig(p.P, ".claude", {}, { create: false }));
+  return { mode: "update", config, product: p.P, replacedComposeOwned: conflicts, replacedPluginFiles: stalePlugin, retiredLegacyDHooks, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, missing: pf.missing, runtime: pf.runtime } };
 }
 
 // -------------------------------------------------------------- manifest ---
@@ -531,9 +548,15 @@ if (import.meta.main) {
   const all = (name: string) => argv.flatMap((value, index) => (argv[index - 1] === name ? [value] : []));
   const src = flag("--src"), product = flag("--product"), out = flag("--out");
   try {
-    if (!src || !product) throw new SetupStop("usage: fresh-install.ts <install|update|parity|manifest> --src ABS_SRC --product ABS_PRODUCT [--out FILE] [--run-log FILE ...] [--legacy-install-commit SHA]");
+    if (!src || !product) throw new SetupStop("usage: fresh-install.ts <install|update|parity|manifest> --src ABS_SRC --product ABS_PRODUCT [--set <switch>=true|false ...] [--out FILE] [--run-log FILE ...] [--legacy-install-commit SHA]");
     let result: unknown;
-    if (argv[0] === "install") result = await install(src, product);
+    const answers: Record<string, boolean> = {};
+    for (const pair of all("--set")) {
+      const [key, value] = pair.split("=");
+      if (!key || !["true", "false"].includes(value ?? "")) throw new SetupStop(`--set takes <switch>=true|false, got ${pair}`);
+      answers[key] = value === "true";
+    }
+    if (argv[0] === "install") result = await install(src, product, answers);
     else if (argv[0] === "update") result = await update(src, product, flag("--legacy-install-commit"));
     else if (argv[0] === "parity") result = await parity(src, product);
     else if (argv[0] === "manifest") result = await manifest(src, product, all("--run-log"));

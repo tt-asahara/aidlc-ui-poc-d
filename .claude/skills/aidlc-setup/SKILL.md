@@ -85,7 +85,7 @@ Do not copy the source `poc/d-acceleration` directory into `PRODUCT`. The Claude
 
 Install or update that projected runtime as one indivisible directory, never as a selected-file patch. After setup, byte-compare every file under `SRC/dist/claude/.claude/tools/d-acceleration` with `PRODUCT/.claude/tools/d-acceleration` (for example with `diff -qr`) and stop as a setup failure on any missing, extra, or changed file. This full-tree parity check is required before preflight so later additions such as configuration resolvers cannot be silently omitted. `fresh-install.ts parity` additionally resolves every installed D, spawned-official, and hook entrypoint with Bun's resolver from PRODUCT and stops on any module outside PRODUCT, differing from the package, or importing a non-built-in package.
 
-Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Setup must not enable autopilot or create project configuration unless the person explicitly requested those exact settings for this product.
+Also verify that `PRODUCT/.claude/skills/aidlc-issue-autopilot/SKILL.md` exists and is byte-identical to the packaged Claude distribution. Claude Code's standard `/loop` scheduler must not be overwritten; recurring use schedules `/aidlc-issue-autopilot`. Issue autopilot (`issueAutopilot.enabled`) stays OFF unless the person turns it on in the D configuration question below.
 
 ```bash
 (cd "$PRODUCT" && bun "$PRODUCT/.claude/tools/d-acceleration/run.ts" --project-dir "$PRODUCT" --preflight)
@@ -103,13 +103,47 @@ The ordinary `/aidlc` skill runs only the installed `run.ts`; it resolves PRODUC
 
 Report the retained C source pins and licenses, UI compose status, D source commit, acceleration mode, directive validation, fallback disposition, requested/runtime model IDs, evidence paths, and exact official next handoff. Fixtures, fake workers, dry runs, and benchmark estimates are synthetic evidence and are not live-model or speed claims.
 
+## D configuration (asked once at setup)
+
+Setup writes `PRODUCT/.claude/d-acceleration.jsonc` with every key and its
+comment (`poc/d-acceleration/d-config-writer.ts`, run by `fresh-install.ts`).
+Before the install command, when the PRODUCT has no D configuration yet, ask
+the person once which switches to turn on, through the question tool, in plain
+words and the conversation's language. Show each with its setup default and
+what it means for them; recommend the defaults:
+
+| Switch | Default | What it does |
+|---|---|---|
+| `parallel.enabled` | ON | runs independent design work in parallel |
+| `features.requirementIdValidation` | ON | checks that screens and acceptance criteria IDs match |
+| `features.mockupPngGeneration` | ON | keeps a picture of each approved screen |
+| `gitPersistence.enabled` | ON | commits approved work at each approval (never pushes) |
+| `auto.enabled` | ON | allows `/aidlc --auto`; approvals still stop for the person |
+| `features.functionalDesignDocumentDiscipline` | OFF | limits the size of design documents |
+| `features.sourceGrounding`, `features.specGrounding` | OFF | checks designs against code or specs (needs their folders) |
+| `features.visualRegression` | OFF | compares built screens with approved pictures |
+| `features.prLensReview` | OFF | adds a slow PR Lens review (needs its own setup) |
+| `gitPersistence.push` | OFF | pushes those commits |
+| `issueAutopilot.enabled` | OFF | takes work from GitHub Issues |
+| `decisionIssueSummary.enabled`, `decisionIssueSummary.send` | OFF | prepares, then posts, a GitHub Issue summary of AI-answered questions |
+
+Pass every answer that differs from its default as `--set <switch>=true|false`
+to `fresh-install.ts install`. Safety settings (`auto.sessionOnly`,
+`auto.assumptionLedger`, `issueAutopilot.oneIssuePerRun`) are written ON and
+not asked. An existing D configuration keeps every value: setup never asks
+again, and `install`/`update` only add missing keys with the value the project
+already runs with. Report the result's `config.action`, `config.added`, and any
+`config.unmet` prerequisite with its next step.
+
 ## Optional PR Lens supplemental review (opt-in only)
 
 `poc/pr-lens-review` is an optional plugin. It adds a supplemental PR Lens
 diagram and review at Build and Test. The switch `features.prLensReview` is
 OFF by default because a review run is slow. Do not install the plugin or
 enable the switch unless the person explicitly asked for PR Lens review in
-this PRODUCT. Setup itself must never set `features.prLensReview`.
+this PRODUCT. When the person turns `features.prLensReview` on in the D
+configuration question, run this setup too; until it runs, the installer
+reports the switch's unmet prerequisite.
 
 When asked, read [`../../../poc/pr-lens-review/README.md`](../../../poc/pr-lens-review/README.md).
 Then, from `SRC`, after the D install:
@@ -155,8 +189,8 @@ The refined-mockups design slot defaults to the pinned Arm C component
 
 The router refuses any non-default choice in `ui-poc-comparison`. Do not
 install a choice or set `uiDesign.refinedMockupSkill` unless the person
-explicitly asked for that skill in this PRODUCT. Setup itself must never set
-the value.
+explicitly asked for that skill in this PRODUCT. The D configuration setup
+writes the default value; change it only when the person chose the skill.
 
 When asked, read [`../../../poc/d-acceleration/configuration.md`](../../../poc/d-acceleration/configuration.md)
 ("詳細モックアップのデザインスキル"). Then, from `SRC`, after the D install:

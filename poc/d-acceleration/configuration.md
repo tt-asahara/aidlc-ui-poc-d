@@ -11,6 +11,12 @@ Kiro CLI・Kiro IDE・Codexでは `.claude` の代わりに `.kiro`・`.codex` �
 通常の手順に戻り、AIへの質問委任・資料からの回答・groundingは `claude` が入っていないと止まります。
 PR LensはClaude専用です。
 
+setup（`/aidlc-setup`、`fresh-install.ts install`、`setup-ui-poc.ts`）は、まだD設定が無いプロジェクトに
+`d-acceleration.jsonc` を全項目・説明コメント付きで書きます。ON/OFFは最初の1回だけ質問し（既定でONは
+`parallel.enabled`・`features.requirementIdValidation`・`features.mockupPngGeneration`・`gitPersistence.enabled`・
+`auto.enabled`）、答えは `--set <switch>=true|false` で渡します。既にある設定は値を変えず、足りない項目だけを
+いま効いている値（下の各項目の既定値）で足します。標準の形に無い項目を含む設定や旧 `.json` は書き換えません。
+
 旧 `.json` 名も後方互換として読みます。同じレイヤーに `.jsonc` と `.json` が
 両方ある場合は、曖昧な選択をせず明示エラーで停止します。両ファイルはstrict JSONと
 JSONC（行・ブロックコメント、末尾カンマ）に対応します。

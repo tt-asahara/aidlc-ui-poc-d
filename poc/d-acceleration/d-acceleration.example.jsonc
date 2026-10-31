@@ -1,4 +1,5 @@
 {
+  // setupはこの全項目を書き出します（d-config-writer.ts）。各項目の「既定値」は、その項目が無いときにDが使う値です。setupが新しく書くときは、質問への答え（既定: parallel・requirementIdValidation・mockupPngGeneration・gitPersistence.enabled・auto.enabledがON）を書きます。
   // モデル経路 / 対象: D対応waveの並列worker。既定値: 全tier opus。
   "models": { "fast": "opus", "balanced": "opus", "judgment": "opus" },
   "parallel": {
