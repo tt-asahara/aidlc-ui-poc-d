@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { grantHumanTurnRefusal } from "./ai-approval-controller.ts";
+import { dConfigCandidates } from "./d-config.ts";
 
 // D-owned delegated-question grammar, target resolver, and settler.
 //
@@ -218,7 +219,7 @@ export function settleAiAnswers(projectDir: string, stage: string, decisionFile:
     for (const evidence of answer.evidence) { const bound = readBound(root, evidence.path, evidence.sha256, "evidence"); if (!inside(active.dir, resolve(root, bound.path))) throw new Error("evidence binding is outside active Intent"); }
   }
   if (!Array.isArray(decision.config)) throw new Error("invalid configuration binding");
-  const configCandidates = [".claude/d-acceleration.jsonc", ".claude/d-acceleration.json", ".claude/d-acceleration.local.jsonc", ".claude/d-acceleration.local.json"], currentConfigPaths = configCandidates.filter((path) => existsSync(join(root, path))).sort(), boundConfigPaths = decision.config.map((item: any) => item.path).sort();
+  const configCandidates = dConfigCandidates(root), currentConfigPaths = configCandidates.filter((path) => existsSync(join(root, path))).sort(), boundConfigPaths = decision.config.map((item: any) => item.path).sort();
   if (canonical(currentConfigPaths) !== canonical(boundConfigPaths)) throw new Error("configuration file set changed");
   for (const item of decision.config) readBound(root, item.path, item.sha256, "configuration");
   if (typeof decision.requiredConfidence !== "number" || decision.confidence < decision.requiredConfidence || typeof decision.reason !== "string" || !decision.reason.trim() || typeof decision.model?.requested !== "string") throw new Error("invalid confidence or model binding");

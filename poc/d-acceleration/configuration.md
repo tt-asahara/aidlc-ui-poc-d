@@ -3,7 +3,7 @@
 正式名 `<project>/.claude/d-acceleration.jsonc` を読み、その各フィールドを
 `<project>/.claude/d-acceleration.local.jsonc` で上書きします。Kiro CLI・Kiro IDE・Codexでは
 `.claude` の代わりに `.kiro`・`.codex` の下の同じ名前のファイルを読みます。これらのharnessで
-効く設定は `uiDesign` とUI fidelity image settingsだけです（D accelerationとPR LensはClaude専用）。したがって
+効く設定は `uiDesign` とUI fidelity image settingsだけです。これらのビルドにもD本体は入りますが、`/aidlc` がDの加速・PR Lens・自動進行を使うのは、今はClaudeだけです。したがって
 local が project より優先されます。モデルの明示CLI引数だけは両ファイルより
 優先されます。
 
