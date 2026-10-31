@@ -74,6 +74,11 @@ describe("dashboard data", () => {
     expect(row.events[0]!.event).toBe("SENSOR_FAILED");
   });
 
+  test("between stages the state's \"none\" shows no current stage", () => {
+    const row = intentRow({ dirName: "x", slug: "x", status: "active", active: true }, STATE.replace("- **In Progress**: functional-design", "- **In Progress**: none"), []);
+    expect(row.current).toBeNull();
+  });
+
   test("a record with no audit and no usage still renders", () => {
     const row = intentRow({ dirName: "x", slug: "x", status: "active", active: false }, "", []);
     expect(row).toMatchObject({ completed: 0, total: 0, usage: null, issue: null, bolts: [] });

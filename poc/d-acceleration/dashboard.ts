@@ -61,6 +61,8 @@ export function parseProgress(state: string): { phases: IntentRow["phases"]; sta
   return { phases, stages };
 }
 
+// The state writes "none" (or leaves the field empty) between stages.
+const currentStage = (value: string | null) => value && !/^(none|n\/a|-)$/i.test(value.trim()) ? value.trim() : null;
 const ms = (from: string | null, to: string | null) => from && to ? Math.max(0, Date.parse(to) - Date.parse(from)) : null;
 const number = (text: string | null) => text !== null && text.trim() !== "" && Number.isFinite(Number(text)) ? Number(text) : null;
 
@@ -111,7 +113,7 @@ export function intentRow(info: { dirName: string; slug: string; status: string;
     dir: info.dirName, slug: info.slug, status: info.status, scope: getField(state, "Scope") ?? info.scope ?? "", active: info.active,
     project: project.length > 120 ? `${project.slice(0, 119)}…` : project,
     startedAt: getField(state, "Start Date") ?? sorted[0]?.timestamp ?? null, lastAt: sorted.at(-1)?.timestamp ?? null,
-    current: getField(state, "In Progress") || null,
+    current: currentStage(getField(state, "In Progress")),
     completed: stages.filter((stage) => stage.mark === "x").length,
     total: stages.filter((stage) => stage.plan !== "SKIP").length,
     phases, stages, timings: [...timings.values()], bolts: [...bolts.values()],
