@@ -15,6 +15,9 @@
 //            put that edited HTML back into <stage>/<n>/<rel> and remove it
 //   diff   --stage-dir <dir> --name <n>       added/modified/deleted vs base
 //   verify --stage-dir <dir> --name <n>       the declared changes match diff
+//   show   --page <file>                     print a baseline or intent-copy page's HTML (read-only)
+//   shot   --page <file> --out <png> [--width N] [--height N]
+//            screenshot that page into design-document/figures/ for /aidlc --doc
 //
 // Tools for determinism: every decision is a path, hash, or set comparison.
 // The person's folder path is read once and never recorded; the records name
@@ -188,15 +191,49 @@ function verify({stageDir, name}) {
   return {pass: findings.length === 0, findings, diff: actual};
 }
 
-const COMMANDS = {adopt, start, status, unpack, pack, diff, verify};
+// /aidlc --doc reads and pictures screen pages, but only pages of a design
+// baseline or an intent's copy, and writes pictures only into the design
+// document's figures folder.
+function baselinePage(page) {
+  const full = path.resolve(page || '');
+  const parts = full.split(path.sep);
+  if (!full.endsWith('.html') || !(parts.includes('design-baseline') || parts.includes('refined-mockups'))) throw Error('--page must be an .html page of a design baseline or an intent\'s refined-mockups copy');
+  if (!fs.existsSync(full)) throw Error(`no such page: ${page}`);
+  return full;
+}
+function show({page}) {
+  const full = baselinePage(page), text = fs.readFileSync(full, 'utf8'), match = TEMPLATE.exec(text);
+  return {page: full, html: match ? JSON.parse(match[2].trim()) : text};
+}
+function shot({page, out, width, height}) {
+  const full = baselinePage(page), target = path.resolve(out || '');
+  const parts = target.split(path.sep), at = parts.lastIndexOf('figures');
+  if (!target.endsWith('.png') || at < 1 || parts[at - 1] !== 'design-document') throw Error('--out must be a .png inside design-document/figures/');
+  const size = (value, fallback) => { const n = value === undefined ? fallback : Number(value); if (!Number.isInteger(n) || n < 200 || n > 4000) throw Error('--width and --height must be whole numbers from 200 to 4000'); return n; };
+  const fidelity = require('./ui-poc-fidelity.cjs'), browser = fidelity.browserExecutable();
+  if (!browser) throw Error('no Chrome or Edge found; install one or set UI_POC_BROWSER_EXECUTABLE');
+  fs.mkdirSync(path.dirname(target), {recursive: true});
+  // A throwaway profile: never the person's own browser profile or its lock.
+  const profile = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'ui-poc-shot-'));
+  let run;
+  try {
+    run = require('node:child_process').spawnSync(browser, [...fidelity.RENDER_FLAGS, `--user-data-dir=${profile}`, `--window-size=${size(width, 1280)},${size(height, 1100)}`, '--virtual-time-budget=4000', `--screenshot=${target}`, `file://${full}`], {encoding: 'utf8', timeout: 60000});
+  } finally { fs.rmSync(profile, {recursive: true, force: true}); }
+  if (!fs.existsSync(target)) throw Error(`the browser wrote no picture: ${(run.stderr || '').trim().split('\n').slice(-1)[0] || run.status}`);
+  const bytes = fs.readFileSync(target);
+  return {action: 'shot', out: target, bytes: bytes.length, sha256: sha256(bytes)};
+}
+
+const COMMANDS = {adopt, start, status, unpack, pack, diff, verify, show, shot};
 function main(argv) {
   const [command, ...rest] = argv, flag = name => { const at = rest.indexOf(name); return at < 0 ? undefined : rest[at + 1]; };
   if (!COMMANDS[command]) throw Error(`usage: ui-poc-baseline.cjs <${Object.keys(COMMANDS).join('|')}> --stage-dir <dir> --name <name> [...]`);
-  const result = COMMANDS[command]({stageDir: flag('--stage-dir'), name: flag('--name'), from: flag('--from'), file: flag('--file'), replace: rest.includes('--replace')});
+  const result = COMMANDS[command]({stageDir: flag('--stage-dir'), name: flag('--name'), from: flag('--from'), file: flag('--file'), replace: rest.includes('--replace'), page: flag('--page'), out: flag('--out'), width: flag('--width'), height: flag('--height')});
+  if (command === 'show') { process.stdout.write(result.html); return; }
   console.log(JSON.stringify(command === 'diff' ? {pass: true, ...result} : result, null, 2));
   if (command === 'verify' && !result.pass) process.exitCode = 1;
 }
 if (require.main === module) {
   try { main(process.argv.slice(2)); } catch (e) { console.error(`ui-poc-baseline: ${e.message}`); process.exit(2); }
 }
-module.exports = {adopt, start, status, unpack, pack, diff, verify, baselineSpec, encodeTemplate, spaceDir};
+module.exports = {adopt, start, status, unpack, pack, diff, verify, show, shot, baselineSpec, encodeTemplate, spaceDir};

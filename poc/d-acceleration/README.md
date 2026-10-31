@@ -107,7 +107,7 @@ document spanning every intent into the space-level
 after `design-document.ts doc-snapshot` keeps one previous generation under the
 already-ignored `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`. The LLM
 writes the document following `design-document-guide.md`; `design-document.ts
-doc-manifest --json` owns the deterministic input set. It is read-only with
+doc-manifest --json` owns the deterministic input set, including the space's design baselines (`design-baseline/<name>/`) and each intent's refined-mockups copy with its change list; when they exist, the screen, transition, user-flow, member-type, and screen-specification chapters are written from them, with screenshots taken by `ui-poc-baseline.cjs shot` into `design-document/figures/`. It is read-only with
 respect to workflow state. The KDDI critic loop (`docCriticLoop`, design-doc
 audit and reviewer agent) is not ported.
 

@@ -49,6 +49,26 @@ describe("/aidlc --doc deterministic inputs", () => {
     ]);
   });
 
+  test("doc-manifest lists the space's design baselines and each intent's refined-mockups copy", () => {
+    const root = project();
+    expect(docManifest(root).design_baselines).toEqual([]);
+    const baselines = join(root, "aidlc", "spaces", "default", "design-baseline");
+    mkdirSync(join(baselines, "ponta-pass"), { recursive: true });
+    writeFileSync(join(baselines, "ponta-pass.json"), JSON.stringify({ kind: "ui-poc-design-baseline", schema: 1, name: "ponta-pass", files: 579, screens: 298, treeSha256: "abc" }));
+    writeFileSync(join(baselines, "notes.json"), JSON.stringify({ kind: "something-else", name: "notes" }));
+    const stage = join(root, "aidlc", "spaces", "default", "intents", "beta-bbbbbbbb", "inception", "refined-mockups");
+    mkdirSync(join(stage, "ponta-pass"), { recursive: true });
+    writeFileSync(join(stage, "ponta-pass-base.json"), JSON.stringify({ kind: "ui-poc-baseline-copy", name: "ponta-pass", source: "space-baseline" }));
+    writeFileSync(join(stage, "ponta-pass-changes.json"), "{}");
+    const manifest = docManifest(root);
+    expect(manifest.design_baselines).toEqual([{ name: "ponta-pass", dir: "aidlc/spaces/default/design-baseline/ponta-pass", files: 579, screens: 298, tree_sha256: "abc" }]);
+    expect(manifest.intents[1]!.baseline_copies).toEqual([{
+      name: "ponta-pass", dir: "aidlc/spaces/default/intents/beta-bbbbbbbb/inception/refined-mockups/ponta-pass", source: "space-baseline",
+      changes: "aidlc/spaces/default/intents/beta-bbbbbbbb/inception/refined-mockups/ponta-pass-changes.json", changes_md: null,
+    }]);
+    expect(manifest.intents[0]!.baseline_copies).toEqual([]);
+  });
+
   test("doc-snapshot is a reported no-op when the document is absent and keeps an older snapshot", () => {
     const root = project();
     const snapshot = join(root, "aidlc", "spaces", "default", "intents", ".aidlc-d-doc-snapshot");

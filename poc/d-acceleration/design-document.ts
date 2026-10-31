@@ -19,7 +19,7 @@
 // so the shipped `aidlc/spaces/*/intents/.aidlc-*` ignore rule already keeps it
 // machine-local; it holds no aidlc-state.md, so it is never listed as a record.
 
-import { cpSync, existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { activeSpace, intentsDir, listIntents, spacesRoot } from "../../core/tools/aidlc-lib.ts";
 
@@ -58,8 +58,46 @@ export interface DocManifest {
     active: boolean;
     design_summary: string;
     design_summary_exists: boolean;
+    /** This intent's refined-mockups copies of a design baseline, with their declared changes. */
+    baseline_copies: BaselineCopy[];
   }>;
+  /** The space's design baselines: the product's current screens, flows, and specifications. */
+  design_baselines: DesignBaseline[];
   warnings: string[];
+}
+
+export type DesignBaseline = { name: string; dir: string; files: number; screens: number; tree_sha256: string };
+export type BaselineCopy = { name: string; dir: string; source: string; changes: string | null; changes_md: string | null };
+
+/**
+ * The space's design baselines (design-baseline/<name>.json, written by the
+ * ui-poc baseline tool) as posix paths relative to the project. A record that
+ * is not that tool's is ignored.
+ */
+export function designBaselines(projectDir: string, space?: string): DesignBaseline[] {
+  const sp = space ?? activeSpace(projectDir), root = join(spacesRoot(projectDir), sp, "design-baseline");
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((file) => file.endsWith(".json")).sort().flatMap((file) => {
+    try {
+      const record = JSON.parse(readFileSync(join(root, file), "utf8")) as { kind?: string; name?: string; files?: number; screens?: number; treeSha256?: string };
+      if (record.kind !== "ui-poc-design-baseline" || !record.name || !existsSync(join(root, record.name))) return [];
+      return [{ name: record.name, dir: `aidlc/spaces/${sp}/design-baseline/${record.name}`, files: record.files ?? 0, screens: record.screens ?? 0, tree_sha256: record.treeSha256 ?? "" }];
+    } catch { return []; }
+  });
+}
+
+/** One record's refined-mockups copies of a design baseline (<name>-base.json beside <name>/). */
+export function baselineCopies(projectDir: string, recordRoot: string): BaselineCopy[] {
+  const rel = `${recordRoot}/inception/refined-mockups`, stage = join(projectDir, rel);
+  if (!existsSync(stage)) return [];
+  return readdirSync(stage).filter((file) => file.endsWith("-base.json")).sort().flatMap((file) => {
+    try {
+      const record = JSON.parse(readFileSync(join(stage, file), "utf8")) as { kind?: string; name?: string; source?: string };
+      if (record.kind !== "ui-poc-baseline-copy" || !record.name) return [];
+      const has = (name: string) => existsSync(join(stage, name)) ? `${rel}/${name}` : null;
+      return [{ name: record.name, dir: `${rel}/${record.name}`, source: record.source ?? "", changes: has(`${record.name}-changes.json`), changes_md: has(`${record.name}-changes.md`) }];
+    } catch { return []; }
+  });
 }
 
 /**
@@ -91,12 +129,14 @@ export function docManifest(projectDir: string): DocManifest {
       active: info.active,
       design_summary: summary,
       design_summary_exists: existsSync(join(projectDir, summary)),
+      baseline_copies: baselineCopies(projectDir, recordRoot),
     });
   }
   return {
     space: activeSpace(projectDir),
     design_document_root: relativeDesignDocumentDir(projectDir),
     intents,
+    design_baselines: designBaselines(projectDir),
     warnings,
   };
 }

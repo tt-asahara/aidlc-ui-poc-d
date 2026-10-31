@@ -122,3 +122,19 @@ test('the stage directory must sit inside an intent record of a space', () => {
   assert.throws(() => baseline.spaceDir('/tmp/somewhere'), /inside aidlc\/spaces\/<space>\/intents/);
   assert.equal(baseline.spaceDir('/p/aidlc/spaces/s1/intents/r/inception/refined-mockups'), '/p/aidlc/spaces/s1');
 });
+
+test('show and shot read and picture only baseline or intent-copy pages, and shot writes only into design-document/figures', t => {
+  const w = world(t);
+  baseline.adopt({...w.args, from: w.exported});
+  const page = path.join(w.root, 'aidlc', 'spaces', 'default', 'design-baseline', 'ponta-pass', 'Web-13-gate.html');
+  assert.equal(baseline.show({page}).html, '<div>gate</div><script>x()</script>');
+  assert.throws(() => baseline.show({page: path.join(w.exported, 'Web-13-gate.html')}), /design baseline or an intent/);
+  const figures = path.join(w.root, 'aidlc', 'spaces', 'default', 'design-document', 'figures');
+  assert.throws(() => baseline.shot({page, out: path.join(w.root, 'elsewhere.png')}), /inside design-document\/figures/);
+  assert.throws(() => baseline.shot({page, out: path.join(figures, 'a.png'), width: '50'}), /from 200 to 4000/);
+  const fidelity = require('../tools/ui-poc-fidelity.cjs');
+  if (!fidelity.browserExecutable()) return;
+  const result = baseline.shot({page, out: path.join(figures, 'Web-13.png'), width: '400', height: '300'});
+  assert.ok(result.bytes > 0);
+  assert.ok(fs.existsSync(path.join(figures, 'Web-13.png')));
+});
