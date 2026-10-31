@@ -1,11 +1,15 @@
 # D acceleration configuration
 
 正式名 `<project>/.claude/d-acceleration.jsonc` を読み、その各フィールドを
-`<project>/.claude/d-acceleration.local.jsonc` で上書きします。Kiro CLI・Kiro IDE・Codexでは
-`.claude` の代わりに `.kiro`・`.codex` の下の同じ名前のファイルを読みます。これらのharnessで
-効く設定は `uiDesign` とUI fidelity image settingsだけです。これらのビルドにもD本体は入りますが、`/aidlc` がDの加速・PR Lens・自動進行を使うのは、今はClaudeだけです。したがって
+`<project>/.claude/d-acceleration.local.jsonc` で上書きします。したがって
 local が project より優先されます。モデルの明示CLI引数だけは両ファイルより
 優先されます。
+
+Kiro CLI・Kiro IDE・Codexでは `.claude` の代わりに `.kiro`・`.codex` の下の同じ名前のファイルを読みます。
+これらのharnessにもD本体が入り、`/aidlc` は共通の手順（`orchestrator-d.md`）に従ってDの機能を使います。
+ただしDの作業役は今は `claude` CLIだけなので、これらのharnessではbatch waveとresearch fanoutは
+通常の手順に戻り、AIへの質問委任・資料からの回答・groundingは `claude` が入っていないと止まります。
+PR LensはClaude専用です。
 
 旧 `.json` 名も後方互換として読みます。同じレイヤーに `.jsonc` と `.json` が
 両方ある場合は、曖昧な選択をせず明示エラーで停止します。両ファイルはstrict JSONと

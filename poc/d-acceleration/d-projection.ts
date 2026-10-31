@@ -21,6 +21,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "native-entry.ts",
   "execution.ts",
   "model-routing.md",
+  "orchestrator-d.md",
   "hooks/aidlc-d-persistence-pre.ts",
   "hooks/aidlc-d-persistence-post.ts",
   "hooks/aidlc-d-reviewer-dispatch-cleanup.ts",
@@ -121,8 +122,12 @@ export function projectCoreImports(text: string): string {
     .replaceAll('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
 }
 
-/** Copy the D runtime into `<treeRoot>/tools/d-acceleration/`, refusing any collision first. */
-export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME, harness = "claude"): void {
+/**
+ * Copy the D runtime into `<treeRoot>/tools/d-acceleration/`, refusing any collision first.
+ * `prose` is the packager's own token substitution for this tree; D Markdown
+ * carries the same `{{HARNESS_DIR}}`/`{{INVOKE}}` tokens core prose does.
+ */
+export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME, harness = "claude", prose: (text: string) => string = (text) => text): void {
   for (const file of runtime) {
     const source = join(accelerationRoot, file);
     if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`[${harness}] D acceleration runtime source is missing: ${file}`);
@@ -139,6 +144,7 @@ export function projectDAcceleration(treeRoot: string, accelerationRoot: string,
         ? text.replace(/from "\.\.\/([a-z0-9-]+\.ts)"/g, 'from "../tools/d-acceleration/$1"')
         : projectCoreImports(text));
     }
+    else if (file.endsWith(".md")) writeFileSync(destination, prose(readFileSync(source, "utf8")));
     else cpSync(source, destination);
   }
 }

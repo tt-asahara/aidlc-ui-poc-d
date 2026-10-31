@@ -144,7 +144,7 @@ zero compose drops, and `uiBaseline: C-composed` preflight before use.
 
 ## Kiro CLI, Kiro IDE, and Codex
 
-This plugin also runs on Kiro CLI, Kiro IDE, and Codex. Those builds carry the D runtime (`<harness dir>/tools/d-acceleration/`) and read D configuration from their own harness directory, so `uiDesign.refinedMockupSkill` and the image settings work there; `/aidlc` does not run D acceleration, PR Lens review, or automation on them yet. Install the runtime, the pinned C payload, and the composed plugin with one command from the D checkout, after `bun scripts/package.ts <harness>` and `bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/ui-poc <harness>`:
+This plugin also runs on Kiro CLI, Kiro IDE, and Codex. Those builds carry the D runtime (`<harness dir>/tools/d-acceleration/`), read D configuration from their own harness directory, and their `/aidlc` follows D's shared orchestrator module (`orchestrator-d.md`) with D's commands pre-allowed. D's model workers still run the `claude` CLI: there, batch waves and research fanout go back to the ordinary path, and delegated questions, document answers, and grounding checks need `claude` installed. PR Lens review stays Claude-only. Install the runtime, the pinned C payload, and the composed plugin with one command from the D checkout, after `bun scripts/package.ts <harness>` and `bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/ui-poc <harness>`:
 
 ```bash
 bun poc/ui-poc/scripts/setup-ui-poc.ts --harness kiro|kiro-ide|codex --src "$PWD" --product <PRODUCT> --dry-run

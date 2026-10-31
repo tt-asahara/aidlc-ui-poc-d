@@ -90,7 +90,7 @@
 全ツリーを盲目探索せず、まず入力マニフェストを取る:
 
 ```bash
-bun .claude/tools/d-acceleration/design-document.ts doc-manifest --json --project-dir "$PWD"
+bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-manifest --json --project-dir "$PWD"
 ```
 
 これが `design_document_root` と、各 intent の `uuid` / `record_dir` / `record_root` /
@@ -120,7 +120,7 @@ headless 実行（`claude -p`）には許可プロンプトに答える人がお
 上書きする唯一の瞬間で、既定構成（D の `gitPersistence` 無効・`aidlc/` 未コミット）では他に復旧手段が無い。
 
 ```bash
-bun .claude/tools/d-acceleration/design-document.ts doc-snapshot --project-dir "$PWD"
+bun {{HARNESS_DIR}}/tools/d-acceleration/design-document.ts doc-snapshot --project-dir "$PWD"
 ```
 
 退避先は space-level の `aidlc/spaces/<space>/intents/.aidlc-d-doc-snapshot/`（**1 世代のみ**・実行の

@@ -108,6 +108,7 @@ import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 import { D_ACCELERATION_RUNTIME, D_HARNESSES, projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
+import { applyDPermissions } from "../poc/d-acceleration/d-permissions.ts";
 import { invalidNativeDInvocations, nativeDAllow, nativeDInvocations } from "../poc/d-acceleration/native-commands.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -951,7 +952,7 @@ function buildTree(
   // back into this source checkout.
   // The collision guard and the file list live in poc/d-acceleration/d-projection.ts.
   if (m.name === "claude" || D_HARNESSES.includes(m.name)) {
-    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"), D_ACCELERATION_RUNTIME, m.name);
+    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"), D_ACCELERATION_RUNTIME, m.name, (text) => substituteToken(text, harnessDir, invoke));
   }
   const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
   if (fmMissed.length > 0) {
@@ -1111,6 +1112,8 @@ function buildTree(
   expandClaudeToolAllows(treeRoot, m);
   expandKiroToolAllows(treeRoot, m);
   expandKiroIdeConductorAllows(treeRoot, m, invoke);
+  // D's commands, once the harness's own permission files exist.
+  if (D_HARNESSES.includes(m.name)) applyDPermissions(treeRoot, m.name, harnessDir, invoke === "aidlc");
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1516,7 +1519,7 @@ function rewriteNativeInvocations(
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
     let value = readFileSync(file, "utf-8");
-    if (m.name === "claude") value = nativeDInvocations(value, m.harnessDir);
+    if (m.name === "claude" || D_HARNESSES.includes(m.name)) value = nativeDInvocations(value, m.harnessDir);
     // Claude's source hook/statusline dispatcher is rooted at the project, so
     // it still loads after an application command changes cwd. JSON escapes
     // its shell quotes; strip the complete invocation for native releases.
@@ -1614,6 +1617,8 @@ function rewriteNativeInvocations(
       emitTrustSeed(m.harnessDir, m.name, "aidlc", TRUSTED_ROUTE_NAMESPACE),
     );
   }
+  // After Codex's rules file is re-emitted for the native channel.
+  if (D_HARNESSES.includes(m.name)) applyDPermissions(join(outRoot, m.harnessDir), m.name, m.harnessDir, true);
   // Before the copy's hashes are recorded below, so a part that changed here
   // still has its copy bytes recognized, and --check builds it the same way.
   syncRootBlockParts(outRoot, m);
@@ -1678,7 +1683,7 @@ function rewriteNativeInvocations(
     leftovers.push(
       ...projectedNamespaceInvocationViolations(relative(outRoot, file), withoutNativeReplacements(value)),
     );
-    if (m.name === "claude") {
+    if (m.name === "claude" || D_HARNESSES.includes(m.name)) {
       for (const name of invalidNativeDInvocations(value)) leftovers.push(`${relative(outRoot, file)}: unknown D native tool ${name}`);
       if (/\bbun\s+[^\n]*tools\/d-acceleration\/[a-z0-9-]+\.ts/.test(value)) leftovers.push(`${relative(outRoot, file)}: source-only D invocation survived native projection`);
     }

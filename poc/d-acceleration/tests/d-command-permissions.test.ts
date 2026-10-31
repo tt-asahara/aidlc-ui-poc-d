@@ -30,6 +30,8 @@ const SOURCES = [
   // --doc guide the skill reads first.
   join(REPO, "poc", "ui-poc", "tools", "ui-poc"),
   join(REPO, "poc", "d-acceleration", "design-document-guide.md"),
+  // The shared D orchestrator module every harness skill reads.
+  join(REPO, "poc", "d-acceleration", "orchestrator-d.md"),
 ];
 
 function* textFiles(dir: string): Generator<string> {
@@ -104,7 +106,7 @@ describe("D command permissions", () => {
   });
 
   test("--doc writes the design files with the file tools, not a generator script", () => {
-    const skill = readFileSync(join(REPO, "harness", "claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    const skill = readFileSync(join(REPO, "poc", "d-acceleration", "orchestrator-d.md"), "utf8");
     const guide = readFileSync(join(REPO, "poc", "d-acceleration", "design-document-guide.md"), "utf8");
     expect(skill).toMatch(/Create and update every design\s+file with\s+the Write and Edit tools/);
     expect(skill).toMatch(/never write or run a\s+generator script/);
