@@ -81,6 +81,31 @@
 
 `*-questions.md` と `memory.md` は内部メモなので本文の根拠にしない（参照する場合も設計書には転記しない）。
 
+### 基準資料（design-baseline）と改修版を使う
+
+`doc-manifest` の `design_baselines` は space の基準資料（今リリースされている製品の画面・遷移・仕様の
+書き出し一式、`aidlc/spaces/<space>/design-baseline/<name>/`）、各 intent の `baseline_copies` は
+その intent の 2.5 refined-mockups で改修した写し（`<record>/inception/refined-mockups/<name>/`）と
+変更一覧（`<name>-changes.json` / `.md`）。どちらかがあれば、次の章は**これを正本として**書く。
+推測で画面や遷移を作り直さない。
+
+- 画面一覧・画面遷移・ユーザーフロー・会員種別ごとの出し分け・画面仕様: 基準資料の `Screen-00`（画面一覧）、
+  `Flow-00`〜`Flow-03`（遷移図・導線・画面マップ・ユーザーフロー）、`Screen-02-member`（会員種別）、
+  `Spec-<画面>`（要素 el-NNN・表示状態・遷移先・API）を読む。読むときは
+  `bun {{HARNESS_DIR}}/tools/ui-poc-baseline.cjs show --page <ページの絶対パス>` で中身の HTML を取り出す
+  （まとめた形式のページを直接読まない）。必要な画面・図だけを読み、全ページを読み込まない。
+- 改修の intent: 「現行（基準資料）→ 改修後（写し）」の形で書く。変わった画面・要素・遷移は
+  `<name>-changes.json` の `screens[].elements`（el-NNN と 既存改修／新規実装／削除）と `flows` を根拠にし、
+  変更要件シート `CR-*` へリンクする。変更一覧に無い変更を設計書に書かない。
+- **スクリーンショット**: 設計書が扱う画面（改修した画面・新しい画面・主要な導線の画面）と、遷移図・
+  ユーザーフローは、`bun {{HARNESS_DIR}}/tools/ui-poc-baseline.cjs shot --page <ページ> --out
+  <design-document>/figures/<名前>.png [--width N --height N]` で撮って載せる。改修した画面は現行と改修後の
+  2枚を並べる（`<画面>.before.png` / `<画面>.after.png`）。載せ方は
+  `![<画面名>（現行）](figures/<名前>.png)` の直後に、元ページへのリンクと 1〜2 行の説明を置く（画像だけで
+  終わらせない）。全画面は撮らない。撮れない環境（ブラウザ無し）では撮らずにリンクだけ置き、
+  その旨を `未検討一覧.md` ではなく本文の注記に書く。
+- 基準資料も写しも無いときは、この節は適用しない（従来どおり interaction-spec.md などから書く）。
+
 ### product-level 化と入力マニフェスト（マルチ intent）
 
 設計書は **product-level**＝全 intent を対象にする（active intent だけではない）。上の代表パスは各 intent の
@@ -167,6 +192,7 @@ incremental が全 artifact ではなく digest を読める。manifest の `des
 design-document/
   README.md                       # 表紙・読み方・ファイル構成・ID体系・ステータス定義・参照元・カバレッジ・ブロッカー現在地
   table-width.css                 # Markdown プレビューでテーブルを全幅表示する補助CSS（骨格外・常に生成）
+  figures/                        # 基準資料・改修版の画面と遷移図のスクリーンショット（ui-poc-baseline.cjs shot。基準資料があるときだけ）
   00_設計管理/
     要件一覧.md                   # 要件一覧（FR / NFR / US / REQ を番号付きで集約、優先度/ステータス/根拠付き）
     状態イベントマトリクス.md      # 状態×イベント/ユーザ状態×機能/エラー×応答の網羅マトリクス＋抜け（要確認）
