@@ -1,8 +1,8 @@
 // The pinned dispatcher requires aidlc-sensor-<id>.ts and invokes it with its runtime.
 // This adapter intentionally has no upstream imports or third-party dependencies.
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const { check, contracts, engineFor } = require('./ui-poc-evidence.cjs');
@@ -17,6 +17,18 @@ function args(argv) {
   }
   return out;
 }
+function baselineFindings(stageDir) {
+  const baseline = require('./ui-poc-baseline.cjs'), out = [];
+  for (const name of readdirSync(stageDir).filter(file => file.endsWith('-base.json'))) {
+    let record;
+    try { record = JSON.parse(readFileSync(join(stageDir, name), 'utf8')); } catch { continue; }
+    if (record?.kind !== 'ui-poc-baseline-copy') continue;
+    const result = baseline.verify({stageDir, name: record.name});
+    if (!result.pass) out.push(...result.findings.map(finding => `${record.name} baseline: ${finding}`));
+  }
+  return out;
+}
+
 async function main(argv) {
   const findings = [];
   try {
@@ -52,6 +64,8 @@ async function main(argv) {
     }
     const routing = verify(stage, resolve(root, 'ui-poc-skill-evidence.json'), facts, {contextPath:resolve(root, 'ui-poc-routing-context.json'),factsPath,outputPath});
     if (!routing.pass) findings.push(...routing.findings);
+    // A design-baseline copy started in this stage must declare every change.
+    if (stage === 'refined-mockups') findings.push(...baselineFindings(root));
   } catch (e) { findings.push(e.message); }
   console.log(JSON.stringify({pass:findings.length === 0,findings_count:findings.length,findings}));
 }

@@ -136,6 +136,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
       "Bash(bun .claude/tools/ui-poc-review-risks.cjs *)",
       "Bash(bun .claude/tools/ui-poc-evidence.cjs *)",
+      "Bash(bun .claude/tools/ui-poc-baseline.cjs *)",
       "Task",
       "WebSearch",
     ]);
