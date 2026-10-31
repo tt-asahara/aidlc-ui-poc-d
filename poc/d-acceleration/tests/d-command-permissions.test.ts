@@ -7,6 +7,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { D_ACCELERATION_RUNTIME } from "../d-projection.ts";
+import { D_ALLOWED_PYTHON_TOOLS, dAllowedCommands } from "../d-permissions.ts";
+
+const D_PYTHON_TOOL = new RegExp(`\`python3 -I (?:\\{\\{HARNESS_DIR\\}\\}|\\.claude)/tools/d-acceleration/(?:${D_ALLOWED_PYTHON_TOOLS.map((file) => file.replace(/[.]/g, "\\.")).join("|")})[^\`]*\``, "g");
 
 const REPO = join(import.meta.dir, "..", "..", "..");
 const SETTINGS = join(REPO, "harness", "claude", "settings.json");
@@ -97,12 +100,15 @@ describe("D command permissions", () => {
     for (const dir of SOURCES) {
       for (const file of textFiles(dir)) {
         for (const line of readFileSync(file, "utf8").split("\n")) {
-          if (/`(?:shasum|sha256sum|openssl dgst|python3?|node) [^`]*`/.test(line) && !/never/i.test(line)) offenders.push(`${relative(REPO, file)}: ${line.slice(0, 120)}`);
+          // D's own fixed Python tools (D_ALLOWED_PYTHON_TOOLS) are named commands, not a generic interpreter.
+          const generic = line.replace(D_PYTHON_TOOL, "");
+          if (/`(?:shasum|sha256sum|openssl dgst|python3?|node) [^`]*`/.test(generic) && !/never/i.test(generic)) offenders.push(`${relative(REPO, file)}: ${line.slice(0, 120)}`);
         }
       }
     }
     expect(offenders).toEqual([]);
-    expect(allow.some((rule) => /^Bash\((?:shasum|sha256sum|openssl|python3?|node)\b/.test(rule))).toBe(false);
+    const pythonTools = new Set(dAllowedCommands(".claude", false).filter((words) => words[0] === "python3").map((words) => `Bash(${words.join(" ")} *)`));
+    expect(allow.some((rule) => /^Bash\((?:shasum|sha256sum|openssl|python3?|node)\b/.test(rule) && !pythonTools.has(rule))).toBe(false);
   });
 
   test("--doc writes the design files with the file tools, not a generator script", () => {

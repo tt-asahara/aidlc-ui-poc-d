@@ -18,21 +18,27 @@ export const D_ALLOWED_PLUGIN_TOOLS: readonly string[] = [
   "pr-lens-review.ts", "ui-poc-fidelity.cjs", "ui-poc-element-matrix.cjs", "ui-poc-review-risks.cjs", "ui-poc-evidence.cjs", "ui-poc-baseline.cjs",
 ];
 
+/** D's Python tools, run as `python3 -I <harness dir>/tools/d-acceleration/<file>` in both channels. */
+export const D_ALLOWED_PYTHON_TOOLS: readonly string[] = ["pdm-deck.py"];
+
 /**
  * The command prefixes D needs allowed, each a list of words. A native install
- * runs D as `aidlc d <tool>` and allows no `bun` command, as Claude's native
- * settings do (rewriteClaudeNativePermissions in scripts/package.ts).
+ * runs D's TypeScript tools as `aidlc d <tool>` and allows no `bun` command, as
+ * Claude's native settings do (rewriteClaudeNativePermissions in
+ * scripts/package.ts); Python tools run the same way in both channels.
  */
 export function dAllowedCommands(harnessDir: string, native: boolean): string[][] {
-  if (native) return D_HOST_ALLOWED_TOOLS.map((name) => ["aidlc", "d", name]);
+  const python = D_ALLOWED_PYTHON_TOOLS.map((file) => ["python3", "-I", `${harnessDir}/tools/d-acceleration/${file}`]);
+  if (native) return [...D_HOST_ALLOWED_TOOLS.map((name) => ["aidlc", "d", name]), ...python];
   return [
     ...D_HOST_ALLOWED_TOOLS.map((name) => ["bun", `${harnessDir}/tools/d-acceleration/${name}.ts`]),
     ...D_ALLOWED_PLUGIN_TOOLS.map((file) => ["bun", `${harnessDir}/tools/${file}`]),
+    ...python,
   ];
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const isDEntry = (text: string) => /d-acceleration\/|^aidlc d |pr-lens-review|ui-poc-/.test(text);
+const isDEntry = (text: string) => /d-acceleration\/|^aidlc d |pr-lens-review|ui-poc-|pdm-deck/.test(text);
 const BEGIN = "# BEGIN AI-DLC D permissions", END = "# END AI-DLC D permissions";
 
 /** Write D's allow entries into the harness's own permission file. A harness without one is left alone. */
@@ -62,6 +68,7 @@ export function applyDPermissions(treeRoot: string, harness: string, harnessDir:
     const dRule = native
       ? `prefix_rule(pattern = ["aidlc", "d", [${D_HOST_ALLOWED_TOOLS.map((name) => JSON.stringify(name)).join(", ")}]], decision = "allow")`
       : `prefix_rule(pattern = ["bun", [\n${commands.filter((words) => words[0] === "bun").map((words) => `    ${JSON.stringify(words[1])}`).join(",\n")}\n]], decision = "allow")`;
-    writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}\n${BEGIN}\n${dRule}\n${END}\n`);
+    const pythonRule = `prefix_rule(pattern = ["python3", "-I", [${D_ALLOWED_PYTHON_TOOLS.map((file) => JSON.stringify(`${harnessDir}/tools/d-acceleration/${file}`)).join(", ")}]], decision = "allow")`;
+    writeFileSync(file, `${text.endsWith("\n") ? text : `${text}\n`}\n${BEGIN}\n${dRule}\n${pythonRule}\n${END}\n`);
   }
 }

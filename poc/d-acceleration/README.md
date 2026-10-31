@@ -99,6 +99,26 @@ on other harnesses `/aidlc --dashboard` refreshes it. Setup git-ignores the
 page. Milestones and DORA metrics are not shown, since the record holds no
 source for them; token totals appear only where the harness records usage.
 
+## PdM service proposal deck (`/aidlc --deck`)
+
+`/aidlc --deck` builds a consulting-style PowerPoint covering everything a
+product manager weighs when building a service: background and issues, market
+and competition, value and solution, scope and requirements, business model,
+KPIs, plan, risks, and decisions. The 31 pages in 9 sections come from
+`pdm-deck-catalog.json`, and every page is always built. A page without material
+is built as 未検討 with the questions it should answer, so a missing
+consideration shows.
+
+The model writes only a JSON spec (`pdm-deck-guide.md` holds the method):
+action titles first, confirmed by the person as a storyline, then the content.
+`pdm-deck.py` (python-pptx) checks the spec and draws it: action titles that
+state a conclusion, sources on every filled page, and bounded table, bullet, and
+timeline sizes. Screens come from the product's `design-baseline` through
+`ui-poc-baseline.cjs shot`. With a company template (`pdm-deck.py template`
+keeps it in the product's `pdm-deck/`), the deck uses that file's masters,
+layouts, and theme. Its slides are dropped and nothing of it is stored in this
+repository. Output lives in `aidlc/spaces/<space>/pdm-deck/`.
+
 ## Design document (`/aidlc --doc`)
 
 Ported from the KDDI harness. `/aidlc --doc` merges a product-level design

@@ -17,7 +17,7 @@
 //   verify --stage-dir <dir> --name <n>       the declared changes match diff
 //   show   --page <file>                     print a baseline or intent-copy page's HTML (read-only)
 //   shot   --page <file> --out <png> [--width N] [--height N]
-//            screenshot that page into design-document/figures/ for /aidlc --doc
+//            screenshot that page into design-document/figures/ (/aidlc --doc) or pdm-deck/figures/ (/aidlc --deck)
 //
 // Tools for determinism: every decision is a path, hash, or set comparison.
 // The person's folder path is read once and never recorded; the records name
@@ -208,7 +208,7 @@ function show({page}) {
 function shot({page, out, width, height}) {
   const full = baselinePage(page), target = path.resolve(out || '');
   const parts = target.split(path.sep), at = parts.lastIndexOf('figures');
-  if (!target.endsWith('.png') || at < 1 || parts[at - 1] !== 'design-document') throw Error('--out must be a .png inside design-document/figures/');
+  if (!target.endsWith('.png') || at < 1 || !['design-document', 'pdm-deck'].includes(parts[at - 1])) throw Error('--out must be a .png inside design-document/figures/ or pdm-deck/figures/');
   const size = (value, fallback) => { const n = value === undefined ? fallback : Number(value); if (!Number.isInteger(n) || n < 200 || n > 4000) throw Error('--width and --height must be whole numbers from 200 to 4000'); return n; };
   const fidelity = require('./ui-poc-fidelity.cjs'), browser = fidelity.browserExecutable();
   if (!browser) throw Error('no Chrome or Edge found; install one or set UI_POC_BROWSER_EXECUTABLE');

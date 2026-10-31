@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "note": "Every page a product manager's service proposal covers. pdm-deck.py builds every page in this order; a page the spec leaves without content is still built, marked 未検討, with its questions, so a missing consideration is visible.",
+  "sections": [
+    {"id": "summary", "title": "サマリー"},
+    {"id": "background", "title": "1. 背景と課題"},
+    {"id": "market", "title": "2. 市場と競合"},
+    {"id": "value", "title": "3. 提供価値とソリューション"},
+    {"id": "scope", "title": "4. スコープと要件"},
+    {"id": "business", "title": "5. ビジネスモデル"},
+    {"id": "kpi", "title": "6. KPI と計測"},
+    {"id": "plan", "title": "7. 実行計画"},
+    {"id": "risk", "title": "8. リスクと論点"},
+    {"id": "decision", "title": "9. 意思決定事項"}
+  ],
+  "pages": [
+    {"id": "executive-summary", "section": "summary", "topic": "エグゼクティブサマリー", "blocks": ["cards", "bullets"], "sources": ["intent-capture", "scope-definition", "approval-handoff"],
+     "questions": ["何を、誰のために、なぜ今やるのか（状況・課題・打ち手・効果）", "意思決定者に今回求める判断は何か", "効果は数字でいくらか、いつ出るか"]},
+    {"id": "agenda", "section": "summary", "topic": "目次", "blocks": ["bullets"], "sources": [], "questions": []},
+
+    {"id": "background", "section": "background", "topic": "背景と現状", "blocks": ["bullets", "table"], "sources": ["intent-capture", "market-research"],
+     "questions": ["事業・市場・社内で何が起きているか", "現状のサービスと運用はどうなっているか（数字で）", "このまま何もしないと何が起きるか"]},
+    {"id": "issue-tree", "section": "background", "topic": "課題の構造", "blocks": ["tree"], "sources": ["intent-capture", "requirements-analysis"],
+     "questions": ["解くべき中心の課題は何か", "課題は MECE に分解できているか", "どの課題を今回解き、どれを解かないか"]},
+    {"id": "personas", "section": "background", "topic": "対象ユーザーとペルソナ", "blocks": ["cards"], "sources": ["user-stories", "intent-capture"],
+     "questions": ["主な利用者は誰か（属性・利用場面・頻度）", "利用者ごとの困りごと・期待は何か", "対象外の利用者は誰か"]},
+    {"id": "user-jobs", "section": "background", "topic": "ユーザーの課題とジョブ", "blocks": ["table"], "sources": ["user-stories", "requirements-analysis"],
+     "questions": ["利用者は何を成し遂げたいのか（ジョブ）", "今どう解決していて、何が不満か", "その不満の大きさ・頻度は"]},
+
+    {"id": "market-size", "section": "market", "topic": "市場規模", "blocks": ["table", "bullets"], "sources": ["market-research"],
+     "questions": ["TAM / SAM / SOM はいくらか、算定根拠は", "対象セグメントの成長率は", "自社が取れる規模はどこまでか"]},
+    {"id": "market-trends", "section": "market", "topic": "市場・顧客動向", "blocks": ["bullets"], "sources": ["market-research"],
+     "questions": ["市場・技術・規制・顧客行動のどの変化が効くか", "その変化は追い風か向かい風か", "変化の時期と確度は"]},
+    {"id": "competitors", "section": "market", "topic": "競合比較", "blocks": ["table"], "sources": ["market-research"],
+     "questions": ["直接競合・代替手段は何か", "機能・価格・体験・チャネルでどう違うか", "競合が次に打つ手は"]},
+    {"id": "positioning", "section": "market", "topic": "ポジショニング", "blocks": ["matrix2x2"], "sources": ["market-research"],
+     "questions": ["どの 2 軸で差別化するか", "自社はどこに位置し、空白はどこか", "その位置は守れるか"]},
+
+    {"id": "value-proposition", "section": "value", "topic": "提供価値（バリュープロポジション）", "blocks": ["table", "callout"], "sources": ["intent-capture", "market-research"],
+     "questions": ["利用者の課題に対して何を約束するか", "なぜ競合ではなくこれを選ぶのか", "価値をどう検証するか"]},
+    {"id": "solution", "section": "value", "topic": "ソリューション概要", "blocks": ["cards", "bullets"], "sources": ["requirements-analysis", "domain-design"],
+     "questions": ["主な機能・体験は何か", "既存サービスのどこを変えるか", "作らずに済む方法はないか"]},
+    {"id": "user-flow", "section": "value", "topic": "主要なユーザーフロー", "blocks": ["image", "bullets"], "sources": ["refined-mockups", "design-baseline"],
+     "questions": ["利用者は入口から目的達成までどう進むか", "分岐・例外（未ログイン・エラー・解約）はどう扱うか", "既存の導線から何が変わるか"]},
+    {"id": "screens", "section": "value", "topic": "画面イメージ（現行→改修後）", "blocks": ["image", "image"], "sources": ["refined-mockups", "design-baseline"],
+     "questions": ["主要画面は現行からどう変わるか", "会員種別・状態ごとの出し分けは", "既存のトンマナと整合しているか"]},
+
+    {"id": "scope", "section": "scope", "topic": "スコープ（対象・対象外）", "blocks": ["table"], "sources": ["scope-definition"],
+     "questions": ["今回やること・やらないことは何か", "対象の基盤（Web・アプリ・CMS・API）は", "次のフェーズに回すものは"]},
+    {"id": "requirements", "section": "scope", "topic": "要件一覧と優先度", "blocks": ["table"], "sources": ["requirements-analysis", "user-stories", "scope-definition"],
+     "questions": ["機能要件は何か、優先度（Must / Should / Could / Won't）は", "受け入れ条件は決まっているか", "要件と課題・KPI はつながっているか"]},
+    {"id": "nonfunctional", "section": "scope", "topic": "非機能要件", "blocks": ["table"], "sources": ["requirements-analysis", "nfr-requirements"],
+     "questions": ["性能・可用性・セキュリティ・運用の要求水準は", "ピーク時の負荷と前提は", "既存の基準との差は"]},
+
+    {"id": "business-model", "section": "business", "topic": "収益モデルと価格", "blocks": ["table", "bullets"], "sources": ["market-research", "feasibility"],
+     "questions": ["誰から、何に対して、いくら得るか", "価格の根拠（競合・支払意思・原価）は", "既存プランとの関係（上位・下位・移行・日割り）は"]},
+    {"id": "unit-economics", "section": "business", "topic": "ユニットエコノミクス", "blocks": ["table"], "sources": ["feasibility"],
+     "questions": ["1 利用者あたりの収益・原価・獲得費用は", "LTV / CAC と回収期間は", "感度の高い前提はどれか"]},
+    {"id": "business-plan", "section": "business", "topic": "事業計画（収支・投資）", "blocks": ["table", "chart_bar"], "sources": ["feasibility", "approval-handoff"],
+     "questions": ["年度別の売上・費用・利益・投資額は", "損益分岐はいつか", "上振れ・下振れのシナリオは"]},
+
+    {"id": "kpi-tree", "section": "kpi", "topic": "KPI ツリー", "blocks": ["tree"], "sources": ["intent-capture"],
+     "questions": ["北極星指標は何か", "それを分解した先行指標・行動指標は", "各 KPI の目標値と達成時期は"]},
+    {"id": "measurement", "section": "kpi", "topic": "計測設計", "blocks": ["table"], "sources": ["intent-capture", "observability-setup"],
+     "questions": ["各 KPI をどのログ・イベントで測るか", "計測に追加開発は要るか", "いつ・誰が効果を評価するか"]},
+
+    {"id": "roadmap", "section": "plan", "topic": "ロードマップ", "blocks": ["timeline"], "sources": ["delivery-planning", "scope-definition"],
+     "questions": ["フェーズごとに何をいつ出すか", "マイルストーンと判断ポイントは", "依存する他施策は"]},
+    {"id": "organization", "section": "plan", "topic": "推進体制", "blocks": ["tree"], "sources": ["team-formation", "intent-capture"],
+     "questions": ["意思決定者・責任者・実行チームは誰か", "関係部門（法務・CS・営業・運用）の役割は", "外部パートナーは"]},
+    {"id": "release", "section": "plan", "topic": "リリースと移行", "blocks": ["table"], "sources": ["delivery-planning", "deployment-pipeline"],
+     "questions": ["どう公開するか（段階公開・A/B・一斉）", "既存ユーザー・既存データの移行は", "切り戻しの条件と手順は"]},
+    {"id": "go-to-market", "section": "plan", "topic": "告知と販売・CS", "blocks": ["table"], "sources": ["market-research", "approval-handoff"],
+     "questions": ["誰に、どのチャネルで、何を伝えるか", "販売・CS の準備（FAQ・問い合わせ対応）は", "告知の時期と規約・表示の確認は"]},
+
+    {"id": "risks", "section": "risk", "topic": "リスクと対策", "blocks": ["table"], "sources": ["feasibility"],
+     "questions": ["事業・技術・体制・スケジュール・コストのリスクは", "影響度と発生確率は", "対策と責任者は"]},
+    {"id": "compliance", "section": "risk", "topic": "法務・規約・セキュリティ", "blocks": ["table"], "sources": ["feasibility", "requirements-analysis"],
+     "questions": ["規約変更・表示（景品表示法など）・個人情報への影響は", "決済・契約上の確認事項は", "セキュリティ・監査の要求は"]},
+    {"id": "open-issues", "section": "risk", "topic": "前提・依存・未決事項", "blocks": ["table"], "sources": ["feasibility", "approval-handoff"],
+     "questions": ["置いている前提は何か、崩れたらどうなるか", "他部門・他システムへの依存は", "まだ決まっていないことと期限は"]},
+
+    {"id": "decisions", "section": "decision", "topic": "意思決定いただきたい事項", "blocks": ["table", "callout"], "sources": ["approval-handoff"],
+     "questions": ["今回決めてほしいことは何か", "選択肢と推奨案、その理由は", "決めない場合の影響は"]},
+    {"id": "next-steps", "section": "decision", "topic": "次のステップ", "blocks": ["table"], "sources": ["delivery-planning"],
+     "questions": ["承認後すぐ何をするか", "次の判断はいつ、何を材料にするか", "担当と期限は"]}
+  ]
+}
