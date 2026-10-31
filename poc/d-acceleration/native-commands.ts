@@ -3,6 +3,7 @@ export const D_NATIVE_TOOLS: Readonly<Record<string, string>> = Object.fromEntri
   "generic-auto-cli", "run", "host-stage-boundary", "ai-question-controller",
   "ai-question-answers", "ai-approval-controller", "host-session-cli", "parallel-guard",
   "design-document", "pr-lens-gate", "document-answers", "issue-autopilot-cli", "decision-issue-summary",
+  "dashboard",
 ].map((name) => [name, `${name}.ts`]));
 export const D_PROMPTED_TOOLS = new Set(["issue-autopilot-cli", "decision-issue-summary"]);
 

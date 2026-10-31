@@ -138,6 +138,16 @@ function ignoreDRuntime(P: string): boolean {
   return true;
 }
 
+const D_DASHBOARD_GITIGNORE = "# BEGIN AI-DLC D:dashboard\n# Regenerated after every turn from the records (dashboard.ts)\n/aidlc/spaces/*/dashboard.html\n# END AI-DLC D:dashboard\n";
+/** Keep the generated space dashboard out of the product's Git changes; added once, never rewritten. */
+export function ignoreDDashboard(P: string): boolean {
+  const path = join(P, ".gitignore");
+  const current = existsSync(path) ? readFileSync(path, "utf8") : "";
+  if (current.includes("# BEGIN AI-DLC D:dashboard")) return false;
+  writeFileSync(path, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${D_DASHBOARD_GITIGNORE}`);
+  return true;
+}
+
 function compose(p: ReturnType<typeof paths>): void {
   must(process.execPath, [join(p.pluginRoot, "hooks", "compose.ts")], p.P, "project-local compose", {
     AIDLC_PROJECT_DIR: p.P, AIDLC_PLUGIN_ROOT: p.pluginRoot, AIDLC_HARNESS_DIR: ".claude", AIDLC_HARNESS_NAME: "claude",
@@ -391,6 +401,7 @@ export async function install(src: string, product: string, answers: Readonly<Re
   must(process.execPath, configArgs(p, []), p.P, "official config apply");
   const cPayload = placeCPayload(p.S, p.P);
   const gitignoreAdded = ignoreDRuntime(p.P);
+  ignoreDDashboard(p.P);
   const composed = composeTwice(p);
   const report = await parity(p.S, p.P);
   if (!report.ok) throw new SetupStop(`package parity failed: ${JSON.stringify(report)}`);
@@ -457,6 +468,7 @@ export async function update(src: string, product: string, legacyInstallCommit?:
   if (!report.ok) throw new SetupStop(`package parity failed after update: ${JSON.stringify(report)}`);
   const pf = preflight(p.P);
   writeReceipt(p);
+  ignoreDDashboard(p.P);
   const config = configWithPrerequisites(p.P, writeDConfig(p.P, ".claude", {}, { create: false }));
   return { mode: "update", config, product: p.P, replacedComposeOwned: conflicts, replacedPluginFiles: stalePlugin, retiredLegacyDHooks, cPayload, composedTree: composed, parity: report, preflight: { uiBaseline: pf.uiBaseline, missing: pf.missing, runtime: pf.runtime } };
 }

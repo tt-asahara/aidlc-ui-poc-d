@@ -131,6 +131,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "Bash(bun .claude/tools/d-acceleration/design-document.ts *)",
       "Bash(bun .claude/tools/d-acceleration/pr-lens-gate.ts *)",
       "Bash(bun .claude/tools/d-acceleration/document-answers.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/dashboard.ts *)",
       "Bash(bun .claude/tools/pr-lens-review.ts *)",
       "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
@@ -330,6 +331,7 @@ describe("permissions.allow on the native release", () => {
       "Bash(aidlc d design-document *)",
       "Bash(aidlc d pr-lens-gate *)",
       "Bash(aidlc d document-answers *)",
+      "Bash(aidlc d dashboard *)",
       ...copyChannelDispatcherCommands().map((command) => `Bash(aidlc ${command})`),
     ]);
   });

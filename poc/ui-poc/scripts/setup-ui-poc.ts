@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { configWithPrerequisites, placeCPayload, treeHash } from "../../d-acceleration/fresh-install.ts";
+import { configWithPrerequisites, ignoreDDashboard, placeCPayload, treeHash } from "../../d-acceleration/fresh-install.ts";
 import { writeDConfig } from "../../d-acceleration/d-config-writer.ts";
 
 export class SetupStop extends Error {}
@@ -111,6 +111,7 @@ export function setupUiPoc(harness: string, src: string, product: string, dryRun
   const first = compose(p), second = compose(p);
   if (first !== second) throw new SetupStop("second compose changed the installed tree; compose is not idempotent");
   const config = configWithPrerequisites(p.P, writeDConfig(p.P, p.dir, answers), p.dir);
+  ignoreDDashboard(p.P);
   return { mode: "apply", ...plan, config, cPayload: payload, pluginFilesAdded: pluginFiles, composedTreeSha256: second, next: `open the project in ${p.harness === "codex" ? "Codex" : p.harness === "kiro" ? "Kiro CLI (kiro-cli chat)" : "Kiro IDE"} and run /aidlc --doctor` };
 }
 

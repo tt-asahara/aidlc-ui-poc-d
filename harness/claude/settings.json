@@ -18,6 +18,7 @@
       "Bash(bun .claude/tools/d-acceleration/design-document.ts *)",
       "Bash(bun .claude/tools/d-acceleration/pr-lens-gate.ts *)",
       "Bash(bun .claude/tools/d-acceleration/document-answers.ts *)",
+      "Bash(bun .claude/tools/d-acceleration/dashboard.ts *)",
       "Bash(bun .claude/tools/pr-lens-review.ts *)",
       "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",
@@ -94,6 +95,11 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook session-start",
             "timeout": 1800
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook d-dashboard-refresh",
+            "timeout": 30
           }
         ]
       }
@@ -224,6 +230,11 @@
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook continue-workflow",
             "timeout": 3600
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/{{HARNESS_DIR}}/tools/aidlc.ts\" engine hook d-dashboard-refresh",
+            "timeout": 30
           }
         ]
       }
