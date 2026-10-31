@@ -132,6 +132,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "Bash(bun .claude/tools/d-acceleration/pr-lens-gate.ts *)",
       "Bash(bun .claude/tools/d-acceleration/document-answers.ts *)",
       "Bash(bun .claude/tools/d-acceleration/dashboard.ts *)",
+      "Bash(python3 -I .claude/tools/d-acceleration/pdm-deck.py *)",
       "Bash(bun .claude/tools/pr-lens-review.ts *)",
       "Bash(bun .claude/tools/ui-poc-fidelity.cjs *)",
       "Bash(bun .claude/tools/ui-poc-element-matrix.cjs *)",

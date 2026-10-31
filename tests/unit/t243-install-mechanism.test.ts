@@ -8957,7 +8957,7 @@ describe("t243 projection channel", () => {
           ]);
         if (path === "aidlc.json") {
           expect(allowed.filter((command) => command.startsWith("aidlc d ")))
-            .toEqual(dAllowedCommands(".kiro", true).map((words) => `${words.join(" ")}( .*)?`));
+            .toEqual(dAllowedCommands(".kiro", true).filter((words) => words[0] === "aidlc").map((words) => `${words.join(" ")}( .*)?`));
         }
         for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);

@@ -130,7 +130,7 @@ test('show and shot read and picture only baseline or intent-copy pages, and sho
   assert.equal(baseline.show({page}).html, '<div>gate</div><script>x()</script>');
   assert.throws(() => baseline.show({page: path.join(w.exported, 'Web-13-gate.html')}), /design baseline or an intent/);
   const figures = path.join(w.root, 'aidlc', 'spaces', 'default', 'design-document', 'figures');
-  assert.throws(() => baseline.shot({page, out: path.join(w.root, 'elsewhere.png')}), /inside design-document\/figures/);
+  assert.throws(() => baseline.shot({page, out: path.join(w.root, 'elsewhere.png')}), /inside design-document\/figures\/ or pdm-deck\/figures/);
   assert.throws(() => baseline.shot({page, out: path.join(figures, 'a.png'), width: '50'}), /from 200 to 4000/);
   const fidelity = require('../tools/ui-poc-fidelity.cjs');
   if (!fidelity.browserExecutable()) return;

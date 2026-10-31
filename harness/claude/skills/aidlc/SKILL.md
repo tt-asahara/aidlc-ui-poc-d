@@ -12,7 +12,7 @@ description: >
   --summary-confirmation on|off, --statusline on|off, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and AI-DLC proposes a plan for it.
-argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full | --review] | --dashboard | --version | --help]"
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full | --review] | --deck | --dashboard | --version | --help]"
 user-invocable: true
 ---
 
@@ -34,7 +34,7 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 ## The Forwarding Loop
 
-When `{{HARNESS_DIR}}/tools/d-acceleration/orchestrator-d.md` exists, read it once now, before the loop below, and apply its sections where they say: D's Issue, `--auto`, `--doc`, `--dashboard` and `--from-docs` routes and delegated questions before the loop, its `invoke-swarm` guard, and its optional research fanout, batch waves, and checks inside `run-stage`. In every D command, `<PRODUCT>` is the absolute project directory written out literally.
+When `{{HARNESS_DIR}}/tools/d-acceleration/orchestrator-d.md` exists, read it once now, before the loop below, and apply its sections where they say: D's Issue, `--auto`, `--doc`, `--deck`, `--dashboard` and `--from-docs` routes and delegated questions before the loop, its `invoke-swarm` guard, and its optional research fanout, batch waves, and checks inside `run-stage`. In every D command, `<PRODUCT>` is the absolute project directory written out literally.
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
