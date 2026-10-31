@@ -131,9 +131,14 @@ describe("ordinary /aidlc D integration", () => {
     expect(commands).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook d-blocking-sensor-override');
   });
 
-  test("the ordinary skill invokes D automatically and preserves official fallback", () => {
-    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
-    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir <PRODUCT> --worker claude");
+  test("the ordinary skill reads the D module, which invokes D automatically and preserves official fallback", () => {
+    const entry = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    expect(entry).toContain(".claude/tools/d-acceleration/orchestrator-d.md` exists, read it once now");
+    expect(entry).toContain("first apply `orchestrator-d.md`'s `invoke-swarm` guard");
+    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "tools", "d-acceleration", "orchestrator-d.md"), "utf8");
+    expect(skill).toContain(".claude/tools/d-acceleration/run.ts --project-dir <PRODUCT>`");
+    expect(skill).not.toContain("--worker claude");
+    expect(skill).not.toContain("{{");
     expect(skill).toContain("generic-auto-cli.ts start --project-dir <PRODUCT> --description-file");
     expect(skill).toContain("d-auto-request-<random>.txt");
     expect(skill).toContain("generic-auto-cli.ts bootstrap --project-dir <PRODUCT>`");
@@ -157,7 +162,7 @@ describe("ordinary /aidlc D integration", () => {
   });
 
   test("the ordinary skill routes --doc to the installed design-document runtime", () => {
-    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "skills", "aidlc", "SKILL.md"), "utf8");
+    const skill = readFileSync(join(repo, "dist", "claude", ".claude", "tools", "d-acceleration", "orchestrator-d.md"), "utf8");
     expect(skill).toContain("design-document.ts doc-manifest --json --project-dir \"$PWD\"");
     expect(skill).toContain("design-document.ts doc-snapshot --project-dir \"$PWD\"");
     expect(skill).toContain("never pass `--doc` to the engine");

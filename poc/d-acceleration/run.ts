@@ -46,6 +46,13 @@ if (directive.gate || directive.kind !== "run-stage" || (!readOnlyStages.has(dir
   process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled, ...(parallelGuard ? { parallelGuard } : {}) }, null, 2)}\n`);
   process.exit(0);
 }
+// D's workers run the claude CLI. A product on another harness gets no worker
+// by default, so the step goes back to the host's ordinary path.
+const worker = value("--worker") ?? (dHarnessDir(projectDir) === ".claude" ? "claude" : null);
+if (!worker) {
+  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: "no-d-worker-for-this-harness", directive, enabled }, null, 2)}\n`);
+  process.exit(0);
+}
 if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   const input = value("--fanout-input");
   if (!input) { process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: "read-only-fanout-input-required", directive, enabled }, null, 2)}\n`); process.exit(2); }
@@ -55,7 +62,6 @@ if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   if (args.includes("--dry-run")) command.push("--dry-run");
   const result = runScriptSync(command[0]!, command.slice(1), { cwd: projectDir, encoding: "utf8" }); process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }
-const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
 const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
 for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);
