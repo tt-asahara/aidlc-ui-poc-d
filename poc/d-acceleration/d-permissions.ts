@@ -15,7 +15,7 @@ import { D_NATIVE_TOOLS, D_PROMPTED_TOOLS } from "./native-commands.ts";
 export const D_HOST_ALLOWED_TOOLS: readonly string[] = Object.keys(D_NATIVE_TOOLS).filter((name) => !D_PROMPTED_TOOLS.has(name));
 /** Plugin tools under `<harness dir>/tools/` that the D path runs. */
 export const D_ALLOWED_PLUGIN_TOOLS: readonly string[] = [
-  "pr-lens-review.ts", "ui-poc-fidelity.cjs", "ui-poc-element-matrix.cjs", "ui-poc-review-risks.cjs", "ui-poc-evidence.cjs",
+  "pr-lens-review.ts", "ui-poc-fidelity.cjs", "ui-poc-element-matrix.cjs", "ui-poc-review-risks.cjs", "ui-poc-evidence.cjs", "ui-poc-baseline.cjs",
 ];
 
 /**
