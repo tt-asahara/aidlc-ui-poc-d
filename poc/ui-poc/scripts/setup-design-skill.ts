@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Opt-in install of an optional refined-mockups design skill into an installed D PRODUCT.
 //
-//   bun poc/ui-poc/scripts/setup-design-skill.ts --product /abs/PRODUCT --skill <id> [--source /abs/folder] [--dry-run]
+//   bun poc/ui-poc/scripts/setup-design-skill.ts --product /abs/PRODUCT --skill <id> [--source /abs/folder] [--harness-dir .claude|.kiro|.codex] [--dry-run]
 //
 // Run from the D source checkout (SRC) after PRODUCT has this checkout's
 // composed C UI tools (poc/d-acceleration/fresh-install.ts install|update).
@@ -21,7 +21,9 @@
 // are ignored, every other file must be exactly one pinned file, and the folder
 // must hash to the pinned Git tree. Steps 1, 3, and 4 are the same.
 // It never changes uiDesign.refinedMockupSkill: choosing the skill stays the
-// person's decision in .claude/d-acceleration(.local).jsonc.
+// person's decision in <harness dir>/d-acceleration(.local).jsonc. The harness
+// directory is the one PRODUCT's composed C UI tools are installed in; when
+// several are, --harness-dir names it.
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -40,7 +42,19 @@ type Routing = {
   designSkillStatus(id: string, projectRoot: string): { ok: boolean; detail?: string };
   gitBlobHash(bytes: Buffer): string;
 };
-export type SetupOptions = { dryRun?: boolean; srcTools?: string; fetchUrl?: (repository: string) => string; source?: string };
+export type SetupOptions = { dryRun?: boolean; srcTools?: string; fetchUrl?: (repository: string) => string; source?: string; harnessDir?: string };
+export const HARNESS_DIRS = [".claude", ".kiro", ".codex"] as const;
+
+/** The harness directory holding PRODUCT's composed C UI routing tool. */
+export function productHarnessDir(P: string, requested?: string): string {
+  if (requested) {
+    if (!(HARNESS_DIRS as readonly string[]).includes(requested)) throw new SetupStop(`--harness-dir must be one of ${HARNESS_DIRS.join(", ")}`);
+    return requested;
+  }
+  const found = HARNESS_DIRS.filter((dir) => existsSync(join(P, dir, "tools", "ui-poc-c-routing.cjs")));
+  if (found.length > 1) throw new SetupStop(`PRODUCT has composed C UI tools in ${found.join(" and ")}; name one with --harness-dir`);
+  return found[0] ?? ".claude";
+}
 type PinnedEntry = { from: string; rel: string; executable: boolean };
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -111,7 +125,7 @@ function place(from: string, to: string, executable: boolean): boolean {
 export function setupDesignSkill(product: string, id: string, options: SetupOptions = {}) {
   if (!isAbsolute(product) || !existsSync(product)) throw new SetupStop("--product must be an existing absolute PRODUCT path");
   if (!id) throw new SetupStop("--skill <id> is required");
-  const P = realpathSync(product), installedTools = join(P, ".claude", "tools"), srcTools = options.srcTools ?? SRC_TOOLS;
+  const P = realpathSync(product), harnessDir = productHarnessDir(P, options.harnessDir), installedTools = join(P, harnessDir, "tools"), srcTools = options.srcTools ?? SRC_TOOLS;
   for (const rel of ROUTING_FILES) {
     const installed = join(installedTools, rel);
     if (!existsSync(installed)) throw new SetupStop(`PRODUCT has no composed C UI routing with design-skill selection (${rel}); install or update D first (poc/d-acceleration/fresh-install.ts)`);
@@ -121,7 +135,7 @@ export function setupDesignSkill(product: string, id: string, options: SetupOpti
   const cfg = routing.load();
   let choice: ReturnType<Routing["designChoice"]>;
   try { choice = routing.designChoice(cfg, id); } catch (error) { throw new SetupStop((error as Error).message); }
-  const next = `uiDesign.refinedMockupSkill is unchanged; set it to "${choice.id}" in .claude/d-acceleration.local.jsonc or .claude/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)`;
+  const next = `uiDesign.refinedMockupSkill is unchanged; set it to "${choice.id}" in ${harnessDir}/d-acceleration.local.jsonc or ${harnessDir}/d-acceleration.jsonc to use it (ui-poc-comparison always keeps the Arm C default)`;
   if (!choice.install) {
     const status = routing.designSkillStatus(choice.id, P);
     return { mode: options.dryRun ? "dry-run" : "apply", skill: choice.id, ready: status.ok, ...(status.ok ? {} : { detail: status.detail }), note: "the default design skill is the Arm C payload placed by D setup; nothing to fetch" };
@@ -175,7 +189,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const value = (flag: string) => { const at = args.indexOf(flag); return at >= 0 ? args[at + 1] ?? "" : ""; };
   try {
-    process.stdout.write(`${JSON.stringify(setupDesignSkill(value("--product"), value("--skill"), { dryRun: args.includes("--dry-run"), ...(args.includes("--source") ? { source: value("--source") } : {}) }), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(setupDesignSkill(value("--product"), value("--skill"), { dryRun: args.includes("--dry-run"), ...(args.includes("--source") ? { source: value("--source") } : {}), ...(args.includes("--harness-dir") ? { harnessDir: value("--harness-dir") } : {}) }), null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`design-skill setup stopped: ${(error as Error).message}\n`);
     process.exit(2);

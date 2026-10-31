@@ -1,7 +1,9 @@
 # D acceleration configuration
 
 正式名 `<project>/.claude/d-acceleration.jsonc` を読み、その各フィールドを
-`<project>/.claude/d-acceleration.local.jsonc` で上書きします。したがって
+`<project>/.claude/d-acceleration.local.jsonc` で上書きします。Kiro CLI・Kiro IDE・Codexでは
+`.claude` の代わりに `.kiro`・`.codex` の下の同じ名前のファイルを読みます。これらのharnessで
+効く設定は `uiDesign` とUI fidelity image settingsだけです（D accelerationとPR LensはClaude専用）。したがって
 local が project より優先されます。モデルの明示CLI引数だけは両ファイルより
 優先されます。
 
@@ -243,6 +245,10 @@ bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill impecc
 bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill ponta-pass-design --source /abs/ponta-pass-design --dry-run
 bun poc/ui-poc/scripts/setup-design-skill.ts --product "$PRODUCT" --skill ponta-pass-design --source /abs/ponta-pass-design
 ```
+
+Kiro CLI・Kiro IDE・Codexのproductでは、先に `poc/ui-poc/scripts/setup-ui-poc.ts --harness <kiro|kiro-ide|codex>` で
+AI-DLCとui-pocを入れます。`setup-design-skill.ts` は、合成済みのui-pocツールがあるharnessディレクトリを
+自分で見つけます。複数あるときは `--harness-dir .kiro` のように指定します。
 
 フォルダは記録と完全に一致する必要があります（Finderの `.DS_Store` だけは無視）。ファイルの追加・欠落・変更、
 symlinkがあれば何も書かずに停止します。スキルを更新したときは、lockとrouting設定の固定値も更新します。

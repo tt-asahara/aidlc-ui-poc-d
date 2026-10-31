@@ -6,7 +6,8 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(import.meta.url);
 const { check, contracts, engineFor } = require('./ui-poc-evidence.cjs');
-const { verify } = require('./ui-poc-c-routing.cjs');
+const { verify, harnessDirOf } = require('./ui-poc-c-routing.cjs');
+const harnessDir = harnessDirOf(dirname(fileURLToPath(import.meta.url)));
 
 function args(argv) {
   const out = {};
@@ -32,7 +33,7 @@ async function main(argv) {
       let imageFeatures = {};
       const configModule = resolve(dirname(fileURLToPath(import.meta.url)), 'd-acceleration', 'd-config.ts');
       if (existsSync(configModule)) imageFeatures = (await import(pathToFileURL(configModule).href)).resolveDFeatureFlags(process.cwd());
-      else if (['d-acceleration.json', 'd-acceleration.jsonc', 'd-acceleration.local.json', 'd-acceleration.local.jsonc'].some(name => existsSync(resolve(process.cwd(), '.claude', name)))) {
+      else if (['d-acceleration.json', 'd-acceleration.jsonc', 'd-acceleration.local.json', 'd-acceleration.local.jsonc'].some(name => existsSync(resolve(process.cwd(), harnessDir, name)))) {
         // A D configuration exists but its resolver is not installed: image
         // settings cannot be read, so fail closed instead of silently treating
         // mockupPngGeneration/visualRegression as OFF.

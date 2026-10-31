@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { OFFICIAL_PHASES, OFFICIAL_STAGES } from "./issue-autopilot.ts";
 import { DEFAULT_GROUNDING_LIMITS, groundingLimitError, type GroundingLimits } from "./grounding.ts";
 import { checkPrLensInstall, checkPrLensPluginComposed, PR_LENS_PIN, PR_LENS_VENDOR_DIR } from "./pr-lens-pin.ts";
@@ -137,8 +138,17 @@ function readConfig(path: string): DFileConfig {
   }
   return { models: result, gitPersistence: gitPersistence as Partial<DGitPersistenceConfig>, features: features as Partial<DFeatureFlags>, featureInputs: featureInputs as Partial<DFeatureInputs>, auto: auto as Partial<DAutomationConfig>, issueAutopilot: issueAutopilot as Partial<DIssueAutopilotConfig>, aiApproval: aiApproval as Partial<DAiApprovalConfig>, decisionIssueSummary: decisionIssueSummary as Partial<DDecisionIssueSummaryConfig>, parallel: parallel as Partial<DParallelConfig>, constructionDefaults: constructionDefaults as Partial<DConstructionDefaults>, uiDesign: uiDesign as { refinedMockupSkill?: string } };
 }
+/**
+ * The harness directory this resolver serves (`.claude`, `.kiro`, `.codex`).
+ * An installed copy lives at `<project>/<harness dir>/tools/d-acceleration/`,
+ * so its own location names the directory; the source checkout serves Claude.
+ */
+export function dHarnessDir(moduleUrl: string = import.meta.url): string {
+  const here = dirname(fileURLToPath(moduleUrl)), harness = basename(dirname(dirname(here)));
+  return basename(here) === "d-acceleration" && basename(dirname(here)) === "tools" && harness.startsWith(".") ? harness : ".claude";
+}
 function configPath(projectDir: string, stem: "d-acceleration" | "d-acceleration.local"): string {
-  const directory = join(projectDir, ".claude");
+  const directory = join(projectDir, dHarnessDir());
   const jsonc = join(directory, `${stem}.jsonc`);
   const legacyJson = join(directory, `${stem}.json`);
   if (existsSync(jsonc) && existsSync(legacyJson)) {
@@ -176,9 +186,9 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
   if (config.features.sourceGrounding) need("features.sourceGrounding", "featureInputs.sourceRoots is non-empty", config.featureInputs.sourceRoots.length > 0);
   if (config.features.specGrounding) need("features.specGrounding", "featureInputs.specRoots is non-empty", config.featureInputs.specRoots.length > 0);
   if (config.features.requirementIdValidation || config.features.mockupPngGeneration || config.features.visualRegression) {
-    const contract = join(projectDir, ".claude", "tools", "ui-poc", "c-stage-routing.json");
+    const contract = join(projectDir, dHarnessDir(), "tools", "ui-poc", "c-stage-routing.json");
     for (const name of ["requirementIdValidation", "mockupPngGeneration", "visualRegression"] as const) {
-      if (config.features[name]) need(`features.${name}`, "composed C UI contract (.claude/tools/ui-poc/c-stage-routing.json)", existsSync(contract));
+      if (config.features[name]) need(`features.${name}`, `composed C UI contract (${dHarnessDir()}/tools/ui-poc/c-stage-routing.json)`, existsSync(contract));
     }
   }
   if (config.features.prLensReview) {
@@ -189,8 +199,8 @@ export function checkDPrerequisites(projectDir: string, env: Record<string, stri
   }
   if (config.uiDesign.refinedMockupSkill !== null) {
     // The composed C routing tool owns the choice set, the pins, and the install check.
-    const routing = join(projectDir, ".claude", "tools", "ui-poc-c-routing.cjs");
-    const status = existsSync(routing) ? createRequire(import.meta.url)(routing).designSkillStatus(config.uiDesign.refinedMockupSkill, projectDir) as { ok: boolean; detail?: string } : { ok: false, detail: "composed C UI contract (.claude/tools/ui-poc-c-routing.cjs) is missing" };
+    const routing = join(projectDir, dHarnessDir(), "tools", "ui-poc-c-routing.cjs");
+    const status = existsSync(routing) ? createRequire(import.meta.url)(routing).designSkillStatus(config.uiDesign.refinedMockupSkill, projectDir) as { ok: boolean; detail?: string } : { ok: false, detail: `composed C UI contract (${dHarnessDir()}/tools/ui-poc-c-routing.cjs) is missing` };
     need("uiDesign.refinedMockupSkill", `"${config.uiDesign.refinedMockupSkill}" is a design-skill choice of the composed C routing and its pinned files and licences are installed${status.ok ? "" : `: ${status.detail}`}`, status.ok);
   }
   if (config.issueAutopilot.enabled) {

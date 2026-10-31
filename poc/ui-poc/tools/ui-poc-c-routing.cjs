@@ -9,6 +9,13 @@ const configPath = path.join(__dirname, 'ui-poc', 'c-stage-routing.json');
 const sourceLockPath = path.join(__dirname, 'ui-poc', 'treatments', 'source-lock.json');
 const designSkillLockPath = path.join(__dirname, 'ui-poc', 'design-skill-lock.json');
 const D_CONFIG_FILES = ['d-acceleration.json', 'd-acceleration.jsonc', 'd-acceleration.local.json', 'd-acceleration.local.jsonc'];
+// An installed tool lives at <project>/<harness dir>/tools/, so its own
+// location names the harness directory (.claude, .kiro, .codex) where D
+// configuration sits; the source checkout serves Claude.
+function harnessDirOf(toolsDir) {
+  const parent = path.basename(path.dirname(toolsDir));
+  return path.basename(toolsDir) === 'tools' && parent.startsWith('.') ? parent : '.claude';
+}
 const hash = b => crypto.createHash('sha256').update(b).digest('hex');
 const gitBlobHash = b => crypto.createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');
 const load = () => JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -150,7 +157,7 @@ function designChoice(cfg, id) {
 function resolveDesignSkill(projectRoot = process.cwd(), toolsDir = __dirname) {
   const resolver = path.join(toolsDir, 'd-acceleration', 'd-config.ts');
   if (!fs.existsSync(resolver)) {
-    if (D_CONFIG_FILES.some(name => fs.existsSync(path.join(projectRoot, '.claude', name)))) throw Error('D configuration is present but the D config resolver is not installed beside this tool; uiDesign.refinedMockupSkill cannot be resolved');
+    if (D_CONFIG_FILES.some(name => fs.existsSync(path.join(projectRoot, harnessDirOf(toolsDir), name)))) throw Error('D configuration is present but the D config resolver is not installed beside this tool; uiDesign.refinedMockupSkill cannot be resolved');
     return null;
   }
   const result = spawnSync(process.versions.bun ? process.execPath : 'bun', [resolver, 'print-ui-design', path.resolve(projectRoot)], {encoding: 'utf8'});
@@ -322,4 +329,4 @@ function main(argv) {
   } catch (e) { console.log(JSON.stringify(fail(e.message), null, 2)); process.exitCode = 1; }
 }
 if (require.main === module) main(process.argv.slice(2));
-module.exports = {plan, verify, load, lockedEntrypoint, lockedSource, engineRecord, engineGateStatus, stateField, deriveEngineContext, runtimeProfile, designChoice, resolveDesignSkill, designSkillStatus, gitBlobHash};
+module.exports = {harnessDirOf, plan, verify, load, lockedEntrypoint, lockedSource, engineRecord, engineGateStatus, stateField, deriveEngineContext, runtimeProfile, designChoice, resolveDesignSkill, designSkillStatus, gitBlobHash};

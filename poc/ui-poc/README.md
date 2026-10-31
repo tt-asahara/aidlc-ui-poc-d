@@ -141,3 +141,13 @@ machine-wide Claude marketplace. The same official composer performs
 no-clobber payload copies, sentinel contribution merges, provenance sidecars,
 and graph compilation; run it twice and require idempotent graph/sidecar hashes,
 zero compose drops, and `uiBaseline: C-composed` preflight before use.
+
+## Kiro CLI, Kiro IDE, and Codex
+
+This plugin also runs on Kiro CLI, Kiro IDE, and Codex. D acceleration does not yet: those harnesses carry only D's configuration resolver (`<harness dir>/tools/d-acceleration/d-config.ts`), so `uiDesign.refinedMockupSkill` and the image settings work there, and PR Lens review and automation stay Claude-only. Install the runtime, the pinned C payload, and the composed plugin with one command from the D checkout, after `bun scripts/package.ts <harness>` and `bun dist/claude/.claude/tools/aidlc-plugin-build.ts poc/ui-poc <harness>`:
+
+```bash
+bun poc/ui-poc/scripts/setup-ui-poc.ts --harness kiro|kiro-ide|codex --src "$PWD" --product <PRODUCT> --dry-run
+```
+
+Rerun without `--dry-run` to apply. Kiro and Kiro IDE take the plugin as AI-DLC's folder drop (`.kiro/aidlc-plugins/ui-poc/`); Codex composes from the build, so `/aidlc --doctor` in Codex reports the plugin as not installed in the host. Leave that warning: `engine plugin sync --prune-missing` would remove the composed plugin. D settings live in the harness directory (`.kiro/d-acceleration.jsonc`, `.codex/d-acceleration.jsonc`), and `setup-design-skill.ts` finds that directory itself, or takes `--harness-dir` when a product has more than one.

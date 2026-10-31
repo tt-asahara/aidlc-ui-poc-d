@@ -107,7 +107,7 @@ import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIn
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
-import { projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
+import { D_CONFIG_HARNESSES, D_CONFIG_RUNTIME, projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
 import { invalidNativeDInvocations, nativeDAllow, nativeDInvocations } from "../poc/d-acceleration/native-commands.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -952,6 +952,10 @@ function buildTree(
   // The collision guard and the file list live in poc/d-acceleration/d-projection.ts.
   if (m.name === "claude") {
     projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"));
+  } else if (D_CONFIG_HARNESSES.includes(m.name)) {
+    // The other harnesses run no D acceleration yet, but the ui-poc plugin
+    // reads D settings through the resolver, so they carry that much.
+    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"), D_CONFIG_RUNTIME, m.name);
   }
   const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
   if (fmMissed.length > 0) {
