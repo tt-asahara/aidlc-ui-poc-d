@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { docManifest, docSnapshot } from "../design-document.ts";
+import { docManifest, docReviewCheck, docSnapshot } from "../design-document.ts";
 
 const repo = join(import.meta.dir, "..", "..", "..");
 const cli = join(import.meta.dir, "..", "design-document.ts");
@@ -118,5 +118,56 @@ describe("/aidlc --doc deterministic inputs", () => {
     expect(JSON.parse(ok.stdout).intents).toHaveLength(2);
     const bad = spawnSync(process.execPath, [cli, "status", "--project-dir", root], { encoding: "utf8" });
     expect(bad.status).toBe(2);
+  });
+});
+
+describe("/aidlc --doc --review check", () => {
+  function reviewed() {
+    const root = project();
+    const doc = join(root, "aidlc", "spaces", "default", "design-document");
+    mkdirSync(join(doc, "00_設計管理"), { recursive: true });
+    mkdirSync(join(doc, "02_基本設計"), { recursive: true });
+    writeFileSync(join(doc, "README.md"), "# 設計書\n");
+    writeFileSync(join(doc, "02_基本設計", "05_画面遷移.md"), "# 画面遷移\nSCR-001 から SCR-002 へ進む。\n");
+    docSnapshot(root);
+    return { root, doc };
+  }
+  const log = (doc: string, findings: unknown[]) => {
+    writeFileSync(join(doc, "00_設計管理", "レビュー記録.md"), "# レビュー記録\n");
+    writeFileSync(join(doc, "00_設計管理", "レビュー記録.json"), JSON.stringify({ findings }));
+  };
+  const finding = (over: Record<string, unknown>) => ({ id: "R-001", kind: "見せ方", severity: "中", location: "02_基本設計/05_画面遷移.md#画面遷移", finding: "文章だけ", proposal: "遷移図を足す", status: "自動で反映", files: ["02_基本設計/05_画面遷移.md"], ...over });
+
+  test("a presentation change named by its finding passes, with questions left for the person", () => {
+    const { root, doc } = reviewed();
+    writeFileSync(join(doc, "02_基本設計", "05_画面遷移.md"), "# 画面遷移\n```mermaid\nflowchart LR\nSCR-001-->SCR-002\n```\nText fallback: SCR-001 → SCR-002\n");
+    log(doc, [finding({}), finding({ id: "R-002", kind: "問い", status: "確認待ち", files: undefined, finding: "未ログイン時は？", proposal: "人に確認" })]);
+    const result = docReviewCheck(root);
+    expect(result.findings).toEqual([]);
+    expect(result.changed).toEqual(["02_基本設計/05_画面遷移.md"]);
+    expect(result.counts).toEqual({ 自動で反映: 1, 確認待ち: 1 });
+  });
+
+  test("an edit no presentation finding names, or a content finding applied automatically, fails", () => {
+    const { root, doc } = reviewed();
+    writeFileSync(join(doc, "README.md"), "# 設計書\n要件を変えた\n");
+    log(doc, [finding({ id: "R-001", kind: "抜け漏れ", files: ["README.md"] })]);
+    const result = docReviewCheck(root);
+    expect(result.pass).toBeFalse();
+    expect(result.findings.join("\n")).toContain("only a 見せ方 finding may be applied automatically");
+    expect(result.findings.join("\n")).toContain("named by no 見せ方 finding applied automatically: README.md");
+  });
+
+  test("malformed records and a missing snapshot are reported", () => {
+    const root = project();
+    const doc = join(root, "aidlc", "spaces", "default", "design-document");
+    mkdirSync(join(doc, "00_設計管理"), { recursive: true });
+    log(doc, [finding({ id: "X1", severity: "最大", location: "nope.md" }), finding({ id: "X1" })]);
+    const text = docReviewCheck(root).findings.join("\n");
+    expect(text).toContain("id must look like R-001");
+    expect(text).toContain("id is used twice");
+    expect(text).toContain("severity must be one of");
+    expect(text).toContain("location nope.md does not exist");
+    expect(text).toContain("no snapshot of the document from before the review");
   });
 });

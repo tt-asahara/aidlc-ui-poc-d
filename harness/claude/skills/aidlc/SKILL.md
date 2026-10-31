@@ -12,7 +12,7 @@ description: >
   --summary-confirmation on|off, --statusline on|off, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and AI-DLC proposes a plan for it.
-argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full] | --dashboard | --version | --help]"
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --doc [--full | --review] | --dashboard | --version | --help]"
 user-invocable: true
 ---
 
