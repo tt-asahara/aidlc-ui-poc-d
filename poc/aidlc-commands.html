@@ -148,7 +148,7 @@
 <tr class="off"><td>AI 判断の GitHub 要約</td><td class="mono">decisionIssueSummary.enabled / send</td><td><span class="default-pill off">false</span></td><td>intent ごとに上の台帳から Issue 要約 payload を作る。送信には <code>send: true</code> と、repository・intent・payload hash を指定した本人の最新の許可文が必要。台帳が空なら <code>nothing-to-publish</code></td></tr>
 <tr class="off"><td>Issue オートパイロット</td><td class="mono">auto.enabled ＋ issueAutopilot.enabled</td><td><span class="default-pill off">false</span></td><td>それ自体は自動発火しない。<code>/loop 15m /aidlc-issue-autopilot &lt;label&gt;</code> で定期起動したときだけ、1回1件を処理する（①参照）</td></tr>
 <tr class="on"><td>ダッシュボード（dashboard.html）</td><td class="mono">—（コマンド・自動）</td><td><span class="default-pill on">自動</span></td><td><code>/aidlc --dashboard</code> で <code>aidlc/spaces/&lt;space&gt;/dashboard.html</code> を作り直す。Claude Code ではセッション開始時と毎ターン終了時に自動で更新（git には入れない）</td></tr>
-<tr class="manual"><td>設計書（design-document）</td><td class="mono">—（コマンド）</td><td><span class="default-pill manual">手動</span></td><td><code>/aidlc --doc</code> のみ。フェーズ境界での自動生成は無い</td></tr>
+<tr class="manual"><td>設計書（design-document）</td><td class="mono">—（コマンド）</td><td><span class="default-pill manual">手動</span></td><td><code>/aidlc --doc</code> のみ。フェーズ境界での自動生成は無い。<code>/aidlc --doc --review</code> で既存の設計書をレビュー（要件の問い・抜け漏れ・別案は確認待ちとして記録、図・表・画面遷移・スクリーンショットなどの見せ方だけ自動で改善）</td></tr>
 </tbody>
 </table>
 
