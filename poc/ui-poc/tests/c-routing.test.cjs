@@ -328,6 +328,13 @@ test('a design skill installed from a local folder verifies like a fetched one, 
   fs.rmSync(path.join(f.project,'.agents/skills/ponta-pass-design/SKILL.md'));
   assert.match(tools.routing.designSkillStatus('ponta-pass-design',f.project).detail,/--skill ponta-pass-design --source <your ponta-pass-design folder>$/);
 });
+test('ponta-pass-design asks every run for the original screens folder instead of an environment or default path', () => {
+  const adapter=JSON.parse(fs.readFileSync(path.join(__dirname,'../tools/ui-poc/c-stage-routing.json'),'utf8')).designSkillChoices['ponta-pass-design'].adapter;
+  assert.match(adapter,/on every run of this stage, ask the person through AI-DLC's pending-question flow for the absolute path of their folder of original Pontaパス screens/);
+  assert.match(adapter,/Never take the folder from PONTA_PASS_EXPORT, the skill's default ~\/Downloads folder, or an earlier run without asking/);
+  assert.match(adapter,/Pass the folder as ref\.py's first argument on every call/);
+  assert.match(adapter,/never the folder path/);
+});
 test('verify still requires the creator-confirmed Design Context for a selected design skill', t => {
   const tools=fakeDesignTools(t,'ui-ux-pro-max'),f=fixture(t,'refined-mockups',refinedFacts,'ui-poc-application',{...tools,designSkill:'ui-ux-pro-max'}),old=process.cwd();process.chdir(f.project);t.after(()=>process.chdir(old));
   f.events.find(x=>x.type==='skill-applied'&&x.skill==='ui-ux-pro-max').inputs.find(x=>x.name==='creator-confirmed-design-context-snapshot').kind='value';f.write();
