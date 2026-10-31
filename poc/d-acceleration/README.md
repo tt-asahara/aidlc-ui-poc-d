@@ -87,6 +87,18 @@ functional-design document discipline, source grounding, and specification
 grounding. Their lifecycle positions and non-authority contract are documented
 in `feature-21-22.md` and `grounding-integration.md`.
 
+## Workflow dashboard (`/aidlc --dashboard`)
+
+`dashboard.ts` writes one self-contained page, `aidlc/spaces/<space>/dashboard.html`,
+over every intent's official record (state file and audit shards, read
+through core): where the active intent stands, an intent list, a timeline,
+Construction Bolts by state, each stage's duration and reruns, and intents
+taken from GitHub Issues. It writes nothing else. On Claude Code the
+`d-dashboard-refresh` hook rewrites it at session start and after every turn;
+on other harnesses `/aidlc --dashboard` refreshes it. Setup git-ignores the
+page. Milestones and DORA metrics are not shown, since the record holds no
+source for them; token totals appear only where the harness records usage.
+
 ## Design document (`/aidlc --doc`)
 
 Ported from the KDDI harness. `/aidlc --doc` merges a product-level design
