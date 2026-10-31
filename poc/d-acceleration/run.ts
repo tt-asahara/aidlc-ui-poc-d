@@ -2,13 +2,13 @@
 import { runEngineSync, runScriptSync } from "./execution.ts";
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { CLEF_REMOVED, checkDPrerequisites, resolveDConfig, resolveDGitPersistence, resolveDModelContract, resolveDModels } from "./d-config.ts";
+import { CLEF_REMOVED, checkDPrerequisites, dHarnessDir, resolveDConfig, resolveDGitPersistence, resolveDModelContract, resolveDModels } from "./d-config.ts";
 import { enforceParallelOff } from "./parallel-guard.ts";
 import { prLensGate } from "./pr-lens-gate.ts";
 
 const args = process.argv.slice(2); const value = (flag: string) => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i + 1]; };
 const projectDir = value("--project-dir"); if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
-const runtime = join(projectDir, ".claude"); const tools = join(runtime, "tools"); const orchestrate = join(tools, "aidlc-orchestrate.ts");
+const runtime = join(projectDir, dHarnessDir(projectDir)); const tools = join(runtime, "tools"); const orchestrate = join(tools, "aidlc-orchestrate.ts");
 const required = [orchestrate, join(runtime, "sensors", "aidlc-ui-poc-evidence.md"), join(tools, "ui-poc", "c-stage-routing.json"), join(tools, "data", "plugin-contrib-ui-poc.json"), join(tools, "data", "plugin-files-ui-poc.json")];
 const missing = required.filter((path) => !existsSync(path));
 if (args.some((arg) => arg === "--clef-url" || arg === "--clef-low-risk-units")) { process.stderr.write(`${CLEF_REMOVED}; drop --clef-url/--clef-low-risk-units\n`); process.exit(2); }
@@ -46,6 +46,13 @@ if (directive.gate || directive.kind !== "run-stage" || (!readOnlyStages.has(dir
   process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: directive.gate ? "official-gate" : "unsupported-directive", directive, enabled, ...(parallelGuard ? { parallelGuard } : {}) }, null, 2)}\n`);
   process.exit(0);
 }
+// D's workers run the claude CLI. A product on another harness gets no worker
+// by default, so the step goes back to the host's ordinary path.
+const worker = value("--worker") ?? (dHarnessDir(projectDir) === ".claude" ? "claude" : null);
+if (!worker) {
+  process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: "no-d-worker-for-this-harness", directive, enabled }, null, 2)}\n`);
+  process.exit(0);
+}
 if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   const input = value("--fanout-input");
   if (!input) { process.stdout.write(`${JSON.stringify({ status: "official-host-action-required", reason: "read-only-fanout-input-required", directive, enabled }, null, 2)}\n`); process.exit(2); }
@@ -55,7 +62,6 @@ if (directive.kind === "run-stage" && readOnlyStages.has(directive.stage)) {
   if (args.includes("--dry-run")) command.push("--dry-run");
   const result = runScriptSync(command[0]!, command.slice(1), { cwd: projectDir, encoding: "utf8" }); process.stdout.write(result.stdout); process.stderr.write(result.stderr); process.exit(result.status ?? 1);
 }
-const worker = value("--worker") ?? "claude";
 const command = [join(import.meta.dir, "conductor.ts"), "--project-dir", projectDir, "--engine-dir", tools, "--worker", worker];
 const resolvedModels = resolveDModels(projectDir, { fast: value("--claude-fast"), balanced: value("--claude-balanced"), judgment: value("--claude-judgment") });
 for (const tier of ["fast", "balanced", "judgment"] as const) command.push(`--claude-${tier}`, resolvedModels.models[tier]);

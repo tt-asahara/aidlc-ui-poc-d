@@ -1,5 +1,5 @@
-// Packager-side projection of Arm D's Claude-only acceleration runtime into a
-// built `.claude/` tree (called by scripts/package.ts; never shipped itself).
+// Packager-side projection of Arm D's acceleration runtime into a built harness
+// tree (`.claude/`, `.kiro/`, `.codex/`) (called by scripts/package.ts; never shipped itself).
 //
 // core/ stays byte-identical to upstream AI-DLC, so D adds its own runtime in
 // `tools/d-acceleration/` and uniquely named dispatcher adapters in `hooks/`.
@@ -21,6 +21,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "native-entry.ts",
   "execution.ts",
   "model-routing.md",
+  "orchestrator-d.md",
   "hooks/aidlc-d-persistence-pre.ts",
   "hooks/aidlc-d-persistence-post.ts",
   "hooks/aidlc-d-reviewer-dispatch-cleanup.ts",
@@ -71,24 +72,8 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "worker-adapters.ts",
 ];
 
-/**
- * The D configuration resolver and its import closure. Harnesses without the
- * D runtime still ship it, because the ui-poc plugin reads its settings
- * (uiDesign.refinedMockupSkill, image features) through this one owner.
- */
-export const D_CONFIG_RUNTIME: readonly string[] = [
-  "d-config.ts",
-  "execution.ts",
-  "grounding.ts",
-  "issue-autopilot.ts",
-  "native-commands.ts",
-  "native-runtime.ts",
-  "pr-lens-pin.ts",
-  "worker-adapters.ts",
-];
-
-/** Harnesses that get only D_CONFIG_RUNTIME; Claude gets the full D runtime. */
-export const D_CONFIG_HARNESSES: readonly string[] = ["kiro", "kiro-ide", "codex"];
+/** Harnesses whose build carries the D runtime besides Claude. */
+export const D_HARNESSES: readonly string[] = ["kiro", "kiro-ide", "codex"];
 
 /** D-owned hook adapters use the stock dispatcher seam; runtime modules stay separate. */
 export function dProjectionPath(file: string): string {
@@ -126,7 +111,7 @@ export function dProjectionCollisions(projected: readonly string[], runtime: rea
 
 // D modules that import the engine read-only reach it through ../../core in
 // the source checkout and through the sibling ../ in a projected tree.
-function projectCoreImports(text: string): string {
+export function projectCoreImports(text: string): string {
   return text
     .replaceAll('from "../../core/tools/aidlc-directive.ts"', 'from "../aidlc-directive.ts"')
     .replaceAll('from "../../core/tools/aidlc-runtime-paths.ts"', 'from "../aidlc-runtime-paths.ts"')
@@ -137,8 +122,12 @@ function projectCoreImports(text: string): string {
     .replaceAll('from "../../core/tools/aidlc-lib.ts"', 'from "../aidlc-lib.ts"');
 }
 
-/** Copy the D runtime into `<treeRoot>/tools/d-acceleration/`, refusing any collision first. */
-export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME, harness = "claude"): void {
+/**
+ * Copy the D runtime into `<treeRoot>/tools/d-acceleration/`, refusing any collision first.
+ * `prose` is the packager's own token substitution for this tree; D Markdown
+ * carries the same `{{HARNESS_DIR}}`/`{{INVOKE}}` tokens core prose does.
+ */
+export function projectDAcceleration(treeRoot: string, accelerationRoot: string, runtime: readonly string[] = D_ACCELERATION_RUNTIME, harness = "claude", prose: (text: string) => string = (text) => text): void {
   for (const file of runtime) {
     const source = join(accelerationRoot, file);
     if (!existsSync(source) || !lstatSync(source).isFile()) throw new Error(`[${harness}] D acceleration runtime source is missing: ${file}`);
@@ -155,6 +144,7 @@ export function projectDAcceleration(treeRoot: string, accelerationRoot: string,
         ? text.replace(/from "\.\.\/([a-z0-9-]+\.ts)"/g, 'from "../tools/d-acceleration/$1"')
         : projectCoreImports(text));
     }
+    else if (file.endsWith(".md")) writeFileSync(destination, prose(readFileSync(source, "utf8")));
     else cpSync(source, destination);
   }
 }

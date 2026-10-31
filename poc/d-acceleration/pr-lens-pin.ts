@@ -3,11 +3,12 @@
 // install receipt, and the install check live here so the setup script, the
 // D preflight prerequisites, the Build and Test gate, and the plugin tool all
 // apply exactly the same rule. Built-in modules only: this file is projected
-// into PRODUCT/.claude/tools/d-acceleration/ and must resolve there.
+// into PRODUCT/<harness dir>/tools/d-acceleration/ and must resolve there.
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
+import { runtimeHarnessDir } from "../../core/tools/aidlc-runtime-paths.ts";
 
 export const PR_LENS_REPOSITORY = "https://github.com/coldteadotai/pr-lens.git";
 export const PR_LENS_PIN = "7a9115c8202da4db030be5954ada8862e6135dce";
@@ -99,11 +100,12 @@ export function writePrLensReceipt(projectDir: string): PrLensReceipt {
 
 /** The plugin is composed: its tool is installed and its Build and Test fragment is present. */
 export function checkPrLensPluginComposed(projectDir: string): { ok: boolean; detail: string } {
-  const tool = join(projectDir, ".claude", "tools", "pr-lens-review.ts");
-  const sidecar = join(projectDir, ".claude", "tools", "data", `plugin-contrib-${PR_LENS_PLUGIN}.json`);
-  const stage = join(projectDir, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
-  if (!existsSync(tool)) return { ok: false, detail: ".claude/tools/pr-lens-review.ts is missing" };
-  if (!existsSync(sidecar)) return { ok: false, detail: `.claude/tools/data/plugin-contrib-${PR_LENS_PLUGIN}.json is missing` };
+  const dir = runtimeHarnessDir(projectDir);
+  const tool = join(projectDir, dir, "tools", "pr-lens-review.ts");
+  const sidecar = join(projectDir, dir, "tools", "data", `plugin-contrib-${PR_LENS_PLUGIN}.json`);
+  const stage = join(projectDir, dir, "aidlc-common", "stages", "construction", "build-and-test.md");
+  if (!existsSync(tool)) return { ok: false, detail: `${dir}/tools/pr-lens-review.ts is missing` };
+  if (!existsSync(sidecar)) return { ok: false, detail: `${dir}/tools/data/plugin-contrib-${PR_LENS_PLUGIN}.json is missing` };
   if (!existsSync(stage) || !readFileSync(stage, "utf8").includes(`<!-- plugin:${PR_LENS_PLUGIN}:`)) return { ok: false, detail: "the Build and Test stage has no pr-lens-review fragment" };
   return { ok: true, detail: "composed" };
 }

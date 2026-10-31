@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { resolveDModels } from "./d-config.ts";
+import { dHarnessDir, resolveDModels } from "./d-config.ts";
+import { discoverProjectHarnesses } from "../../core/tools/aidlc-runtime-paths.ts";
 import { runWorker, type ModelIdentity, type WorkerUsage } from "./worker-adapters.ts";
 import { activeIntentDir, atomicWrite, canonicalJson, DOCUMENT_DELEGATION_PATH, DOCUMENT_DELEGATION_THROUGH, DOCUMENT_DRIVEN_SCOPE, grantHumanTurnRefusal, productionClaudeExecutable, sha256 as hash, within as inside } from "./ai-approval-controller.ts";
 import { runEngineSync } from "./execution.ts";
@@ -58,7 +59,7 @@ export function documentsChanged(root: string, intent: string, documents: KbDocu
 }
 
 /** The installed dispatcher; in a native install `runEngineSync` re-enters the compiled `aidlc` instead. */
-const defaultAidlcTool = (root: string) => join(root, ".claude", "tools", "aidlc.ts");
+const defaultAidlcTool = (root: string) => join(root, dHarnessDir(root), "tools", "aidlc.ts");
 
 /** Runs one official DocumentKB verb (`aidlc engine knowledge <verb>`), the single owner of that catalog. */
 function knowledge(root: string, aidlcTool: string, args: string[]): any {
@@ -118,7 +119,8 @@ export function stageDocuments(projectDir: string, from: string, aidlcTool?: str
   if (!existsSync(source) || lstatSync(source).isSymbolicLink()) throw new Error(`documents path is missing or a symlink: ${from}`);
   // Never sweep AI-DLC's own records, the harness, or the DocumentKB originals as hand-over documents.
   const real = realpathSync(source);
-  for (const owned of [join(root, "aidlc"), join(root, ".claude"), join(root, ".aidlc-engine")]) {
+  const harnessDirs = new Set([".claude", dHarnessDir(root), ...discoverProjectHarnesses(root).map((harness) => harness.harnessDir)]);
+  for (const owned of [join(root, "aidlc"), ...[...harnessDirs].map((dir) => join(root, dir)), join(root, ".aidlc-engine")]) {
     if (inside(owned, real) || inside(real, owned)) throw new Error(`hand over a folder or file of requirement documents, not one that is or contains ${posix(root, owned)}`);
   }
   const files: Array<{ absolute: string; rel: string }> = [];

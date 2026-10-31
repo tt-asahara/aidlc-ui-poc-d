@@ -108,6 +108,8 @@ import {
 } from "../harness/release-fixture.ts";
 import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { dAllowedCommands } from "../../poc/d-acceleration/d-permissions.ts";
+
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -8946,11 +8948,16 @@ describe("t243 projection channel", () => {
         if (!allowed) continue;
         expect(allowed).toContain(trustedCommand(".*"));
         expect(allowed.some((command) => command.startsWith("bun "))).toBe(false);
-        expect(allowed.filter((command) => command.includes("aidlc")))
+        // D's own `aidlc d <tool>` entries are checked against their one owner below.
+        expect(allowed.filter((command) => command.includes("aidlc") && !command.startsWith("aidlc d ")))
           .toEqual([
             trustedCommand(".*"),
             ...exactNative.map((command) => command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
           ]);
+        if (path === "aidlc.json") {
+          expect(allowed.filter((command) => command.startsWith("aidlc d ")))
+            .toEqual(dAllowedCommands(".kiro", true).map((words) => `${words.join(" ")}( .*)?`));
+        }
         for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }

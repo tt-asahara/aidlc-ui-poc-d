@@ -26,7 +26,7 @@ import { runEngineSync } from "./execution.ts";
 //   whatever env/machine/project/local swarm flag is set.
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveDParallel } from "./d-config.ts";
+import { dHarnessDir, resolveDParallel } from "./d-config.ts";
 
 export type ParallelGuardAction = "continue" | "refresh" | "stop";
 export type ParallelSerialization = "parallel-enabled" | "already-serial" | "set-serial" | "refused" | "unavailable";
@@ -40,7 +40,7 @@ export type ParallelGuardResult = {
 };
 
 export const PARALLEL_OFF_RECOVERY =
-  "D parallel.enabled is false in .claude/d-acceleration(.local).jsonc, but this Intent's official Construction Execution is still swarm. " +
+  "D parallel.enabled is false in the D configuration (d-acceleration(.local).jsonc), but this Intent's official Construction Execution is still swarm. " +
   "Ask to switch it to serial (aidlc-state.ts set-construction-execution serial, with --message <id> of the message they asked in), or set parallel.enabled to true; D hands off no swarm until then.";
 
 /** Current D master switch at this boundary. An unreadable configuration fails toward one worker. */
@@ -64,7 +64,7 @@ export function enforceParallelOff(options: { projectDir: string; engineDir?: st
   const enabled = options.parallelEnabled ?? currentDParallelEnabled(options.projectDir);
   const swarmHandOff = options.directive !== undefined && isSwarmHandOff(options.directive);
   if (enabled) return { action: "continue", reason: "parallel-enabled", parallel: { enabled: true, maxConcurrentWorkers: null }, construction: { executionBefore: null, serialization: "parallel-enabled" }, swarmHandOff };
-  const stateTool = join(options.engineDir ?? join(options.projectDir, ".claude", "tools"), "aidlc-state.ts");
+  const stateTool = join(options.engineDir ?? join(options.projectDir, dHarnessDir(options.projectDir), "tools"), "aidlc-state.ts");
   let executionBefore: string | null = null; let serialization: ParallelSerialization = "unavailable"; let detail: string | undefined;
   if (existsSync(stateTool)) {
     executionBefore = officialExecution(stateTool, options.projectDir, env);

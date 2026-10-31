@@ -11,7 +11,7 @@ import { appendFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, 
 import { tmpdir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { D_ACCELERATION_RUNTIME } from "../../d-acceleration/d-projection.ts";
+import { D_ACCELERATION_RUNTIME, projectCoreImports } from "../../d-acceleration/d-projection.ts";
 import { PR_LENS_CLI, PR_LENS_LICENSE_SHA256, PR_LENS_PIN, writePrLensReceipt } from "../../d-acceleration/pr-lens-pin.ts";
 
 const SRC = resolve(import.meta.dir, "..", "..", "..");
@@ -105,10 +105,10 @@ describe("pr-lens-review plugin contract", () => {
     expect(sha(readFileSync(join(PLUGIN, "LICENSES", "pr-lens", "LICENSE")))).toBe(PR_LENS_LICENSE_SHA256);
   });
 
-  test("the D gate and pin modules are packaged byte-identically into the Claude runtime", () => {
+  test("the D gate and pin modules are packaged into the Claude runtime exactly as projected", () => {
     for (const file of ["pr-lens-gate.ts", "pr-lens-pin.ts"]) {
       expect(D_ACCELERATION_RUNTIME).toContain(file);
-      expect(sha(readFileSync(join(DIST, "tools", "d-acceleration", file)))).toBe(sha(readFileSync(join(SRC, "poc", "d-acceleration", file))));
+      expect(sha(readFileSync(join(DIST, "tools", "d-acceleration", file)))).toBe(sha(Buffer.from(projectCoreImports(readFileSync(join(SRC, "poc", "d-acceleration", file), "utf8")))));
     }
   });
 });

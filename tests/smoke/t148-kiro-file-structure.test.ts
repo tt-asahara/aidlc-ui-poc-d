@@ -937,7 +937,8 @@ describe("t148 dist/kiro file structure", () => {
       const entries = [...fm.matchAll(/^ {8}- "([^"]*)"$/gm)].map((m) => m[1]);
       expect(entries.filter((entry) => entry === "aidlc engine *").length, `${tree} conductor`).toBe(tree === "dist" ? 0 : 1);
       if (tree === "dist-release") {
-        expect(entries.filter((entry) => entry.startsWith("aidlc ") && !entry.startsWith("aidlc engine ")), `${tree} conductor`)
+        // D's `aidlc d <tool>` entries come from poc/d-acceleration/d-permissions.ts.
+        expect(entries.filter((entry) => entry.startsWith("aidlc ") && !entry.startsWith("aidlc engine ") && !entry.startsWith("aidlc d ")), `${tree} conductor`)
           .toEqual(copyChannelDispatcherCommands().map((command) => `aidlc ${command}`));
       }
     }
