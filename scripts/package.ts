@@ -107,7 +107,7 @@ import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIn
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
-import { D_CONFIG_HARNESSES, D_CONFIG_RUNTIME, projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
+import { D_ACCELERATION_RUNTIME, D_HARNESSES, projectDAcceleration } from "../poc/d-acceleration/d-projection.ts";
 import { invalidNativeDInvocations, nativeDAllow, nativeDInvocations } from "../poc/d-acceleration/native-commands.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -945,17 +945,13 @@ function buildTree(
     }
   }
 
-  // Arm D's Claude-only acceleration runtime is authored beside its PoC so
-  // the experiment stays separable from the framework core.  A Claude
-  // projection nevertheless has to carry the runtime it tells /aidlc to run:
-  // installed projects cannot reach back into this source checkout.
+  // Arm D's acceleration runtime is authored beside its PoC so the experiment
+  // stays separable from the framework core. A projection nevertheless has to
+  // carry the runtime it tells /aidlc to run: installed projects cannot reach
+  // back into this source checkout.
   // The collision guard and the file list live in poc/d-acceleration/d-projection.ts.
-  if (m.name === "claude") {
-    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"));
-  } else if (D_CONFIG_HARNESSES.includes(m.name)) {
-    // The other harnesses run no D acceleration yet, but the ui-poc plugin
-    // reads D settings through the resolver, so they carry that much.
-    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"), D_CONFIG_RUNTIME, m.name);
+  if (m.name === "claude" || D_HARNESSES.includes(m.name)) {
+    projectDAcceleration(treeRoot, join(REPO_ROOT, "poc", "d-acceleration"), D_ACCELERATION_RUNTIME, m.name);
   }
   const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
   if (fmMissed.length > 0) {

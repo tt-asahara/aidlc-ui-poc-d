@@ -3,7 +3,7 @@ import { runEngineSync } from "./execution.ts";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { resolveDAutomation, resolveDConstructionDefaults, resolveDParallel } from "./d-config.ts";
+import { dHarnessDir, resolveDAutomation, resolveDConstructionDefaults, resolveDParallel } from "./d-config.ts";
 
 type Json = Record<string, unknown>;
 const argv = process.argv.slice(2);
@@ -13,7 +13,7 @@ const projectDir = value("--project-dir");
 if (!projectDir || !isAbsolute(projectDir)) throw new Error("--project-dir must be an absolute PRODUCT path");
 const product = realpathSync(projectDir);
 const sessionFile = value("--session-file") ?? ".aidlc-engine/d-autopilot-session.json";
-const runtime = join(product, ".claude", "tools");
+const runtime = join(product, dHarnessDir(product), "tools");
 const hostCli = join(import.meta.dir, "host-session-cli.ts");
 
 function runJson(executable: string, args: string[]): Json {

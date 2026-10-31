@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { resolveDAiApproval, resolveDModels } from "./d-config.ts";
+import { dConfigCandidates, resolveDAiApproval, resolveDModels } from "./d-config.ts";
 import { runWorker, type ModelIdentity, type ModelIdentityStatus, type WorkerLaunch, type WorkerUsage } from "./worker-adapters.ts";
 import { grantHumanTurnRefusal, productionClaudeExecutable } from "./ai-approval-controller.ts";
 import stagePolicy from "./stage-policy.json";
@@ -37,7 +37,7 @@ function activeIntent(root: string) {
   const intents = join(root, "aidlc", "spaces", space, "intents"); const intent = readFileSync(join(intents, "active-intent"), "utf8").trim();
   const dir = realpathSync(join(intents, intent)); if (!inside(root, dir)) throw new Error("active Intent escapes project"); return dir;
 }
-function configBindings(root: string) { return [".claude/d-acceleration.jsonc", ".claude/d-acceleration.json", ".claude/d-acceleration.local.jsonc", ".claude/d-acceleration.local.json"].filter((path) => existsSync(join(root, path))).map((path) => file(root, path, "configuration file")); }
+function configBindings(root: string) { return dConfigCandidates(root).filter((path) => existsSync(join(root, path))).map((path) => file(root, path, "configuration file")); }
 function atomic(path: string, body: string) { mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`; const fd = openSync(tmp, "wx", 0o600); try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); } renameSync(tmp, path); }
 function strings(value: unknown, label: string): string[] { if (!Array.isArray(value) || value.length > 64 || !value.every((x) => typeof x === "string" && x.trim() && x.length <= 4096)) throw new Error(`${label} is invalid`); return value.map((x) => String(x).trim()); }
 // A model may wrap its JSON in exactly one Markdown code fence. Unwrapping that
