@@ -72,6 +72,45 @@ describe("PdM deck tool", () => {
     expect(JSON.parse(run("check", "--spec", spec).stdout).findings[0]).toContain("every catalog page in catalog order");
   });
 
+  test("a waterfall must add up, a formula needs its operators, and wording problems are warnings that leave the check passing", () => {
+    const dir = temp(), spec = ghostSpec(dir);
+    edit(spec, (pages) => {
+      Object.assign(pages["unit-economics"], { status: "done", title: "上位プランで ARPU は600円に上がる", sources: ["f.md"],
+        blocks: [{ kind: "chart_bar", mode: "waterfall", unit: "ARPU、円", categories: ["現行", "差額", "着地"], series: [{ name: "ARPU", values: [540, 65, 600] }] }] });
+      Object.assign(pages["market-size"], { status: "done", title: "獲得余地は約62万人である", sources: ["m.md"],
+        blocks: [{ kind: "formula", terms: [{ value: "1,600万", label: "会員数" }, { value: "4%", label: "移行率" }], ops: [], result: { value: "62万", label: "会員" } }] });
+    });
+    const failing = JSON.parse(run("check", "--spec", spec).stdout).findings.join("\n");
+    expect(failing).toContain("the waterfall does not add up: start plus changes is 605, the end is 600");
+    expect(failing).toContain("formula needs 2 to 4 terms, one operator");
+    edit(spec, (pages) => {
+      pages["unit-economics"].blocks[0].series[0].values = [540, 60, 600];
+      pages["market-size"].blocks[0].ops = ["×"];
+      Object.assign(pages["personas"], { status: "done", title: "対象は3つの層である", sources: ["u.md"],
+        blocks: [{ kind: "cards", items: [{ title: "A", points: ["非常に使う"] }, { title: "B", points: ["使います"] }] }] });
+    });
+    const result = JSON.parse(run("check", "--spec", spec).stdout);
+    expect(result.pass).toBeTrue();
+    const warnings = result.warnings.join("\n");
+    expect(warnings).toContain("personas: reads as machine-written (非常に)");
+    expect(warnings).toContain("personas: the title says 3 but the page shows 2");
+    expect(warnings).toContain("unit-economics: a chart page says what the chart means");
+  });
+
+  test("outline lists every page with its number and status, then what each filled page says", () => {
+    const dir = temp(), spec = ghostSpec(dir);
+    edit(spec, (pages) => Object.assign(pages["competitors"], { status: "partial", title: "上位帯は空いている", sources: ["m.md"], gaps: ["価格の比較"],
+      blocks: [{ kind: "bullets", items: ["C 社だけが上位を持つ", "還元は弱い"] }] }));
+    const result = run("outline", "--spec", spec);
+    expect(result.status).toBe(0);
+    const competitors = 2 + catalog.pages.findIndex((p) => p.id === "competitors");
+    expect(result.stdout).toContain(`P.${competitors} 【一部未検討】上位帯は空いている`);
+    expect(result.stdout).toContain("P.3 目次");
+    expect(result.stdout).toContain("P.4 【未検討】背景と現状");
+    expect(result.stdout).toContain("C 社だけが上位を持つ / 還元は弱い");
+    expect(result.stdout).toContain("未検討の論点: 価格の比較");
+  });
+
   test.skipIf(!hasPptx)("build makes the cover and every page, with 未検討 pages for missing material and summary rows pointing at page numbers", () => {
     const dir = temp(), spec = ghostSpec(dir), out = join(dir, "deck.pptx");
     edit(spec, (pages) => Object.assign(pages["executive-summary"], {
