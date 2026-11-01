@@ -112,8 +112,11 @@ consideration shows.
 The model writes only a JSON spec (`pdm-deck-guide.md` holds the method):
 action titles first, confirmed by the person as a storyline, then the content.
 `pdm-deck.py` (python-pptx) checks the spec and draws it: action titles that
-state a conclusion, sources on every filled page, and bounded table, bullet, and
-timeline sizes. Screens come from the product's `design-baseline` through
+state a conclusion, sources on every filled page, bounded table, bullet, and
+timeline sizes, a waterfall that adds up, and advisory warnings for machine-sounding
+wording and a title whose count disagrees with its page. `outline` prints the
+deck as text for the storyline check and for a reviewer who has not seen how it
+was made (`pdm-deck-review.md`). Screens come from the product's `design-baseline` through
 `ui-poc-baseline.cjs shot`. With a company template (`pdm-deck.py template`
 keeps it in the product's `pdm-deck/`), the deck uses that file's masters,
 layouts, and theme. Its slides are dropped and nothing of it is stored in this

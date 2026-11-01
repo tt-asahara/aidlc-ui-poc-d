@@ -25,6 +25,7 @@ export const D_ACCELERATION_RUNTIME: readonly string[] = [
   "pdm-deck.py",
   "pdm-deck-catalog.json",
   "pdm-deck-guide.md",
+  "pdm-deck-review.md",
   "hooks/aidlc-d-persistence-pre.ts",
   "hooks/aidlc-d-persistence-post.ts",
   "hooks/aidlc-d-reviewer-dispatch-cleanup.ts",

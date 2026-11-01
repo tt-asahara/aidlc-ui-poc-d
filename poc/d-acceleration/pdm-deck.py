@@ -4,6 +4,7 @@
   python3 -I pdm-deck.py template --from company.pptx --deck-dir <pdm-deck folder>
   python3 -I pdm-deck.py ghost --out deck.json [--title T]
   python3 -I pdm-deck.py check --spec deck.json
+  python3 -I pdm-deck.py outline --spec deck.json   (the titles top to bottom, then each page as text)
   python3 -I pdm-deck.py build --spec deck.json --out deck.pptx [--template company.pptx] [--only id,id]
     (--only builds just those pages, for a quick look; the deck itself is always every page)
 
@@ -33,8 +34,19 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 CATALOG = os.path.join(HERE, "pdm-deck-catalog.json")
 STATUSES = ("done", "partial", "missing")
-BLOCK_KINDS = ("summary", "bullets", "table", "cards", "stats", "steps", "callout", "tree", "matrix2x2", "timeline",
+BLOCK_KINDS = ("summary", "bullets", "table", "cards", "stats", "steps", "formula", "callout", "tree", "matrix2x2", "timeline",
                "chart_bar", "image", "before_after", "implication")
+CHART_MODES = ("clustered", "stacked", "waterfall")
+OPERATORS = ("×", "+", "−", "÷")
+# Words that read as machine-written in a Japanese business deck: empty emphasis, katakana padding,
+# slogans, stock openings and closings, and the names of thinking frameworks shown on the page.
+AI_SMELL = ("非常に", "極めて", "圧倒的", "画期的", "革新的", "次世代の", "と言っても過言ではない", "に他なりません", "シームレス",
+            "シナジー", "エンドツーエンド", "ブラッシュアップ", "寄り添", "伴走", "二人三脚", "邁進", "さらなる高み", "昨今",
+            "変化の激しい時代", "現代において", "することが可能", "と言えるでしょう", "と考えられます", "詳細は別途", "追ってご連絡",
+            "今後検討してまいります", "いかがでしたでしょうか", "Situation", "Complication", "Resolution", " — ")
+TYPED_MARKS = ("・", "•", "■", "□", "- ", "－", "※")
+COUNTERS = "つ本段階点層案件項目社"
+KANJI_NUMBERS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 LIMITS = {"title": 60, "bullets": 8, "bullet": 80, "rows": 10, "cols": 6, "cell": 60, "cards": 4, "card_points": 5,
           "stats": 4, "steps": 6, "summary": 5, "details": 3, "implication": 5, "gaps": 3}
 RATINGS = {"●": 1.0, "◕": 0.75, "◑": 0.5, "◔": 0.25, "○": 0.0}
@@ -163,10 +175,25 @@ def check_block(page_id, index, block, base_dir, page_ids, problems):
                 start, end = item.get("start", -1), item.get("end", -1)
                 if not (isinstance(start, int) and isinstance(end, int) and 0 <= start <= end < len(periods)):
                     problems.append(f"{where}: timeline item {item.get('label')!r} must span period indexes 0..{len(periods) - 1}")
+    elif kind == "formula":
+        terms, ops = block.get("terms") or [], block.get("ops") or []
+        if len(terms) < 2 or len(terms) > 4 or len(ops) != len(terms) - 1 or any(op not in OPERATORS for op in ops):
+            problems.append(f"{where}: formula needs 2 to 4 terms, one operator ({' '.join(OPERATORS)}) between each pair, and a result")
+        if not (block.get("result") or {}).get("value") or any(not t.get("value") or not t.get("label") for t in terms):
+            problems.append(f"{where}: every formula term and the result need a value and a label")
     elif kind == "chart_bar":
         categories, series = block.get("categories") or [], block.get("series") or []
+        mode = block.get("mode", "clustered")
         if not categories or not series or any(len(s.get("values") or []) != len(categories) for s in series):
             problems.append(f"{where}: chart_bar needs categories and one value per category in every series")
+        if mode not in CHART_MODES:
+            problems.append(f"{where}: chart_bar mode must be one of {', '.join(CHART_MODES)}")
+        elif mode == "waterfall":
+            values = (series[0].get("values") or []) if series else []
+            if len(series) != 1 or len(values) < 3:
+                problems.append(f"{where}: a waterfall has one series: the start, the changes, and the end")
+            elif abs(sum(values[:-1]) - values[-1]) > 1e-6 * max(1.0, abs(values[-1])):
+                problems.append(f"{where}: the waterfall does not add up: start plus changes is {sum(values[:-1]):g}, the end is {values[-1]:g}")
         if not block.get("unit"):
             problems.append(f"{where}: chart_bar needs unit (what is measured, the unit and the period, e.g. 売上、億円、年度)")
     elif kind == "image":
@@ -178,6 +205,88 @@ def check_block(page_id, index, block, base_dir, page_ids, problems):
             path = (block.get(side) or {}).get("path")
             if not path or not os.path.isfile(os.path.join(base_dir, path)):
                 problems.append(f"{where}: {side} image {path!r} does not exist (paths are relative to the spec)")
+
+
+def block_texts(block):
+    """Every sentence a block puts on the page, for the wording checks and the outline."""
+    out = []
+    for key in ("heading", "text", "root", "unit", "x", "y"):
+        if block.get(key):
+            out.append(str(block[key]))
+    for item in block.get("items") or []:
+        if isinstance(item, dict):
+            out += [str(item[k]) for k in ("text", "title", "label", "value", "caption", "body", "note") if item.get(k)]
+            out += [str(v) for k in ("details", "points", "sub", "items") for v in item.get(k) or []]
+        else:
+            out.append(str(item))
+    out += [str(c) for c in block.get("columns") or []] + [str(c) for row in block.get("rows") or [] for c in row]
+    for child in block.get("children") or []:
+        out.append(str(child.get("label", "")))
+        out += [str(g.get("label", "")) for g in child.get("children") or []]
+    for quad in block.get("quadrants") or []:
+        out += [str(quad.get("label", ""))] + [str(i) for i in quad.get("items") or []]
+    for lane in block.get("lanes") or []:
+        out += [str(lane.get("label", ""))] + [str(i.get("label", "")) for i in lane.get("items") or []]
+    for term in (block.get("terms") or []) + ([block["result"]] if block.get("result") else []):
+        out += [str(term.get("value", "")), str(term.get("label", ""))]
+    for side in ("before", "after"):
+        out += [str(p) for p in (block.get(side) or {}).get("points") or []]
+    return [t for t in out if t]
+
+
+def counted(title):
+    """The number a title promises ("3つの層", "4段階"), or None."""
+    import re
+    match = re.search(r"([0-9０-９]+|[一二三四五六七八九十])\s*(?:つ|本|段階|点|層|案|件|項目|社)", title)
+    if not match:
+        return None
+    raw = match.group(1)
+    return KANJI_NUMBERS.get(raw) or int(raw.translate(str.maketrans("０１２３４５６７８９", "0123456789")))
+
+
+def main_count(block):
+    kind = block.get("kind")
+    if kind in ("cards", "steps", "summary", "stats"):
+        return len(block.get("items") or [])
+    if kind == "table":
+        return len(block.get("rows") or [])
+    if kind == "tree":
+        return len(block.get("children") or [])
+    return None
+
+
+def warnings_for(spec):
+    """Things a reader trips over that a rule cannot settle alone; build still runs."""
+    found, kinds = [], []
+    for page in spec.get("pages") or []:
+        pid = page.get("id")
+        if page.get("status") == "missing" or pid == "agenda":
+            kinds.append(None)
+            continue
+        blocks = page.get("blocks") or []
+        texts = [page.get("title") or ""] + [t for b in blocks for t in block_texts(b)] + list(page.get("notes") or [])
+        smells = sorted({word.strip() for word in AI_SMELL for t in texts if word in t})
+        if smells:
+            found.append(f"{pid}: reads as machine-written ({'、'.join(smells)}); say it plainly")
+        bullets_ = [str(i.get("text") if isinstance(i, dict) else i) for b in blocks if b.get("kind") in ("bullets", "implication") for i in b.get("items") or []]
+        if any(t.rstrip("。").endswith(("です", "ます")) for t in bullets_):
+            found.append(f"{pid}: write bullets in plain form (である調), not です・ます")
+        listed = bullets_ + [str(v) for b in blocks for i in b.get("items") or [] if isinstance(i, dict) for k in ("details", "points", "sub") for v in i.get(k) or []]
+        if any(t.lstrip().startswith(TYPED_MARKS) for t in listed):
+            found.append(f"{pid}: a line starts with a typed mark (・ • ■ - ※); the tool draws the bullets")
+        if any("。" in t.rstrip("。") for b in blocks if b.get("kind") == "table" for row in b.get("rows") or [] for t in map(str, row)):
+            found.append(f"{pid}: one sentence per table cell")
+        promised = counted(page.get("title") or "")
+        actual = next((main_count(b) for b in blocks if main_count(b) is not None), None)
+        if promised is not None and actual is not None and promised != actual:
+            found.append(f"{pid}: the title says {promised} but the page shows {actual}; check that they count the same thing")
+        if any(b.get("kind") == "chart_bar" for b in blocks) and not any(b.get("kind") == "implication" for b in blocks):
+            found.append(f"{pid}: a chart page says what the chart means; add an implication block")
+        main = next((b.get("kind") for b in blocks if b.get("kind") != "implication"), None)
+        kinds.append(main)
+        if main and len(kinds) >= 3 and kinds[-1] == kinds[-2] == kinds[-3]:
+            found.append(f"{pid}: the third page in a row drawn as {main}; vary the shape to fit what each page shows")
+    return found
 
 
 def check(spec, base_dir):
@@ -227,9 +336,40 @@ def check(spec, base_dir):
             problems.append(f"{pid}: a partial page needs gaps (what is still not considered)")
         if len(page.get("gaps") or []) > LIMITS["gaps"]:
             problems.append(f"{pid}: at most {LIMITS['gaps']} gaps; move the rest to open-issues")
+        if len(page.get("notes") or []) > 2 or any(_len(note) > 120 for note in page.get("notes") or []):
+            problems.append(f"{pid}: at most 2 notes of 120 characters (assumptions and formulas behind the numbers)")
         for index, block in enumerate(blocks):
             check_block(pid, index, block, base_dir, expected, problems)
-    return {"pass": not problems, "findings": problems, "counts": counts}
+    return {"pass": not problems, "findings": problems, "warnings": warnings_for(spec), "counts": counts}
+
+
+def outline(spec):
+    """The deck as text: every page's number, status and title, then what it says. For reading the
+    storyline top to bottom and for a reviewer who reads without the slides."""
+    catalog = load_catalog()
+    pages = {p.get("id"): p for p in spec.get("pages") or []}
+    lines = [f"# {spec.get('title') or 'サービス企画書'}", ""]
+    for index, meta in enumerate(catalog["pages"]):
+        page = pages.get(meta["id"]) or {}
+        status = page.get("status", "missing")
+        mark = "" if meta["id"] == "agenda" else {"done": "", "partial": "【一部未検討】", "missing": "【未検討】"}[status if status in STATUSES else "missing"]
+        title = page.get("title") or meta["topic"]
+        lines.append(f"P.{index + 2} {mark}{title}")
+    lines += ["", "---", ""]
+    for index, meta in enumerate(catalog["pages"]):
+        page = pages.get(meta["id"]) or {}
+        if page.get("status", "missing") == "missing" or meta["id"] == "agenda":
+            continue
+        lines.append(f"## P.{index + 2} {page.get('title', '')}")
+        for block in page.get("blocks") or []:
+            lines.append(f"- [{block.get('kind')}] " + " / ".join(block_texts(block)))
+        for gap in page.get("gaps") or []:
+            lines.append(f"- 未検討の論点: {gap}")
+        for note in page.get("notes") or []:
+            lines.append(f"- 注: {note}")
+        lines.append(f"- 出典: {'、'.join(page.get('sources') or [])}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +401,7 @@ def build(spec, base_dir, out, template, only=None):
     from pptx.oxml.ns import qn
     from pptx.util import Emu, Inches, Pt
     from lxml import etree
+    import re
 
     # Theme slots: MAIN structures the page, HILITE marks the one thing to look at
     # (and 未検討), GREY and LIGHT are the neutrals.
@@ -469,7 +610,7 @@ def build(spec, base_dir, out, template, only=None):
         left, top, width, height = title_box(slide)
         text(slide, left, top, width, height, value, 22, True, anchor=MSO_ANCHOR.MIDDLE)
 
-    def frame(slide, title, section, sources, status):
+    def frame(slide, title, section, sources, status, notes=()):
         set_title(slide, title)
         # The page's place in the deck, right-aligned under the title rule; the status chip sits before it.
         tag_w = Inches(3.2)
@@ -479,8 +620,20 @@ def build(spec, base_dir, out, template, only=None):
             cw = Inches(0.95 if status == "missing" else 1.2)
             used = Inches(text_units(section) * 10 / 72 + 0.15)
             text(slide, X1 - used - cw, Inches(1.03), cw, Inches(0.26), label, 10, True, PAPER, PP_ALIGN.CENTER, MSO_ANCHOR.MIDDLE, fill=(HILITE,))
+        if notes:
+            text(slide, X0, SOURCE_Y - Inches(0.24) * len(notes), W - Inches(2.4), Inches(0.24) * len(notes),
+                 ["注：" + note for note in notes], 9, False, GREY, anchor=MSO_ANCHOR.BOTTOM)
         if sources:
-            text(slide, X0, SOURCE_Y, W - Inches(2.4), Inches(0.24), "出典：" + "／".join(sources), 9, False, GREY, anchor=MSO_ANCHOR.MIDDLE)
+            box = text(slide, X0, SOURCE_Y, W - Inches(2.4), Inches(0.24), "", 9, False, GREY, anchor=MSO_ANCHOR.MIDDLE)
+            paragraph = box.text_frame.paragraphs[0]
+            for i, source in enumerate(["出典："] + list(sources)):
+                link = re.fullmatch(r"\[(.+?)\]\((https?://[^)\s]+)\)", source.strip()) if i else None
+                run = paragraph.add_run()
+                run.text = (link.group(1) if link else source) + ("／" if 0 < i < len(sources) else "")
+                run.font.size = Pt(9)
+                paint(run.font.color, GREY)
+                if link:
+                    run.hyperlink.address = link.group(2)
 
     # ---- block measuring: the natural height of a block at a width -----------
     def bullets_height(items, w_in, size):
@@ -545,6 +698,8 @@ def build(spec, base_dir, out, template, only=None):
             cw = (w_in - 0.08 * (n - 1)) / n
             body = max([bullets_height(step_points(item), cw - 0.1, size) for item in block["items"]] + [0])
             return 0.85 + (0.15 + body if body else 0)
+        if kind == "formula":
+            return 1.95
         if kind == "callout":
             return text_height(line_count(block["text"], w_in - 0.3, size + 3), size + 3) + 0.2
         if kind == "implication":
@@ -868,17 +1023,37 @@ def build(spec, base_dir, out, template, only=None):
     def chart_bar(slide, block, x, y, w, h, size):
         text(slide, x, y, w, Inches(0.3), block["unit"], size, True, INK, anchor=MSO_ANCHOR.MIDDLE)
         rule(slide, x, y + Inches(0.34), x + w, y + Inches(0.34), MAIN, 1.0)
+        mode = block.get("mode", "clustered")
         data = CategoryChartData()
         data.categories = block["categories"]
-        for series in block["series"]:
-            data.add_series(series.get("name", ""), series["values"])
-        kind = XL_CHART_TYPE.BAR_CLUSTERED if block.get("horizontal") else XL_CHART_TYPE.COLUMN_CLUSTERED
+        if mode == "waterfall":
+            # A bridge: an invisible base carries each change up to where the running total stands.
+            values = block["series"][0]["values"]
+            base, up, down, total, running = [], [], [], [], 0.0
+            for i, value in enumerate(values):
+                if i == 0 or i == len(values) - 1:
+                    base.append(0); up.append(0); down.append(0); total.append(value)
+                    running = value if i == 0 else running
+                    continue
+                low = running if value >= 0 else running + value
+                base.append(low); up.append(max(value, 0)); down.append(max(-value, 0)); total.append(0)
+                running += value
+            for name, series_values in (("base", base), ("total", total), ("up", up), ("down", down)):
+                data.add_series(name, series_values)
+            kind = XL_CHART_TYPE.COLUMN_STACKED
+        else:
+            for series in block["series"]:
+                data.add_series(series.get("name", ""), series["values"])
+            if mode == "stacked":
+                kind = XL_CHART_TYPE.BAR_STACKED if block.get("horizontal") else XL_CHART_TYPE.COLUMN_STACKED
+            else:
+                kind = XL_CHART_TYPE.BAR_CLUSTERED if block.get("horizontal") else XL_CHART_TYPE.COLUMN_CLUSTERED
         many = len(block["series"]) > 1
         top = Inches(0.45)
         chart = slide.shapes.add_chart(kind, int(x), int(y + top), int(w), int(h - top), data).chart
         chart.font.size = Pt(size)
-        chart.has_legend = many
-        if many:
+        chart.has_legend = many and mode != "waterfall"
+        if chart.has_legend:
             chart.legend.position, chart.legend.include_in_layout = XL_LEGEND_POSITION.TOP, False
             chart.legend.font.size = Pt(size - 1)
         value_axis = chart.value_axis
@@ -890,18 +1065,45 @@ def build(spec, base_dir, out, template, only=None):
         paint(category_axis.format.line.fill.fore_color, GREY)
         plot = chart.plots[0]
         plot.gap_width = 60
-        plot.overlap = -10 if many else 0
+        if mode == "clustered":
+            plot.overlap = -10 if many else 0
+        else:
+            plot.overlap = 100
         plot.has_data_labels = True
         labels = plot.data_labels
         labels.font.size, labels.font.bold = Pt(size), True
-        labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        if mode == "clustered":
+            labels.position = XL_LABEL_POSITION.OUTSIDE_END
+        number = block.get("number_format") or "#,##0"
         if block.get("number_format"):
             labels.number_format, labels.number_format_is_linked = block["number_format"], False
-        tones = [(MAIN, 0.0), (GREY, 0.0), (PALE, 0.0)]
+        if mode == "waterfall":
+            looks = {"base": (None, None), "total": ((MAIN, 0.0), number + ";;"), "up": ((SUB, 0.0), '"+"' + number + ";;"),
+                     "down": ((HILITE, 0.0), '"−"' + number + ";;")}
+            for series, name in zip(plot.series, ("base", "total", "up", "down")):
+                fill, fmt = looks[name]
+                if fill is None:
+                    series.format.fill.background()
+                    series.format.line.fill.background()
+                    series.data_labels.show_value = False
+                    continue
+                series.format.fill.solid()
+                paint(series.format.fill.fore_color, *fill)
+                series.format.line.fill.background()
+                series.data_labels.number_format, series.data_labels.number_format_is_linked = fmt, False
+                series.data_labels.position = XL_LABEL_POSITION.INSIDE_END if name != "total" else XL_LABEL_POSITION.INSIDE_END
+                series.data_labels.font.size, series.data_labels.font.bold = Pt(size), True
+                paint(series.data_labels.font.color, PAPER)
+            return
+        tones = [(MAIN, 0.0), (SUB, 0.0), (PALE, 0.0), (GREY, 0.0)] if mode == "stacked" else [(MAIN, 0.0), (GREY, 0.0), (PALE, 0.0)]
         for i, series in enumerate(plot.series):
             series.format.fill.solid()
-            paint(series.format.fill.fore_color, *tones[i % 3])
+            paint(series.format.fill.fore_color, *tones[i % len(tones)])
             series.format.line.fill.background()
+        if mode == "stacked":
+            labels.position = XL_LABEL_POSITION.CENTER
+            for i, series in enumerate(plot.series):
+                paint(series.data_labels.font.color, PAPER if i < 2 else INK)
         highlight = block.get("highlight")
         if not many and isinstance(highlight, int) and 0 <= highlight < len(block["categories"]):
             series = plot.series[0]
@@ -909,6 +1111,30 @@ def build(spec, base_dir, out, template, only=None):
                 point = series.points[i]
                 point.format.fill.solid()
                 paint(point.format.fill.fore_color, HILITE if i == highlight else GREY, 0.0 if i == highlight else 0.35)
+
+    def formula(slide, block, x, y, w, h, size):
+        """The calculation behind a number: terms with the operator between them, equal to the result."""
+        terms, ops, result = block["terms"], block["ops"], block["result"]
+        op_w = Inches(0.55)
+        cols = len(terms) + 1
+        cw = int((w - op_w * cols) / cols)
+        top = y + int((h - Inches(1.95)) / 2) if h > Inches(1.95) else y
+        # One number size for the whole line, the largest at which the longest value fits on one line.
+        value_size = max(16, min(32, int((cw / IN * 72 - 8) / max(text_units(t["value"]) for t in list(terms) + [result]))))
+        cx = x
+        for i, term in enumerate(list(terms) + [result]):
+            last = i == len(terms)
+            if last:
+                rect(slide, cx - Inches(0.1), top - Inches(0.1), cw + Inches(0.2), Inches(2.0), (HILITE, 0.88))
+            text(slide, cx, top, cw, Inches(0.85), str(term["value"]), value_size, True, HILITE if last else MAIN, PP_ALIGN.CENTER, MSO_ANCHOR.BOTTOM)
+            paragraphs = [{"text": term["label"], "size": min(size, 13), "bold": True, "align": PP_ALIGN.CENTER}]
+            if term.get("note"):
+                paragraphs.append({"text": term["note"], "size": min(size, 13) - 2, "theme": GREY, "before": 3, "align": PP_ALIGN.CENTER})
+            text(slide, cx, top + Inches(0.95), cw, Inches(0.9), paragraphs, size)
+            cx += cw
+            if not last:
+                text(slide, cx, top, op_w, Inches(0.85), ops[i] if i < len(ops) else "＝", 28, False, GREY, PP_ALIGN.CENTER, MSO_ANCHOR.BOTTOM)
+                cx += op_w
 
     def image(slide, block, x, y, w, h, size):
         path = os.path.join(base_dir, block["path"])
@@ -945,7 +1171,7 @@ def build(spec, base_dir, out, template, only=None):
              MSO_ANCHOR.MIDDLE, fill=(MAIN,), shape=MSO_SHAPE.OVAL)
 
     RENDER = {"summary": summary, "bullets": bullets, "table": table, "cards": cards, "stats": stats, "steps": steps,
-              "callout": callout, "tree": tree, "matrix2x2": matrix, "timeline": timeline, "chart_bar": chart_bar,
+              "formula": formula, "callout": callout, "tree": tree, "matrix2x2": matrix, "timeline": timeline, "chart_bar": chart_bar,
               "image": image, "before_after": before_after}
 
     # ---- page layout: left facts stacked, right implication ------------------
@@ -999,6 +1225,11 @@ def build(spec, base_dir, out, template, only=None):
                 offset += height + gap
         # Both columns start on one line; a short page is centred as a whole, never stretched.
         group = max(used, Inches(right_height(right, gaps, right_w / IN, size))) if right_w else used
+        squeezed = (sum(Inches(n) for n in naturals if n is not None) if not (columns and len(left) > 1) else 0) > h
+        if squeezed or (right_w and Inches(right_height(right, gaps, right_w / IN, size)) > h):
+            layout_notes.append(f"{current[0]}: more than the page holds; split it or cut rows")
+        elif not flexible and group < h * 0.35:
+            layout_notes.append(f"{current[0]}: the page is mostly empty; merge it with a neighbour or add material, never padding")
         top = y if flexible or group >= h * 0.7 else y + int((h - group) / 2)
         for block, (bx, by, bw, bh) in zip(left, slots):
             RENDER[block["kind"]](slide, block, bx, top + by, bw, bh, size)
@@ -1008,6 +1239,7 @@ def build(spec, base_dir, out, template, only=None):
                 triangle(slide, x + left_w + Inches(0.16), top + int(min(group, h) / 2))
             implication(slide, right, rx, top, right_w, h - (top - y), size, gaps)
 
+    layout_notes, current = [], [""]
     pages = {p.get("id"): p for p in spec.get("pages") or []}
     statuses = {pid: (page.get("status") or "missing") for pid, page in pages.items()}
 
@@ -1103,12 +1335,14 @@ def build(spec, base_dir, out, template, only=None):
             frame(slide, f"{meta['topic']}：未検討", section, [], "missing")
             missing_page(slide, meta, x, y, w, h)
             continue
-        frame(slide, page.get("title", ""), section, page.get("sources") or [], status)
+        frame(slide, page.get("title", ""), section, page.get("sources") or [], status, page.get("notes") or [])
+        current[0] = f"P.{page_number[meta['id']]} {meta['id']}"
+        h -= Inches(0.24) * len(page.get("notes") or [])  # the notes sit above the source line
         gaps = page.get("gaps") if status == "partial" else []
         lay_out(slide, page.get("blocks") or [], gaps, x, y, w, h, page.get("layout") == "columns")
 
     prs.save(out)
-    return {"out": out, "slides": len(prs.slides)}
+    return {"out": out, "slides": len(prs.slides), "layout": layout_notes}
 
 
 
@@ -1141,7 +1375,7 @@ def main(argv):
         except (ValueError, OSError) as error:
             sys.stderr.write(f"pdm-deck: {error}\n")
             return 2
-    if not argv or argv[0] not in ("ghost", "check", "build"):
+    if not argv or argv[0] not in ("ghost", "check", "build", "outline"):
         sys.stderr.write(__doc__)
         return 2
     args, flags = argv[1:], {}
@@ -1166,6 +1400,9 @@ def main(argv):
             spec = json.load(handle)
         base = os.path.dirname(os.path.abspath(spec_path))
         result = check(spec, base)
+        if argv[0] == "outline":
+            print(outline(spec))
+            return 0
         if argv[0] == "check":
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["pass"] else 1
@@ -1179,7 +1416,8 @@ def main(argv):
         if template and not os.path.isfile(template):
             raise ValueError(f"template {template} does not exist")
         only = [item for item in (flags.get("--only") or "").split(",") if item]
-        print(json.dumps({**build(spec, base, out, template, only or None), "counts": result["counts"], **({"preview": only} if only else {})}, ensure_ascii=False))
+        print(json.dumps({**build(spec, base, out, template, only or None), "counts": result["counts"], "warnings": result["warnings"],
+                          **({"preview": only} if only else {})}, ensure_ascii=False))
         return 0
     except ModuleNotFoundError:
         sys.stderr.write("pdm-deck: python-pptx is not installed; install it with `python3 -m pip install python-pptx`\n")
