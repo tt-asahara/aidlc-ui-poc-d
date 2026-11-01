@@ -102,12 +102,15 @@ source for them; token totals appear only where the harness records usage.
 ## PdM service proposal deck (`/aidlc --deck`)
 
 `/aidlc --deck` builds a consulting-style PowerPoint covering everything a
-product manager weighs when building a service: background and issues, market
-and competition, value and solution, scope and requirements, business model,
-KPIs, plan, risks, and decisions. The 31 pages in 9 sections come from
-`pdm-deck-catalog.json`, and every page is always built. A page without material
-is built as 未検討 with the questions it should answer, so a missing
-consideration shows.
+product manager weighs when building a service, about two pages per viewpoint:
+background and issues, customers (personas, journeys, voices, segments), market
+and competition, value and the service picture (ecosystem, canvas), experience
+and screens, scope and requirements, business model and profitability, KPIs and
+measurement, plan and organisation, risks, decisions, and an appendix. The 95
+pages in 13 chapters come from `pdm-deck-catalog.json`, every page is always
+built, and each chapter opens with a divider that recaps the agenda. A page
+without material is built as 未検討 with the questions it should answer, so a
+missing consideration shows.
 
 The model writes only a JSON spec (`pdm-deck-guide.md` holds the method):
 action titles first, confirmed by the person as a storyline, then the content.
