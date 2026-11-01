@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "note": "Every page a product manager's service proposal covers. pdm-deck.py builds every page in this order; a page the spec leaves without content is still built, marked 未検討, with its questions, the stages that fill it and the intended shape, so a missing consideration is visible. blocks is the recommended set of blocks for the page, shape says the intended picture in words.",
+  "note": "Every page a product manager's service proposal covers: about two pages per viewpoint (an overview page, then a deep-dive page), each a distinct decision-relevant view, in 11 numbered chapters plus the summary and an appendix. pdm-deck.py builds every page in this order; a page the spec leaves without content is still built, marked 未検討, with its questions, the stages that fill it and the intended shape, so a missing consideration is visible. blocks is the recommended set of blocks for the page, shape says the intended picture in words, questions are the three a decision-maker would ask of it.",
   "stages": {
     "intent-capture": "インテント把握",
     "market-research": "市場調査",
@@ -28,36 +28,48 @@
       "title": "1. 背景と課題"
     },
     {
+      "id": "customer",
+      "title": "2. 顧客と課題の実態"
+    },
+    {
       "id": "market",
-      "title": "2. 市場と競合"
+      "title": "3. 市場と競合"
     },
     {
       "id": "value",
-      "title": "3. 提供価値とソリューション"
+      "title": "4. 提供価値とサービス像"
+    },
+    {
+      "id": "experience",
+      "title": "5. 体験と画面"
     },
     {
       "id": "scope",
-      "title": "4. スコープと要件"
+      "title": "6. スコープと要件"
     },
     {
       "id": "business",
-      "title": "5. ビジネスモデル"
+      "title": "7. ビジネスモデルと収益性"
     },
     {
       "id": "kpi",
-      "title": "6. KPI と計測"
+      "title": "8. KPI と効果検証"
     },
     {
       "id": "plan",
-      "title": "7. 実行計画"
+      "title": "9. 実行計画と体制"
     },
     {
       "id": "risk",
-      "title": "8. リスクと論点"
+      "title": "10. リスクと論点"
     },
     {
       "id": "decision",
-      "title": "9. 意思決定事項"
+      "title": "11. 意思決定事項"
+    },
+    {
+      "id": "appendix",
+      "title": "付録"
     }
   ],
   "pages": [
@@ -66,18 +78,21 @@
       "section": "summary",
       "topic": "エグゼクティブサマリー",
       "blocks": [
-        "summary"
+        "summary",
+        "stats",
+        "callout"
       ],
-      "shape": "論点ごとに、結論の一文と根拠2〜3点、深掘りのページ番号を並べる",
+      "shape": "上に提案を言い切る一文（ガバニングメッセージ）、下に3〜4本の柱それぞれの結論と裏付けの数字・深掘りページ番号、最下段に今回いただきたい判断を囲みで示す",
       "sources": [
         "intent-capture",
         "scope-definition",
+        "feasibility",
         "approval-handoff"
       ],
       "questions": [
-        "何を、誰のために、なぜ今やるのか（状況・課題・打ち手・効果）",
-        "意思決定者に今回求める判断は何か",
-        "効果は数字でいくらか、いつ出るか"
+        "一言で言うと何を提案し、なぜそれが正しいのか（ガバニングメッセージ）",
+        "それを支える3〜4の柱と、それぞれを裏付ける数字は何か",
+        "今日この場で何を決めてほしいのか、決めると何が始まるのか"
       ]
     },
     {
@@ -85,7 +100,7 @@
       "section": "summary",
       "topic": "目次",
       "blocks": [],
-      "shape": "章ごとのページと検討状況",
+      "shape": "章ごとに、その章の結論の一文・含むページ・検討状況を並べる",
       "sources": [],
       "questions": []
     },
@@ -95,91 +110,312 @@
       "topic": "背景と現状",
       "blocks": [
         "stats",
+        "chart_bar",
         "implication"
       ],
-      "shape": "現状の数字を大きく並べ、右にこのままだと何が起きるかを書く",
+      "shape": "現状を表す主要な数字を KPI タイル（前年差つき）で並べ、下に推移の折れ線、右にこのまま何もしないと何が起きるかを書く",
       "sources": [
         "intent-capture",
         "market-research"
       ],
       "questions": [
-        "事業・市場・社内で何が起きているか",
-        "現状のサービスと運用はどうなっているか（数字で）",
-        "このまま何もしないと何が起きるか"
+        "事業・市場・社内で何が起きているか、数字で見ると何が悪化しているか",
+        "現状のサービスと運用はどうなっているか",
+        "このまま何もしないと1〜3年後に何が起きるか"
+      ]
+    },
+    {
+      "id": "why-now",
+      "section": "background",
+      "topic": "なぜ今か",
+      "blocks": [
+        "timeline",
+        "evidence",
+        "implication"
+      ],
+      "shape": "直近の外部・内部の変化を時間軸に置き、機会の窓が開いている期間と、遅れた場合に失うものを強調する",
+      "sources": [
+        "intent-capture",
+        "market-research"
+      ],
+      "questions": [
+        "なぜ今この施策をやる必要があるのか（何が変わったのか）",
+        "機会の窓はいつまで開いているか",
+        "1年遅れたら何を失うか（売上・顧客・競争上の位置）"
       ]
     },
     {
       "id": "issue-tree",
       "section": "background",
-      "topic": "課題の構造",
+      "topic": "課題の構造（仮説ツリー）",
       "blocks": [
         "tree",
         "implication"
       ],
-      "shape": "中心の問いを要素に分解するイシューツリーと、今回解く枝の示唆",
+      "shape": "中心の問いを MECE に分解した仮説ツリーで、各末端に検証状況と深掘りページ番号を付け、今回解く枝を色で強調する",
       "sources": [
         "intent-capture",
         "requirements-analysis"
       ],
       "questions": [
-        "解くべき中心の課題は何か",
-        "課題は MECE に分解できているか",
-        "どの課題を今回解き、どれを解かないか"
+        "解くべき中心の問いは何か、それは MECE に分解できているか",
+        "各仮説は検証済みか、どのページの根拠で支えられているか",
+        "どの枝を今回解き、どれを解かないか"
+      ]
+    },
+    {
+      "id": "issue-chain",
+      "section": "background",
+      "topic": "課題・原因・打ち手のつながり",
+      "blocks": [
+        "chain",
+        "implication"
+      ],
+      "shape": "行＝主要課題、3列＝課題→根本原因→打ち手を矢印でつなぎ、打ち手から要件・KPI への参照を添える",
+      "sources": [
+        "intent-capture",
+        "requirements-analysis",
+        "scope-definition"
+      ],
+      "questions": [
+        "各課題の根本原因は何か（症状と原因を取り違えていないか）",
+        "打ち手は原因に直接効いているか",
+        "原因に効かない打ち手が紛れていないか"
+      ]
+    },
+    {
+      "id": "issue-priority",
+      "section": "background",
+      "topic": "課題の優先度",
+      "blocks": [
+        "matrix2x2",
+        "table"
+      ],
+      "shape": "横軸＝影響の大きさ、縦軸＝発生頻度（または緊急度）の2×2に課題を置き、右上の象限を今回の対象として強調する",
+      "sources": [
+        "intent-capture",
+        "requirements-analysis"
+      ],
+      "questions": [
+        "どの課題が最も大きく、最も頻繁に起きているか",
+        "優先度の判断基準と根拠データは何か",
+        "後回しにする課題を放置した場合の影響は"
       ]
     },
     {
       "id": "personas",
-      "section": "background",
-      "topic": "対象ユーザーとペルソナ",
+      "section": "customer",
+      "topic": "ペルソナの全体像と比較",
       "blocks": [
-        "cards"
+        "table",
+        "implication"
       ],
-      "shape": "利用者ごとの柱（属性・利用場面・困りごと・期待）",
+      "shape": "列＝ペルソナ（最大3）、行＝規模・利用頻度・目的・困りごと・支払意思・代表的な一言の比較表で、主対象の列を強調する",
+      "sources": [
+        "user-stories",
+        "intent-capture",
+        "market-research"
+      ],
+      "questions": [
+        "主な利用者は誰で、行動の違いでどう分かれるか（属性ではなく行動で）",
+        "各ペルソナの規模（人数・売上構成）はどれくらいか",
+        "どのペルソナを主対象にし、対象外は誰か"
+      ]
+    },
+    {
+      "id": "persona-primary",
+      "section": "customer",
+      "topic": "主ペルソナのプロフィール",
+      "blocks": [
+        "persona",
+        "implication"
+      ],
+      "shape": "主ペルソナ1人のプロフィール（似顔絵・代表的な一言・基本情報・目標・困りごと・行動・利用チャネル）を1枚に描き、右に示唆を置く",
       "sources": [
         "user-stories",
         "intent-capture"
       ],
       "questions": [
-        "主な利用者は誰か（属性・利用場面・頻度）",
-        "利用者ごとの困りごと・期待は何か",
-        "対象外の利用者は誰か"
+        "この人はどんな場面で、何を目的にサービスを使うのか",
+        "最も強い不満と、それが生む行動（離脱・代替）は何か",
+        "この人が「使い続ける」と言う条件は何か"
+      ]
+    },
+    {
+      "id": "persona-secondary",
+      "section": "customer",
+      "topic": "第2ペルソナのプロフィール",
+      "blocks": [
+        "persona",
+        "implication"
+      ],
+      "shape": "第2ペルソナのプロフィールを主ペルソナと同じ型で描き、主ペルソナとの違いを示唆に書く",
+      "sources": [
+        "user-stories",
+        "intent-capture"
+      ],
+      "questions": [
+        "主ペルソナと目的・行動・支払意思はどう違うか",
+        "このペルソナ固有の困りごとは何か",
+        "同じ体験で両者を満たせるか、出し分けが必要か"
+      ]
+    },
+    {
+      "id": "persona-tertiary",
+      "section": "customer",
+      "topic": "第3ペルソナのプロフィール",
+      "blocks": [
+        "persona",
+        "implication"
+      ],
+      "shape": "第3ペルソナ（周辺利用者または意思決定者）のプロフィールを同じ型で描き、関与の仕方を示唆に書く",
+      "sources": [
+        "user-stories",
+        "intent-capture"
+      ],
+      "questions": [
+        "このペルソナは利用・購入・推奨のどこに関与するか",
+        "この人に無視されると何が起きるか",
+        "今回どこまでこの人に向けた機能を作るか"
+      ]
+    },
+    {
+      "id": "segments",
+      "section": "customer",
+      "topic": "対象セグメントの比較と選定",
+      "blocks": [
+        "scatter",
+        "table",
+        "implication"
+      ],
+      "shape": "横軸＝市場の魅力度（規模・成長）、縦軸＝自社の勝ちやすさで候補セグメントを散布図に置き、選んだセグメントと選定理由を表で示す",
+      "sources": [
+        "market-research",
+        "intent-capture"
+      ],
+      "questions": [
+        "候補セグメントはどれで、規模・成長・獲得難易度はどう違うか",
+        "なぜこのセグメントから始めるのか",
+        "次に広げるセグメントとその条件は"
       ]
     },
     {
       "id": "user-jobs",
-      "section": "background",
-      "topic": "ユーザーの課題とジョブ",
+      "section": "customer",
+      "topic": "ユーザーのジョブと現在の代替手段",
       "blocks": [
         "table",
         "implication"
       ],
-      "shape": "行＝ジョブ、列＝今の解き方・不満・頻度の表と示唆",
+      "shape": "行＝ジョブ、列＝機能的・感情的・社会的なジョブ、今の代替手段、不満、頻度の表で、最も満たされていないジョブを強調する",
       "sources": [
         "user-stories",
         "requirements-analysis"
       ],
       "questions": [
-        "利用者は何を成し遂げたいのか（ジョブ）",
-        "今どう解決していて、何が不満か",
-        "その不満の大きさ・頻度は"
+        "利用者は何を成し遂げたいのか（機能・感情・社会の3面で）",
+        "今はどの代替手段で解決していて、何が不満か",
+        "どのジョブが最も重要なのに満たされていないか"
+      ]
+    },
+    {
+      "id": "voice-of-customer",
+      "section": "customer",
+      "topic": "顧客の声と一次エビデンス",
+      "blocks": [
+        "voices",
+        "implication"
+      ],
+      "shape": "利用者の生の発言を顔と吹き出しで4〜6件並べ、属性・件数と、各発言が示すこと（→）を添える",
+      "sources": [
+        "market-research",
+        "user-stories",
+        "intent-capture"
+      ],
+      "questions": [
+        "何人の顧客に、いつ、どの方法で確かめたか",
+        "顧客は自分の言葉で何と言っているか（引用で）",
+        "エビデンスが仮説と食い違った点はどこか"
+      ]
+    },
+    {
+      "id": "journey-current",
+      "section": "customer",
+      "topic": "カスタマージャーニー（現状）",
+      "blocks": [
+        "journey",
+        "implication"
+      ],
+      "shape": "列＝認知・検討・利用開始・継続利用・解約/推奨の段階、行＝行動・思考・感情曲線・接点・困りごと・機会のジャーニーマップで、感情が落ち込む谷を強調する",
+      "sources": [
+        "user-stories",
+        "design-baseline",
+        "market-research"
+      ],
+      "questions": [
+        "主ペルソナは今、各段階で何をし、何を感じているか",
+        "感情が最も落ち込む瞬間（真実の瞬間）はどこか",
+        "どの接点の困りごとが離脱に直結しているか"
+      ]
+    },
+    {
+      "id": "funnel-baseline",
+      "section": "customer",
+      "topic": "現状のファネルとベースライン",
+      "blocks": [
+        "funnel",
+        "stats",
+        "implication"
+      ],
+      "shape": "認知から継続までの各段階の人数と転換率をファネルで示し、最も落ちる段階と業界水準との差を強調する",
+      "sources": [
+        "market-research",
+        "observability-setup",
+        "intent-capture"
+      ],
+      "questions": [
+        "各段階の現状の人数・転換率はいくらか（いつの、どのデータか）",
+        "最も大きく落ちている段階はどこか、業界水準と比べてどうか",
+        "このベースラインは効果検証の基準として信頼できるか"
       ]
     },
     {
       "id": "market-size",
       "section": "market",
-      "topic": "市場規模",
+      "topic": "市場規模の全体像",
       "blocks": [
         "stats",
+        "chart_bar",
         "implication"
       ],
-      "shape": "TAM・SAM・SOM の大きな数字と算定根拠",
+      "shape": "TAM・SAM・SOM を幅（下限〜上限）つきの大きな数字で示し、5年の成長を棒グラフで並べる",
       "sources": [
         "market-research"
       ],
       "questions": [
-        "TAM / SAM / SOM はいくらか、算定根拠は",
-        "対象セグメントの成長率は",
-        "自社が取れる規模はどこまでか"
+        "TAM / SAM / SOM はいくらか、幅はどれくらいか",
+        "対象セグメントの成長率と、その牽引要因は",
+        "自社が3年で取れる規模と、そのシェアは現実的か"
+      ]
+    },
+    {
+      "id": "market-sizing",
+      "section": "market",
+      "topic": "市場規模の算定根拠（三角測量）",
+      "blocks": [
+        "formula",
+        "table",
+        "implication"
+      ],
+      "shape": "トップダウン・ボトムアップ（顧客数×単価×頻度の積み上げ）・類推の3つの算定式を並べ、結果の幅と採用値を比較する",
+      "sources": [
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "ボトムアップの積み上げ（顧客数×単価×頻度）でいくらになるか",
+        "3つの方法の結果はどれくらい一致しているか",
+        "最も不確かな係数はどれで、どう確かめるか"
       ]
     },
     {
@@ -187,53 +423,211 @@
       "section": "market",
       "topic": "市場・顧客動向",
       "blocks": [
+        "evidence",
         "table",
         "implication"
       ],
-      "shape": "行＝変化、列＝内容・影響・時期の表と示唆",
+      "shape": "市場・技術・規制・顧客行動の変化を日付つきエビデンスカードで示し、下の表で影響・時期・自社の打ち手を対応づける",
       "sources": [
         "market-research"
       ],
       "questions": [
-        "市場・技術・規制・顧客行動のどの変化が効くか",
-        "その変化は追い風か向かい風か",
-        "変化の時期と確度は"
+        "市場・技術・規制・顧客行動のどの変化が効くか（出典と日付つきで）",
+        "その変化は追い風か向かい風か、いつ効いてくるか",
+        "それぞれの変化に自社はどう対応するか"
+      ]
+    },
+    {
+      "id": "industry-structure",
+      "section": "market",
+      "topic": "業界構造と収益プール",
+      "blocks": [
+        "chart_bar",
+        "ecosystem",
+        "implication"
+      ],
+      "shape": "バリューチェーンの段階ごとの売上規模と利益率を積み上げ棒で示し、利益が集まる場所と自社が入る位置を強調する",
+      "sources": [
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "業界のバリューチェーンのどこに利益が集まっているか",
+        "自社はどの段階で、どの収益を取りにいくのか",
+        "業界の力関係（買い手・売り手・代替・新規）は"
       ]
     },
     {
       "id": "competitors",
       "section": "market",
-      "topic": "競合比較",
+      "topic": "競合の全体像",
       "blocks": [
+        "cards",
         "table",
         "implication"
       ],
-      "shape": "行＝評価軸、列＝自社と競合のハーベイボール表と示唆",
+      "shape": "直接競合・間接競合・代替手段・何もしないの4層に競合を分け、各社の規模（売上・利用者数）と強みを並べ、自社が負けている所を示す",
       "sources": [
         "market-research"
       ],
       "questions": [
-        "直接競合・代替手段は何か",
-        "機能・価格・体験・チャネルでどう違うか",
-        "競合が次に打つ手は"
+        "直接競合・間接競合・代替手段・「何もしない」はそれぞれ何か",
+        "各社の規模と勢い（売上・利用者数・成長）は",
+        "今、自社はどこで負けているか"
+      ]
+    },
+    {
+      "id": "competitor-matrix",
+      "section": "market",
+      "topic": "競合の詳細比較",
+      "blocks": [
+        "table",
+        "implication"
+      ],
+      "shape": "行＝顧客の購買基準（機能・価格・体験・チャネル・サポートなど10〜15項目）、列＝自社と競合5〜6社のハーベイボールの高密度表で、差がつく行を強調する",
+      "sources": [
+        "market-research"
+      ],
+      "questions": [
+        "顧客の購買基準ごとに、自社と各社はどう違うか",
+        "決定的な差になる項目はどれか",
+        "自社が追いつく必要がある項目と、捨てる項目は"
+      ]
+    },
+    {
+      "id": "competitor-pricing",
+      "section": "market",
+      "topic": "競合の価格・プラン階段",
+      "blocks": [
+        "chart_bar",
+        "table",
+        "implication"
+      ],
+      "shape": "横軸＝各社のプラン、縦軸＝月額価格の階段状の棒で、プランごとの主な機能差と自社の想定価格の位置を重ねる",
+      "sources": [
+        "market-research"
+      ],
+      "questions": [
+        "各社はどんなプラン階段で、どこで価格差をつけているか",
+        "無料枠・お試し・割引の設計はどうなっているか",
+        "自社の価格はその中でどこに置くべきか"
+      ]
+    },
+    {
+      "id": "win-loss",
+      "section": "market",
+      "topic": "勝ち負け要因と解約理由",
+      "blocks": [
+        "chart_bar",
+        "bullets",
+        "implication"
+      ],
+      "shape": "選ばれた理由・選ばれなかった理由・解約理由の上位を件数つきの横棒で並べ、打ち手で解消できるものを強調する",
+      "sources": [
+        "market-research",
+        "user-stories"
+      ],
+      "questions": [
+        "顧客が自社を選ぶ理由・選ばない理由の上位は何か（件数で）",
+        "解約した顧客はなぜ去り、どこへ行ったか",
+        "今回の施策はどの理由を解消するか"
+      ]
+    },
+    {
+      "id": "competitor-response",
+      "section": "market",
+      "topic": "競合の反応予測",
+      "blocks": [
+        "table",
+        "options",
+        "implication"
+      ],
+      "shape": "行＝主要競合、列＝想定される反応（値下げ・模倣・囲い込み）・起こる可能性・時期・自社の対抗策の表",
+      "sources": [
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "この施策を出したら、主要競合はどう反応するか",
+        "最も痛い反応は何で、どのくらい早く来るか",
+        "その反応に対する自社の備えは"
       ]
     },
     {
       "id": "positioning",
       "section": "market",
-      "topic": "ポジショニング",
+      "topic": "ポジショニング（現状→目標）",
       "blocks": [
-        "matrix2x2",
+        "scatter",
         "implication"
       ],
-      "shape": "2軸のマトリクスに自社と競合を置き、空白を強調",
+      "shape": "顧客の購買基準から選んだ2軸の散布図に競合各社と自社の現状・目標位置を置き、移動を矢印で、空白地帯を強調する",
       "sources": [
         "market-research"
       ],
       "questions": [
-        "どの 2 軸で差別化するか",
-        "自社はどこに位置し、空白はどこか",
-        "その位置は守れるか"
+        "顧客が実際に重視するどの2軸で差別化するか",
+        "自社は今どこにいて、どこへ動くのか",
+        "その位置に空白がある理由と、守れる期間は"
+      ]
+    },
+    {
+      "id": "service-overview",
+      "section": "value",
+      "topic": "サービスの全体像（ひと目でわかるサービス像）",
+      "blocks": [
+        "house",
+        "callout"
+      ],
+      "shape": "屋根にサービスのコンセプトの一文、柱に3〜4の提供価値、土台に支える仕組み・データ・体制を置いた1枚のサービス像",
+      "sources": [
+        "intent-capture",
+        "requirements-analysis",
+        "domain-design"
+      ],
+      "questions": [
+        "このサービスは一言で何か、誰にどんな価値を届けるか",
+        "価値を支える柱と、それを可能にする土台は何か",
+        "既存サービスとの関係（置き換え・追加・統合）は"
+      ]
+    },
+    {
+      "id": "ecosystem",
+      "section": "value",
+      "topic": "エコシステムと価値の流れ",
+      "blocks": [
+        "ecosystem",
+        "implication"
+      ],
+      "shape": "中央にサービス、周りに利用者・提携先・社内部門・決済などの関係者を置き、価値・お金・データの流れを色分けした矢印で描く",
+      "sources": [
+        "intent-capture",
+        "domain-design",
+        "market-research"
+      ],
+      "questions": [
+        "関係者は誰で、それぞれ何を得て何を提供するか",
+        "お金とデータはどこからどこへ流れるか",
+        "関係者の誰かが離れると成り立たなくなる所はどこか"
+      ]
+    },
+    {
+      "id": "business-canvas",
+      "section": "value",
+      "topic": "ビジネスモデルキャンバス",
+      "blocks": [
+        "canvas"
+      ],
+      "shape": "9マス（顧客セグメント・提供価値・チャネル・顧客との関係・収益の流れ・主要資源・主要活動・パートナー・コスト構造）を1枚で埋め、未検証の箱を印で示す",
+      "sources": [
+        "intent-capture",
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "9つの要素が一貫して1つの事業として成り立っているか",
+        "最も不確かな要素（未検証の箱）はどれか",
+        "既存事業のキャンバスと比べて何が新しいか"
       ]
     },
     {
@@ -241,18 +635,58 @@
       "section": "value",
       "topic": "提供価値（バリュープロポジション）",
       "blocks": [
-        "table",
+        "from_to",
         "implication"
       ],
-      "shape": "行＝利用者の課題、列＝約束する価値・根拠の表",
+      "shape": "行＝主対象の困りごと、左＝今の状態、右＝このサービスで実現する状態を並べ、約束する価値の一文を上に掲げる",
       "sources": [
         "intent-capture",
         "market-research"
       ],
       "questions": [
-        "利用者の課題に対して何を約束するか",
-        "なぜ競合ではなくこれを選ぶのか",
-        "価値をどう検証するか"
+        "利用者の課題に対して何を約束するか（一文で）",
+        "利用者の状態は今からどう変わるか",
+        "なぜ競合や代替手段ではなくこれを選ぶのか"
+      ]
+    },
+    {
+      "id": "value-map",
+      "section": "value",
+      "topic": "課題と打ち手の対応",
+      "blocks": [
+        "matrix2x2",
+        "table",
+        "implication"
+      ],
+      "shape": "行＝顧客の困りごと・得たいもの、列＝提供する機能・痛みの解消・得の創出の対応表で、どの課題にも効かない機能と、打ち手のない課題を強調する",
+      "sources": [
+        "intent-capture",
+        "requirements-analysis",
+        "user-stories"
+      ],
+      "questions": [
+        "すべての重要な課題に打ち手があるか",
+        "どの課題にも効かない機能が入っていないか",
+        "価値の約束をどう検証するか"
+      ]
+    },
+    {
+      "id": "opportunity-tree",
+      "section": "value",
+      "topic": "機会と打ち手のツリー",
+      "blocks": [
+        "tree",
+        "implication"
+      ],
+      "shape": "目標とする成果を頂点に、顧客の機会、打ち手、検証の実験へと分解するツリーで、今回選ぶ打ち手を強調する",
+      "sources": [
+        "intent-capture",
+        "requirements-analysis"
+      ],
+      "questions": [
+        "目標の成果につながる顧客の機会は何があるか",
+        "機会ごとにどんな打ち手の候補があるか",
+        "なぜこの打ち手を選び、どの実験で確かめるか"
       ]
     },
     {
@@ -260,55 +694,239 @@
       "section": "value",
       "topic": "ソリューション概要",
       "blocks": [
-        "steps",
+        "two_tier",
         "implication"
       ],
-      "shape": "主な機能・体験を段階で示し、既存から変わる点を右に",
+      "shape": "上段に利用者が見る体験の段階、下段にそれを支える裏側の処理・システム・運用を列で揃え、既存から変わる箇所を強調する",
       "sources": [
         "requirements-analysis",
         "domain-design"
       ],
       "questions": [
-        "主な機能・体験は何か",
+        "主な機能・体験は何か、裏側で何が動くのか",
         "既存サービスのどこを変えるか",
-        "作らずに済む方法はないか"
+        "作らずに済む方法（運用・既存機能・外部サービス）はないか"
+      ]
+    },
+    {
+      "id": "solution-mechanism",
+      "section": "value",
+      "topic": "仕組みの概要",
+      "blocks": [
+        "steps",
+        "image",
+        "implication"
+      ],
+      "shape": "データと処理の流れを入力→処理→出力の段階で示し、新規に作る部分と既存を使う部分を色分けする",
+      "sources": [
+        "domain-design",
+        "requirements-analysis",
+        "nfr-requirements"
+      ],
+      "questions": [
+        "サービスを動かす主要な仕組み（データ・判断ロジック・連携）は何か",
+        "新しく作るものと既存を使うものの境目はどこか",
+        "技術的に最も難しい部分はどこで、目処は立っているか"
+      ]
+    },
+    {
+      "id": "options-considered",
+      "section": "value",
+      "topic": "検討した選択肢と不採用の理由",
+      "blocks": [
+        "options",
+        "table"
+      ],
+      "shape": "「どの打ち手で課題を解くか」の問いに対し3〜4の選択肢を箱で並べ、効果・費用・期間・リスクで比較し、推奨案と不採用の理由を示す",
+      "sources": [
+        "intent-capture",
+        "feasibility",
+        "scope-definition"
+      ],
+      "questions": [
+        "他にどんな選択肢を検討したか（何もしない案を含めて）",
+        "それぞれの効果・費用・期間・リスクはどう違うか",
+        "なぜこの案を推奨し、他を捨てたのか"
+      ]
+    },
+    {
+      "id": "build-buy-partner",
+      "section": "value",
+      "topic": "自社開発・購入・提携の判断",
+      "blocks": [
+        "table",
+        "options",
+        "implication"
+      ],
+      "shape": "行＝主要な構成要素、列＝自社開発・購入・提携の費用・期間・差別化への寄与・依存リスクの比較表と、要素ごとの推奨",
+      "sources": [
+        "feasibility",
+        "domain-design"
+      ],
+      "questions": [
+        "どの部分を自社で作り、どこを買い、どこを提携で賄うか",
+        "差別化の源泉になる部分は自社で持てているか",
+        "外部に依存する部分のリスクと切り替え費用は"
+      ]
+    },
+    {
+      "id": "moat",
+      "section": "value",
+      "topic": "勝てる理由と参入障壁",
+      "blocks": [
+        "house",
+        "implication"
+      ],
+      "shape": "屋根に「なぜ自社が勝てるか」の一文、柱に顧客基盤・データ・ブランド・コストなどの優位、土台に模倣されにくさの根拠を置く",
+      "sources": [
+        "market-research",
+        "intent-capture",
+        "feasibility"
+      ],
+      "questions": [
+        "自社だけが持っている資産・能力は何か",
+        "競合が真似するのにどれくらいの時間・費用がかかるか",
+        "時間とともに強まる優位（データ・ネットワーク効果）はあるか"
+      ]
+    },
+    {
+      "id": "kano",
+      "section": "value",
+      "topic": "機能の Kano 分類",
+      "blocks": [
+        "matrix2x2",
+        "table"
+      ],
+      "shape": "機能を当たり前品質・一元的品質・魅力品質・無関心に分類し、横軸＝充足度、縦軸＝満足度の図に配置して、魅力品質を強調する",
+      "sources": [
+        "user-stories",
+        "requirements-analysis",
+        "market-research"
+      ],
+      "questions": [
+        "ないと不満になる当たり前の機能は揃っているか",
+        "満足度を大きく上げる魅力的な機能はどれか",
+        "作っても満足度が変わらない機能が入っていないか"
+      ]
+    },
+    {
+      "id": "journey-target",
+      "section": "experience",
+      "topic": "カスタマージャーニー（目標）",
+      "blocks": [
+        "journey",
+        "implication"
+      ],
+      "shape": "現状と同じ段階の列で、目標とする行動・思考・感情曲線・接点を描き、現状の谷が解消される箇所と新しい接点を強調する",
+      "sources": [
+        "user-stories",
+        "refined-mockups",
+        "intent-capture"
+      ],
+      "questions": [
+        "新しいサービスで、各段階の体験はどう変わるか",
+        "現状の感情の谷はどの打ち手で解消されるか",
+        "新しく生まれる接点と、その運用は誰が持つか"
+      ]
+    },
+    {
+      "id": "journey-gap",
+      "section": "experience",
+      "topic": "体験の変化点（現状→目標）",
+      "blocks": [
+        "from_to",
+        "table"
+      ],
+      "shape": "行＝ジャーニーの段階、左＝現状の体験、右＝目標の体験、右端に効く打ち手と測る KPI を並べる",
+      "sources": [
+        "user-stories",
+        "requirements-analysis",
+        "intent-capture"
+      ],
+      "questions": [
+        "段階ごとに体験の何が変わるのか",
+        "その変化はどの機能・運用で実現するか",
+        "変化を何の数字で確かめるか"
       ]
     },
     {
       "id": "user-flow",
-      "section": "value",
+      "section": "experience",
       "topic": "主要なユーザーフロー",
       "blocks": [
         "steps",
-        "image"
+        "image",
+        "implication"
       ],
-      "shape": "入口から目的達成までの矢羽と遷移図",
+      "shape": "入口から目的達成までの画面遷移を矢羽で示し、分岐・例外（未ログイン・エラー・解約）を枝で、既存から変わる遷移を強調する",
       "sources": [
         "refined-mockups",
-        "design-baseline"
+        "design-baseline",
+        "user-stories"
       ],
       "questions": [
-        "利用者は入口から目的達成までどう進むか",
+        "利用者は入口から目的達成までどう進むか、何ステップか",
         "分岐・例外（未ログイン・エラー・解約）はどう扱うか",
-        "既存の導線から何が変わるか"
+        "既存の導線から何が変わり、どこで離脱が減るか"
+      ]
+    },
+    {
+      "id": "service-blueprint",
+      "section": "experience",
+      "topic": "サービスブループリント（表と裏）",
+      "blocks": [
+        "two_tier",
+        "table"
+      ],
+      "shape": "上段＝利用者の行動と画面、下段＝裏側の担当者・システム・外部連携の処理を列で揃え、見える線の上下と手作業の箇所を強調する",
+      "sources": [
+        "domain-design",
+        "requirements-analysis",
+        "user-stories"
+      ],
+      "questions": [
+        "利用者の各行動の裏で、誰が・どのシステムが何をするか",
+        "人手の作業・待ち時間・失敗しやすい所はどこか",
+        "運用部門・CS の負荷はどれくらい増えるか"
       ]
     },
     {
       "id": "screens",
-      "section": "value",
+      "section": "experience",
       "topic": "画面イメージ（現行→改修後）",
       "blocks": [
-        "before_after"
+        "before_after",
+        "implication"
       ],
-      "shape": "主要画面の現行と改修後を左右に並べる",
+      "shape": "主要画面の現行と改修後を左右に並べ、変更点に番号を振って下で説明する",
       "sources": [
         "refined-mockups",
         "design-baseline"
       ],
       "questions": [
         "主要画面は現行からどう変わるか",
-        "会員種別・状態ごとの出し分けは",
-        "既存のトンマナと整合しているか"
+        "変更が利用者の課題にどう効くか",
+        "既存のトンマナ・デザインシステムと整合しているか"
+      ]
+    },
+    {
+      "id": "screen-states",
+      "section": "experience",
+      "topic": "画面の出し分けと状態",
+      "blocks": [
+        "table",
+        "image"
+      ],
+      "shape": "行＝主要画面、列＝会員種別・状態（未ログイン・無料・有料・解約済み）ごとの表示内容のマトリクス",
+      "sources": [
+        "refined-mockups",
+        "design-baseline",
+        "requirements-analysis"
+      ],
+      "questions": [
+        "会員種別・状態ごとに何を出し分けるか",
+        "空・エラー・読み込み中などの状態は設計されているか",
+        "アクセシビリティ・端末差への対応は"
       ]
     },
     {
@@ -316,16 +934,76 @@
       "section": "scope",
       "topic": "スコープ（対象・対象外）",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝対象（Web・アプリ・CMS・API）、列＝やること・やらないこと・次フェーズ",
+      "shape": "行＝対象（Web・アプリ・CMS・API・運用）、列＝今回やること・やらないこと・次フェーズの表",
       "sources": [
         "scope-definition"
       ],
       "questions": [
         "今回やること・やらないことは何か",
-        "対象の基盤（Web・アプリ・CMS・API）は",
-        "次のフェーズに回すものは"
+        "対象の基盤（Web・アプリ・CMS・API・運用）は",
+        "次のフェーズに回すものは何か"
+      ]
+    },
+    {
+      "id": "scope-exclusions",
+      "section": "scope",
+      "topic": "対象外とする理由",
+      "blocks": [
+        "table",
+        "callout"
+      ],
+      "shape": "行＝対象外とした項目、列＝外した理由・外すことの影響・再検討の条件と時期の表",
+      "sources": [
+        "scope-definition",
+        "feasibility"
+      ],
+      "questions": [
+        "なぜそれを今回の対象から外したのか",
+        "外したことで困る利用者・部門は誰か",
+        "どの条件が揃ったら対象に戻すか"
+      ]
+    },
+    {
+      "id": "prioritization",
+      "section": "scope",
+      "topic": "優先度付けの根拠",
+      "blocks": [
+        "scatter",
+        "table"
+      ],
+      "shape": "横軸＝工数、縦軸＝価値の散布図に候補機能を置き、RICE（到達数・効果・確信度・工数）のスコア表を添えて、選んだ機能を強調する",
+      "sources": [
+        "scope-definition",
+        "requirements-analysis",
+        "user-stories"
+      ],
+      "questions": [
+        "候補機能の価値と工数はどう見積もったか",
+        "RICE などの基準で並べると上位は何か",
+        "スコアに反して入れた・外した機能とその理由は"
+      ]
+    },
+    {
+      "id": "mvp",
+      "section": "scope",
+      "topic": "MVP の定義と検証する仮説",
+      "blocks": [
+        "table",
+        "callout"
+      ],
+      "shape": "行＝検証する仮説、列＝MVP に含む機能・成功基準・検証方法・期間の表と、MVP に含めないものの一覧",
+      "sources": [
+        "scope-definition",
+        "intent-capture",
+        "requirements-analysis"
+      ],
+      "questions": [
+        "最小限で出すものは何か、それで何を確かめるか",
+        "仮説ごとの成功基準（数字）は",
+        "仮説が外れたら何をやめ、何に切り替えるか"
       ]
     },
     {
@@ -333,9 +1011,10 @@
       "section": "scope",
       "topic": "要件一覧と優先度",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝要件、列＝優先度・受け入れ条件・関係する課題/KPI",
+      "shape": "行＝要件、列＝優先度（Must / Should / Could / Won't）・受け入れ条件（Given/When/Then）・関係する課題と KPI の表",
       "sources": [
         "requirements-analysis",
         "user-stories",
@@ -343,8 +1022,28 @@
       ],
       "questions": [
         "機能要件は何か、優先度（Must / Should / Could / Won't）は",
-        "受け入れ条件は決まっているか",
+        "受け入れ条件は Given/When/Then で検証できる形になっているか",
         "要件と課題・KPI はつながっているか"
+      ]
+    },
+    {
+      "id": "requirements-matrix",
+      "section": "scope",
+      "topic": "要件トレーサビリティマトリクス",
+      "blocks": [
+        "table"
+      ],
+      "shape": "行＝要件（20〜30件）、列＝ペルソナ・ジャーニー段階・課題・KPI・画面・リリース時期の対応を印で示す高密度のマトリクス",
+      "sources": [
+        "requirements-analysis",
+        "user-stories",
+        "scope-definition",
+        "refined-mockups"
+      ],
+      "questions": [
+        "すべての要件がいずれかの課題・KPI に紐づいているか",
+        "どの課題・ジャーニー段階に要件が集中し、どこが手薄か",
+        "画面・リリース時期との対応に抜けはないか"
       ]
     },
     {
@@ -352,9 +1051,10 @@
       "section": "scope",
       "topic": "非機能要件",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝観点（性能・可用性・セキュリティ・運用）、列＝水準・前提・既存との差",
+      "shape": "行＝観点（性能・可用性・セキュリティ・運用・拡張性）、列＝要求水準・前提・既存との差の表",
       "sources": [
         "requirements-analysis",
         "nfr-requirements"
@@ -362,7 +1062,27 @@
       "questions": [
         "性能・可用性・セキュリティ・運用の要求水準は",
         "ピーク時の負荷と前提は",
-        "既存の基準との差は"
+        "既存の基準との差と、それを満たす費用は"
+      ]
+    },
+    {
+      "id": "nfr-architecture",
+      "section": "scope",
+      "topic": "品質を支える構成",
+      "blocks": [
+        "house",
+        "table"
+      ],
+      "shape": "屋根にサービス品質の目標（SLO）、柱に性能・可用性・セキュリティ・運用性の設計方針、土台に基盤・監視・データ保護を置く",
+      "sources": [
+        "nfr-requirements",
+        "domain-design",
+        "observability-setup"
+      ],
+      "questions": [
+        "SLO（可用性・応答時間）の目標と、その根拠は",
+        "目標を満たす構成上の工夫は何か",
+        "障害時の影響範囲と復旧の目標時間は"
       ]
     },
     {
@@ -373,15 +1093,73 @@
         "table",
         "implication"
       ],
-      "shape": "行＝プラン、列＝価格・対象・特典の表と価格の根拠",
+      "shape": "行＝プラン、列＝価格・対象・含まれる価値・想定構成比の表と、既存プランとの関係",
       "sources": [
         "market-research",
         "feasibility"
       ],
       "questions": [
         "誰から、何に対して、いくら得るか",
-        "価格の根拠（競合・支払意思・原価）は",
+        "プランごとの想定構成比と平均単価は",
         "既存プランとの関係（上位・下位・移行・日割り）は"
+      ]
+    },
+    {
+      "id": "pricing-structure",
+      "section": "business",
+      "topic": "課金単位と料金体系",
+      "blocks": [
+        "options",
+        "table"
+      ],
+      "shape": "「何に対して課金するか」の問いに対し、定額・従量・成果報酬・フリーミアムの選択肢を並べ、顧客の価値の感じ方との一致で比較して推奨を示す",
+      "sources": [
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "何を課金の単位にするのが顧客の価値と一致するか",
+        "無料枠・お試し・割引はどう設計するか",
+        "請求・決済の仕組みで実現できるか"
+      ]
+    },
+    {
+      "id": "pricing-rationale",
+      "section": "business",
+      "topic": "価格の根拠（経済価値と価格帯）",
+      "blocks": [
+        "chart_bar",
+        "implication"
+      ],
+      "shape": "次善の代替の価格に差別化価値を積み上げた経済価値（EVC）の積み上げ棒で、価格の上限・下限と設定価格の位置を示す",
+      "sources": [
+        "market-research",
+        "feasibility"
+      ],
+      "questions": [
+        "顧客にとっての経済価値（代替との差額）はいくらか",
+        "価格の上限（価値）と下限（原価・競合）はどこか",
+        "設定価格は価値のどれだけを顧客に残すか"
+      ]
+    },
+    {
+      "id": "willingness-to-pay",
+      "section": "business",
+      "topic": "支払意思額",
+      "blocks": [
+        "chart_bar",
+        "evidence",
+        "implication"
+      ],
+      "shape": "価格感度調査（高すぎる・安すぎるの曲線）の折れ線と受容価格帯、ペルソナ別の支払意思を並べる",
+      "sources": [
+        "market-research",
+        "user-stories"
+      ],
+      "questions": [
+        "顧客はいくらまでなら払うと言っているか（調査方法と人数）",
+        "ペルソナによって支払意思はどう違うか",
+        "言ったことと実際の購買行動の差をどう確かめるか"
       ]
     },
     {
@@ -390,16 +1168,36 @@
       "topic": "ユニットエコノミクス",
       "blocks": [
         "stats",
+        "formula",
         "table"
       ],
-      "shape": "LTV・CAC・回収期間の大きな数字と前提の表",
+      "shape": "LTV・CAC・LTV/CAC・回収期間を KPI タイルで、LTV と CAC の算定式と前提値を下に並べる",
       "sources": [
         "feasibility"
       ],
       "questions": [
         "1 利用者あたりの収益・原価・獲得費用は",
-        "LTV / CAC と回収期間は",
-        "感度の高い前提はどれか"
+        "LTV / CAC と回収期間は、業界水準と比べてどうか",
+        "どの前提が最も効いていて、どう確かめるか"
+      ]
+    },
+    {
+      "id": "cannibalization",
+      "section": "business",
+      "topic": "カニバリゼーションと増分収益",
+      "blocks": [
+        "chart_bar",
+        "implication"
+      ],
+      "shape": "新サービスの売上から既存からの移行・値下がり分を差し引き、純増分に至るウォーターフォールで示す",
+      "sources": [
+        "feasibility",
+        "market-research"
+      ],
+      "questions": [
+        "新サービスの売上のうち、既存からの移行はどれくらいか",
+        "既存プランの売上はどれだけ減るか",
+        "差し引いた純増分はいくらか"
       ]
     },
     {
@@ -408,17 +1206,75 @@
       "topic": "事業計画（収支・投資）",
       "blocks": [
         "chart_bar",
+        "table",
         "implication"
       ],
-      "shape": "年度別の売上・利益の棒グラフと損益分岐の示唆",
+      "shape": "年度別の売上・費用・利益を棒グラフで、下に基本・楽観・悲観（競合の反応を含む）の3シナリオの表と Go/No-Go の条件を示す",
       "sources": [
         "feasibility",
         "approval-handoff"
       ],
       "questions": [
         "年度別の売上・費用・利益・投資額は",
-        "損益分岐はいつか",
-        "上振れ・下振れのシナリオは"
+        "基本・楽観・悲観（競合の反応込み）のシナリオでどう変わるか",
+        "どの数字を下回ったら止めるか（Go/No-Go の条件）"
+      ]
+    },
+    {
+      "id": "sensitivity",
+      "section": "business",
+      "topic": "感度分析",
+      "blocks": [
+        "tornado",
+        "implication"
+      ],
+      "shape": "主要な前提（転換率・単価・解約率・獲得費用・開発費など）を ±の幅で動かしたときの利益の振れをトルネード図で示し、上位の前提を強調する",
+      "sources": [
+        "feasibility"
+      ],
+      "questions": [
+        "どの前提が利益を最も大きく動かすか",
+        "その前提はどれくらい確かか、どう確かめるか",
+        "最悪のケースでも許容できる損失に収まるか"
+      ]
+    },
+    {
+      "id": "benefit-bridge",
+      "section": "business",
+      "topic": "効果のブリッジ",
+      "blocks": [
+        "chart_bar",
+        "table"
+      ],
+      "shape": "現在の利益から、施策ごとの効果（新規獲得・単価向上・解約減・費用削減）を積み上げて目標の利益に至るウォーターフォール",
+      "sources": [
+        "feasibility",
+        "intent-capture"
+      ],
+      "questions": [
+        "目標の数字に、どの施策がいくら寄与するか",
+        "寄与が大きい施策の確度は",
+        "効果の重複（二重計上）はないか"
+      ]
+    },
+    {
+      "id": "breakeven",
+      "section": "business",
+      "topic": "損益分岐と投資回収",
+      "blocks": [
+        "chart_bar",
+        "stats",
+        "implication"
+      ],
+      "shape": "累積の収支を折れ線で示し、損益分岐の時期と、その時点で必要なシェア・利用者数を KPI タイルで並べる",
+      "sources": [
+        "feasibility",
+        "approval-handoff"
+      ],
+      "questions": [
+        "損益分岐はいつで、そのとき何人・何％のシェアが要るか",
+        "そのシェアは市場と競合から見て現実的か",
+        "投資の回収期間と、最大の累積赤字はいくらか"
       ]
     },
     {
@@ -426,16 +1282,78 @@
       "section": "kpi",
       "topic": "KPI ツリー",
       "blocks": [
-        "tree"
+        "tree",
+        "implication"
       ],
-      "shape": "北極星指標を先行指標に分解し、各指標に目標値を付けたツリー",
+      "shape": "北極星指標を先行指標・行動指標に分解し、各指標に現状値と目標値を付け、ガードレール指標を別色で添えたツリー",
       "sources": [
-        "intent-capture"
+        "intent-capture",
+        "observability-setup"
       ],
       "questions": [
-        "北極星指標は何か",
-        "それを分解した先行指標・行動指標は",
-        "各 KPI の目標値と達成時期は"
+        "北極星指標は何か、なぜそれが事業の成果を表すのか",
+        "それを動かす先行指標・行動指標は",
+        "悪化させてはいけないガードレール指標は"
+      ]
+    },
+    {
+      "id": "kpi-targets",
+      "section": "kpi",
+      "topic": "KPI の目標値（現状・必達・挑戦）",
+      "blocks": [
+        "table",
+        "chart_bar"
+      ],
+      "shape": "行＝主要 KPI、列＝現状値・必達目標・挑戦目標・達成時期・責任者の表と、目標までの月次推移",
+      "sources": [
+        "intent-capture",
+        "observability-setup",
+        "feasibility"
+      ],
+      "questions": [
+        "各 KPI の現状値（ベースライン）はいくらか",
+        "必達と挑戦の目標値と、その根拠は",
+        "いつまでに誰が責任を持って達成するか"
+      ]
+    },
+    {
+      "id": "kpi-dashboard",
+      "section": "kpi",
+      "topic": "KPI ダッシュボード（1枚）",
+      "blocks": [
+        "stats",
+        "chart_bar",
+        "funnel"
+      ],
+      "shape": "北極星・先行指標・ガードレールの KPI タイル（現状・目標・差分）を8〜12枚、小さな推移グラフとファネルを1枚に詰めた高密度のダッシュボード",
+      "sources": [
+        "intent-capture",
+        "observability-setup"
+      ],
+      "questions": [
+        "経営層が毎月見る数字は何か、1枚で状況がわかるか",
+        "目標に対して今どこにいるかがひと目でわかるか",
+        "数字が悪化したとき誰に通知が届くか"
+      ]
+    },
+    {
+      "id": "guardrails",
+      "section": "kpi",
+      "topic": "ガードレール指標",
+      "blocks": [
+        "table",
+        "callout"
+      ],
+      "shape": "行＝悪化させてはいけない指標（解約率・問い合わせ数・障害率・既存売上など）、列＝現状値・許容の閾値・超えたときの対応の表",
+      "sources": [
+        "intent-capture",
+        "observability-setup",
+        "nfr-requirements"
+      ],
+      "questions": [
+        "施策の副作用で悪化しうる指標は何か",
+        "どこまでの悪化なら許容するか（閾値）",
+        "閾値を超えたら誰が何をするか（停止・切り戻し）"
       ]
     },
     {
@@ -443,35 +1361,97 @@
       "section": "kpi",
       "topic": "計測設計",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝KPI、列＝イベント・算式・追加開発・評価の時期",
+      "shape": "行＝KPI、列＝イベント・算式・データソース・追加開発・評価の時期の表",
       "sources": [
         "intent-capture",
         "observability-setup"
       ],
       "questions": [
         "各 KPI をどのログ・イベントで測るか",
-        "計測に追加開発は要るか",
+        "計測に追加開発は要るか、リリースに間に合うか",
         "いつ・誰が効果を評価するか"
+      ]
+    },
+    {
+      "id": "experiment-design",
+      "section": "kpi",
+      "topic": "効果検証の設計（A/B テスト）",
+      "blocks": [
+        "table",
+        "formula",
+        "callout"
+      ],
+      "shape": "行＝検証する仮説、列＝対照群・指標・最小検出効果・必要サンプル数・期間の表と、判定の基準",
+      "sources": [
+        "intent-capture",
+        "observability-setup",
+        "delivery-planning"
+      ],
+      "questions": [
+        "施策の効果を何と比べて測るか（対照群・A/B）",
+        "有意な差を見るのに何人・何日必要か",
+        "結果が出たら何を判断するか（続行・拡大・停止）"
+      ]
+    },
+    {
+      "id": "benefit-register",
+      "section": "kpi",
+      "topic": "効果管理台帳",
+      "blocks": [
+        "table"
+      ],
+      "shape": "行＝見込む効果、列＝金額・KPI・計上時期・測定方法・責任者・現在の実績の台帳",
+      "sources": [
+        "feasibility",
+        "intent-capture",
+        "approval-handoff"
+      ],
+      "questions": [
+        "約束した効果はいくらで、いつ誰が計上するか",
+        "効果をどの数字で、どう確かめるか",
+        "効果が出なかったとき誰が報告し、何を見直すか"
       ]
     },
     {
       "id": "roadmap",
       "section": "plan",
-      "topic": "ロードマップ",
+      "topic": "ロードマップ（Now / Next / Later）",
       "blocks": [
-        "timeline"
+        "timeline",
+        "implication"
       ],
-      "shape": "フェーズ×月のガントとマイルストーン",
+      "shape": "Now / Next / Later の3列に施策を置き、時間軸の上に判断ゲートを菱形で示す",
       "sources": [
         "delivery-planning",
         "scope-definition"
       ],
       "questions": [
         "フェーズごとに何をいつ出すか",
-        "マイルストーンと判断ポイントは",
-        "依存する他施策は"
+        "各フェーズの終わりの判断ポイントは",
+        "依存する他施策と、その遅れの影響は"
+      ]
+    },
+    {
+      "id": "decision-gates",
+      "section": "plan",
+      "topic": "判断ゲートと撤退基準",
+      "blocks": [
+        "steps",
+        "table"
+      ],
+      "shape": "ゲートを段階で並べ、各ゲートの判断者・判断材料・続行の条件・撤退の基準を表で示す",
+      "sources": [
+        "delivery-planning",
+        "approval-handoff",
+        "feasibility"
+      ],
+      "questions": [
+        "どの時点で、誰が、何を見て続行を判断するか",
+        "撤退の基準（数字）は事前に決まっているか",
+        "撤退した場合の費用と、残る資産は"
       ]
     },
     {
@@ -480,17 +1460,95 @@
       "topic": "推進体制",
       "blocks": [
         "tree",
-        "table"
+        "implication"
       ],
-      "shape": "意思決定者から実行チームまでの体制と役割",
+      "shape": "意思決定者から責任者・実行チーム・関係部門・外部パートナーまでの体制図",
       "sources": [
         "team-formation",
         "intent-capture"
       ],
       "questions": [
         "意思決定者・責任者・実行チームは誰か",
-        "関係部門（法務・CS・営業・運用）の役割は",
-        "外部パートナーは"
+        "関係部門（法務・CS・営業・運用）は誰が窓口か",
+        "外部パートナーの役割と契約形態は"
+      ]
+    },
+    {
+      "id": "raci",
+      "section": "plan",
+      "topic": "役割分担（RACI）",
+      "blocks": [
+        "table"
+      ],
+      "shape": "行＝主要なタスク・判断、列＝関係者、セルに R / A / C / I を置いたマトリクス",
+      "sources": [
+        "team-formation",
+        "delivery-planning"
+      ],
+      "questions": [
+        "主要な判断ごとに、最終責任者（A）は誰か",
+        "実行（R）と相談先（C）・報告先（I）は明確か",
+        "責任者が重複・欠落している判断はないか"
+      ]
+    },
+    {
+      "id": "stakeholder-map",
+      "section": "plan",
+      "topic": "ステークホルダーマップ",
+      "blocks": [
+        "matrix2x2",
+        "table"
+      ],
+      "shape": "横軸＝関心度、縦軸＝影響力の2×2に関係者を置き、現在の姿勢（賛成・中立・反対）と働きかけ方を添える",
+      "sources": [
+        "team-formation",
+        "intent-capture",
+        "approval-handoff"
+      ],
+      "questions": [
+        "この施策に影響力を持つのは誰か",
+        "それぞれの現在の姿勢と懸念は何か",
+        "誰に、いつ、どう働きかけるか"
+      ]
+    },
+    {
+      "id": "capacity",
+      "section": "plan",
+      "topic": "体制のキャパシティ",
+      "blocks": [
+        "chart_bar",
+        "table",
+        "implication"
+      ],
+      "shape": "月×チームの必要工数と確保できる工数を積み上げ棒で比べ、不足する時期と職種を強調する",
+      "sources": [
+        "team-formation",
+        "delivery-planning"
+      ],
+      "questions": [
+        "必要な人員・スキルは確保できているか",
+        "他の施策と取り合いになる時期と人は",
+        "不足をどう埋めるか（採用・外部・優先度の見直し）"
+      ]
+    },
+    {
+      "id": "readiness",
+      "section": "plan",
+      "topic": "社内の受け入れ準備度",
+      "blocks": [
+        "table",
+        "chart_bar"
+      ],
+      "shape": "行＝受け入れ部門（営業・CS・運用・法務・経理）、列＝必要な準備・現在の準備度・ギャップ・期限の表",
+      "sources": [
+        "team-formation",
+        "delivery-planning",
+        "approval-handoff"
+      ],
+      "questions": [
+        "リリースまでに各部門で何の準備が必要か",
+        "今の準備度とギャップはどれくらいか",
+        "準備が間に合わない部門はどこで、どう手当てするか"
       ]
     },
     {
@@ -499,52 +1557,174 @@
       "topic": "リリースと移行",
       "blocks": [
         "steps",
-        "table"
+        "two_tier",
+        "implication"
       ],
-      "shape": "公開の段階（先行→全体）と切り戻しの条件",
+      "shape": "公開の段階（社内→先行→一部→全体）を上段に、各段階の裏で行う移行・切替・監視の作業を下段に揃えて示す",
       "sources": [
         "delivery-planning",
         "deployment-pipeline"
       ],
       "questions": [
         "どう公開するか（段階公開・A/B・一斉）",
-        "既存ユーザー・既存データの移行は",
-        "切り戻しの条件と手順は"
+        "既存ユーザー・既存データの移行はどうするか",
+        "各段階に進む条件は何か"
+      ]
+    },
+    {
+      "id": "rollback",
+      "section": "plan",
+      "topic": "切り戻しの条件と手順",
+      "blocks": [
+        "table",
+        "steps"
+      ],
+      "shape": "行＝ガードレール指標と障害の種類、列＝切り戻しの閾値・判断者・手順・所要時間の表",
+      "sources": [
+        "deployment-pipeline",
+        "observability-setup",
+        "delivery-planning"
+      ],
+      "questions": [
+        "どの指標がどこまで悪化したら切り戻すか",
+        "誰が判断し、何分で戻せるか",
+        "切り戻した場合に利用者・データへの影響は"
       ]
     },
     {
       "id": "go-to-market",
       "section": "plan",
-      "topic": "告知と販売・CS",
+      "topic": "市場投入の戦略",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝対象、列＝チャネル・メッセージ・時期・準備",
+      "shape": "行＝対象セグメント、列＝認知・入手・購入・推奨の4A ごとのチャネル・メッセージ・時期・準備の表",
       "sources": [
         "market-research",
         "approval-handoff"
       ],
       "questions": [
         "誰に、どのチャネルで、何を伝えるか",
-        "販売・CS の準備（FAQ・問い合わせ対応）は",
+        "販売・CS の準備（FAQ・問い合わせ対応・研修）は",
         "告知の時期と規約・表示の確認は"
+      ]
+    },
+    {
+      "id": "launch-plan",
+      "section": "plan",
+      "topic": "ローンチ計画とローンチ KPI",
+      "blocks": [
+        "timeline",
+        "funnel",
+        "stats"
+      ],
+      "shape": "ローンチ前後の施策を時間軸に並べ、ローンチ後90日の目標ファネル（認知→試用→有料→継続）と KPI タイルを示す",
+      "sources": [
+        "market-research",
+        "delivery-planning",
+        "observability-setup"
+      ],
+      "questions": [
+        "ローンチ前後に何をいつ打つか",
+        "ローンチ後90日で達成すべき数字は",
+        "数字が届かないときの次の手は"
       ]
     },
     {
       "id": "risks",
       "section": "risk",
-      "topic": "リスクと対策",
+      "topic": "リスクの全体像",
+      "blocks": [
+        "matrix2x2",
+        "implication"
+      ],
+      "shape": "横軸＝発生確率、縦軸＝影響度のヒートマップにリスクを番号で置き、右上の重大リスクを強調する",
+      "sources": [
+        "feasibility",
+        "nfr-requirements"
+      ],
+      "questions": [
+        "事業・技術・体制・スケジュール・コストの重大リスクは何か",
+        "影響度と発生確率はどう見積もったか",
+        "最も重いリスクは許容範囲に収まるか"
+      ]
+    },
+    {
+      "id": "risk-register",
+      "section": "risk",
+      "topic": "リスク対応表",
       "blocks": [
         "table"
       ],
-      "shape": "行＝リスク、列＝影響・確率（高中低）・対策・担当",
+      "shape": "行＝リスク、列＝影響・確率・対応方針（回避・低減・移転・受容）・対策・兆候・担当の表",
       "sources": [
+        "feasibility",
+        "delivery-planning"
+      ],
+      "questions": [
+        "各リスクに対してどう対応するか（回避・低減・移転・受容）",
+        "リスクが顕在化する兆候は何で、誰が見張るか",
+        "対策の費用と、残るリスクは"
+      ]
+    },
+    {
+      "id": "assumption-ladder",
+      "section": "risk",
+      "topic": "前提の梯子と最弱リンク",
+      "blocks": [
+        "chain",
+        "callout"
+      ],
+      "shape": "提案が成り立つための前提を下から順に積み上げ、各前提の確度を示して、最も弱い一段とその検証方法を強調する",
+      "sources": [
+        "intent-capture",
+        "feasibility",
+        "market-research"
+      ],
+      "questions": [
+        "この提案が成り立つには、何が真でなければならないか",
+        "その中で最も確度の低い前提はどれか",
+        "その前提をいつ、どう安く確かめるか"
+      ]
+    },
+    {
+      "id": "premortem",
+      "section": "risk",
+      "topic": "プレモーテムと最強の対案",
+      "blocks": [
+        "bullets",
+        "options",
+        "implication"
+      ],
+      "shape": "「1年後にこの施策が失敗したとしたら、なぜか」の失敗理由の上位と、最も説得力のある反対意見・対案を並べ、それぞれへの答えを示す",
+      "sources": [
+        "feasibility",
+        "intent-capture"
+      ],
+      "questions": [
+        "この施策が失敗するとしたら、最もありそうな理由は何か",
+        "最も強い反対意見・対案は何で、それにどう答えるか",
+        "失敗の兆候を早く見つけるには何を見るか"
+      ]
+    },
+    {
+      "id": "external-scenarios",
+      "section": "risk",
+      "topic": "外部環境シナリオと監視シグナル",
+      "blocks": [
+        "matrix2x2",
+        "table"
+      ],
+      "shape": "不確実性の高い2つの外部要因を軸にした4つのシナリオと、それぞれで取る行動、どのシナリオに向かっているかを示す監視シグナルの表",
+      "sources": [
+        "market-research",
         "feasibility"
       ],
       "questions": [
-        "事業・技術・体制・スケジュール・コストのリスクは",
-        "影響度と発生確率は",
-        "対策と責任者は"
+        "どの外部要因が最も不確かで、事業を大きく左右するか",
+        "それぞれのシナリオで計画をどう変えるか",
+        "どのシグナルを見て、どのシナリオかを判断するか"
       ]
     },
     {
@@ -552,17 +1732,19 @@
       "section": "risk",
       "topic": "法務・規約・セキュリティ",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝確認事項（規約・表示・個人情報・決済）、列＝影響・対応・確認先",
+      "shape": "行＝確認事項（規約・表示・個人情報・決済・セキュリティ）、列＝影響・対応・確認先・期限の表",
       "sources": [
         "feasibility",
-        "requirements-analysis"
+        "requirements-analysis",
+        "nfr-requirements"
       ],
       "questions": [
         "規約変更・表示（景品表示法など）・個人情報への影響は",
         "決済・契約上の確認事項は",
-        "セキュリティ・監査の要求は"
+        "セキュリティ・監査の要求と対応状況は"
       ]
     },
     {
@@ -570,9 +1752,10 @@
       "section": "risk",
       "topic": "前提・依存・未決事項",
       "blocks": [
-        "table"
+        "table",
+        "implication"
       ],
-      "shape": "行＝前提・依存・未決、列＝内容・崩れたときの影響・期限",
+      "shape": "行＝前提・依存・未決、列＝内容・崩れたときの影響・回答者・期限・着手前か走りながらかの区分",
       "sources": [
         "feasibility",
         "approval-handoff"
@@ -580,7 +1763,26 @@
       "questions": [
         "置いている前提は何か、崩れたらどうなるか",
         "他部門・他システムへの依存は",
-        "まだ決まっていないことと期限は"
+        "着手前に決めるべきことと、走りながら決めてよいこと、それぞれ誰が答えるか"
+      ]
+    },
+    {
+      "id": "open-questions",
+      "section": "risk",
+      "topic": "想定問答（論点への回答）",
+      "blocks": [
+        "qa"
+      ],
+      "shape": "意思決定者から出そうな厳しい質問と、それへの短い回答・根拠ページを問答の形で並べる",
+      "sources": [
+        "intent-capture",
+        "feasibility",
+        "approval-handoff"
+      ],
+      "questions": [
+        "意思決定者が最も気にする質問は何か",
+        "それぞれに根拠を持って答えられるか",
+        "まだ答えられない質問と、いつ答えるか"
       ]
     },
     {
@@ -591,14 +1793,34 @@
         "table",
         "implication"
       ],
-      "shape": "行＝決めてほしいこと、列＝選択肢・推奨案・理由、右に決めない場合の影響",
+      "shape": "行＝決めてほしいこと、列＝推奨案・理由・期限・元に戻せるか・決めない場合の影響・決定後の次のアクション",
       "sources": [
         "approval-handoff"
       ],
       "questions": [
-        "今回決めてほしいことは何か",
-        "選択肢と推奨案、その理由は",
-        "決めない場合の影響は"
+        "今回決めてほしいことは何か、いつまでに",
+        "推奨案とその理由、元に戻せる判断か",
+        "決めない（先送りする）場合の影響は"
+      ]
+    },
+    {
+      "id": "decision-options",
+      "section": "decision",
+      "topic": "主要な判断の選択肢",
+      "blocks": [
+        "options",
+        "implication"
+      ],
+      "shape": "最も重い判断1〜2件について、問いと3つの選択肢の箱（効果・費用・リスク）を並べ、推奨案を強調する",
+      "sources": [
+        "approval-handoff",
+        "feasibility",
+        "scope-definition"
+      ],
+      "questions": [
+        "選択肢ごとの効果・費用・リスクはどう違うか",
+        "推奨案を選ぶと何を諦めることになるか",
+        "推奨案以外を選んだ場合、計画はどう変わるか"
       ]
     },
     {
@@ -606,16 +1828,94 @@
       "section": "decision",
       "topic": "次のステップ",
       "blocks": [
+        "timeline",
         "table"
       ],
-      "shape": "行＝やること、列＝担当・期限・判断の材料",
+      "shape": "承認後90日の行動を時間軸に置き、各行動の担当・期限・次の判断の材料を表で示す",
       "sources": [
-        "delivery-planning"
+        "delivery-planning",
+        "approval-handoff"
       ],
       "questions": [
         "承認後すぐ何をするか",
         "次の判断はいつ、何を材料にするか",
         "担当と期限は"
+      ]
+    },
+    {
+      "id": "assumptions-register",
+      "section": "appendix",
+      "topic": "前提一覧",
+      "blocks": [
+        "table"
+      ],
+      "shape": "行＝計画で置いた前提（数字）、列＝値・根拠・確度・影響するページ・検証方法の一覧",
+      "sources": [
+        "feasibility",
+        "market-research",
+        "intent-capture"
+      ],
+      "questions": [
+        "計画のすべての数字はどの前提に基づくか",
+        "確度の低い前提はどれで、どう検証するか",
+        "前提が変わったらどのページが変わるか"
+      ]
+    },
+    {
+      "id": "sources-register",
+      "section": "appendix",
+      "topic": "出典一覧",
+      "blocks": [
+        "table"
+      ],
+      "shape": "行＝出典、列＝種類（調査・社内データ・インタビュー）・日付・引用したページの一覧",
+      "sources": [
+        "market-research",
+        "intent-capture"
+      ],
+      "questions": [
+        "主要な数字と主張の出典は何か",
+        "出典は新しく、信頼できるか",
+        "社内データの抽出条件は再現できるか"
+      ]
+    },
+    {
+      "id": "decision-log",
+      "section": "appendix",
+      "topic": "意思決定の記録",
+      "blocks": [
+        "table",
+        "timeline"
+      ],
+      "shape": "行＝これまでの判断、列＝日付・判断者・内容・理由・前提・見直しの条件の記録",
+      "sources": [
+        "approval-handoff",
+        "scope-definition",
+        "intent-capture"
+      ],
+      "questions": [
+        "これまでに何を、誰が、なぜ決めたか",
+        "その判断の前提は今も成り立っているか",
+        "見直しが必要になる条件は何か"
+      ]
+    },
+    {
+      "id": "faq",
+      "section": "appendix",
+      "topic": "よくある質問",
+      "blocks": [
+        "qa"
+      ],
+      "shape": "関係部門（営業・CS・法務・開発）から出る質問と回答を問答の形で並べる",
+      "sources": [
+        "approval-handoff",
+        "requirements-analysis",
+        "scope-definition"
+      ],
+      "questions": [
+        "関係部門から繰り返し出る質問は何か",
+        "その回答はこの資料のどこに根拠があるか",
+        "回答が未確定の質問はどれか"
       ]
     }
   ]
